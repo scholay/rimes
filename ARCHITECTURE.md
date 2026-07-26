@@ -10,7 +10,7 @@
 >
 > **2026-07-20 输入配置/翻译覆盖**：设置层已把输入编码（自然码双拼/全拼/英文）与键入模式（串击/并击/互击）拆开，再映射到经过验证的固定 schema。飞耀互击复用 `my_combo`：并击结算同一计时批内的全部按键，多键的左侧、右侧或跨区组合均可映射但不跨批重组；互击在此基础上允许相邻的左侧声母与右侧韵母跨批配对。单独敲下的物理字母保留为英文原码，不自动插入分词符，也不与另一个单键批次重组。「实时翻译」作为内置缓冲插件只出现在缓冲插件列表，与 Marine 共用唯一 owner；默认用 Apple 本地翻译，也可改用当前 AI 渠道。源文在上方连续缓冲轨显示，译文在下方独立分块轨显示，拖拽/展开与原文行对齐，发送与目标语言行对齐，只能经 `BufferDeliveryCoordinator -> Delivery.insert` 手动发送。
 >
-> **2026-07-26 Remarkable 覆盖**：`builtin.remarkable` 是显式、只读的普通缓冲 importer，不是派生 workspace 或通用 SSH provider。用户先在 reMarkable 上执行官方 Convert to text，再点击工作台货架动作；RIMES 用系统 `/usr/bin/ssh`、严格 known_hosts 与固定只读命令定位最近打开文档的当前页，双读稳定的 software 3/v6 `.rm`，提取原生 typed text 后以 `.ssh` provenance 调用 `stageExternalSemantic`。插件可配置 host、SSH 用户名与密码，也可沿用 key/agent；密码只在 0700 目录中的 0600 私有文件保存，经受限 `SSH_ASKPASS` 读取，不进入 argv、环境值或日志。插件不触发私有云转写、不停止 Xochitl、不写设备、不自动投递；配置变化、owner/secure/锁屏/关闭/禁用均取消并墓碑化在途请求。
+> **2026-07-26 Remarkable 覆盖**：`builtin.remarkable` 是显式、只读的普通缓冲 importer，不是派生 workspace 或通用 SSH provider。用户先在 reMarkable 上执行官方 Convert to text，再点击工作台货架动作；RIMES 用系统 `/usr/bin/ssh`、严格 known_hosts 与固定只读命令定位最近打开文档的当前页，双读稳定的 software 3/v6 `.rm`，提取原生 typed text 后以 `.ssh` provenance 调用 `stageExternalSemantic`。插件可配置 host、SSH 用户名与密码，也可沿用 key/agent；密码只在 0700 私有子目录中的 0600 文件保存，共享数据根目录则要求当前用户所有且 group/world 不可写（兼容安全的 0755），经受限 `SSH_ASKPASS` 读取时不进入 argv、环境值或日志。插件不触发私有云转写、不停止 Xochitl、不写设备、不自动投递；配置变化、owner/secure/锁屏/关闭/禁用均取消并墓碑化在途请求。
 >
 > **2026-07-26 插件配置覆盖**：所有有 schema 的插件都经统一“设置…”入口和 `PluginConfigurationModel` 表单；普通字段以每插件单字典保存，敏感字段进入 0700/0600 私有文件，通知只携带插件与字段 ID。完整规范见 [PLUGIN-CONFIGURATION.md](PLUGIN-CONFIGURATION.md)。「AI 生成」可选择共享 AI 渠道；意识流有独立渠道及 220/800 ms 默认节流配置；实时翻译默认 Apple 本地，也可选当前 AI 渠道；Marine 可配置并在调用开始时冻结 60–600 秒超时。
 >

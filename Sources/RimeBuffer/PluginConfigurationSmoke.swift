@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 private final class PluginConfigurationNotificationProbe:
@@ -65,7 +66,7 @@ func runPluginConfigurationSmokeTest() -> Bool {
         try FileManager.default.createDirectory(
             at: privateRoot,
             withIntermediateDirectories: false,
-            attributes: [.posixPermissions: 0o700]
+            attributes: [.posixPermissions: 0o755]
         )
     } catch {
         return fail("private root")
@@ -229,6 +230,11 @@ func runPluginConfigurationSmokeTest() -> Bool {
             store: privateStore,
             notificationCenter: center
         )
+        guard pluginConfigurationLayoutIsSafe(
+            models: [streamModel, translationModel, privateModel]
+        ) else {
+            return fail("sheet layout")
+        }
         let privateBase = privateRoot.appendingPathComponent(
             "plugin-config",
             isDirectory: true
@@ -290,7 +296,7 @@ func runPluginConfigurationSmokeTest() -> Bool {
             }
             return value.intValue & 0o777
         }
-        guard try permissions(at: privateRoot) == 0o700,
+        guard try permissions(at: privateRoot) == 0o755,
               try permissions(at: privateBase) == 0o700,
               try permissions(at: privatePluginDirectory) == 0o700,
               try permissions(at: privateStore.configurationURL) == 0o600 else {
@@ -310,6 +316,21 @@ func runPluginConfigurationSmokeTest() -> Bool {
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600],
             ofItemAtPath: privateStore.configurationURL.path
+        )
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o777],
+            ofItemAtPath: privateRoot.path
+        )
+        do {
+            _ = try privateModel.load()
+            return fail("writable shared root accepted")
+        } catch PluginConfigurationError.invalidPermissions {
+            // Expected.
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: privateRoot.path
         )
 
         try FileManager.default.removeItem(at: privateStore.configurationURL)
@@ -362,5 +383,99 @@ func runPluginConfigurationSmokeTest() -> Bool {
     }
 
     print("PASS: plugin configuration smoke")
+    return true
+}
+
+/// Reproduces the production sheet sequence, including AppKit's size
+/// recalculation when assigning `contentViewController`. Controls must remain
+/// inside a useful inset after the caller reapplies the controller's preferred
+/// size.
+private func pluginConfigurationLayoutIsSafe(
+    models: [PluginConfigurationModel]
+) -> Bool {
+    guard Thread.isMainThread else { return false }
+    _ = NSApplication.shared
+    let tolerance: CGFloat = 0.5
+
+    func approximatelyEqual(_ lhs: NSSize, _ rhs: NSSize) -> Bool {
+        abs(lhs.width - rhs.width) <= tolerance
+            && abs(lhs.height - rhs.height) <= tolerance
+    }
+
+    func descendants(of view: NSView) -> [NSView] {
+        view.subviews.flatMap { [$0] + descendants(of: $0) }
+    }
+
+    for model in models {
+        func rejectLayout(_ detail: String) -> Bool {
+            print(
+                "FAILED: plugin configuration layout "
+                    + "\(model.schema.pluginID) \(detail)"
+            )
+            return false
+        }
+        let controller = PluginConfigurationViewController(model: model)
+        _ = controller.view
+        let expected = controller.preferredContentSize
+        guard expected.width
+                == PluginConfigurationViewController.preferredFormSize.width,
+              expected.height
+                >= PluginConfigurationViewController.minimumFormHeight,
+              expected.height
+                <= PluginConfigurationViewController.maximumFormHeight,
+              approximatelyEqual(controller.view.frame.size, expected) else {
+            return rejectLayout(
+                "initial preferred=\(controller.preferredContentSize) "
+                    + "view=\(controller.view.frame.size)"
+            )
+        }
+
+        let sheet = PluginConfigurationSheetFactory.make(
+            contentViewController: controller,
+            title: "Layout smoke"
+        )
+        sheet.contentView?.layoutSubtreeIfNeeded()
+        controller.view.layoutSubtreeIfNeeded()
+        defer { sheet.close() }
+
+        guard approximatelyEqual(sheet.contentLayoutRect.size, expected),
+              approximatelyEqual(controller.view.bounds.size, expected) else {
+            return rejectLayout(
+                "panel=\(sheet.contentLayoutRect.size) "
+                    + "view=\(controller.view.bounds.size)"
+            )
+        }
+
+        let interactiveViews = descendants(of: controller.view).filter {
+            if let textField = $0 as? NSTextField {
+                return textField.isEditable
+            }
+            return $0 is NSButton || $0 is NSStepper
+        }
+        guard interactiveViews.count >= model.schema.fields.count + 3 else {
+            return rejectLayout(
+                "interactive-count=\(interactiveViews.count)"
+            )
+        }
+        for interactiveView in interactiveViews
+        where !interactiveView.isHidden {
+            let frame = interactiveView.convert(
+                interactiveView.bounds,
+                to: controller.view
+            )
+            guard frame.width > 0,
+                  frame.height > 0,
+                  // Rounded AppKit buttons extend their focus-ring frame
+                  // roughly seven points beyond the stack's 28-point inset.
+                  frame.minX >= 16 - tolerance,
+                  frame.maxX <= expected.width - 16 + tolerance,
+                  frame.minY >= -tolerance,
+                  frame.maxY <= expected.height + tolerance else {
+                return rejectLayout(
+                    "control=\(type(of: interactiveView)) frame=\(frame)"
+                )
+            }
+        }
+    }
     return true
 }

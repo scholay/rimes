@@ -732,6 +732,15 @@ private func remarkableTransportSmoke() -> String? {
         "rimebuffer-remarkable-credentials-\(UUID().uuidString)",
         isDirectory: true
     )
+    do {
+        try FileManager.default.createDirectory(
+            at: credentialRoot,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o755]
+        )
+    } catch {
+        return "SSH credential root setup"
+    }
     let credentialStore = RemarkableCredentialStore(
         rootDirectory: credentialRoot
     )
@@ -768,8 +777,13 @@ private func remarkableTransportSmoke() -> String? {
         return "SSH credential load"
     }
 
+    var sharedRootInfo = stat()
+    guard lstat(credentialStore.rootDirectory.path, &sharedRootInfo) == 0,
+          (sharedRootInfo.st_mode & S_IFMT) == S_IFDIR,
+          (sharedRootInfo.st_mode & 0o777) == 0o755 else {
+        return "SSH credential shared root permissions"
+    }
     for privateDirectory in [
-        credentialStore.rootDirectory,
         credentialStore.configurationDirectoryURL.deletingLastPathComponent(),
         credentialStore.configurationDirectoryURL,
     ] {
@@ -1174,6 +1188,36 @@ private func remarkableTransportSmoke() -> String? {
     }
     guard case .failure(.pageChangedWhileReading)? = changedResultBox.value else {
         return "SSH changed-page rejection"
+    }
+
+    do {
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o777],
+            ofItemAtPath: credentialRoot.path
+        )
+        do {
+            _ = try credentialStore.load()
+            return "SSH writable shared root accepted"
+        } catch RemarkableCredentialStoreError.invalidPermissions {
+            // Expected.
+        }
+        do {
+            _ = try RemarkableCredentialStore.readConfiguration(
+                at: credentialStore.configurationURL
+            )
+            return "SSH askpass writable shared root accepted"
+        } catch RemarkableCredentialStoreError.invalidPermissions {
+            // Expected.
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: credentialRoot.path
+        )
+        guard try credentialStore.load() == savedConfiguration else {
+            return "SSH shared root permission recovery"
+        }
+    } catch {
+        return "SSH shared root permission boundary"
     }
 
     return nil

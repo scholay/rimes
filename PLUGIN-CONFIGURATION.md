@@ -24,7 +24,10 @@ Plugin 提供的可信配置。插件设置必须通过
   namespace，并以完整字典原子替换。
 - 只要 schema 含 `secureText`，必须使用私有存储。默认路径是
   `~/Library/RimeBuffer/plugin-config/<plugin-id>/configuration.json`，
-  目录权限 `0700`、文件权限 `0600`。
+  `plugin-config` 与 `<plugin-id>` 目录权限为 `0700`、文件权限为
+  `0600`。共享的 `~/Library/RimeBuffer` 根目录必须是当前用户所有且
+  不可由 group/world 写入；兼容 Rime 数据导入留下的安全 `0755`，
+  不得因此拒绝读取内部的私有配置。
 - 已有专用凭据文件的插件通过 `PluginConfigurationStoring` adapter
   复用通用表单，不能再生成第二份密钥副本。
 - 密码、token、API key 不得进入 UserDefaults、argv、URL、通知、
@@ -64,7 +67,8 @@ Plugin 提供的可信配置。插件设置必须通过
 
 1. schema 默认值、类型、范围与迁移；
 2. 保存后运行时确实读取新值；
-3. 敏感文件的所有者、`0700/0600` 权限与 symlink 拒绝；
+3. 共享根目录所有者/不可写边界、私有子目录与敏感文件的
+   `0700/0600` 权限，以及 symlink 拒绝；
 4. argv、环境值、通知和日志不含敏感值；
 5. reset 恢复既定默认行为；
 6. secure input、owner 切换、取消和迟到结果仍 fail closed；

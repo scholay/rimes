@@ -22,7 +22,7 @@ enum RemarkableCredentialStoreError: LocalizedError, Equatable {
         case .unsafePath:
             return "reMarkable 凭据路径不安全"
         case .invalidPermissions:
-            return "reMarkable 凭据权限必须为仅当前用户可读写"
+            return "reMarkable 凭据目录或文件权限不安全"
         case .unreadable:
             return "无法读取或保存 reMarkable 凭据"
         case .oversized:
@@ -99,8 +99,9 @@ struct RemarkableSSHConfiguration: Codable, Equatable,
 ///
 ///   ~/Library/RimeBuffer/plugin-config/builtin.remarkable/credentials.json
 ///
-/// Every directory created below `~/Library/RimeBuffer` is mode 0700 and the
-/// credential is atomically replaced as a mode-0600 regular file.
+/// The shared `~/Library/RimeBuffer` root may use a safe non-writable 0755
+/// mode. The private directories below it are mode 0700 and the credential is
+/// atomically replaced as a mode-0600 regular file.
 final class RemarkableCredentialStore {
     static let shared = RemarkableCredentialStore()
 
@@ -141,7 +142,7 @@ final class RemarkableCredentialStore {
             if errno == ENOENT {
                 var directoryInfo = stat()
                 if lstat(configurationDirectoryURL.path, &directoryInfo) == 0 {
-                    try validatePrivateDirectory(rootDirectory)
+                    try validateSharedRootDirectory(rootDirectory)
                     try validatePrivateDirectory(
                         configurationDirectoryURL.deletingLastPathComponent()
                     )
@@ -154,7 +155,7 @@ final class RemarkableCredentialStore {
             }
             throw RemarkableCredentialStoreError.unreadable
         }
-        try validatePrivateDirectory(rootDirectory)
+        try validateSharedRootDirectory(rootDirectory)
         try validatePrivateDirectory(
             configurationDirectoryURL.deletingLastPathComponent()
         )
@@ -202,7 +203,7 @@ final class RemarkableCredentialStore {
             throw RemarkableCredentialStoreError.oversized
         }
 
-        try ensurePrivateDirectory(rootDirectory)
+        try ensureSharedRootDirectory(rootDirectory)
         let pluginConfigRoot =
             configurationDirectoryURL.deletingLastPathComponent()
         try ensurePrivateDirectory(pluginConfigRoot)
@@ -269,7 +270,7 @@ final class RemarkableCredentialStore {
               info.st_uid == geteuid() else {
             throw RemarkableCredentialStoreError.unsafePath
         }
-        try validatePrivateDirectory(rootDirectory)
+        try validateSharedRootDirectory(rootDirectory)
         try validatePrivateDirectory(
             configurationDirectoryURL.deletingLastPathComponent()
         )
@@ -303,18 +304,9 @@ final class RemarkableCredentialStore {
               pluginDirectory.path != pluginConfigDirectory.path else {
             throw RemarkableCredentialStoreError.unsafePath
         }
-        for directory in [
-            rootDirectory,
-            pluginConfigDirectory,
-            pluginDirectory,
-        ] {
-            var directoryInfo = stat()
-            guard lstat(directory.path, &directoryInfo) == 0,
-                  (directoryInfo.st_mode & S_IFMT) == S_IFDIR,
-                  directoryInfo.st_uid == geteuid(),
-                  (directoryInfo.st_mode & 0o777) == 0o700 else {
-                throw RemarkableCredentialStoreError.unsafePath
-            }
+        try validateSharedRootDirectory(rootDirectory)
+        for directory in [pluginConfigDirectory, pluginDirectory] {
+            try validatePrivateDirectory(directory)
         }
         var info = stat()
         guard lstat(path, &info) == 0 else {
@@ -403,7 +395,48 @@ final class RemarkableCredentialStore {
         }
     }
 
+    private func ensureSharedRootDirectory(_ url: URL) throws {
+        var info = stat()
+        if lstat(url.path, &info) != 0 {
+            guard errno == ENOENT else {
+                throw RemarkableCredentialStoreError.unreadable
+            }
+            do {
+                try fileManager.createDirectory(
+                    at: url,
+                    withIntermediateDirectories: false,
+                    attributes: [.posixPermissions: 0o700]
+                )
+            } catch {
+                throw RemarkableCredentialStoreError.unreadable
+            }
+        }
+        try Self.validateSharedRootDirectory(url)
+    }
+
+    private func validateSharedRootDirectory(_ url: URL) throws {
+        try Self.validateSharedRootDirectory(url)
+    }
+
+    private static func validateSharedRootDirectory(_ url: URL) throws {
+        var info = stat()
+        guard lstat(url.path, &info) == 0,
+              (info.st_mode & S_IFMT) == S_IFDIR,
+              info.st_uid == geteuid() else {
+            throw RemarkableCredentialStoreError.unsafePath
+        }
+        let permissions = info.st_mode & 0o777
+        guard (permissions & 0o700) == 0o700,
+              (permissions & 0o022) == 0 else {
+            throw RemarkableCredentialStoreError.invalidPermissions
+        }
+    }
+
     private func validatePrivateDirectory(_ url: URL) throws {
+        try Self.validatePrivateDirectory(url)
+    }
+
+    private static func validatePrivateDirectory(_ url: URL) throws {
         var info = stat()
         guard lstat(url.path, &info) == 0,
               (info.st_mode & S_IFMT) == S_IFDIR,

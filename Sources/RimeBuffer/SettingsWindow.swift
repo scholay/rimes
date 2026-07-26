@@ -2297,15 +2297,10 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 setPluginStatus("这个插件当前没有可配置项", isError: true)
                 return
             }
-            let sheet = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 700, height: 520),
-                styleMask: [.titled],
-                backing: .buffered,
-                defer: false
+            let sheet = PluginConfigurationSheetFactory.make(
+                contentViewController: controller,
+                title: "\(plugin?.descriptor.name ?? "插件") 设置"
             )
-            sheet.title = "\(plugin?.descriptor.name ?? "插件") 设置"
-            sheet.isReleasedWhenClosed = false
-            sheet.contentViewController = controller
             pluginConfigurationSheet = sheet
             if let form = controller as? PluginConfigurationViewController {
                 form.onDismiss = { [weak self, weak parentWindow, weak sheet] in

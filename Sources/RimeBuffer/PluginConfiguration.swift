@@ -492,7 +492,7 @@ enum PluginConfigurationError: Error, LocalizedError {
         case .unsafePath:
             return "配置文件路径不安全"
         case .invalidPermissions:
-            return "配置文件权限必须为 0600"
+            return "配置目录或文件权限不安全"
         case .oversized:
             return "配置文件过大"
         case .unreadable:
@@ -716,7 +716,7 @@ final class PluginConfigurationPrivateJSONStore: PluginConfigurationStoring {
             throw PluginConfigurationError.oversized
         }
 
-        try ensurePrivateDirectory(rootDirectory)
+        try ensureSharedRootDirectory(rootDirectory)
         try ensurePrivateDirectory(baseDirectory)
         try ensurePrivateDirectory(pluginDirectory)
         try removeOrphanedTemporaryFiles()
@@ -866,8 +866,48 @@ final class PluginConfigurationPrivateJSONStore: PluginConfigurationStoring {
         }
     }
 
+    /// `rootDirectory` is shared with Rime schemas and user data, so an
+    /// installer may legitimately leave it mode 0755. Secrets remain behind
+    /// the exact-0700 `plugin-config/<plugin-id>` directories. At this shared
+    /// boundary, require a real current-user-owned directory with full owner
+    /// access and no group/world write permission, but do not rewrite its
+    /// otherwise-safe mode.
+    private func ensureSharedRootDirectory(_ url: URL) throws {
+        var info = stat()
+        if lstat(url.path, &info) != 0 {
+            guard errno == ENOENT else {
+                throw PluginConfigurationError.unreadable
+            }
+            do {
+                try fileManager.createDirectory(
+                    at: url,
+                    withIntermediateDirectories: false,
+                    attributes: [.posixPermissions: 0o700]
+                )
+            } catch {
+                throw PluginConfigurationError.unreadable
+            }
+        }
+        try validateSharedRootDirectory(url)
+    }
+
+    private func validateSharedRootDirectory(_ url: URL) throws {
+        var info = stat()
+        guard lstat(url.path, &info) == 0,
+              (info.st_mode & S_IFMT) == S_IFDIR,
+              info.st_uid == geteuid() else {
+            throw PluginConfigurationError.unsafePath
+        }
+        let permissions = info.st_mode & 0o777
+        guard (permissions & 0o700) == 0o700,
+              (permissions & 0o022) == 0 else {
+            throw PluginConfigurationError.invalidPermissions
+        }
+    }
+
     private func validatePrivateDirectoryChain() throws {
-        for directory in [rootDirectory, baseDirectory, pluginDirectory] {
+        try validateSharedRootDirectory(rootDirectory)
+        for directory in [baseDirectory, pluginDirectory] {
             var info = stat()
             guard lstat(directory.path, &info) == 0,
                   (info.st_mode & S_IFMT) == S_IFDIR,
@@ -1049,12 +1089,54 @@ extension PluginConfigurationProviding {
     }
 }
 
+/// Single construction seam for plugin-configuration sheets. Assigning a
+/// content view controller lets AppKit replace the panel's requested content
+/// rect with the controller view's fitting size, so the final size must be
+/// applied after that assignment.
+enum PluginConfigurationSheetFactory {
+    static func make(
+        contentViewController controller: NSViewController,
+        title: String
+    ) -> NSPanel {
+        // Force the generic controller to calculate its content-driven
+        // preferred height before choosing the panel rect.
+        _ = controller.view
+        let declaredSize = controller.preferredContentSize
+        let preferredSize: NSSize
+        if declaredSize.width.isFinite,
+           declaredSize.height.isFinite,
+           declaredSize.width > 0,
+           declaredSize.height > 0 {
+            preferredSize = declaredSize
+        } else {
+            preferredSize =
+                PluginConfigurationViewController.preferredFormSize
+        }
+
+        let sheet = NSPanel(
+            contentRect: NSRect(origin: .zero, size: preferredSize),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        sheet.title = title
+        sheet.isReleasedWhenClosed = false
+        sheet.contentViewController = controller
+        sheet.setContentSize(preferredSize)
+        return sheet
+    }
+}
+
 /// Generic settings surface for declarative plugin schemas.
 ///
 /// It uses an explicit Save action, masks secure text with NSSecureTextField,
 /// and reports validation/storage errors without logging form contents.
 final class PluginConfigurationViewController: NSViewController,
     NSTextFieldDelegate {
+    static let preferredFormSize = NSSize(width: 700, height: 420)
+    static let minimumFormHeight: CGFloat = 320
+    static let maximumFormHeight: CGFloat = 520
+
     private enum FieldControl {
         case text(NSTextField)
         case toggle(NSSwitch)
@@ -1084,10 +1166,17 @@ final class PluginConfigurationViewController: NSViewController,
     override func loadView() {
         controls.removeAll()
 
+        let root = NSView(frame: NSRect(
+            x: 0,
+            y: 0,
+            width: Self.preferredFormSize.width,
+            height: Self.maximumFormHeight
+        ))
         let heading = NSTextField(labelWithString: model.schema.title)
         heading.font = .systemFont(ofSize: 22, weight: .semibold)
 
         let content = NSStackView()
+        content.translatesAutoresizingMaskIntoConstraints = false
         content.orientation = .vertical
         content.alignment = .leading
         content.spacing = 16
@@ -1121,6 +1210,9 @@ final class PluginConfigurationViewController: NSViewController,
         statusLabel.font = .systemFont(ofSize: 11)
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.maximumNumberOfLines = 3
+        statusLabel.heightAnchor.constraint(
+            greaterThanOrEqualToConstant: 42
+        ).isActive = true
 
         saveButton.bezelStyle = .rounded
         saveButton.keyEquivalent = "\r"
@@ -1144,7 +1236,27 @@ final class PluginConfigurationViewController: NSViewController,
         content.addArrangedSubview(statusLabel)
         statusLabel.widthAnchor.constraint(equalToConstant: 620).isActive = true
 
-        view = content
+        root.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            content.topAnchor.constraint(equalTo: root.topAnchor),
+            content.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor),
+        ])
+        view = root
+        root.layoutSubtreeIfNeeded()
+        let naturalHeight = ceil(content.fittingSize.height)
+        let resolvedHeight = min(
+            max(naturalHeight, Self.minimumFormHeight),
+            Self.maximumFormHeight
+        )
+        let resolvedSize = NSSize(
+            width: Self.preferredFormSize.width,
+            height: resolvedHeight
+        )
+        root.setFrameSize(resolvedSize)
+        preferredContentSize = resolvedSize
+        root.layoutSubtreeIfNeeded()
         reload()
     }
 
