@@ -274,6 +274,19 @@ enum CandidatePanelGeometry {
     }
 }
 
+struct CandidateMatrixLayoutSnapshot {
+    let rowCount: Int
+    let rowHeights: [CGFloat]
+    let expectedRowHeight: CGFloat
+    let documentHeight: CGFloat
+    let expectedDocumentHeight: CGFloat
+    let scrollHeight: CGFloat
+    let panelHeight: CGFloat
+    let expectedPanelHeight: CGFloat
+    let documentTranslatesAutoresizingMaskIntoConstraints: Bool
+    let documentAutoresizingMaskConstraintCount: Int
+}
+
 /// In-process candidate window. Candidates default to a compact one-line strip
 /// and can expand into a matrix of consecutive Rime pages, one page per row.
 /// The matrix renders at most three rows at a time, but that is a viewport, not
@@ -423,6 +436,11 @@ final class CandidateWindow {
         candidateStack.alignment = .centerY
         candidateStack.spacing = Self.candidateSpacing
         candidateStack.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+        // `NSScrollView.documentView` is frame-driven here. Leaving the stack's
+        // autoresizing mask enabled creates a required 24pt document-height
+        // constraint from the compact state; a three-row matrix needs 78pt and
+        // AppKit then breaks every row/button height constraint.
+        candidateStack.translatesAutoresizingMaskIntoConstraints = false
 
         candidateScroll.drawsBackground = false
         candidateScroll.hasHorizontalScroller = false
@@ -713,6 +731,14 @@ final class CandidateWindow {
         return min(max(0, base), max(0, pageCount - maxRows))
     }
 
+    /// Height of the visible matrix document. Pure so `matrix-smoke` can pin
+    /// the one/two/three-row transition without depending on a window server.
+    static func matrixViewportHeight(rowHeight: CGFloat, rowCount: Int) -> CGFloat {
+        let visibleRows = max(1, min(expandedMaxRows, rowCount))
+        return CGFloat(visibleRows) * rowHeight
+            + CGFloat(max(0, visibleRows - 1)) * expandedRowSpacing
+    }
+
     /// Keep the selected row inside the three-row viewport.
     private func scrollExpandedWindowToSelection() {
         expandedWindowBase = Self.windowBase(selection: expandedSelectionPageOffset,
@@ -823,15 +849,34 @@ final class CandidateWindow {
 
     private func layoutPanel(caretRect: NSRect, bundleId: String) {
         let metrics = CandidateWindowMetrics.current
-        let width = panelWidth(caretRect: caretRect)
-        let stripHeight = strip.isHidden ? 0 : stripHeightConstraint.constant
-        let height = stripHeight
-            + (preeditLabel.isHidden ? 0 : metrics.preeditHeight + root.spacing)
-        panel.setContentSize(NSSize(width: width, height: height))
+        panel.setContentSize(desiredPanelContentSize(caretRect: caretRect, metrics: metrics))
         panel.layoutIfNeeded()
         updateCandidateDocumentSize()
         resetCandidateScroll()
         panel.setFrameOrigin(origin(for: caretRect, bundleId: bundleId))
+    }
+
+    private func desiredPanelContentSize(
+        caretRect: NSRect,
+        metrics: CandidateWindowMetrics
+    ) -> NSSize {
+        let stripHeight = strip.isHidden ? 0 : stripHeightConstraint.constant
+        let height = stripHeight
+            + (preeditLabel.isHidden ? 0 : metrics.preeditHeight + root.spacing)
+        return NSSize(width: panelWidth(caretRect: caretRect), height: height)
+    }
+
+    /// Resolve the final panel, scroll viewport, and document frame before rows
+    /// are attached. This keeps AppKit from laying a three-row stack inside the
+    /// stale compact (one-row) document geometry during reconciliation.
+    private func prepareCandidateGeometryForRendering() {
+        let metrics = CandidateWindowMetrics.current
+        panel.setContentSize(desiredPanelContentSize(caretRect: lastCaretRect, metrics: metrics))
+        panel.layoutIfNeeded()
+        candidateStack.setFrameSize(NSSize(
+            width: candidateScroll.contentSize.width,
+            height: candidateAreaHeight(for: metrics)
+        ))
     }
 
     private func origin(for caretRect: NSRect, bundleId: String) -> NSPoint {
@@ -895,7 +940,6 @@ final class CandidateWindow {
             $0.removeFromSuperview()
         }
 
-        applyMetrics()
         if isExpanded {
             // A too-narrow panel no longer collapses the matrix: at least one
             // column always renders and the viewport scrolls to the rest.
@@ -908,6 +952,8 @@ final class CandidateWindow {
         }
         visualPageIndex = clampVisualPage(visualPageIndex, panelWidth: activePanelWidth())
         candidateScroll.isHidden = false
+        applyMetrics()
+        prepareCandidateGeometryForRendering()
 
         if isSingleCharacterSelectionActive {
             renderSingleCharacterSelectionRow()
@@ -1411,12 +1457,73 @@ final class CandidateWindow {
     private func candidateAreaHeight(for metrics: CandidateWindowMetrics) -> CGFloat {
         let rowHeight = compactCandidateButtonHeight(for: metrics)
         guard isExpanded, !isSingleCharacterSelectionActive else { return rowHeight }
-        let rowCount = max(1, min(Self.expandedMaxRows, expandedPages.count))
-        return CGFloat(rowCount) * rowHeight + CGFloat(max(0, rowCount - 1)) * Self.expandedRowSpacing
+        return Self.matrixViewportHeight(rowHeight: rowHeight,
+                                         rowCount: expandedPages.count)
     }
 
     private func effectiveStripHeight(for metrics: CandidateWindowMetrics) -> CGFloat {
         max(metrics.compactStripHeight, candidateAreaHeight(for: metrics) + 2 * barVerticalPadding(for: metrics))
+    }
+
+    /// AppKit-backed seam for `buffer-window-smoke`. Unlike the pure viewport
+    /// math above, this exercises the real NSPanel/NSScrollView/NSStackView
+    /// hierarchy and catches a reintroduced autoresizing-mask conflict.
+    static func matrixLayoutSnapshotForSmoke(rowCount: Int) -> CandidateMatrixLayoutSnapshot {
+        let candidateWindow = CandidateWindow()
+        let pages = (0..<rowCount).map { pageIndex -> RimeContextModel in
+            var page = RimeContextModel()
+            page.pageNo = pageIndex
+            page.pageSize = 1
+            page.isLastPage = pageIndex == rowCount - 1
+            page.candidates = [
+                RimeCandidateModel(text: "候选\(pageIndex + 1)",
+                                   comment: "",
+                                   label: "1"),
+            ]
+            return page
+        }
+        candidateWindow.expandedPages = pages
+        candidateWindow.expandedSelectionPageOffset = 0
+        candidateWindow.expandedWindowBase = 0
+        candidateWindow.renderCandidates()
+        candidateWindow.panel.layoutIfNeeded()
+        candidateWindow.candidateScroll.layoutSubtreeIfNeeded()
+        candidateWindow.candidateStack.layoutSubtreeIfNeeded()
+
+        let metrics = CandidateWindowMetrics.current
+        let expectedRowHeight = candidateWindow.compactCandidateButtonHeight(for: metrics)
+        let expectedDocumentHeight = matrixViewportHeight(rowHeight: expectedRowHeight,
+                                                          rowCount: rowCount)
+        let expectedPanelHeight = candidateWindow.desiredPanelContentSize(
+            caretRect: candidateWindow.lastCaretRect,
+            metrics: metrics
+        ).height
+        let document = candidateWindow.candidateStack
+        let constraints = document.constraints
+            + candidateWindow.candidateScroll.contentView.constraints
+            + candidateWindow.candidateScroll.constraints
+        let autoresizingMaskConstraintCount = constraints.filter { constraint in
+            guard constraint.isActive,
+                  String(describing: type(of: constraint)).contains("AutoresizingMask") else {
+                return false
+            }
+            return (constraint.firstItem as? NSView) === document
+                || (constraint.secondItem as? NSView) === document
+        }.count
+
+        return CandidateMatrixLayoutSnapshot(
+            rowCount: document.arrangedSubviews.count,
+            rowHeights: document.arrangedSubviews.map(\.frame.height),
+            expectedRowHeight: expectedRowHeight,
+            documentHeight: document.frame.height,
+            expectedDocumentHeight: expectedDocumentHeight,
+            scrollHeight: candidateWindow.candidateScroll.frame.height,
+            panelHeight: candidateWindow.panel.contentView?.bounds.height ?? 0,
+            expectedPanelHeight: expectedPanelHeight,
+            documentTranslatesAutoresizingMaskIntoConstraints:
+                document.translatesAutoresizingMaskIntoConstraints,
+            documentAutoresizingMaskConstraintCount: autoresizingMaskConstraintCount
+        )
     }
 
     private func contextSignature(_ ctx: RimeContextModel) -> String {

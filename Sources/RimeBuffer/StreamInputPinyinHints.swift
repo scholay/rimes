@@ -3,9 +3,11 @@
 /// These hints never decode Chinese and must never replace the complete raw
 /// value sent to the model. They only give the same global request a few
 /// compact, full-coverage readings of an otherwise unseparated `a`...`z`
-/// stream. Normalized spaces are hard short-sentence boundaries: candidates
-/// preserve them and never form a syllable across one. Unknown spans stay
-/// visible in brackets so no input is discarded.
+/// stream. User-entered spaces are hard short-sentence boundaries. Chord-
+/// inserted spaces are supplied as sidecar offsets and become fixed syllable
+/// boundaries instead; candidates preserve both and never form a syllable
+/// across either one. Unknown spans stay visible in brackets so no input is
+/// discarded.
 ///
 /// Expected properties (not fixed golden output):
 /// - `xiufuyigewenti` strongly favors `xiu'fu'yi'ge'wen'ti`.
@@ -18,6 +20,7 @@ enum StreamInputPinyinHints {
             case syllable
             case unrecognized
             case boundary
+            case syllableBoundary
         }
 
         let spelling: String
@@ -49,6 +52,11 @@ enum StreamInputPinyinHints {
                     }
                 case .boundary:
                     clauses.append("")
+                case .syllableBoundary:
+                    // The next recognized or unknown segment naturally adds
+                    // an apostrophe to the current clause. Keep the raw Space
+                    // in `segments` without presenting it as a hard ` | `.
+                    break
                 }
             }
             return clauses.joined(separator: " | ")
@@ -59,6 +67,7 @@ enum StreamInputPinyinHints {
     /// caller should still ask the model to interpret the complete raw input
     /// globally; candidate order is only a deterministic local preference.
     static func candidates(for raw: String,
+                           automaticSyllableSpaceOffsets: Set<Int> = [],
                            maximumCount: Int = 3) -> [Candidate] {
         let limit = min(max(maximumCount, 0), 3)
         guard limit > 0, !raw.isEmpty else { return [] }
@@ -85,7 +94,11 @@ enum StreamInputPinyinHints {
             if bytes[position] == 0x20 {
                 for path in beams[position] {
                     var next = path
-                    next.appendBoundary(at: position)
+                    if automaticSyllableSpaceOffsets.contains(position) {
+                        next.appendSyllableBoundary(at: position)
+                    } else {
+                        next.appendBoundary(at: position)
+                    }
                     insert(next, into: &beams[position + 1])
                 }
                 continue
@@ -145,16 +158,26 @@ enum StreamInputPinyinHints {
     }
 
     static func compactHints(for raw: String,
+                             automaticSyllableSpaceOffsets: Set<Int> = [],
                              maximumCount: Int = 3) -> [String] {
-        candidates(for: raw, maximumCount: maximumCount).map(\.compact)
+        candidates(
+            for: raw,
+            automaticSyllableSpaceOffsets: automaticSyllableSpaceOffsets,
+            maximumCount: maximumCount
+        ).map(\.compact)
     }
 
     /// Produces one compact value that can be embedded as advisory metadata in
     /// the existing full-context prompt. It intentionally contains no Chinese
     /// guess and is never suitable as a separately inferred region.
     static func compactPromptValue(for raw: String,
+                                   automaticSyllableSpaceOffsets: Set<Int> = [],
                                    maximumCount: Int = 3) -> String? {
-        let hints = compactHints(for: raw, maximumCount: maximumCount)
+        let hints = compactHints(
+            for: raw,
+            automaticSyllableSpaceOffsets: automaticSyllableSpaceOffsets,
+            maximumCount: maximumCount
+        )
         guard !hints.isEmpty else { return nil }
         return hints.enumerated().map { index, hint in
             "\(index + 1):\(hint)"
@@ -166,16 +189,21 @@ enum StreamInputPinyinHints {
         var upperBound: Int
         let recognized: Bool
         let boundary: Bool
+        let syllableBoundary: Bool
 
         init(lowerBound: Int,
              upperBound: Int,
              recognized: Bool,
-             boundary: Bool = false) {
+             boundary: Bool = false,
+             syllableBoundary: Bool = false) {
             self.lowerBound = lowerBound
             self.upperBound = upperBound
             self.recognized = recognized
             self.boundary = boundary
+            self.syllableBoundary = syllableBoundary
         }
+
+        var isBoundary: Bool { boundary || syllableBoundary }
     }
 
     /// Immutable predecessor nodes let beam paths share their histories. A
@@ -200,6 +228,8 @@ enum StreamInputPinyinHints {
             value ^= segment.recognized ? 1 : 0
             value &*= 1_099_511_628_211
             value ^= segment.boundary ? 2 : 0
+            value &*= 1_099_511_628_211
+            value ^= segment.syllableBoundary ? 4 : 0
             value &*= 1_099_511_628_211
             signature = value
         }
@@ -234,7 +264,7 @@ enum StreamInputPinyinHints {
             score -= 50
             if let previousTail = tail,
                !previousTail.segment.recognized,
-               !previousTail.segment.boundary,
+               !previousTail.segment.isBoundary,
                previousTail.segment.upperBound == position {
                 tail = Trail(
                     segment: RangeSegment(
@@ -264,6 +294,16 @@ enum StreamInputPinyinHints {
                                       upperBound: position + 1,
                                       recognized: false,
                                       boundary: true),
+                previous: tail
+            )
+        }
+
+        mutating func appendSyllableBoundary(at position: Int) {
+            tail = Trail(
+                segment: RangeSegment(lowerBound: position,
+                                      upperBound: position + 1,
+                                      recognized: false,
+                                      syllableBoundary: true),
                 previous: tail
             )
         }
@@ -314,8 +354,8 @@ enum StreamInputPinyinHints {
         }
 
         if let left = lhs.tail?.segment, let right = rhs.tail?.segment {
-            if left.boundary != right.boundary {
-                return !left.boundary && right.boundary
+            if left.isBoundary != right.isBoundary {
+                return !left.isBoundary && right.isBoundary
             }
             if left.recognized != right.recognized {
                 return left.recognized && !right.recognized
@@ -335,7 +375,9 @@ enum StreamInputPinyinHints {
                                  as: UTF8.self),
                 kind: range.boundary
                     ? .boundary
-                    : (range.recognized ? .syllable : .unrecognized)
+                    : (range.syllableBoundary
+                        ? .syllableBoundary
+                        : (range.recognized ? .syllable : .unrecognized))
             )
         })
     }
@@ -349,7 +391,7 @@ enum StreamInputPinyinHints {
         var ranges = source
         var index = 0
         while index < ranges.count {
-            guard !ranges[index].recognized, !ranges[index].boundary else {
+            guard !ranges[index].recognized, !ranges[index].isBoundary else {
                 index += 1
                 continue
             }
@@ -359,7 +401,7 @@ enum StreamInputPinyinHints {
                 closingUnknown += 1
             }
             if closingUnknown < ranges.count,
-               !ranges[closingUnknown].boundary {
+               !ranges[closingUnknown].isBoundary {
                 let spanLength = ranges[closingUnknown].upperBound
                     - ranges[index].lowerBound
                 let recognizedBridgeCount = closingUnknown - index - 1
@@ -381,7 +423,7 @@ enum StreamInputPinyinHints {
         if ranges.count >= 2,
            let unknown = ranges.last,
            !unknown.recognized,
-           !unknown.boundary,
+           !unknown.isBoundary,
            unknown.upperBound - unknown.lowerBound == 1 {
             let previousIndex = ranges.count - 2
             let previous = ranges[previousIndex]

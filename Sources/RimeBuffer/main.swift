@@ -1692,6 +1692,20 @@ func runCandidateMatrixSmokeTest() -> Bool {
         return false
     }
 
+    // The third row is the boundary that used to retain a compact 24pt
+    // document height. Pin all transitions and the three-row viewport cap.
+    let rowHeight: CGFloat = 24
+    let expectedViewportHeights: [CGFloat] = [24, 51, 78, 78]
+    for (index, expectedHeight) in expectedViewportHeights.enumerated() {
+        let rowCount = index + 1
+        let height = CandidateWindow.matrixViewportHeight(rowHeight: rowHeight,
+                                                          rowCount: rowCount)
+        guard height == expectedHeight else {
+            print("FAILED: \(rowCount)-row viewport expected \(expectedHeight)pt, got \(height)pt")
+            return false
+        }
+    }
+
     // Walking ↓ through six pages: the window pins to the top until the
     // selection leaves it, then trails the selection one row at a time.
     let walkDown = [0, 0, 0, 1, 2, 3]
@@ -4602,6 +4616,44 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
 func runBufferWindowSmokeTest() -> Bool {
     print("== \(ProductIdentity.displayName) buffer window smoke test ==")
 
+    // Physical flagsChanged events close stream mutual pairing even when the
+    // aggregate modifier bitset has no delta (for example, pressing the second
+    // Shift/Command/Option/Control key). Ordinary key events are not boundaries.
+    guard StreamInputModifierBoundaryRules.closesPairing(
+        eventType: .flagsChanged
+    ),
+    !StreamInputModifierBoundaryRules.closesPairing(
+        eventType: .keyDown
+    ) else {
+        print("FAILED: physical modifier transition stream boundary routing")
+        return false
+    }
+
+    let candidateMatrix = CandidateWindow.matrixLayoutSnapshotForSmoke(rowCount: 3)
+    let candidateLayoutEpsilon: CGFloat = 0.5
+    guard candidateMatrix.rowCount == 3,
+          candidateMatrix.rowHeights.allSatisfy({
+              abs($0 - candidateMatrix.expectedRowHeight) <= candidateLayoutEpsilon
+          }),
+          abs(candidateMatrix.documentHeight
+              - candidateMatrix.expectedDocumentHeight) <= candidateLayoutEpsilon,
+          abs(candidateMatrix.scrollHeight
+              - candidateMatrix.expectedDocumentHeight) <= candidateLayoutEpsilon,
+          abs(candidateMatrix.panelHeight
+              - candidateMatrix.expectedPanelHeight) <= candidateLayoutEpsilon,
+          !candidateMatrix.documentTranslatesAutoresizingMaskIntoConstraints,
+          candidateMatrix.documentAutoresizingMaskConstraintCount == 0 else {
+        print("FAILED: three-row candidate matrix geometry",
+              "rows=\(candidateMatrix.rowCount)",
+              "rowHeights=\(candidateMatrix.rowHeights)",
+              "document=\(candidateMatrix.documentHeight)/\(candidateMatrix.expectedDocumentHeight)",
+              "scroll=\(candidateMatrix.scrollHeight)",
+              "panel=\(candidateMatrix.panelHeight)/\(candidateMatrix.expectedPanelHeight)",
+              "translatesMask=\(candidateMatrix.documentTranslatesAutoresizingMaskIntoConstraints)",
+              "maskConstraints=\(candidateMatrix.documentAutoresizingMaskConstraintCount)")
+        return false
+    }
+
     let workbenchHotKeyID = WorkbenchGlobalHotKeyRouting.identifier
     let unrelatedHotKeyID = EventHotKeyID(
         signature: WorkbenchGlobalHotKeyRouting.signature,
@@ -5805,7 +5857,15 @@ func runBufferWindowSmokeTest() -> Bool {
         return false
     }
 
-    let translationRail = BufferInlineView()
+    let translationRail = BufferInlineView(
+        frame: NSRect(
+            x: 0,
+            y: 0,
+            width: 760,
+            height: BufferInlineView.translationPreferredHeight(targetRows: 1)
+        )
+    )
+    translationRail.layoutSubtreeIfNeeded()
     let sourcePreview = "上方原文缓冲"
     let targetPreviewA = "下方译文"
     let targetPreviewB = "第二块"
@@ -5885,12 +5945,34 @@ func runBufferWindowSmokeTest() -> Bool {
         sourceRole: "拼",
         targetRole: "文"
     )
+    // Runtime grows before attaching the third candidate. Exercise the real
+    // scroll/document geometry instead of only checking preferredHeight.
+    translationRail.setFrameSize(NSSize(
+        width: 760,
+        height: BufferInlineView.translationPreferredHeight(targetRows: 3)
+    ))
+    translationRail.layoutSubtreeIfNeeded()
     let renderedMultiCandidateLayout = translationRail.renderTranslationForPreview(
         multiCandidatePreview
     ) && translationRail.renderedTranslationTargetRowCount == 3
         && translationRail.translationRailCount == 4
         && translationRail.preferredHeight
             == BufferInlineView.translationPreferredHeight(targetRows: 3)
+    let threeRowProbe = translationRail.translationLayoutProbe
+    let threeRowFrames = threeRowProbe.rails
+        .map(\.viewportFrame)
+        .sorted { $0.minY < $1.minY }
+    let renderedThreeRowGeometry = threeRowProbe.boundsHeight == 130
+        && threeRowProbe.containerHeight == 120
+        && threeRowProbe.rails.count == 4
+        && threeRowProbe.rails.allSatisfy {
+            abs($0.viewportHeight - 27) < 0.5
+                && abs($0.documentHeight - $0.viewportHeight) < 0.5
+        }
+        && zip(threeRowFrames, threeRowFrames.dropFirst()).allSatisfy {
+            $1.minY >= $0.maxY
+                && abs(($1.minY - $0.maxY) - 4) < 0.5
+        }
     let threeRowIdentities = translationRail.renderedTranslationTargetViewIdentities
     let renderedMultiCandidateRows = renderedMultiCandidateLayout
         && threeRowIdentities.count == 3
@@ -5923,13 +6005,28 @@ func runBufferWindowSmokeTest() -> Bool {
         sourceRole: "拼",
         targetRole: "文"
     )
-    let renderedTwoCandidateRows = translationRail.renderTranslationForPreview(
+    let renderedTwoCandidateRowsBeforeShrink = translationRail.renderTranslationForPreview(
         twoCandidatePreview
     ) && translationRail.renderedTranslationTargetRowCount == 2
         && translationRail.translationRailCount == 3
         && !translationRail.renderedTextFragments.contains("翻案")
         && translationRail.renderedTranslationTargetViewIdentities
             == reorderedCandidateIdentities
+    translationRail.setFrameSize(NSSize(
+        width: 760,
+        height: BufferInlineView.translationPreferredHeight(targetRows: 2)
+    ))
+    translationRail.reconcileTranslationDocumentGeometry()
+    let twoRowProbe = translationRail.translationLayoutProbe
+    let renderedTwoCandidateRows = renderedTwoCandidateRowsBeforeShrink
+        && twoRowProbe.boundsHeight == 99
+        && twoRowProbe.containerHeight == 89
+        && twoRowProbe.rails.count == 3
+        && twoRowProbe.rails.map(\.key) == [nil, 2, 0]
+        && twoRowProbe.rails.allSatisfy {
+            abs($0.viewportHeight - 27) < 0.5
+                && abs($0.documentHeight - $0.viewportHeight) < 0.5
+        }
     let retainedChildID = UUID()
     let segmentedOneRowPreview = TranslationRailSnapshot(
         sourceText: "fangan",
@@ -5986,10 +6083,20 @@ func runBufferWindowSmokeTest() -> Bool {
             == .init(name: "sparkles", accessibilityLabel: "AI 回答"),
           reusedTargetViews,
           renderedMultiCandidateRows,
+          renderedThreeRowGeometry,
           renderedTwoCandidateRows,
           renderedSegmentedOneRow,
           translationShielded else {
-        print("FAILED: translation rail must render two stacked, independently shielded buffers")
+        print("FAILED: translation rail must render two stacked, independently shielded buffers",
+              "stacked=\(renderedStackedTranslation)",
+              "reused=\(reusedTargetViews)",
+              "multi=\(renderedMultiCandidateRows)",
+              "threeGeometry=\(renderedThreeRowGeometry)",
+              "two=\(renderedTwoCandidateRows)",
+              "segmented=\(renderedSegmentedOneRow)",
+              "shielded=\(translationShielded)",
+              "threeProbe=\(threeRowProbe.boundsHeight)/\(threeRowProbe.containerHeight)",
+              "rails=\(threeRowProbe.rails.map { ($0.key, $0.viewportHeight, $0.documentHeight) })")
         return false
     }
 

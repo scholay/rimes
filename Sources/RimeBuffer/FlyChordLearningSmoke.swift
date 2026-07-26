@@ -50,6 +50,21 @@ func runFlyChordLearningSmokeTest() -> Bool {
               fixtureMap["not-in-chord-section"] == nil else {
             return fail("literal xform filtering")
         }
+        let fixtureStreamMapping = StreamInputChordMapping(schema: parsed)
+        guard fixtureStreamMapping.decode([
+            FlyChordKeyEvent(keycode: 0x62, mask: 0),
+            FlyChordKeyEvent(keycode: 0x61, mask: 0),
+        ]) == .init(text: "alpha",
+                    insertsAutomaticSyllableSpace: false,
+                    usedMappedOutput: true),
+        fixtureStreamMapping.decode([
+            FlyChordKeyEvent(keycode: 0x2e, mask: 0),
+            FlyChordKeyEvent(keycode: 0x61, mask: 0),
+        ]) == .init(text: "dot",
+                    insertsAutomaticSyllableSpace: true,
+                    usedMappedOutput: true) else {
+            return fail("stream mapping must use order-independent parsed rules")
+        }
 
         let fakeShared = sandbox.appendingPathComponent("SharedSupport", isDirectory: true)
         try fileManager.createDirectory(at: fakeShared, withIntermediateDirectories: true)
@@ -212,6 +227,31 @@ func runFlyChordLearningSmokeTest() -> Bool {
               mappingByChord["v"] == nil,
               schema.mappings.allSatisfy({ !$0.output.contains("*") }) else {
             return fail("real my_combo mapping extraction")
+        }
+        let streamMapping = StreamInputChordMapping(schema: schema)
+        guard streamMapping.decode([
+            FlyChordKeyEvent(keycode: 0x79, mask: 0),
+            FlyChordKeyEvent(keycode: 0x71, mask: 0),
+        ]) == .init(text: "qing",
+                    insertsAutomaticSyllableSpace: true,
+                    usedMappedOutput: true),
+        streamMapping.decode([
+            FlyChordKeyEvent(keycode: 0x76, mask: 0),
+            FlyChordKeyEvent(keycode: 0x64, mask: 0),
+        ]) == .init(text: "n",
+                    insertsAutomaticSyllableSpace: false,
+                    usedMappedOutput: true),
+        streamMapping.decode([
+            FlyChordKeyEvent(keycode: 0x69, mask: 0),
+            FlyChordKeyEvent(keycode: 0x76, mask: 0),
+            FlyChordKeyEvent(keycode: 0x64, mask: 0),
+        ])?.text == "ni",
+        streamMapping.decode([
+            FlyChordKeyEvent(keycode: 0x2e, mask: 0),
+            FlyChordKeyEvent(keycode: 0x6d, mask: 0),
+            FlyChordKeyEvent(keycode: 0x71, mask: 0),
+        ])?.text == "que" else {
+            return fail("real stream mapping must follow effective FlyYao algebra")
         }
         guard FlyChordAnswerMatcher.matches(captured: "ydf", expected: "dfy"),
               FlyChordAnswerMatcher.matches(captured: "dfy", expected: "dfy"),

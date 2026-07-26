@@ -27,6 +27,16 @@ enum BufferClipboardShortcut: Equatable {
     case paste
 }
 
+/// `modifierFlags` is an aggregate bitset: pressing the second physical Shift,
+/// Command, Option, or Control key can emit `flagsChanged` without changing
+/// that bitset. The event type itself is therefore the stream-chord boundary;
+/// a delta in the aggregate flags is not required.
+enum StreamInputModifierBoundaryRules {
+    static func closesPairing(eventType: NSEvent.EventType) -> Bool {
+        eventType == .flagsChanged
+    }
+}
+
 enum BufferClipboardShortcutRules {
     /// RIMES accepts both the user's Control convention and native macOS
     /// Command shortcuts. Extra Shift/Option or Control+Command combinations
@@ -372,13 +382,21 @@ final class RimeBufferController: IMKInputController {
 
     /// Consciousness-stream capture is intentionally stricter than ordinary
     /// buffer commands: persistent capture must be enabled and the exact
-    /// external client must still own the lease. It consumes physical a-z as
-    /// full-pinyin data without changing or depending on the active schema.
+    /// external client must still own the lease. Sequential mode consumes
+    /// physical a-z as continuous full pinyin. Both FlyYao modes stage the
+    /// effective alphabet while preserving their same-batch/cross-batch
+    /// settlement policy.
     private var streamInputModeSelected: Bool {
         BufferModel.shared.enabled
             && BufferPluginSelectionStore.shared.isSelected(
                 StreamInputWorkspace.pluginKey
             )
+    }
+
+    private var streamInputChordRoute: StreamInputChordRoute? {
+        StreamInputChordRoutingRules.route(
+            for: InputConfigurationStore.shared.configuration
+        )
     }
 
     private func streamInputLease(client: IMKTextInput) -> FocusLease? {
@@ -398,7 +416,8 @@ final class RimeBufferController: IMKInputController {
 
     private func streamInputDisposition(keycode: Int32?,
                                         mask: Int32,
-                                        exactExternalFocus: Bool)
+                                        exactExternalFocus: Bool,
+                                        chordRoute: StreamInputChordRoute?)
         -> StreamInputCaptureRules.Disposition {
         StreamInputCaptureRules.disposition(
             keycode: keycode,
@@ -408,7 +427,8 @@ final class RimeBufferController: IMKInputController {
                 StreamInputWorkspace.pluginKey
             ),
             secureInput: IsSecureEventInputEnabled(),
-            exactExternalFocus: exactExternalFocus
+            exactExternalFocus: exactExternalFocus,
+            chordSchemaID: chordRoute?.schemaID
         )
     }
 
@@ -1344,11 +1364,13 @@ final class RimeBufferController: IMKInputController {
                 switch streamInputDisposition(
                     keycode: keysym(for: event),
                     mask: RimeKey.modifierMask(from: event.modifierFlags),
-                    exactExternalFocus: false
+                    exactExternalFocus: false,
+                    chordRoute: streamInputChordRoute
                 ) {
                 case .passThrough:
                     break
-                case .capture, .consumeOwned, .consumeUntrusted:
+                case .capture, .stageChordKey,
+                     .consumeOwned, .consumeUntrusted:
                     StreamInputWorkspace.shared.authorityRejected()
                     IMELog.write("stream printable consumed after stale event")
                     return true
@@ -1490,11 +1512,12 @@ final class RimeBufferController: IMKInputController {
             switch streamInputDisposition(
                 keycode: keycode,
                 mask: RimeKey.modifierMask(from: event.modifierFlags),
-                exactExternalFocus: streamLease != nil
+                exactExternalFocus: streamLease != nil,
+                chordRoute: streamInputChordRoute
             ) {
             case .passThrough:
                 return false
-            case .capture, .consumeOwned:
+            case .capture, .stageChordKey, .consumeOwned:
                 return true
             case .consumeUntrusted:
                 StreamInputWorkspace.shared.authorityRejected()
@@ -1598,6 +1621,16 @@ final class RimeBufferController: IMKInputController {
         // composition first so the shortcut acts on committed text.
         if event.modifierFlags.contains(.command) {
             if composition.composing || chord.hasPending { forceCommit() }
+            if streamInputModeSelected {
+                if let lease = streamInputLease(client: client) {
+                    _ = StreamInputWorkspace.shared.settlePendingChord(
+                        focusToken: lease.token,
+                        closesPairingAfterSettlement: true
+                    )
+                } else {
+                    StreamInputWorkspace.shared.authorityRejected()
+                }
+            }
             return false
         }
 
@@ -1622,12 +1655,20 @@ final class RimeBufferController: IMKInputController {
             updateUI(client: client)
             return true
         }
+        let streamChordRoute = streamInputChordRoute
         switch streamInputDisposition(
             keycode: routedKeycode,
             mask: routedMask,
-            exactExternalFocus: streamLease != nil
+            exactExternalFocus: streamLease != nil,
+            chordRoute: streamChordRoute
         ) {
         case .passThrough:
+            if let streamLease {
+                _ = StreamInputWorkspace.shared.settlePendingChord(
+                    focusToken: streamLease.token,
+                    closesPairingAfterSettlement: true
+                )
+            }
             break
         case .consumeUntrusted:
             StreamInputWorkspace.shared.authorityRejected()
@@ -1646,6 +1687,26 @@ final class RimeBufferController: IMKInputController {
                   self.streamInputLease(client: client) === streamLease else {
                 StreamInputWorkspace.shared.authorityRejected()
                 IMELog.write("stream letter consumed after authority changed")
+                return true
+            }
+            updateUI(client: client)
+            return true
+        case let .stageChordKey(keycode):
+            guard let streamLease,
+                  let streamChordRoute,
+                  prepareForStreamInputCapture(
+                    client: client,
+                    lease: streamLease
+                  ),
+                  StreamInputWorkspace.shared.captureChordKey(
+                    keycode,
+                    schemaID: streamChordRoute.schemaID,
+                    policy: streamChordRoute.policy,
+                    focusToken: streamLease.token
+                  ),
+                  self.streamInputLease(client: client) === streamLease else {
+                StreamInputWorkspace.shared.authorityRejected()
+                IMELog.write("stream chord key consumed after authority changed")
                 return true
             }
             updateUI(client: client)
@@ -3211,12 +3272,36 @@ final class RimeBufferController: IMKInputController {
             shiftGesture?.noteModifierUse()
         }
 
-        guard rimeEngine.start(), ensureSessionReady() else {
-            lastModifiers = event.modifierFlags
-            return false
+        // Every trusted flagsChanged is a physical boundary for stream chords,
+        // including a second left/right modifier whose aggregate flags have no
+        // delta. Settle and close before consulting librime, whose availability
+        // must not decide whether a later FlyYao half can recombine with raw.
+        if StreamInputModifierBoundaryRules.closesPairing(
+            eventType: event.type
+        ), streamInputModeSelected {
+            guard let lease = streamInputLease(client: client) else {
+                StreamInputWorkspace.shared.authorityRejected()
+                lastModifiers = modifiers
+                return false
+            }
+            _ = StreamInputWorkspace.shared.settlePendingChord(
+                focusToken: lease.token,
+                closesPairingAfterSettlement: true
+            )
+            guard streamInputLease(client: client) === lease else {
+                StreamInputWorkspace.shared.authorityRejected()
+                lastModifiers = modifiers
+                return false
+            }
         }
+
         guard !changes.isEmpty else {
             lastModifiers = modifiers
+            return false
+        }
+
+        guard rimeEngine.start(), ensureSessionReady() else {
+            lastModifiers = event.modifierFlags
             return false
         }
 

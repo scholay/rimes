@@ -939,20 +939,31 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             ? .blocked(.secureInput)
             : BufferDeliveryCoordinator.shared.availability()
         // Row reconciliation and panel geometry are one visual transaction.
-        // This prevents 3→2→1 candidate changes from briefly squeezing stale
-        // rows into the new frame, and prevents 1→2→3 from drawing before the
-        // larger frame is ready.
+        // Grow before attaching a new row; shrink only after stale rows have
+        // been removed. Otherwise NSScrollView captures a 0pt/old document
+        // frame and AppKit permanently breaks the third row's constraints.
         let nextLayoutMode: BufferWorkbenchLayoutMode = derivedWorkspaceSelected
             ? .derived(targetRows: derivedSnapshot?.targetRowCount ?? 1)
             : .standard
-        if layoutMode != nextLayoutMode {
+        let layoutChanged = layoutMode != nextLayoutMode
+        let grows = BufferWorkbenchMetrics.railHeight(for: nextLayoutMode)
+            > BufferWorkbenchMetrics.railHeight(for: layoutMode)
+        if layoutChanged {
             panel.disableScreenUpdatesUntilFlush()
+        }
+        if layoutChanged, grows {
+            syncLayoutMode(nextLayoutMode)
+            panel.contentView?.layoutSubtreeIfNeeded()
         }
         _ = bufferRail.refresh(
             shielded: contentProtected,
             translationSnapshot: derivedSnapshot
         )
-        syncLayoutMode(nextLayoutMode)
+        if layoutChanged, !grows {
+            syncLayoutMode(nextLayoutMode)
+        }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        bufferRail.reconcileTranslationDocumentGeometry()
         let pluginFailure = contentProtected || derivedWorkspaceSelected
             ? nil
             : ActionPluginHost.shared.workbenchFailureMessage

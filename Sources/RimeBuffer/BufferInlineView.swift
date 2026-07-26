@@ -219,6 +219,19 @@ private final class TranslationTargetRail {
     }
 }
 
+struct BufferTranslationRailLayoutProbe {
+    struct Rail {
+        let key: Int?
+        let viewportFrame: NSRect
+        let viewportHeight: CGFloat
+        let documentHeight: CGFloat
+    }
+
+    let boundsHeight: CGFloat
+    let containerHeight: CGFloat
+    let rails: [Rail]
+}
+
 /// Compact block rail used by the independent workbench window. It never holds
 /// an IMK client or action buttons; it only renders staged blocks.
 final class BufferInlineView: NSView {
@@ -322,6 +335,35 @@ final class BufferInlineView: NSView {
     var renderedTranslationTargetRowCount: Int {
         usesStackedTranslationLayout ? max(renderedTranslationTargetRowKeys.count, 1) : 0
     }
+    var translationLayoutProbe: BufferTranslationRailLayoutProbe {
+        let source = BufferTranslationRailLayoutProbe.Rail(
+            key: nil,
+            viewportFrame: translationSourceScroll.convert(
+                translationSourceScroll.bounds,
+                to: self
+            ),
+            viewportHeight: translationSourceScroll.contentSize.height,
+            documentHeight: translationSourceRow.frame.height
+        )
+        let targets = renderedTranslationTargetRowKeys.compactMap { key in
+            translationTargetRails[key].map { rail in
+                BufferTranslationRailLayoutProbe.Rail(
+                    key: key,
+                    viewportFrame: rail.scroll.convert(
+                        rail.scroll.bounds,
+                        to: self
+                    ),
+                    viewportHeight: rail.scroll.contentSize.height,
+                    documentHeight: rail.row.frame.height
+                )
+            }
+        }
+        return BufferTranslationRailLayoutProbe(
+            boundsHeight: bounds.height,
+            containerHeight: translationContainer.bounds.height,
+            rails: [source] + targets
+        )
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -421,12 +463,23 @@ final class BufferInlineView: NSView {
         row.spacing = BufferInlineMetrics.blockSpacing
         row.alignment = .centerY
         row.distribution = .fill
+        // NSScrollView owns the document frame, which this view updates from
+        // fittingSize/contentSize. An autoresizing-mask width/height constraint
+        // would freeze a newly inserted third row at its initial 0×0 frame and
+        // conflict with every chip before the host rail finishes resizing.
+        row.translatesAutoresizingMaskIntoConstraints = false
         scroll.drawsBackground = false
         scroll.hasHorizontalScroller = false
         scroll.hasVerticalScroller = false
         scroll.horizontalScrollElasticity = .allowed
         scroll.verticalScrollElasticity = .none
         scroll.documentView = row
+        // Horizontal rails scroll only along x; pinning the document height to
+        // the clip viewport centers the 20pt chips inside each 27pt rail and
+        // prevents AppKit from collapsing the document back to fittingSize.
+        row.heightAnchor.constraint(
+            equalTo: scroll.contentView.heightAnchor
+        ).isActive = true
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.setContentHuggingPriority(.defaultLow, for: .horizontal)
         scroll.wantsLayer = true
@@ -449,6 +502,18 @@ final class BufferInlineView: NSView {
         super.layout()
         updateHairlineWidth()
         updateEnterHoldProgressLayer()
+        if !translationContainer.isHidden {
+            updateTranslationDocumentSizes()
+        }
+    }
+
+    /// Host geometry changes and row reconciliation are deliberately separate
+    /// operations. Recompute every document frame after the panel has reached
+    /// its final height so 1↔2↔3-row transitions cannot retain stale sizes.
+    func reconcileTranslationDocumentGeometry() {
+        guard !translationContainer.isHidden else { return }
+        layoutSubtreeIfNeeded()
+        updateTranslationDocumentSizes()
     }
 
     private func updateHairlineWidth() {

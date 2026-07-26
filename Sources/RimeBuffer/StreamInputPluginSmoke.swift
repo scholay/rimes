@@ -76,6 +76,77 @@ func runStreamInputPluginSmokeTest() -> Bool {
     )
     guard letter == "a" else { return fail("valid letter capture") }
 
+    let chordConfiguration = InputConfiguration(
+        encoding: .fullPinyin,
+        keyingMode: .chord
+    )
+    let mutualConfiguration = InputConfiguration(
+        encoding: .fullPinyin,
+        keyingMode: .mutual
+    )
+    guard InputConfigurationResolver.profile(
+        for: chordConfiguration
+    )?.schemaID == FlyChordLearningIdentity.schemaID,
+    InputConfigurationResolver.profile(
+        for: mutualConfiguration
+    )?.schemaID == FlyChordLearningIdentity.schemaID,
+    StreamInputChordRoutingRules.schemaID(
+        for: chordConfiguration
+    ) == FlyChordLearningIdentity.schemaID,
+    StreamInputChordRoutingRules.schemaID(
+        for: mutualConfiguration
+    ) == FlyChordLearningIdentity.schemaID,
+    StreamInputChordRoutingRules.route(
+        for: chordConfiguration
+    ) == StreamInputChordRoute(
+        schemaID: FlyChordLearningIdentity.schemaID,
+        policy: .sameBatchOnly
+    ),
+    StreamInputChordRoutingRules.route(
+        for: mutualConfiguration
+    ) == StreamInputChordRoute(
+        schemaID: FlyChordLearningIdentity.schemaID,
+        policy: .independentHalves
+    ),
+    StreamInputChordRoutingRules.schemaID(
+        for: .init(encoding: .fullPinyin, keyingMode: .sequential)
+    ) == nil else {
+        return fail("chord routing must preserve both FlyYao settlement modes")
+    }
+    for keycode: Int32 in [0x61, 0x7a, 0x2c, 0x2e] {
+        guard StreamInputCaptureRules.disposition(
+            keycode: keycode,
+            mask: 0,
+            bufferEnabled: true,
+            pluginSelected: true,
+            secureInput: false,
+            exactExternalFocus: true,
+            chordSchemaID: FlyChordLearningIdentity.schemaID
+        ) == .stageChordKey(keycode) else {
+            return fail("FlyYao alphabet must enter stream chord staging")
+        }
+    }
+    guard StreamInputCaptureRules.disposition(
+        keycode: 0x20,
+        mask: 0,
+        bufferEnabled: true,
+        pluginSelected: true,
+        secureInput: false,
+        exactExternalFocus: true,
+        chordSchemaID: FlyChordLearningIdentity.schemaID
+    ) == .consumeOwned,
+    StreamInputCaptureRules.disposition(
+        keycode: 0x61,
+        mask: RimeKey.controlMask,
+        bufferEnabled: true,
+        pluginSelected: true,
+        secureInput: false,
+        exactExternalFocus: true,
+        chordSchemaID: FlyChordLearningIdentity.schemaID
+    ) == .passThrough else {
+        return fail("stream chord staging must preserve separators and shortcuts")
+    }
+
     let rejectedGates: [(Bool, Bool, Bool, Bool)] = [
         (false, true, false, true),
         (true, false, false, true),
@@ -276,6 +347,22 @@ func runStreamInputPluginSmokeTest() -> Bool {
         for: "wozaicodexlixiuyigebug"
     )
     let spacedCandidates = StreamInputPinyinHints.candidates(for: "wo shi")
+    let chordRaw = "qing ni "
+    let chordSpaceOffsets: Set<Int> = [4, 7]
+    let chordCandidates = StreamInputPinyinHints.candidates(
+        for: chordRaw,
+        automaticSyllableSpaceOffsets: chordSpaceOffsets
+    )
+    let chordPrompt = StreamInputPrompt.request(
+        for: chordRaw,
+        automaticSyllableSpaceOffsets: chordSpaceOffsets
+    )
+    let chordProtectedSegments = StreamInputOutputSegmenter.fragments(
+        text: "RimeBuffer",
+        sourceIndex: 0,
+        rawInput: chordRaw,
+        automaticSyllableSpaceOffsets: chordSpaceOffsets
+    )
     let longRaw = String(repeating: "a", count: 513)
     let longHints = StreamInputPinyinHints.candidates(for: longRaw)
     guard ambiguousHints.contains("fang'an"),
@@ -328,6 +415,23 @@ func runStreamInputPluginSmokeTest() -> Bool {
           }) else {
         return fail("space-aware pinyin boundary hints")
     }
+    guard !chordCandidates.isEmpty,
+          chordCandidates.allSatisfy({
+              $0.segments.map(\.spelling).joined() == chordRaw
+                  && !$0.compact.contains(" | ")
+                  && $0.compact.contains("qing'ni")
+          }),
+          chordPrompt.contains(
+              "\"automaticSyllableSpaceOffsets\":[4,7]"
+          ),
+          chordPrompt.contains("\"rawPinyin\":\"qing ni \""),
+          chordProtectedSegments.map(\.text) == ["RimeBuffer"],
+          StreamInputSourcePresentation.displayText(
+              for: chordRaw,
+              automaticSyllableSpaceOffsets: chordSpaceOffsets
+          ) == chordRaw else {
+        return fail("automatic chord spaces must remain syllable-only boundaries")
+    }
     guard longHints.isEmpty,
           StreamInputPinyinHints.compactHints(for: "FanGan").isEmpty else {
         return fail("bounded pinyin boundary hint omission")
@@ -344,6 +448,770 @@ func runStreamInputPluginSmokeTest() -> Bool {
     )
     guard providerPolicyWorkspace.providerKindForTesting == .openAICompatible else {
         return fail("default provider must stay OpenAI-compatible")
+    }
+
+    let chordFixture = #"""
+    schema:
+      schema_id: my_combo
+    chord_composer:
+      alphabet: 'qwertyuiopasdfghjklzxcvbnm,.'
+      algebra:
+        - 'xform/^qy$/qing/'
+        - 'xform/^dv$/n/'
+        - 'xform/^km$/ong/'
+        - 'xform/^dvi$/ni/'
+        - 'xform/^qkm$/qiong/'
+        - 'xform/^qm\.$/que/'
+    """#
+    guard let chordSchema = try? FlyChordSchemaParser.parse(
+        chordFixture,
+        sourceURL: URL(fileURLWithPath: "/tmp/stream-chord.schema.yaml")
+    ) else {
+        return fail("stream chord fixture parsing")
+    }
+    let chordMapping = StreamInputChordMapping(schema: chordSchema)
+
+    // Same-batch FlyYao keys are mapped atomically. The inserted ASCII Space is
+    // a soft syllable separator: it waits for the ordinary debounce and does
+    // not render as a hard-boundary middle dot.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { schemaID in
+                schemaID == chordMapping.schemaID ? chordMapping : nil
+            }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+
+        guard workspace.captureChordKey(
+            0x79,
+            schemaID: "my_combo",
+            focusToken: focus
+        ),
+        workspace.captureChordKey(
+            0x71,
+            schemaID: "my_combo",
+            focusToken: focus
+        ),
+        workspace.captureChordKey(
+            0x79,
+            schemaID: "my_combo",
+            focusToken: focus
+        ),
+        workspace.hasPendingChordForTesting,
+        workspace.rawInput.isEmpty,
+        workspace.deliveryPendingBlocks.isEmpty,
+        workspace.hasIncompleteDeliveryBlocks,
+        provider.pending.isEmpty else {
+            return fail("pending chord must be deduplicated and revoke old delivery")
+        }
+        workspace.settlePendingChordForTesting()
+        guard !workspace.hasPendingChordForTesting,
+              workspace.rawInput == "qing ",
+              workspace.automaticSyllableSpaceOffsets == [4],
+              workspace.railSnapshot.sourceText == "qing ",
+              provider.pending.isEmpty,
+              workspace.maximumWaitTimerForTesting != nil else {
+            return fail("both-halves chord must append one soft ASCII syllable Space")
+        }
+        workspace.fireDebounceForTesting()
+        guard provider.pending.count == 1,
+              provider.pending[0].request.sourceText == "qing ",
+              provider.pending[0].request.preparedPrompt?.contains(
+                "\"automaticSyllableSpaceOffsets\":[4]"
+              ) == true else {
+            return fail("mapped chord must request once after the normal debounce")
+        }
+
+        guard workspace.captureChordKey(
+            0x69,
+            schemaID: "my_combo",
+            focusToken: focus
+        ),
+        workspace.captureChordKey(
+            0x76,
+            schemaID: "my_combo",
+            focusToken: focus
+        ),
+        workspace.captureChordKey(
+            0x64,
+            schemaID: "my_combo",
+            focusToken: focus
+        ) else {
+            return fail("second stream chord staging")
+        }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "qing ni ",
+              workspace.automaticSyllableSpaceOffsets == [4, 7],
+              workspace.railSnapshot.sourceText == "qing ni ",
+              provider.pending.count == 1 else {
+            return fail("successive chord batches must remain independently separated")
+        }
+        workspace.fireDebounceForTesting()
+        guard provider.pending.count == 2,
+              provider.pending[1].request.sourceText == "qing ni ",
+              provider.pending[1].request.preparedPrompt?.contains(
+                "\"automaticSyllableSpaceOffsets\":[4,7]"
+              ) == true else {
+            return fail("successive chords must coalesce into one latest snapshot")
+        }
+    }
+
+    // One-sided mapped batches are pinyin fragments, not complete syllables.
+    // They map immediately but do not gain an automatic separator, so a later
+    // singleton can finish the spelling just as it does in normal chord mode.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+
+        guard workspace.captureChordKey(
+            0x64,
+            schemaID: "my_combo",
+            focusToken: focus
+        ),
+        workspace.captureChordKey(
+            0x76,
+            schemaID: "my_combo",
+            focusToken: focus
+        ) else {
+            return fail("one-sided chord fragment staging")
+        }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "n",
+              workspace.automaticSyllableSpaceOffsets.isEmpty,
+              let burstDeadline = workspace.maximumWaitTimerForTesting,
+              workspace.captureChordKey(
+                0x69,
+                schemaID: "my_combo",
+                focusToken: focus
+              ),
+              workspace.maximumWaitTimerForTesting === burstDeadline else {
+            return fail("one-sided mapped fragment must not force a separator")
+        }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "ni",
+              workspace.automaticSyllableSpaceOffsets.isEmpty,
+              workspace.railSnapshot.sourceText == "ni",
+              workspace.maximumWaitTimerForTesting === burstDeadline,
+              provider.pending.isEmpty else {
+            return fail("chord batches must preserve the original burst deadline")
+        }
+    }
+
+    // If the original 800 ms burst ceiling lands inside the next chord
+    // window, it must settle that batch first and request the newest complete
+    // mutual spelling. Sending the preceding visible fragment would authorize
+    // an inference for raw that the user has already extended.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+
+        guard workspace.captureChordKey(
+            0x71,
+            schemaID: "my_combo",
+            policy: .independentHalves,
+            focusToken: focus
+        ) else {
+            return fail("maximum-wait mutual left staging")
+        }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "q",
+              let burstDeadline = workspace.maximumWaitTimerForTesting,
+              workspace.captureChordKey(
+                0x6b,
+                schemaID: "my_combo",
+                policy: .independentHalves,
+                focusToken: focus
+              ),
+              workspace.captureChordKey(
+                0x6d,
+                schemaID: "my_combo",
+                policy: .independentHalves,
+                focusToken: focus
+              ),
+              workspace.maximumWaitTimerForTesting === burstDeadline,
+              workspace.hasPendingChordForTesting else {
+            return fail("maximum-wait must survive a pending chord window")
+        }
+
+        burstDeadline.fire()
+        guard !workspace.hasPendingChordForTesting,
+              workspace.rawInput == "qiong ",
+              workspace.automaticSyllableSpaceOffsets == [5],
+              workspace.maximumWaitTimerForTesting == nil,
+              provider.pending.count == 1,
+              provider.pending[0].request.sourceText == "qiong ",
+              provider.pending[0].request.preparedPrompt?.contains(
+                "\"automaticSyllableSpaceOffsets\":[5]"
+              ) == true else {
+            return fail("maximum-wait must infer after pending chord settlement")
+        }
+    }
+
+    // Mutual mode preserves the normal FlyYao cross-batch contract. A visible
+    // left initial is atomically replaced when the next right final completes
+    // it; same-batch mode keeps those timer batches independent.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let mutualWorkspace = StreamInputWorkspace(
+            provider: StreamInputSmokeProvider(),
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        mutualWorkspace.start()
+        defer { mutualWorkspace.stop() }
+
+        // A simultaneous batch seeds an existing soft-separated prefix.
+        guard mutualWorkspace.captureChordKey(
+            0x71,
+            schemaID: "my_combo",
+            policy: .independentHalves,
+            focusToken: focus
+        ),
+        mutualWorkspace.captureChordKey(
+            0x79,
+            schemaID: "my_combo",
+            policy: .independentHalves,
+            focusToken: focus
+        ) else {
+            return fail("mutual prefix chord staging")
+        }
+        mutualWorkspace.settlePendingChordForTesting()
+        guard mutualWorkspace.rawInput == "qing ",
+              mutualWorkspace.automaticSyllableSpaceOffsets == [4] else {
+            return fail("mutual simultaneous batch mapping")
+        }
+
+        // q + km is one mutual syllable even though it spans timer batches.
+        guard mutualWorkspace.captureChordKey(
+            0x71,
+            schemaID: "my_combo",
+            policy: .independentHalves,
+            focusToken: focus
+        ) else {
+            return fail("mutual left singleton staging")
+        }
+        mutualWorkspace.settlePendingChordForTesting()
+        guard mutualWorkspace.rawInput == "qing q",
+              mutualWorkspace.captureChordKey(
+                0x6b,
+                schemaID: "my_combo",
+                policy: .independentHalves,
+                focusToken: focus
+              ),
+              mutualWorkspace.captureChordKey(
+                0x6d,
+                schemaID: "my_combo",
+                policy: .independentHalves,
+                focusToken: focus
+              ) else {
+            return fail("mutual right multi-key staging")
+        }
+        mutualWorkspace.settlePendingChordForTesting()
+        guard mutualWorkspace.rawInput == "qing qiong ",
+              mutualWorkspace.automaticSyllableSpaceOffsets == [4, 10] else {
+            return fail("mutual q+km must recombine into soft-separated qiong")
+        }
+
+        // The multi-key side may also be the left half.
+        guard mutualWorkspace.captureChordKey(
+            0x64,
+            schemaID: "my_combo",
+            policy: .independentHalves,
+            focusToken: focus
+        ),
+        mutualWorkspace.captureChordKey(
+            0x76,
+            schemaID: "my_combo",
+            policy: .independentHalves,
+            focusToken: focus
+        ) else {
+            return fail("mutual left multi-key staging")
+        }
+        mutualWorkspace.settlePendingChordForTesting()
+        guard mutualWorkspace.rawInput == "qing qiong n",
+              mutualWorkspace.captureChordKey(
+                0x69,
+                schemaID: "my_combo",
+                policy: .independentHalves,
+                focusToken: focus
+              ) else {
+            return fail("mutual right singleton staging")
+        }
+        mutualWorkspace.settlePendingChordForTesting()
+        guard mutualWorkspace.rawInput == "qing qiong ni ",
+              mutualWorkspace.automaticSyllableSpaceOffsets == [4, 10, 13],
+              mutualWorkspace.railSnapshot.sourceText == "qing qiong ni " else {
+            return fail("mutual dv+i must recombine into soft-separated ni")
+        }
+    }
+
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let chordWorkspace = StreamInputWorkspace(
+            provider: StreamInputSmokeProvider(),
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        chordWorkspace.start()
+        defer { chordWorkspace.stop() }
+
+        guard chordWorkspace.captureChordKey(
+            0x71,
+            schemaID: "my_combo",
+            policy: .sameBatchOnly,
+            focusToken: focus
+        ) else {
+            return fail("same-batch left singleton staging")
+        }
+        chordWorkspace.settlePendingChordForTesting()
+        guard chordWorkspace.captureChordKey(
+            0x6b,
+            schemaID: "my_combo",
+            policy: .sameBatchOnly,
+            focusToken: focus
+        ),
+        chordWorkspace.captureChordKey(
+            0x6d,
+            schemaID: "my_combo",
+            policy: .sameBatchOnly,
+            focusToken: focus
+        ) else {
+            return fail("same-batch right fragment staging")
+        }
+        chordWorkspace.settlePendingChordForTesting()
+        guard chordWorkspace.rawInput == "qong",
+              chordWorkspace.automaticSyllableSpaceOffsets.isEmpty else {
+            return fail("same-batch mode must not recombine separate halves")
+        }
+
+        // Two singleton timer batches stay literal in both policies.
+        let singletonWorkspace = StreamInputWorkspace(
+            provider: StreamInputSmokeProvider(),
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        singletonWorkspace.start()
+        defer { singletonWorkspace.stop() }
+        guard singletonWorkspace.captureChordKey(
+            0x71,
+            schemaID: "my_combo",
+            policy: .independentHalves,
+            focusToken: focus
+        ) else {
+            return fail("mutual singleton-left staging")
+        }
+        singletonWorkspace.settlePendingChordForTesting()
+        guard singletonWorkspace.captureChordKey(
+            0x79,
+            schemaID: "my_combo",
+            policy: .independentHalves,
+            focusToken: focus
+        ) else {
+            return fail("mutual singleton-right staging")
+        }
+        singletonWorkspace.settlePendingChordForTesting()
+        guard singletonWorkspace.rawInput == "qy",
+              singletonWorkspace.automaticSyllableSpaceOffsets.isEmpty else {
+            return fail("mutual singleton batches must remain literal")
+        }
+
+        let boundaryWorkspace = StreamInputWorkspace(
+            provider: StreamInputSmokeProvider(),
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        boundaryWorkspace.start()
+        defer { boundaryWorkspace.stop() }
+        guard boundaryWorkspace.captureChordKey(
+            0x71,
+            schemaID: "my_combo",
+            policy: .independentHalves,
+            focusToken: focus
+        ) else {
+            return fail("mutual boundary left staging")
+        }
+        boundaryWorkspace.settlePendingChordForTesting()
+        guard boundaryWorkspace.consumeIgnoredKey(
+            keycode: 0x2f,
+            focusToken: focus
+        ),
+        boundaryWorkspace.captureChordKey(
+            0x6b,
+            schemaID: "my_combo",
+            policy: .independentHalves,
+            focusToken: focus
+        ),
+        boundaryWorkspace.captureChordKey(
+            0x6d,
+            schemaID: "my_combo",
+            policy: .independentHalves,
+            focusToken: focus
+        ) else {
+            return fail("mutual non-chord boundary staging")
+        }
+        boundaryWorkspace.settlePendingChordForTesting()
+        guard boundaryWorkspace.rawInput == "qong",
+              boundaryWorkspace.automaticSyllableSpaceOffsets.isEmpty else {
+            return fail("non-chord key must break mutual cross-batch pairing")
+        }
+    }
+
+    // Single keys preserve continuous raw spelling and never cross timer
+    // batches. Comma/period remain usable inside a mapped chord but a lone
+    // punctuation key is ignored.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+
+        guard workspace.captureChordKey(
+            0x71,
+            schemaID: "my_combo",
+            focusToken: focus
+        ) else { return fail("single chord key staging") }
+        workspace.settlePendingChordForTesting()
+        guard workspace.captureChordKey(
+            0x79,
+            schemaID: "my_combo",
+            focusToken: focus
+        ) else { return fail("second single chord key staging") }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "qy",
+              workspace.automaticSyllableSpaceOffsets.isEmpty,
+              provider.pending.isEmpty else {
+            return fail("single-key batches must stay literal and never recombine")
+        }
+
+        guard workspace.captureChordKey(
+            0x2e,
+            schemaID: "my_combo",
+            focusToken: focus
+        ) else { return fail("lone chord punctuation staging") }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "qy",
+              workspace.captureChordKey(
+                0x2e,
+                schemaID: "my_combo",
+                focusToken: focus
+              ),
+              workspace.captureChordKey(
+                0x6d,
+                schemaID: "my_combo",
+                focusToken: focus
+              ),
+              workspace.captureChordKey(
+                0x71,
+                schemaID: "my_combo",
+                focusToken: focus
+              ) else {
+            return fail("period must be ignored alone but stage inside a chord")
+        }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "qyque ",
+              workspace.automaticSyllableSpaceOffsets == [5] else {
+            return fail("period-bearing chord must follow the parsed mapping")
+        }
+    }
+
+    // The first physical key of a new chord revokes a previously ready answer
+    // before the chord timer fires, so Return/paper-plane cannot send stale
+    // text during the batching window.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+        guard workspace.capture(letter: "a", focusToken: focus),
+              workspace.settleForReturn(focusToken: focus),
+              provider.pending.count == 1 else {
+            return fail("ready-result revocation setup")
+        }
+        provider.complete(.success([
+            AITextProviderBlock(index: 0, text: "啊", title: nil),
+        ]), at: 0)
+        guard workspace.phase == .ready,
+              !workspace.deliveryPendingBlocks.isEmpty,
+              workspace.captureChordKey(
+                0x79,
+                schemaID: "my_combo",
+                focusToken: focus
+              ),
+              workspace.hasPendingChordForTesting,
+              workspace.hasIncompleteDeliveryBlocks,
+              workspace.deliveryPendingBlocks.isEmpty else {
+            return fail("first chord key must immediately revoke old delivery")
+        }
+    }
+
+    // Mapping failure occurs after the first-key intent transition. It must
+    // cancel and tombstone an older request before reporting the fail-visible
+    // error, so a late old final can never become deliverable again.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in nil }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+        guard workspace.capture(letter: "a", focusToken: focus),
+              workspace.settleForReturn(focusToken: focus),
+              provider.pending.count == 1,
+              workspace.captureChordKey(
+                0x71,
+                schemaID: "my_combo",
+                focusToken: focus
+              ),
+              provider.pending[0].task.isCancelled,
+              !workspace.hasPendingChordForTesting,
+              workspace.rawInput == "a",
+              workspace.outputBlocks.isEmpty,
+              workspace.deliveryPendingBlocks.isEmpty,
+              workspace.phase == .failed(
+                "无法读取当前并击方案的全拼映射"
+              ) else {
+            return fail("missing chord mapping must revoke old inference authority")
+        }
+        provider.complete(.success([
+            AITextProviderBlock(index: 0, text: "迟到旧结果", title: nil),
+        ]), at: 0)
+        guard workspace.phase == .failed(
+            "无法读取当前并击方案的全拼映射"
+        ),
+        workspace.outputBlocks.isEmpty,
+        workspace.deliveryPendingBlocks.isEmpty else {
+            return fail("missing chord mapping must tombstone late results")
+        }
+    }
+
+    // A physical Space after a chord promotes the existing trailing byte into
+    // the original hard-clause meaning and requests immediately; it does not
+    // append a second Space.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+        guard workspace.captureChordKey(
+            0x79,
+            schemaID: "my_combo",
+            focusToken: focus
+        ),
+        workspace.captureChordKey(
+            0x71,
+            schemaID: "my_combo",
+            focusToken: focus
+        ) else { return fail("hard-Space promotion chord staging") }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "qing ",
+              workspace.automaticSyllableSpaceOffsets == [4],
+              workspace.consumeIgnoredKey(keycode: 0x20,
+                                          focusToken: focus),
+              workspace.rawInput == "qing ",
+              workspace.automaticSyllableSpaceOffsets.isEmpty,
+              workspace.railSnapshot.sourceText == "qing · ",
+              provider.pending.count == 1,
+              provider.pending[0].request.preparedPrompt?.contains(
+                "\"automaticSyllableSpaceOffsets\":["
+              ) == false else {
+            return fail("physical Space must promote a soft chord separator")
+        }
+    }
+
+    // Focus invalidation owns the chord timer. A late settlement from the old
+    // token cannot mutate raw or issue a provider request.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+        guard workspace.captureChordKey(
+            0x79,
+            schemaID: "my_combo",
+            focusToken: focus
+        ),
+        workspace.captureChordKey(
+            0x71,
+            schemaID: "my_combo",
+            focusToken: focus
+        ) else { return fail("focus-owned chord staging") }
+        workspace.focusInvalidated(focus)
+        workspace.settlePendingChordForTesting()
+        guard !workspace.hasPendingChordForTesting,
+              workspace.rawInput.isEmpty,
+              workspace.automaticSyllableSpaceOffsets.isEmpty,
+              provider.pending.isEmpty else {
+            return fail("focus invalidation must tombstone pending chord settlement")
+        }
+    }
+
+    // Secure input can begin between the first physical chord key and its
+    // timer. The privacy poll must invalidate that otherwise-empty pending
+    // batch immediately rather than waiting for settlement.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+        guard workspace.captureChordKey(
+            0x71,
+            schemaID: "my_combo",
+            focusToken: focus
+        ),
+        workspace.hasPendingChordForTesting,
+        workspace.rawInput.isEmpty else {
+            return fail("pending secure chord setup")
+        }
+        runtime.secureInput = true
+        workspace.privacyTickForTesting()
+        workspace.settlePendingChordForTesting()
+        guard !workspace.hasPendingChordForTesting,
+              workspace.rawInput.isEmpty,
+              workspace.automaticSyllableSpaceOffsets.isEmpty,
+              workspace.outputBlocks.isEmpty,
+              workspace.phase == .idle,
+              provider.pending.isEmpty else {
+            return fail("secure privacy poll must tombstone pending chord")
+        }
+    }
+
+    // A keying-mode/schema configuration notification cancels the old batch
+    // and clears the effective-schema cache. The next explicit chord reloads
+    // the mapping instead of settling under the configuration that staged it.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        var mappingLoadCount = 0
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: true,
+            chordMappingLoader: { _ in
+                mappingLoadCount += 1
+                return chordMapping
+            }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+        guard workspace.captureChordKey(
+            0x71,
+            schemaID: "my_combo",
+            focusToken: focus
+        ),
+        workspace.hasPendingChordForTesting,
+        mappingLoadCount == 1 else {
+            return fail("configuration-owned chord setup")
+        }
+        NotificationCenter.default.post(
+            name: .inputConfigurationDidChange,
+            object: nil
+        )
+        workspace.settlePendingChordForTesting()
+        guard !workspace.hasPendingChordForTesting,
+              workspace.rawInput.isEmpty,
+              provider.pending.isEmpty,
+              workspace.captureChordKey(
+                0x71,
+                schemaID: "my_combo",
+                focusToken: focus
+              ),
+              workspace.captureChordKey(
+                0x79,
+                schemaID: "my_combo",
+                focusToken: focus
+              ),
+              mappingLoadCount == 2 else {
+            return fail("configuration change must cancel and reload chord mapping")
+        }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "qing ",
+              workspace.automaticSyllableSpaceOffsets == [4] else {
+            return fail("reloaded chord mapping settlement")
+        }
     }
 
     // Space ends a short sentence and immediately requests the complete raw
@@ -516,6 +1384,40 @@ func runStreamInputPluginSmokeTest() -> Bool {
               workspace.railSnapshot.sourceText == "a",
               workspace.maximumWaitTimerForTesting != nil else {
             return fail("Backspace must remove one Space boundary")
+        }
+    }
+
+    // Backspace is a non-chord boundary: it settles the pending batch first,
+    // then deletes exactly one visible raw byte (the automatic trailing Space).
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let workspace = StreamInputWorkspace(
+            provider: StreamInputSmokeProvider(),
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+        guard workspace.captureChordKey(
+            0x79,
+            schemaID: "my_combo",
+            focusToken: focus
+        ),
+        workspace.captureChordKey(
+            0x71,
+            schemaID: "my_combo",
+            focusToken: focus
+        ),
+        workspace.deleteBackward(focusToken: focus),
+        workspace.rawInput == "qing",
+        workspace.automaticSyllableSpaceOffsets.isEmpty,
+        !workspace.hasPendingChordForTesting,
+        workspace.deleteBackward(focusToken: focus),
+        workspace.rawInput == "qin" else {
+            return fail("Backspace must settle chord then edit its soft separator")
         }
     }
 
