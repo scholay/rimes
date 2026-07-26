@@ -126,6 +126,7 @@ cp -R Resources/*.lproj "$APP_PATH/Contents/Resources/" 2>/dev/null || true
 cp Resources/etinput.pdf "$APP_PATH/Contents/Resources/" 2>/dev/null || true
 cp Resources/etinput-menu.pdf "$APP_PATH/Contents/Resources/" 2>/dev/null || true
 cp Resources/menubar-template.png "$APP_PATH/Contents/Resources/" 2>/dev/null || true
+cp THIRD_PARTY_NOTICES.md "$APP_PATH/Contents/Resources/"
 
 # Ad-hoc sign. --deep now that we have nested dylibs (librime + plugins).
 echo "==> ad-hoc signing (deep)"

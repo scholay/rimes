@@ -525,6 +525,41 @@ final class PluginRegistry {
         return internalPlugins[pluginKey.rawID]?.makeSettingsViewController(subpageID: subpageID)
     }
 
+    /// Declarative plugin configuration is available independently from
+    /// enablement: users may prepare credentials or preferences before adding
+    /// a plugin to the workbench. External packages still cannot inject UI;
+    /// only host-owned catalog entries (currently Marine) are eligible.
+    func hasConfiguration(for pluginKey: PluginKey) -> Bool {
+        if pluginKey.domain == .builtIn,
+           internalPlugins[pluginKey.rawID]
+            is any PluginConfigurationProviding {
+            return true
+        }
+        do {
+            return try PluginConfigurationCatalog.makeModel(
+                pluginID: pluginKey.rawID
+            ) != nil
+        } catch {
+            return false
+        }
+    }
+
+    func makePluginConfigurationViewController(
+        pluginKey: PluginKey
+    ) throws -> NSViewController? {
+        if pluginKey.domain == .builtIn,
+           let provider = internalPlugins[pluginKey.rawID]
+            as? any PluginConfigurationProviding {
+            return try provider.makePluginConfigurationViewController()
+        }
+        guard let model = try PluginConfigurationCatalog.makeModel(
+            pluginID: pluginKey.rawID
+        ) else {
+            return nil
+        }
+        return PluginConfigurationViewController(model: model)
+    }
+
     func internalPlugin(pluginKey: PluginKey) -> (any InternalPlugin)? {
         guard pluginKey.domain == .builtIn else { return nil }
         return internalPlugins[pluginKey.rawID]

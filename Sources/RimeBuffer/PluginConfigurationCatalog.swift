@@ -1,0 +1,754 @@
+import Foundation
+
+enum AITextPluginConfigurationFieldID {
+    static let connector = "connector"
+}
+
+enum StreamInputPluginConfigurationFieldID {
+    static let connector = "connector"
+    static let debounceSeconds = "debounceSeconds"
+    static let maximumWaitSeconds = "maximumWaitSeconds"
+}
+
+enum RealtimeTranslationProviderKind: String, CaseIterable {
+    case appleLocal = "apple-local"
+    case aiConnector = "ai-connector"
+
+    var displayName: String {
+        switch self {
+        case .appleLocal: return "Apple 本地翻译（默认）"
+        case .aiConnector: return "当前 AI 渠道"
+        }
+    }
+}
+
+enum RealtimeTranslationPluginConfigurationFieldID {
+    static let provider = "provider"
+    static let connector = "connector"
+    static let sourceLanguage = "sourceLanguage"
+    static let targetLanguage = "targetLanguage"
+}
+
+enum MarinePluginConfigurationFieldID {
+    static let connector = "connector"
+    static let invocationTimeoutSeconds = "invocationTimeoutSeconds"
+}
+
+enum RealtimeTranslationConfigurationKey {
+    static let provider = "plugins.realtimeTranslation.provider.v1"
+    static let sourceLanguage = "plugins.appleTranslation.sourceLanguage.v1"
+    static let targetLanguage = "plugins.appleTranslation.targetLanguage.v1"
+}
+
+struct StreamInputPluginSettings: Equatable {
+    let connectorKind: AITextProviderKind
+    let debounce: TimeInterval
+    let maximumWait: TimeInterval
+}
+
+struct RealtimeTranslationPluginSettings: Equatable {
+    let providerKind: RealtimeTranslationProviderKind
+    let connectorKind: AITextProviderKind
+    let sourceLanguageID: String
+    let targetLanguageID: String
+}
+
+/// Central declarations for user-configurable plugin behavior.
+///
+/// Built-in plugins expose these models through PluginConfigurationProviding.
+/// External Action Plugins can be matched by their manifest id without adding
+/// target-specific contents or credentials to the host settings surface.
+enum PluginConfigurationCatalog {
+    static let marinePluginID = "marine"
+
+    static func makeModel(
+        pluginID: String
+    ) throws -> PluginConfigurationModel? {
+        switch pluginID {
+        case AITextBuiltInPluginID.aiText:
+            return try makeAITextModel()
+        case BuiltInPluginID.streamInput:
+            return try makeStreamInputModel()
+        case BuiltInPluginID.appleTranslation:
+            return try makeRealtimeTranslationModel()
+        case marinePluginID:
+            return try makeMarineModel()
+        default:
+            return nil
+        }
+    }
+
+    static func makeAITextModel(
+        selectionStore: AITextConnectorSelectionStore = .shared,
+        notificationCenter: NotificationCenter = .default
+    ) throws -> PluginConfigurationModel {
+        let schema = PluginConfigurationSchema(
+            pluginID: AITextBuiltInPluginID.aiText,
+            title: "AI 生成",
+            summary: "选择 AI 生成使用的渠道。这个选择也会提供给实时翻译与 Marine；各插件的配置页显示的是同一项全局选择。",
+            fields: [
+                .choice(
+                    id: AITextPluginConfigurationFieldID.connector,
+                    title: "AI 渠道",
+                    helpText: "CLI 渠道沿用各自登录状态；OpenAI 兼容渠道沿用“连接器”里的私有 API 配置。",
+                    options: aiConnectorChoices,
+                    defaultValue: AITextProviderKind.codexCLI.rawValue
+                ),
+            ]
+        )
+        return try PluginConfigurationModel(
+            schema: schema,
+            store: AIConnectorConfigurationStore(
+                selectionStore: selectionStore
+            ),
+            notificationCenter: notificationCenter
+        )
+    }
+
+    static func makeStreamInputModel(
+        defaults: UserDefaults = .standard,
+        notificationCenter: NotificationCenter = .default
+    ) throws -> PluginConfigurationModel {
+        let schema = PluginConfigurationSchema(
+            pluginID: BuiltInPluginID.streamInput,
+            title: "意识流输入",
+            summary: "为连续全拼猜测单独选择低延迟渠道，并调整停顿触发节奏。默认仍使用 OpenAI 兼容渠道。",
+            fields: [
+                .choice(
+                    id: StreamInputPluginConfigurationFieldID.connector,
+                    title: "猜测渠道",
+                    helpText: "这是意识流输入自己的选择，不会改动普通 AI 生成的渠道。",
+                    options: aiConnectorChoices,
+                    defaultValue:
+                        AITextProviderKind.openAICompatible.rawValue
+                ),
+                .number(
+                    id: StreamInputPluginConfigurationFieldID.debounceSeconds,
+                    title: "停顿触发",
+                    helpText: "最后一次输入后等待多久开始猜测。数值越小响应越快，也更容易产生重算。",
+                    defaultValue: 0.22,
+                    minimum: 0.10,
+                    maximum: 1.00,
+                    step: 0.01
+                ),
+                .number(
+                    id: StreamInputPluginConfigurationFieldID
+                        .maximumWaitSeconds,
+                    title: "最长等待",
+                    helpText: "连续输入不停顿时，最迟多久启动一次全局猜测。",
+                    defaultValue: 0.80,
+                    minimum: 0.30,
+                    maximum: 2.00,
+                    step: 0.05,
+                    validator: { value, snapshot in
+                        guard case let .number(maximumWait) = value,
+                              let debounce = snapshot.number(
+                                StreamInputPluginConfigurationFieldID
+                                    .debounceSeconds
+                              ),
+                              maximumWait >= debounce else {
+                            return "最长等待不能短于停顿触发"
+                        }
+                        return nil
+                    }
+                ),
+            ]
+        )
+        return try PluginConfigurationModel(
+            schema: schema,
+            store: PluginConfigurationUserDefaultsStore(
+                namespace: BuiltInPluginID.streamInput,
+                defaults: defaults
+            ),
+            notificationCenter: notificationCenter
+        )
+    }
+
+    static func makeRealtimeTranslationModel(
+        defaults: UserDefaults = .standard,
+        selectionStore: AITextConnectorSelectionStore = .shared,
+        notificationCenter: NotificationCenter = .default
+    ) throws -> PluginConfigurationModel {
+        let languageChoices = translationLanguageChoices(defaults: defaults)
+        let schema = PluginConfigurationSchema(
+            pluginID: BuiltInPluginID.appleTranslation,
+            title: "实时翻译",
+            summary: "默认完全使用 Apple 本地翻译；也可改用当前 AI 渠道。切换配置会取消旧请求，并按未改动的源缓冲区重新翻译。",
+            fields: [
+                .choice(
+                    id: RealtimeTranslationPluginConfigurationFieldID.provider,
+                    title: "翻译方式",
+                    helpText: "Apple 本地翻译不发送原文；AI 渠道会把原文交给当前选中的连接器。",
+                    options: RealtimeTranslationProviderKind.allCases.map {
+                        PluginConfigurationChoice(
+                            value: $0.rawValue,
+                            title: $0.displayName
+                        )
+                    },
+                    defaultValue:
+                        RealtimeTranslationProviderKind.appleLocal.rawValue
+                ),
+                .choice(
+                    id: RealtimeTranslationPluginConfigurationFieldID.connector,
+                    title: "AI 渠道",
+                    helpText: "仅在翻译方式为“当前 AI 渠道”时使用；与 AI 生成及 Marine 共享。",
+                    options: aiConnectorChoices,
+                    defaultValue: AITextProviderKind.codexCLI.rawValue
+                ),
+                .choice(
+                    id: RealtimeTranslationPluginConfigurationFieldID
+                        .sourceLanguage,
+                    title: "源语言",
+                    options: languageChoices,
+                    defaultValue:
+                        AppleTranslationWorkspace.defaultSourceLanguageID
+                ),
+                .choice(
+                    id: RealtimeTranslationPluginConfigurationFieldID
+                        .targetLanguage,
+                    title: "目标语言",
+                    options: languageChoices,
+                    defaultValue:
+                        AppleTranslationWorkspace.defaultTargetLanguageID,
+                    validator: { value, snapshot in
+                        guard case let .string(target) = value,
+                              let source = snapshot.string(
+                                RealtimeTranslationPluginConfigurationFieldID
+                                    .sourceLanguage
+                              ),
+                              !TranslationLanguageIdentity.matches(
+                                source,
+                                expected: target
+                              ) else {
+                            return "源语言和目标语言不能相同"
+                        }
+                        return nil
+                    }
+                ),
+            ]
+        )
+        return try PluginConfigurationModel(
+            schema: schema,
+            store: RealtimeTranslationConfigurationStore(
+                defaults: defaults,
+                selectionStore: selectionStore
+            ),
+            notificationCenter: notificationCenter
+        )
+    }
+
+    static func makeMarineModel(
+        defaults: UserDefaults = .standard,
+        selectionStore: AITextConnectorSelectionStore = .shared,
+        notificationCenter: NotificationCenter = .default
+    ) throws -> PluginConfigurationModel {
+        let schema = PluginConfigurationSchema(
+            pluginID: marinePluginID,
+            title: "Marine",
+            summary: "Marine 只接收本地浏览器上下文标识，不在设置页展示目标内容。AI 渠道与普通 AI 生成共享；超时会在每次调用开始时冻结。",
+            fields: [
+                .choice(
+                    id: MarinePluginConfigurationFieldID.connector,
+                    title: "AI 渠道",
+                    helpText: "Marine 预生成使用当前共享渠道；修改后也会影响普通 AI 生成。",
+                    options: aiConnectorChoices,
+                    defaultValue: AITextProviderKind.codexCLI.rawValue
+                ),
+                .number(
+                    id: MarinePluginConfigurationFieldID
+                        .invocationTimeoutSeconds,
+                    title: "生成超时（秒）",
+                    helpText: "只影响新启动的 Marine 请求；正在运行的请求保持启动时的超时。",
+                    defaultValue: 270,
+                    minimum: 60,
+                    maximum: 600,
+                    step: 30
+                ),
+            ]
+        )
+        return try PluginConfigurationModel(
+            schema: schema,
+            store: MarineConfigurationStore(
+                defaults: defaults,
+                selectionStore: selectionStore
+            ),
+            notificationCenter: notificationCenter
+        )
+    }
+
+    static func streamInputSettings(
+        defaults: UserDefaults = .standard
+    ) -> StreamInputPluginSettings {
+        guard let model = try? makeStreamInputModel(defaults: defaults),
+              let snapshot = try? model.load() else {
+            return StreamInputPluginSettings(
+                connectorKind: .openAICompatible,
+                debounce: 0.22,
+                maximumWait: 0.80
+            )
+        }
+        return StreamInputPluginSettings(
+            connectorKind: AITextProviderKind(
+                rawValue: snapshot.string(
+                    StreamInputPluginConfigurationFieldID.connector
+                ) ?? ""
+            ) ?? .openAICompatible,
+            debounce: snapshot.number(
+                StreamInputPluginConfigurationFieldID.debounceSeconds
+            ) ?? 0.22,
+            maximumWait: snapshot.number(
+                StreamInputPluginConfigurationFieldID.maximumWaitSeconds
+            ) ?? 0.80
+        )
+    }
+
+    static func realtimeTranslationSettings(
+        defaults: UserDefaults = .standard,
+        selectionStore: AITextConnectorSelectionStore = .shared
+    ) -> RealtimeTranslationPluginSettings {
+        guard let model = try? makeRealtimeTranslationModel(
+                defaults: defaults,
+                selectionStore: selectionStore
+              ),
+              let snapshot = try? model.load() else {
+            return RealtimeTranslationPluginSettings(
+                providerKind: .appleLocal,
+                connectorKind: selectionStore.selectedKind,
+                sourceLanguageID:
+                    AppleTranslationWorkspace.defaultSourceLanguageID,
+                targetLanguageID:
+                    AppleTranslationWorkspace.defaultTargetLanguageID
+            )
+        }
+        return RealtimeTranslationPluginSettings(
+            providerKind: RealtimeTranslationProviderKind(
+                rawValue: snapshot.string(
+                    RealtimeTranslationPluginConfigurationFieldID.provider
+                ) ?? ""
+            ) ?? .appleLocal,
+            connectorKind: AITextProviderKind(
+                rawValue: snapshot.string(
+                    RealtimeTranslationPluginConfigurationFieldID.connector
+                ) ?? ""
+            ) ?? selectionStore.selectedKind,
+            sourceLanguageID: snapshot.string(
+                RealtimeTranslationPluginConfigurationFieldID.sourceLanguage
+            ) ?? AppleTranslationWorkspace.defaultSourceLanguageID,
+            targetLanguageID: snapshot.string(
+                RealtimeTranslationPluginConfigurationFieldID.targetLanguage
+            ) ?? AppleTranslationWorkspace.defaultTargetLanguageID
+        )
+    }
+
+    static func marineInvocationTimeout(
+        defaults: UserDefaults = .standard
+    ) -> TimeInterval {
+        guard let model = try? makeMarineModel(defaults: defaults),
+              let snapshot = try? model.load(),
+              let value = snapshot.number(
+                MarinePluginConfigurationFieldID.invocationTimeoutSeconds
+              ),
+              value.isFinite else {
+            return 270
+        }
+        return min(max(value, 60), 600)
+    }
+
+    private static let aiConnectorChoices =
+        AITextProviderKind.allCases.map {
+            PluginConfigurationChoice(
+                value: $0.rawValue,
+                title: $0.displayName
+            )
+        }
+
+    private static func translationLanguageChoices(
+        defaults: UserDefaults
+    ) -> [PluginConfigurationChoice] {
+        var identifiers = [
+            "zh-Hans", "zh-Hant", "en", "ja", "ko",
+            "fr", "de", "es", "it", "pt", "ar", "nl",
+            "id", "pl", "ru", "th", "tr", "uk", "vi",
+        ]
+        let standardDictionaryKey =
+            "RimeBuffer.PluginConfiguration.\(BuiltInPluginID.appleTranslation)"
+        let standardValues = defaults.dictionary(
+            forKey: standardDictionaryKey
+        )
+        for fieldID in [
+            RealtimeTranslationPluginConfigurationFieldID.sourceLanguage,
+            RealtimeTranslationPluginConfigurationFieldID.targetLanguage,
+        ] {
+            if let value = standardValues?[fieldID] as? String,
+               validLanguageIdentifier(value),
+               !identifiers.contains(value) {
+                identifiers.append(value)
+            }
+        }
+        for key in [
+            RealtimeTranslationConfigurationKey.sourceLanguage,
+            RealtimeTranslationConfigurationKey.targetLanguage,
+        ] {
+            if let value = defaults.string(forKey: key),
+               validLanguageIdentifier(value),
+               !identifiers.contains(value) {
+                identifiers.append(value)
+            }
+        }
+        return identifiers.map {
+            let title = Locale.current.localizedString(forIdentifier: $0)
+                ?? Locale.current.localizedString(forLanguageCode: $0)
+                ?? $0
+            return PluginConfigurationChoice(value: $0, title: title)
+        }
+    }
+
+    private static func validLanguageIdentifier(_ value: String) -> Bool {
+        !value.isEmpty
+            && value.utf8.count <= 35
+            && value.unicodeScalars.allSatisfy {
+                CharacterSet.alphanumerics.contains($0)
+                    || $0 == "-" || $0 == "_"
+            }
+    }
+
+    fileprivate static func configuredLanguage(
+        _ raw: String?,
+        fallback: String
+    ) -> String {
+        guard let value = raw?.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ), !value.isEmpty else {
+            return fallback
+        }
+        switch value.lowercased() {
+        case "auto", "automatic", "__automatic__":
+            return fallback
+        default:
+            return value
+        }
+    }
+}
+
+/// Dynamic facade used only by consciousness-stream input. An injected
+/// provider in smoke tests still bypasses this facade completely.
+final class StreamInputConfiguredAITextProvider: AITextProvider {
+    static let shared = StreamInputConfiguredAITextProvider()
+
+    private let connectorRegistry: AITextConnectorRegistry
+    private let defaults: UserDefaults
+
+    init(connectorRegistry: AITextConnectorRegistry = .shared,
+         defaults: UserDefaults = .standard) {
+        self.connectorRegistry = connectorRegistry
+        self.defaults = defaults
+    }
+
+    var kind: AITextProviderKind {
+        PluginConfigurationCatalog.streamInputSettings(
+            defaults: defaults
+        ).connectorKind
+    }
+
+    var availability: AITextProviderAvailability {
+        connectorRegistry.availability(for: kind)
+    }
+
+    @discardableResult
+    func generate(
+        _ request: AITextProviderRequest,
+        onEvent: @escaping (AITextProviderEvent) -> Void,
+        completion: @escaping (
+            Result<[AITextProviderBlock], AITextProviderError>
+        ) -> Void
+    ) -> any AITextCancellable {
+        let selectedKind = kind
+        guard let provider = connectorRegistry.provider(for: selectedKind) else {
+            completion(.failure(.unavailable(
+                "连接器不可用：\(selectedKind.displayName)"
+            )))
+            return AITextNoopCancellation()
+        }
+        return provider.generate(
+            request,
+            onEvent: onEvent,
+            completion: completion
+        )
+    }
+}
+
+private final class AIConnectorConfigurationStore:
+    PluginConfigurationStoring {
+    let supportsSecureValues = false
+    private let selectionStore: AITextConnectorSelectionStore
+
+    init(selectionStore: AITextConnectorSelectionStore) {
+        self.selectionStore = selectionStore
+    }
+
+    func validate(schema: PluginConfigurationSchema) throws {}
+
+    func load(
+        schema: PluginConfigurationSchema
+    ) throws -> PluginConfigurationSnapshot? {
+        PluginConfigurationSnapshot(values: [
+            AITextPluginConfigurationFieldID.connector:
+                .string(selectionStore.selectedKind.rawValue),
+        ])
+    }
+
+    func save(
+        _ snapshot: PluginConfigurationSnapshot,
+        schema: PluginConfigurationSchema
+    ) throws {
+        guard let raw = snapshot.string(
+            AITextPluginConfigurationFieldID.connector
+        ), let kind = AITextProviderKind(rawValue: raw) else {
+            throw PluginConfigurationError.corruptDocument
+        }
+        selectionStore.select(kind)
+    }
+
+    func delete(schema: PluginConfigurationSchema) throws {
+        selectionStore.select(.codexCLI)
+    }
+}
+
+private final class RealtimeTranslationConfigurationStore:
+    PluginConfigurationStoring {
+    let supportsSecureValues = false
+
+    private let defaults: UserDefaults
+    private let selectionStore: AITextConnectorSelectionStore
+    private let baseStore: PluginConfigurationUserDefaultsStore
+
+    init(defaults: UserDefaults,
+         selectionStore: AITextConnectorSelectionStore) {
+        self.defaults = defaults
+        self.selectionStore = selectionStore
+        baseStore = PluginConfigurationUserDefaultsStore(
+            namespace: BuiltInPluginID.appleTranslation,
+            defaults: defaults
+        )
+    }
+
+    func validate(schema: PluginConfigurationSchema) throws {
+        try baseStore.validate(schema: schema)
+    }
+
+    func load(
+        schema: PluginConfigurationSchema
+    ) throws -> PluginConfigurationSnapshot? {
+        if var stored = try baseStore.load(schema: schema) {
+            var source = stored.string(
+                RealtimeTranslationPluginConfigurationFieldID.sourceLanguage
+            ) ?? AppleTranslationWorkspace.defaultSourceLanguageID
+            var target = stored.string(
+                RealtimeTranslationPluginConfigurationFieldID.targetLanguage
+            ) ?? AppleTranslationWorkspace.defaultTargetLanguageID
+            if defaults.object(
+                forKey: RealtimeTranslationConfigurationKey.sourceLanguage
+            ) != nil {
+                source = PluginConfigurationCatalog.configuredLanguage(
+                    defaults.string(
+                        forKey:
+                            RealtimeTranslationConfigurationKey.sourceLanguage
+                    ),
+                    fallback:
+                        AppleTranslationWorkspace.defaultSourceLanguageID
+                )
+            }
+            if defaults.object(
+                forKey: RealtimeTranslationConfigurationKey.targetLanguage
+            ) != nil {
+                target = PluginConfigurationCatalog.configuredLanguage(
+                    defaults.string(
+                        forKey:
+                            RealtimeTranslationConfigurationKey.targetLanguage
+                    ),
+                    fallback:
+                        AppleTranslationWorkspace.defaultTargetLanguageID
+                )
+            }
+            if TranslationLanguageIdentity.matches(source, expected: target) {
+                target = TranslationLanguageIdentity.matches(
+                    source,
+                    expected:
+                        AppleTranslationWorkspace.defaultTargetLanguageID
+                )
+                    ? AppleTranslationWorkspace.defaultSourceLanguageID
+                    : AppleTranslationWorkspace.defaultTargetLanguageID
+            }
+            let storedSource = stored.string(
+                RealtimeTranslationPluginConfigurationFieldID.sourceLanguage
+            )
+            let storedTarget = stored.string(
+                RealtimeTranslationPluginConfigurationFieldID.targetLanguage
+            )
+            if storedSource != source || storedTarget != target {
+                stored[
+                    RealtimeTranslationPluginConfigurationFieldID
+                        .sourceLanguage
+                ] = .string(source)
+                stored[
+                    RealtimeTranslationPluginConfigurationFieldID
+                        .targetLanguage
+                ] = .string(target)
+                try baseStore.save(stored, schema: schema)
+            }
+            stored[
+                RealtimeTranslationPluginConfigurationFieldID.connector
+            ] = .string(selectionStore.selectedKind.rawValue)
+            return stored
+        }
+
+        let provider = defaults.string(
+            forKey: RealtimeTranslationConfigurationKey.provider
+        ).flatMap(RealtimeTranslationProviderKind.init(rawValue:))
+            ?? .appleLocal
+        let source = PluginConfigurationCatalog.configuredLanguage(
+            defaults.string(
+                forKey: RealtimeTranslationConfigurationKey.sourceLanguage
+            ),
+            fallback: AppleTranslationWorkspace.defaultSourceLanguageID
+        )
+        var target = PluginConfigurationCatalog.configuredLanguage(
+            defaults.string(
+                forKey: RealtimeTranslationConfigurationKey.targetLanguage
+            ),
+            fallback: AppleTranslationWorkspace.defaultTargetLanguageID
+        )
+        if TranslationLanguageIdentity.matches(source, expected: target) {
+            target = TranslationLanguageIdentity.matches(
+                source,
+                expected: AppleTranslationWorkspace.defaultTargetLanguageID
+            )
+                ? AppleTranslationWorkspace.defaultSourceLanguageID
+                : AppleTranslationWorkspace.defaultTargetLanguageID
+        }
+        let migrated = PluginConfigurationSnapshot(values: [
+            RealtimeTranslationPluginConfigurationFieldID.provider:
+                .string(provider.rawValue),
+            RealtimeTranslationPluginConfigurationFieldID.connector:
+                .string(selectionStore.selectedKind.rawValue),
+            RealtimeTranslationPluginConfigurationFieldID.sourceLanguage:
+                .string(source),
+            RealtimeTranslationPluginConfigurationFieldID.targetLanguage:
+                .string(target),
+        ])
+        try baseStore.save(migrated, schema: schema)
+        // Keep the legacy language pair canonical for downgrade compatibility.
+        defaults.set(
+            source,
+            forKey: RealtimeTranslationConfigurationKey.sourceLanguage
+        )
+        defaults.set(
+            target,
+            forKey: RealtimeTranslationConfigurationKey.targetLanguage
+        )
+        return migrated
+    }
+
+    func save(
+        _ snapshot: PluginConfigurationSnapshot,
+        schema: PluginConfigurationSchema
+    ) throws {
+        guard let providerRaw = snapshot.string(
+                RealtimeTranslationPluginConfigurationFieldID.provider
+              ),
+              RealtimeTranslationProviderKind(rawValue: providerRaw) != nil,
+              let connectorRaw = snapshot.string(
+                RealtimeTranslationPluginConfigurationFieldID.connector
+              ),
+              let connector = AITextProviderKind(rawValue: connectorRaw),
+              let source = snapshot.string(
+                RealtimeTranslationPluginConfigurationFieldID.sourceLanguage
+              ),
+              let target = snapshot.string(
+                RealtimeTranslationPluginConfigurationFieldID.targetLanguage
+              ) else {
+            throw PluginConfigurationError.corruptDocument
+        }
+        try baseStore.save(snapshot, schema: schema)
+        defaults.set(
+            source,
+            forKey: RealtimeTranslationConfigurationKey.sourceLanguage
+        )
+        defaults.set(
+            target,
+            forKey: RealtimeTranslationConfigurationKey.targetLanguage
+        )
+        selectionStore.select(connector)
+    }
+
+    func delete(schema: PluginConfigurationSchema) throws {
+        try baseStore.delete(schema: schema)
+        defaults.removeObject(
+            forKey: RealtimeTranslationConfigurationKey.provider
+        )
+        defaults.removeObject(
+            forKey: RealtimeTranslationConfigurationKey.sourceLanguage
+        )
+        defaults.removeObject(
+            forKey: RealtimeTranslationConfigurationKey.targetLanguage
+        )
+        selectionStore.select(.codexCLI)
+    }
+}
+
+private final class MarineConfigurationStore: PluginConfigurationStoring {
+    let supportsSecureValues = false
+    private let selectionStore: AITextConnectorSelectionStore
+    private let baseStore: PluginConfigurationUserDefaultsStore
+
+    init(defaults: UserDefaults,
+         selectionStore: AITextConnectorSelectionStore) {
+        self.selectionStore = selectionStore
+        baseStore = PluginConfigurationUserDefaultsStore(
+            namespace: PluginConfigurationCatalog.marinePluginID,
+            defaults: defaults
+        )
+    }
+
+    func validate(schema: PluginConfigurationSchema) throws {
+        try baseStore.validate(schema: schema)
+    }
+
+    func load(
+        schema: PluginConfigurationSchema
+    ) throws -> PluginConfigurationSnapshot? {
+        if var stored = try baseStore.load(schema: schema) {
+            stored[MarinePluginConfigurationFieldID.connector] =
+                .string(selectionStore.selectedKind.rawValue)
+            return stored
+        }
+        return PluginConfigurationSnapshot(values: [
+            MarinePluginConfigurationFieldID.connector:
+                .string(selectionStore.selectedKind.rawValue),
+            MarinePluginConfigurationFieldID.invocationTimeoutSeconds:
+                .number(ActionPluginHost.defaultInvocationTimeout),
+        ])
+    }
+
+    func save(
+        _ snapshot: PluginConfigurationSnapshot,
+        schema: PluginConfigurationSchema
+    ) throws {
+        guard let connectorRaw = snapshot.string(
+                MarinePluginConfigurationFieldID.connector
+              ),
+              let connector = AITextProviderKind(rawValue: connectorRaw),
+              snapshot.number(
+                MarinePluginConfigurationFieldID.invocationTimeoutSeconds
+              ) != nil else {
+            throw PluginConfigurationError.corruptDocument
+        }
+        try baseStore.save(snapshot, schema: schema)
+        selectionStore.select(connector)
+    }
+
+    func delete(schema: PluginConfigurationSchema) throws {
+        try baseStore.delete(schema: schema)
+        selectionStore.select(.codexCLI)
+    }
+}

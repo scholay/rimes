@@ -80,7 +80,7 @@ extension WorkbenchManualGenerationControls {
 extension AppleTranslationWorkspace: DerivedBufferWorkspace,
                                      DerivedLanguagePairControls {
     var workspacePluginKey: PluginKey { Self.pluginKey }
-    var workbenchDisplayName: String { "苹果本地翻译" }
+    var workbenchDisplayName: String { "实时翻译" }
 
     @discardableResult
     func requestRefresh() -> Bool {

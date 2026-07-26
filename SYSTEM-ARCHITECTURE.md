@@ -40,14 +40,14 @@ RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并�
  配对 Mac  ─AES-GCM双向───┤─▶ RemoteTypingService ─▶ insertRemoteText ─▶ Delivery.insert│
                           │                                  └─无安全目标→剪贴板累积    │
                           │                                                           │
- Apple 本地翻译────────▶ TranslationWorkspace ───────▶ 独立译文缓冲     │
+ 实时翻译（Apple 本地/当前 AI）▶ TranslationWorkspace ─▶ 独立译文缓冲     │
  唯一「AI 生成」插件────▶ AITextPluginWorkspace ──────▶ 独立生成缓冲     │
  Marine prepare prompt ─▶ ActionPluginHost ─┐                              │
                                             └─▶ AITextConnectorRegistry    │
                                                 ├─ Codex CLI（ChatGPT 登录态） │
                                                 ├─ Claude Code（CLI 授权态）   │
                                                 └─ OpenAI 兼容 API           │
- 意识流 raw ───────────▶ StreamInputWorkspace ─▶ 专用 OpenAI 兼容配置 ─▶ 1–3 个完整猜测 │
+ 意识流 raw ───────────▶ StreamInputWorkspace ─▶ 独立可配置 AI 渠道 ──▶ 1–3 个完整猜测 │
  [计划] 多目标/远端 ACK────┤◀▶ DeliveryRouter（M5；当前不存在）                          │
                           └──────────────────────────────────────────────────────────┘
                                     │ 底座
@@ -63,7 +63,7 @@ RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并�
 | **来源层** Sources | 把外部文字收进来，门控后产出待决条目 | InboundBus, LocalGateway, 各 Provider |
 | **缓冲层** Buffer | 所有文本的暂存枢纽；块携带来源 | BufferModel, Origin |
 | **动作插件层** Action Plugins | 用户明确调用 Marine 等外部动作；冻结上下文，必要时接收 prepared prompt，再把 Rime 本地连接器结果安全地路由回缓冲/收件箱 | ActionPluginHost, manifest, loopback HTTP |
-| **加工层** Transforms | 本地翻译、唯一「AI 生成」与意识流输入使用独立 source/target 双缓冲；普通 AI 三模型源独立切换，意识流固定走用户保存的 OpenAI 兼容配置并给出 1–3 个完整猜测 | AppleTranslationWorkspace, AITextPluginWorkspace, StreamInputWorkspace, AITextConnectorRegistry |
+| **加工层** Transforms | 「实时翻译」、唯一「AI 生成」与意识流输入使用独立 source/target 双缓冲；翻译默认 Apple 本地且可选当前 AI，普通 AI 三模型源共享切换，意识流使用自己的渠道与节流配置并给出 1–3 个完整猜测 | AppleTranslationWorkspace, AITextPluginWorkspace, StreamInputWorkspace, AITextConnectorRegistry |
 | **投递层** Delivery | 把确认后的块送到目标；防过期焦点、防回环、防误投 | InputFocusCoordinator, BufferDeliveryCoordinator, Delivery（唯一插入咽喉） |
 
 下面是底座：**输入核心**（Rime 引擎 + IMKit 事件 + 候选窗），它既独立工作（普通打字），又是缓冲层的一个来源（Rime commit）。
@@ -223,11 +223,12 @@ BufferDeliveryCoordinator (单例)
 | HTTP push（经 LocalGateway） | 脚本 POST | ✅ M2 |
 | SSE 订阅 | 订阅外部事件流 | 计划 M6 |
 | SSH | `/usr/bin/ssh` 子进程流式读 stdout；密钥全交 ssh-agent，输入法不碰；用 argv 数组防参数注入 | 计划 M6 |
+| Remarkable（显式 SSH 动作） | 用户在设备上完成官方转文字后，只读拉取最近打开文档的当前 v6 页面 typed text | ✅ 内置缓冲插件；不等同于通用 SSH provider |
 | RemotePeer | 现有 X25519+AES-GCM 通道 | 现状=直通上屏档（不改道，产品决策） |
 | Action Plugin | `~/Library/RimeBuffer/plugins/*/manifest.json` 声明动作；按 runtime config 走本机 Bearer HTTP | ✅ 通用宿主；具体插件独立安装 |
 | MarineBridge | 旧 `/buffer-state/latest` 轮询实现仍保留源码，但 focus 主路径已解除调用 | 仅兼容存档，不是新链路依赖 |
 
-### 4.4 Action Plugin 宿主与本地翻译工作区
+### 4.4 Action Plugin 宿主、实时翻译与 Remarkable 导入
 
 每个插件目录包含 schemaVersion=1 的 `manifest.json`，声明插件 id/name、runtime config 候选路径和动作 `id/title/symbol/statusPath/invokePath/modes`；需要由 Rime 执行模型的动作可增量声明 `preparePath`，互斥场景动作还可声明成对的 `presentationId/presentationTitle`。同一插件内共享 presentation id 的动作必须共享标题和 status/prepare/invoke/stream 契约；请求、流事件、结果元数据与发送复核始终保留 status 当前选中的真实 action id。当前 owner 解析后的整个动作面只有一个 presentation 且它是 prepared 时，工作台把它提升到右侧 AI 主控件并从展开层隐藏；只要存在任意第二个 presentation，就全部保留为显式按钮，Return 不猜测。runtime config 只接受 `localhost/127.0.0.1/::1`，必须包含与 manifest 精确相同的 `pluginId` 以及 `apiBase/token/updatedAt`（可附 `instanceId/processId`）；宿主拒绝符号链接、非普通文件、相对路径逃逸和超过 1 MiB 的配置，按更新时间从新到旧探测，跳过已失效的残留配置。一次 status 成功后，prepare/invoke、生成后的复核与发送前复核都锁定该精确 runtime binding，期间出现更新的配置也不能把请求切到另一实例。工作台可见时每秒轻量刷新状态，因此“先开缓冲、后选浏览器目标”和“先选目标、后开缓冲”都成立，设置/菜单中的底层缓冲启停本身不参与目标发现。展开区的刷新/重置会取消当前及过时调用、清掉本次失败状态并强制重新获取当前上下文，但不修改 `BufferModel` 正文。
 
@@ -237,9 +238,11 @@ BufferDeliveryCoordinator (单例)
 
 模型完成后或 legacy invoke 完成后，宿主都用同一 binding 再读取一次 status：响应 id、当前 context 和原焦点租约全部匹配时，结果作为 `.plugin(id)` Block 进入缓冲；任一项失效时，带 `stale=true` 元数据进入 `InboundBus` 等人工接受。用户随后发送仍绑定目标的插件块时，唯一投递协调器还会异步重取同一实例的 fresh status，并在回调后再次核对原 `FocusToken/context/action`；切到另一评论后，迟到的“允许”回调也只能把旧块标记过期，绝不进入 `Delivery.insert`。若用户在收件箱明确选择“作为普通文本加入”，元数据会转为 `reviewedAsPlainText=true`：保留来源和原目标仅供核对，但永久解除旧浏览器绑定，之后像普通块一样只投递到用户当时明确聚焦的输入框。两条路径本身都不调用 `Delivery.insert`，因此不会自动上屏。
 
-设置中的缓冲插件 Switch 独立管理一个可多选的启用集合；Marine、苹果翻译与唯一「AI 生成」插件都以带 SF Symbol 的同类卡片呈现。外部 Action Plugin v1 无需升级 manifest：身份图标继承首个 action 的 `symbol`，未知符号回退为通用拼图。展开工作台中的紧凑选择器只枚举该集合，并以 `Default` 表示显式不使用插件；`BufferPluginSelectionStore` 再把集合中的选择收敛为一个当前 owner。选择器只原子替换 owner，不改其他插件的启用状态；关闭当前 owner 的后台 Switch 会同时回到 `Default`。缓冲插件不会贡献动态“扩展”路由。旧版本中三个 provider-specific plugin id 会迁移到「AI 生成」owner，并把原选择保留为连接器偏好。owner 切换会取消旧 owner 的在途请求、停止其工作台状态并作废旧翻译/AI generation，但**不撤销已完成 Action Plugin block 生成时的投递 authority**：例如切到「AI 生成」后，已完成的 Marine 块仍可用原 runtime binding/action/context/focus 复核。只有该外部插件被禁用、卸载、升级或原 runtime 失效时，才撤销对应已完成结果的权限。
+设置中的缓冲插件 Switch 独立管理一个可多选的启用集合；Marine、实时翻译与唯一「AI 生成」插件都以带 SF Symbol 的同类卡片呈现。具有声明式 schema 的内置或宿主已知插件统一显示“设置…”按钮，由 `PluginConfigurationViewController` 渲染，不允许外部包注入 AppKit 视图。`PluginConfigurationUserDefaultsStore` 以每插件单字典保存普通偏好；含 `secureText` 的配置必须进入 0700 目录中的 0600 私有文件，保存通知只携带插件 ID 和字段 ID。完整约束见 [PLUGIN-CONFIGURATION.md](PLUGIN-CONFIGURATION.md)。外部 Action Plugin v1 无需升级 manifest：身份图标继承首个 action 的 `symbol`，未知符号回退为通用拼图。展开工作台中的紧凑选择器只枚举已启用集合，并以 `Default` 表示显式不使用插件；`BufferPluginSelectionStore` 再把集合中的选择收敛为一个当前 owner。选择器只原子替换 owner，不改其他插件的启用状态；关闭当前 owner 的后台 Switch 会同时回到 `Default`。缓冲插件不会贡献动态“扩展”路由。旧版本中三个 provider-specific plugin id 会迁移到「AI 生成」owner，并把原选择保留为连接器偏好。owner 切换会取消旧 owner 的在途请求、停止其工作台状态并作废旧翻译/AI generation，但**不撤销已完成 Action Plugin block 生成时的投递 authority**：例如切到「AI 生成」后，已完成的 Marine 块仍可用原 runtime binding/action/context/focus 复核。只有该外部插件被禁用、卸载、升级或原 runtime 失效时，才撤销对应已完成结果的权限。
 
-Apple 翻译不伪装成 HTTP Action Plugin。`AppleTranslationWorkspace` 读取 `BufferModel.stagedText`；界面上方源轨合并显示全文且不分 block，下方目标轨独立显示译文 block，两条轨道分别横向滚动。翻译态中拖拽与展开按钮对齐上方原文行，发送按钮对齐下方目标语言行。AppKit 工作台挂载 1×1 的 `NSHostingView`，通过 SwiftUI `translationTask` 获得只在视图生命周期内有效的 `TranslationSession`。自动刷新采用 single-in-flight + latest-queued：持续输入不会反复取消当前本地会话，完成的旧快照只能作为降透明的“更新中”预览，只有与当前原文和语言完全匹配的 generation 才进入可发送态。用户点击展开区的刷新/重置时，保留原文 `BufferModel`，作废当前译文 generation 并立即重启当前语言组合的翻译。未 review 的 Action Plugin 目标绑定块禁止作为翻译源，避免加工后绕过原焦点/上下文校验。`BufferDeliveryCoordinator` 通过 `BufferDeliveryContentSource` 选择普通缓冲或译文缓冲，并在每个 block 投递前按 workspace/generation/id 重取实时内容。译文 `.processor` 来源继承所有源 block 中最严格的 remote-mirror 策略。
+实时翻译不伪装成 HTTP Action Plugin。`AppleTranslationWorkspace` 读取 `BufferModel.stagedText`；界面上方源轨合并显示全文且不分 block，下方目标轨独立显示译文 block，两条轨道分别横向滚动。翻译态中拖拽与展开按钮对齐上方原文行，发送按钮对齐下方目标语言行。默认 provider 是 Apple 本地翻译：AppKit 工作台挂载 1×1 的 `NSHostingView`，通过 SwiftUI `translationTask` 获得只在视图生命周期内有效的 `TranslationSession`，原文不交给网络服务。用户也可选择当前 AI 渠道；宿主用严格 JSON 边界构造翻译请求，再由共享 `AITextConnectorRegistry` 执行。自动刷新采用 single-in-flight + latest-queued；只有与当前原文、语言和 provider 配置完全匹配的 generation 才进入可发送态。保存配置或点击展开区的刷新/重置时，保留原文 `BufferModel`，作废旧 generation 并按新快照重启。未 review 的 Action Plugin 目标绑定块禁止作为翻译源，避免加工后绕过原焦点/上下文校验。`BufferDeliveryCoordinator` 通过 `BufferDeliveryContentSource` 选择普通缓冲或译文缓冲，并在每个 block 投递前按 workspace/generation/id 重取实时内容。译文 `.processor` 来源继承所有源 block 中最严格的 remote-mirror 策略。
+
+Remarkable 同样不伪装成 HTTP Action Plugin，也不成为派生 delivery source。它实现通用的内置货架动作接口；只有用户点击“拉取转写”才启动 `/usr/bin/ssh`。插件按 `.metadata.lastOpened` 选择最近打开文档，从 `.content.cPages.lastOpened.value` 定位当前页，连续读取两次 `<document UUID>/<page UUID>.rm` 并要求快照完全一致，再用有界的 software 3 / v6 root-text reader 提取原生 typed text。结果经 `BufferModel.stageExternalSemantic(..., origin: .ssh)` 一次性加入普通缓冲；Return 与纸飞机仍只走既有 `BufferDeliveryCoordinator`。用户可配置 host、SSH 用户名和密码，也可不填密码而使用 key/agent。密码保存在 `~/Library/RimeBuffer/plugin-config/builtin.remarkable/credentials.json`（目录 0700、文件 0600）；密码模式以 `BatchMode=no`、禁用公钥回退和受限 `SSH_ASKPASS` 读取该文件，密码不进入 argv、环境值、日志或通知。无密码模式使用 `BatchMode=yes`。两种模式都严格校验 known_hosts、固定只读远端命令、UUID/host 与有界 stdout。插件不触发 reMarkable 私有云转写、不停止 Xochitl，也不修改设备。配置变化、owner 切换、禁用、关闭、secure input、锁屏、睡眠与会话切出都会取消并墓碑化在途读取。
 
 ```
 当前 BufferModel 全文 ─Return/右侧 AI 主按钮─▶ AITextPluginWorkspace 冻结 source text + block IDs
@@ -255,8 +258,8 @@ Marine 页面上下文 ─Return/右侧 AI 主按钮─▶ Marine prepare prompt
                                                           ▼
                               AI target rail / Action Plugin blocks（完成后才可发）
 
-当前完整意识流 raw ─220/800 ms 自动刷新/全局重算─▶ StreamInputWorkspace
-                                  └─▶ OpenAICompatibleTextProvider（固定专用路由）
+当前完整意识流 raw ─可配置、默认 220/800 ms 自动刷新/全局重算─▶ StreamInputWorkspace
+                                  └─▶ 意识流独立选择的 AITextProvider（默认 OpenAI 兼容）
                                       └─▶ 1–3 个完整互斥猜测 ─稳定槽位连续渲染─▶ 仅 final 所选项可发
 ```
 
@@ -266,7 +269,7 @@ Marine 页面上下文 ─Return/右侧 AI 主按钮─▶ Marine prepare prompt
 - **意识流调度与连续渲染**：连续字母或已结算 FlyYao 批次只重置 220 ms debounce；本次 burst 首次 raw 变更建立的 800 ms max-wait 不重置，因此不停输入也会按上限刷新。显式 `.chord`/`.mutual` 的第一枚键先撤销旧投递权，再按 `ChordSettings.duration` 等待当前物理批次；并击只映射同批，互击还能把有效的相邻左/右半区批次重组。所有精确映射都一次性写入全拼，但只有完整音节同时追加一个 soft ASCII Space，尚未配对的单侧拼音片段与单键不加 Space，无映射批则保留字母原码且不伪造分隔。soft Space 走普通 debounce。用户物理 Space 写入 hard boundary；若 raw 已以 soft Space 结尾则只移除 sidecar 标记、原位提升同一字节。hard Space 上轨显示 `·`，立即触发完整快照请求；前导/连续 hard Space no-op。数字 `1`–`3` 与普通 ↑/↓ 只切换尚未确认的候选；修饰方向键仍放行。精确 Control/Command+A 选中 raw 上轨，Control/Command+V 将 ASCII 字母小写化、把空白段归一为 hard Space 并立即触发一次完整 raw 请求；非法字符或 16 KiB 越界时整次粘贴原子不改状态。workspace 采用有界 make-before-break，最多允许旧视觉 producer + 新 challenger 两路；跨 revision 的旧响应、所有 partial 和 baseline 只服务于显示，绝不进入下一轮 prompt。唯一例外是同 revision 的一次 minimum-candidate retry 可携带此前严格验证的 final 作为有界 JSON 排重数据；墓碑回调仍按 job/generation 丢弃。
 - **意识流全局推断边界**：请求边界始终冻结并发送当前包含 ASCII Space 的完整 raw 拼音以及 soft-space offsets，任何响应都是对全文的替代解释。`StreamInputPinyinHints` 产生最多三条 lossless 边界提示，不跨 hard Space 组音节并以 ` | ` 显式保留 hard boundary；soft Space 作为普通拼音音节边界保留，未知 English/错键不丢失，超过 512 bytes 时省略提示。本地提示数大于一时 `minimumGuessCount=2`。首个严格合法 final 不足下限时只重试一次，已验证候选作为有字节上限、JSON 编码且明确不可信的 `excludedGuesses` 送入重试；新旧 final 以旧候选优先顺序合并、精确去重并截到三条。重试仍重复或失败时，此前合法 final 仍可 ready；retry partial 与 baseline 永不成为 fallback，首轮没有合法 terminal fallback 的 schema/非空/大小失败仍拒绝。retry partial 从旧候选之后的稳定槽位开始，final 逐槽精确替换；多候选按行呈现，行内再做确定性宿主分块。每个非空 hard-Space 子句提出一个最小投递块目标，soft Space 不增加该目标；若补拆会切断英文单词、URL、代码、数字或引文，受保护片段保持原子。协调器在冻结 delivery generation 前确认当前候选并清除其余候选，Return keyDown 也执行同一确认，因此同一次轻按可从 keyUp 开始发送。raw 贯穿所选答案的部分投递保留，最后一块成功才连同结果清除；首块投递后主动继续输入才会建立全新 raw 并撤销未发送尾部，已投递前缀不得复活。
 - **共同隐私/体验边界**：普通「AI 生成」与当前唯一的 prepared Action Plugin 都只在用户用 Return 或右侧 AI 主按钮明确请求时运行；多个 prepared 动作不会被 Return 自动选择，仍要求点击各自的显式动作。意识流是唯一按输入停顿自动请求的 AI 例外，且只发送当前焦点绑定的 raw 全拼。普通「AI 生成」只发送当前 `BufferModel.stagedText`，不附带历史、preedit、剪贴板或屏幕上下文；prepared Action Plugin 只发送插件明确返回且通过身份校验的 prompt。首字前仅展示安全的连接/思考摘要/重试/校验状态与等待秒数，不展示 raw chain-of-thought。普通生成正文可细分为受保护的语义 block；意识流的每个结果则必须是可独立投递的完整猜测，不得在候选间拆句。未 review 的 Action Plugin 目标绑定块不能被作为普通 AI 源文。
-- **Marine 边界**：Marine 继续负责浏览器上下文、话术规则、记录和界面信息，并通过 `preparePath` 产出 prompt；它不再选择模型、保存模型凭据、启动 Codex/Claude 或调用 OpenAI。连接器执行与 `blocks-v1` 结果校验都在 RimeBuffer 内完成，最终块仍绑定 Marine 原来的 runtime/context/focus authority。
+- **Marine 边界**：Marine 继续负责浏览器上下文、话术规则、记录和界面信息，并通过 `preparePath` 产出 prompt；它不保存模型凭据、启动 Codex/Claude 或直接调用 OpenAI。插件设置中的 AI 渠道写回 RimeBuffer 的共享连接器选择；60–600 秒调用超时只影响新请求，并在调用边界冻结。连接器执行与 `blocks-v1` 结果校验都在 RimeBuffer 内完成，最终块仍绑定 Marine 原来的 runtime/context/focus authority。
 
 ### 4.5 投递层
 
@@ -306,7 +309,7 @@ Delivery.insert(_ text, into: client)
                                └─────────────────────────────────────┘
 ```
 
-- **缓冲工作台是独立 `NSPanel`**：默认 nonactivating，不抢目标输入框焦点；普通折叠/展开为 44/78pt。苹果翻译、AI 生成与单候选意识流的 source rail 在上、target rail 在下，折叠/展开为 78/112pt；意识流出现 2/3 个候选时 target 增为 2/3 条独立滚动行，对应高度为 109/143pt 与 140/174pt。每条 target row 行内再以 chips 显示宿主分块。增长时必须先扩展 panel/rail 并完成 layout 再挂新 row；缩小时先移除 row 再收窄高度。每个横向 document stack 禁用 autoresizing-mask constraints，高度绑定 scroll viewport，并在 host geometry 变化后重算 document size。拖拽/展开与上方源文行对齐，发送与最下方目标行对齐；普通单轨态三者仍居中。上层固定显示状态、紧凑插件选择器与当前动作、刷新/重置与关闭，不再含块编辑器或面板内缓冲开关。切 owner、展开与 target row 数变化都只向上调整并固定底边，所以条下方 Rime 候选锚点不跳。仅拖拽图标能移动窗口，背景与其他控件不能拖；窗口仍可调整宽度，frame/展开态持久化并在屏幕拓扑变化后夹回可见区域。原来的标题/字数、手动遮蔽、历史、清空和工具层发送入口均已移除。
+- **缓冲工作台是独立 `NSPanel`**：默认 nonactivating，不抢目标输入框焦点；普通折叠/展开为 44/78pt。实时翻译、AI 生成与单候选意识流的 source rail 在上、target rail 在下，折叠/展开为 78/112pt；意识流出现 2/3 个候选时 target 增为 2/3 条独立滚动行，对应高度为 109/143pt 与 140/174pt。每条 target row 行内再以 chips 显示宿主分块。增长时必须先扩展 panel/rail 并完成 layout 再挂新 row；缩小时先移除 row 再收窄高度。每个横向 document stack 禁用 autoresizing-mask constraints，高度绑定 scroll viewport，并在 host geometry 变化后重算 document size。拖拽/展开与上方源文行对齐，发送与最下方目标行对齐；普通单轨态三者仍居中。上层固定显示状态、紧凑插件选择器与当前动作、刷新/重置与关闭，不再含块编辑器或面板内缓冲开关。切 owner、展开与 target row 数变化都只向上调整并固定底边，所以条下方 Rime 候选锚点不跳。仅拖拽图标能移动窗口，背景与其他控件不能拖；窗口仍可调整宽度，frame/展开态持久化并在屏幕拓扑变化后夹回可见区域。原来的标题/字数、手动遮蔽、历史、清空和工具层发送入口均已移除。
 - **全局切换快捷键**：`GlobalHotKeyController` 用 Carbon 注册精确 `Command+Shift+B`，不需 Accessibility 权限，按下后调用 `BufferWindowController.toggleVisibility()`。关闭时它把非 pin 面板带到当前 Space、显示窗口并恢复 `BufferModel.enabled`；打开时复用 `closeAndPause()`，安全收束当前组字、保留块、暂停捕获并隐藏。该注册快捷键被消费，B 不继续传给前台应用。
 - **边缘绘制**：圆角层内缩到透明窗口边距，并覆盖固定的日/夜工作台背景 token，避免 HUD 背景采样破坏对比度；边框按 backing scale 以路径内 hairline 绘制，避免把居中 border 压在窗口 bounds 上造成圆角或边缘裁剪毛边。
 - **关闭不会删除已有块**：先显式收束当前组字，暂停捕获，结束 transient 加载/错误状态并保留已有模型块，再隐藏。从设置/输入法菜单显示工作台时会恢复底层捕获。工作台没有手动清空或撤销入口；隐私选项触发的跨 app 清理仍是不可恢复的安全操作。
@@ -330,13 +333,13 @@ Delivery.insert(_ text, into: client)
 
 - 每个一级页的子页固定显示在右侧顶部；route/subpage 使用稳定字符串身份，不依赖 sidebar 行号。启停内置扩展后目录会重建；若当前扩展被停用，安全回退到「插件 ▸ 内置扩展」。
 - 输入法页明确分开三层：输入编码、键入模式和词库。运行时只暴露经过验证的 Rime 组合方案，不允许三层任意交叉，以免生成不可部署配置。`my_combo` 的产品名是「飞耀互击」；同一 schema 由完整的 `InputConfiguration.keyingMode` 区分“只结算当前批的并击”与“可跨批配对左右半区的互击”，两者都保留多键单侧批次，不能从 schema ID 反推。单个物理字母保持英文原码且不自动添加分词符；互击只在至少一侧为多键和弦时跨批配对。`my_combo` 仅覆盖物理和弦映射，候选拼写、中文/英文翻译及过滤链继承 `rime_ice`，因此多音节组字仍能选择前缀单字并正常翻页。无映射批保留可由 Return 提交的原码；`,`/`.` 只在 chord alphabet 中充当双角色键，单键结算继续落到 punctuator。词库页通过 librime `levers` API 维护真实的 `rime_ice` / `english` 用户学习库，导入是合并，导出是可移植 TSV，不复制 live LevelDB。
-- 缓冲区、连接器和外部插件管理仍接真实运行时；“AI 模型”子页用单选控件在 Codex CLI、Claude Code CLI 与 OpenAI 兼容 API 三个模型源间切换，展示两个 CLI 的可用性与授权/远程服务隐私说明，并管理 OpenAI 兼容 API 的 Base URL、model 与 API key。该单选独立于缓冲插件 owner，并只决定普通「AI 生成」和 prepared Action Plugin 的执行源；意识流始终直接使用同页保存的 OpenAI 兼容配置。尚未实现的 SSE/SSH 不显示成可操作假功能。当前没有按来源编辑信任等级或重新生成 token 的 UI。
+- 缓冲区、连接器和外部插件管理仍接真实运行时；“AI 模型”子页用单选控件在 Codex CLI、Claude Code CLI 与 OpenAI 兼容 API 三个模型源间切换，展示两个 CLI 的可用性与授权/远程服务隐私说明，并管理 OpenAI 兼容 API 的 Base URL、model 与 API key。该单选独立于缓冲插件 owner；AI 生成、实时翻译和 Marine 的配置页可写回这个共享选择，意识流则维护自己的渠道选择（仍复用连接器授权/凭据）。插件列表中凡 registry 能解析配置 schema 的项目都显示同一个“设置…”入口。通用 SSE/SSH provider 尚未实现；Remarkable 只是用户显式调用、目标与命令固定的专用只读 SSH 动作。当前没有按来源编辑信任等级或重新生成 token 的 UI。
 
 ### 5.3 统一插件平台
 
 - `PluginRegistry` 是发现、命名空间、内置扩展生命周期和统一启停 facade；`PluginKey(domain, rawID)` 防止内置与外部包同名遮蔽。
 - **外部缓冲插件**仍完全沿用 Action Plugin v1：`ActionPluginHost + ActionPluginManager` 是执行、runtime binding、授权与撤权的唯一 authority。Registry 不重建 wire metadata，也不能让外部包贡献原生 AppKit 设置页，因此 Marine 兼容路径不变。
-- **内置扩展/缓冲插件**是随应用编译的可信模块。统计、打字测速和飞耀互击学习贡献动态设置页；苹果翻译、唯一「AI 生成」与「意识流输入」贡献 `.bufferAction`，在唯一 owner 下与 Marine 等插件互斥运行且不出现为左侧动态扩展页。Codex CLI、Claude Code CLI 与 OpenAI 兼容 API 是 `AITextConnectorRegistry` 下的三个普通连接器，不再是三个插件；意识流只复用 OpenAI 兼容配置，不跟随其单选状态。
+- **内置扩展/缓冲插件**是随应用编译的可信模块。统计、打字测速和飞耀互击学习贡献动态设置页；实时翻译、Remarkable、唯一「AI 生成」与「意识流输入」贡献 `.bufferAction`，在唯一 owner 下与 Marine 等插件互斥运行且不出现为左侧动态扩展页。Remarkable 是普通缓冲的显式 importer，不建立 source/target 派生轨，也不会自动上屏。Codex CLI、Claude Code CLI 与 OpenAI 兼容 API 是 `AITextConnectorRegistry` 下的三个普通连接器，不再是三个插件；意识流用自己的 provider 字段选择其中一个，默认 OpenAI 兼容，不跟随共享 AI 单选。
 - `InputTelemetryBus` 是非消费型、脱敏的主线程观测通道：不携带正文、候选、IMK client、FocusToken、应用或焦点身份。secure input、RIMES 自身窗口和不可信/失焦目标不发事件；字符计数只在真正进入缓冲或 `Delivery.insert` 成功后发布。
 
 ### 5.4 其它 UI
@@ -433,6 +436,13 @@ Sources/RimeBuffer/
   SettingsWindow.swift          垂直一级导航 + 横向子页设置壳
   SettingsRouting.swift         稳定 route/subpage + 动态扩展目录与回退
   PluginPlatform/BuiltInPlugins 统一 Registry、能力模型与内置扩展生命周期
+  PluginConfiguration.swift     声明式 schema / 通用表单 / 普通与私有存储
+  PluginConfigurationCatalog.swift AI/意识流/实时翻译/Marine 的配置与运行时桥
+  AppleTranslationPlugin.swift  实时翻译双缓冲 / Apple 本地 session / AI provider
+  RemarkablePlugin.swift        reMarkable 只读 SSH 当前页定位 / 拉取状态机 / 普通缓冲导入
+  RemarkableCredentialStore.swift 0700/0600 SSH 配置 / 受限 askpass
+  RemarkableSceneTextExtractor.swift software 3 / v6 原生 typed-text 有界解析
+  AITextPlugins.swift           唯一 AI workspace、三源 ConnectorRegistry、CLI/API provider 与 0600 配置
   InputTelemetry.swift          无正文/无 IMK 对象的本地输入观测总线
   UserLexiconService.swift      官方 user_dict 导入/导出/快照恢复
   WorkbenchBarView.swift        历史三层面板视觉素材（未接运行时）
@@ -449,12 +459,14 @@ Sources/RimeBuffer/
     LocalGateway.swift          回环 HTTP/MCP 服务器
     GatewayToken.swift          0600 token
     InboundTrayWindow.swift     外部来源收件箱（过渡 UI）
-  AppleTranslationPlugin.swift  本地翻译双缓冲 / SwiftUI session 桥 / 语言设置
+  AppleTranslationPlugin.swift  实时翻译双缓冲 / SwiftUI session 桥 / AI provider
   AITextPlugins.swift          唯一 AI workspace、三源 ConnectorRegistry、CLI/API provider 与 0600 配置
   [计划] Delivery/DeliveryRouter 多目标投递 + 远端 ACK + 持久账本
 ```
 
-**测试**：无 XCTest target；CI 运行编进二进制的 smoke 子命令。`stream-input-smoke` 覆盖 `.chord`/`.mutual` 双路由、同批与跨左右批映射、单键不重组、非和弦边界清配对、自动 soft Space/物理 hard Space 原位提升、提示与宿主分块差异、普通 debounce、首键撤销旧投递权、Backspace 先结算再逐字删除，以及原有焦点/secure/modifier 门、有界双路、迟到回调 tombstone、1–3 个互斥候选、选择/投递和 raw 全选粘贴契约。`fly-chord-learning-smoke` 另验证 fixture 与真实部署 schema 都能被同一 mapper 消费。`buffer-window-smoke` 覆盖普通候选矩阵与意识流 target rail 的真实三行 AppKit 几何、全选显示和动态高度；`matrix-smoke` 覆盖 1–3 行及三行 viewport 上限。`buffer-smoke` 覆盖 Control/Command+A/V 精确组合规则、普通/插件 source 的全选替换、块光标粘贴、语义分块、精确连接文本与纯空白保留；secure input 不读 pasteboard 与延迟读取后租约重验仍需安装后的真实 IMK 交互回归。`ai-text-smoke` 覆盖 provider 逻辑块到工作台的唯一分段、超 20 KB 粗结果、后续上游块 UUID 稳定和 CLI/API 流式收口；`translation-smoke` 与 `plugin-stream-smoke` 覆盖本地翻译、Action/Marine 的分段、权限继承和 partial/final 一致性。这些 smoke 不调用真实模型或用户配置的真实 API；真实 librime 词库桥另有强制隔离 `RIMEBUFFER_USER_DIR` 的 `user-lexicon-bridge-smoke`。
+**测试**：无 XCTest target；CI 运行编进二进制的 smoke 子命令。`plugin-configuration-smoke` 覆盖四插件默认值与运行时桥、每插件普通存储、私有文件 0700/0600、弱权限与 symlink 拒绝、值/通知脱敏，以及 AI 翻译 prompt 的 JSON 边界。`stream-input-smoke` 覆盖 `.chord`/`.mutual` 双路由、同批与跨左右批映射、单键不重组、非和弦边界清配对、自动 soft Space/物理 hard Space 原位提升、提示与宿主分块差异、普通 debounce、首键撤销旧投递权、Backspace 先结算再逐字删除，以及原有焦点/secure/modifier 门、有界双路、迟到回调 tombstone、1–3 个互斥候选、选择/投递和 raw 全选粘贴契约。`fly-chord-learning-smoke` 另验证 fixture 与真实部署 schema 都能被同一 mapper 消费。`buffer-window-smoke` 覆盖普通候选矩阵与意识流 target rail 的真实三行 AppKit 几何、全选显示和动态高度；`matrix-smoke` 覆盖 1–3 行及三行 viewport 上限。`buffer-smoke` 覆盖 Control/Command+A/V 精确组合规则、普通/插件 source 的全选替换、块光标粘贴、语义分块、精确连接文本与纯空白保留；secure input 不读 pasteboard 与延迟读取后租约重验仍需安装后的真实 IMK 交互回归。`ai-text-smoke` 覆盖 provider 逻辑块到工作台的唯一分段、超 20 KB 粗结果、后续上游块 UUID 稳定和 CLI/API 流式收口；`translation-smoke` 与 `plugin-stream-smoke` 覆盖实时翻译、Action/Marine 的分段、权限继承和 partial/final 一致性。这些 smoke 不调用真实模型或用户配置的真实 API；真实 librime 词库桥另有强制隔离 `RIMEBUFFER_USER_DIR` 的 `user-lexicon-bridge-smoke`。
+
+`remarkable-plugin-smoke` 用程序化 v6 fixture 覆盖 root text、CRDT 顺序、删除/格式码与边界拒绝，并可在开发时加载真实 rmscene 样本但绝不打印正文；SSH 拉取状态机则用假 runner 验证 current-page 定位、双读稳定、取消/迟到墓碑、去重和 `.ssh` provenance。CI 不连接真实 reMarkable。
 
 - `plugin-smoke` 覆盖 manifest 发现与 schema、可选 `preparePath` 契约、唯一 prepared presentation 提升到主操作及多动作歧义回退、request/generating/deliver 四态、普通块/其他 action/stale 结果不误亮纸飞机、上下文动作聚合及 `status.actionId` 动态切换、`~`/相对 runtime path、runtime 从新到旧回退与 status→prepare/invoke 精确绑定、只允许 loopback、prepared 五字段身份与 `blocks-v1` 格式校验、流式 1 MiB 响应上限、Bearer request、request/context/action/focus 路由规则、切 owner 后已完成 Marine block 仍保留原投递 authority、切换评论后迟到校验不得上屏、收件箱满载显式失败，以及 stale 结果经人工接受后保留来源但安全降级为普通文本。
 
@@ -475,9 +487,11 @@ Sources/RimeBuffer/
 | **M2** 网关+MCP | LocalGateway / MCP tools / InboundBus / token / 收件箱 | ✅ 主干+收件箱（0.4.7），传入轨嵌入独立工作台待做 |
 | **缓冲窗口** | FocusToken / Return+Backspace 隔离 / 44pt 简化主条+78pt 上展 / 常规候选窗下挂 / 成功块无历史消费 / 多屏与隐私 | ✅ 2026-07-18 已实现并通过源码 smoke；待安装后真实宿主输入交互验收 |
 | **Action Plugin v1** | manifest/runtime config/loopback Bearer HTTP/可选 preparePath/动态动作 UI/插件管理/FocusToken+context 安全分流 | ✅ 基础宿主 2026-07-18；prepare 2026-07-20 |
-| **M3** 本地翻译 | 独立双缓冲 / SwiftUI Translation 桥 / 语言选择 / 互斥撤权 | ✅ 已实现；待安装后真语言包验收 |
+| **M3** 实时翻译 | 独立双缓冲 / Apple 本地默认 / 当前 AI 渠道 / 语言选择 / 互斥撤权 | ✅ 已实现；待安装后真语言包验收 |
 | **M4** AI 插件与连接器 | 唯一「AI 生成」插件 / Codex、Claude Code、OpenAI 三源切换 / CLI/API 授权 / Marine prepare / 双轨 workspace / 0600 凭据 | ✅ 2026-07-20 已实现；待真实宿主端到端验收 |
+| **插件配置** | 统一 schema 与“设置…”表单 / 每插件普通存储 / 0700+0600 敏感存储 / 运行时快照 | ✅ 2026-07-26 已实现 |
 | **M5** 投递路由 | 本地精确焦点已完成；多目标 / 远端 ACK / 持久账本仍属后续，当前明确不保存发送历史 | 部分完成 |
+| **Remarkable** | 显式只读 SSH 动作 / 当前页 v6 typed-text / 普通缓冲导入 / secure 与 owner 取消 | ✅ 2026-07-26 已实现；待设备连接实测 |
 | **M6** SSE/SSH + 收尾 | SSE/SSH provider / 传入轨嵌入独立工作台 / 视觉对齐 | 计划 |
 
 **作废/推迟**（产品决策）：远端改道 + 协议 v2（配对走直通上屏）；剪贴板捕获；AirDrop。

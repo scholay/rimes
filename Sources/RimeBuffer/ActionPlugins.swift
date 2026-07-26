@@ -1513,9 +1513,24 @@ struct ActionPluginFocusAccess {
 final class ActionPluginHost {
     static let shared = ActionPluginHost(pluginIsSelected: {
         BufferPluginSelectionStore.shared.isSelectedExternal(pluginID: $0)
+    }, configuredInvocationTimeout: { pluginID in
+        guard pluginID == PluginConfigurationCatalog.marinePluginID else {
+            return nil
+        }
+        return PluginConfigurationCatalog.marineInvocationTimeout()
     })
     static let defaultInvocationTimeout: TimeInterval = 270
     private static let maximumBackgroundInvocations = 4
+
+    static func resolvedInvocationTimeout(
+        fallback: TimeInterval,
+        configured: TimeInterval?
+    ) -> TimeInterval {
+        if let configured, configured.isFinite {
+            return max(0.01, configured)
+        }
+        return max(0.01, fallback)
+    }
 
     private struct PendingStreamBlock {
         let index: Int
@@ -1584,6 +1599,7 @@ final class ActionPluginHost {
     private let connectorProvider: () -> (any AITextProvider)?
     private let runtimeBindingIsCurrent: (InstalledActionPlugin, ActionPluginRuntimeBinding) -> Bool
     private let invocationTimeout: TimeInterval
+    private let configuredInvocationTimeout: (String) -> TimeInterval?
     private let runtimeAuthorityRecheckInterval: TimeInterval
     private let streamDrainDidRun: () -> Void
     private var managementObserver: NSObjectProtocol?
@@ -1643,6 +1659,9 @@ final class ActionPluginHost {
                  .contains(binding.config)
          },
          invocationTimeout: TimeInterval = ActionPluginHost.defaultInvocationTimeout,
+         configuredInvocationTimeout: @escaping (String) -> TimeInterval? = {
+             _ in nil
+         },
          runtimeAuthorityRecheckInterval: TimeInterval = 0.5,
          streamDrainDidRun: @escaping () -> Void = {}) {
         self.rootURL = rootURL
@@ -1655,6 +1674,7 @@ final class ActionPluginHost {
         self.connectorProvider = connectorProvider
         self.runtimeBindingIsCurrent = runtimeBindingIsCurrent
         self.invocationTimeout = max(0.01, invocationTimeout)
+        self.configuredInvocationTimeout = configuredInvocationTimeout
         self.runtimeAuthorityRecheckInterval = max(0, runtimeAuthorityRecheckInterval)
         self.streamDrainDidRun = streamDrainDidRun
         reloadManifests(force: true)
@@ -1916,6 +1936,12 @@ final class ActionPluginHost {
             return false
         }
 
+        // Freeze the plugin-specific preference at the invocation boundary.
+        // Later settings changes affect only the next request.
+        let frozenInvocationTimeout = Self.resolvedInvocationTimeout(
+            fallback: invocationTimeout,
+            configured: configuredInvocationTimeout(plugin.manifest.id)
+        )
         let requestId = UUID().uuidString.lowercased()
         let nonce = UUID()
         let cancellationChain = preparedByPlugin ? ActionPluginCancellationChain() : nil
@@ -2002,7 +2028,9 @@ final class ActionPluginHost {
                 activeInvocation = invocation
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + invocationTimeout) { [weak self] in
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + frozenInvocationTimeout
+        ) { [weak self] in
             guard let self,
                   let current = self.storedInvocation(nonce: nonce) else { return }
             self.cancelInvocation(current,

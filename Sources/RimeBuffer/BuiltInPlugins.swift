@@ -6,6 +6,7 @@ enum BuiltInPluginID {
     static let typingSpeed = "builtin.typing-speed"
     static let flyChordLearning = "builtin.fly-chord-learning"
     static let appleTranslation = "builtin.apple-translation"
+    static let remarkable = "builtin.remarkable"
     static let streamInput = "builtin.stream-input"
     static let aiText = AITextBuiltInPluginID.aiText
     // Provider-specific IDs are retained for preference/source compatibility.
@@ -21,6 +22,7 @@ enum BuiltInPlugins {
             TypingSpeedInternalPlugin(),
             FlyChordLearningInternalPlugin(),
             AppleTranslationInternalPlugin(),
+            RemarkableInternalPlugin(),
             StreamInputInternalPlugin(),
             AITextInternalPlugin(),
         ]
@@ -156,14 +158,15 @@ private final class FlyChordLearningInternalPlugin: InternalPlugin {
     }
 }
 
-private final class AppleTranslationInternalPlugin: InternalPlugin {
+private final class AppleTranslationInternalPlugin:
+    InternalPlugin, PluginConfigurationProviding {
     let descriptor = PluginDescriptor(
         key: PluginKey(domain: .builtIn, rawID: BuiltInPluginID.appleTranslation),
         wireID: nil,
-        name: "苹果本地翻译",
+        name: "实时翻译",
         symbolName: "character.book.closed",
-        version: "1.0",
-        summary: "把源缓冲区全文在本机翻译到独立目标缓冲区。",
+        version: "2.0",
+        summary: "把源缓冲区实时翻译到独立目标缓冲区；默认使用 Apple 本地翻译，也可选择当前 AI 渠道。",
         source: .builtIn,
         capabilities: [.bufferAction],
         settings: nil,
@@ -181,9 +184,104 @@ private final class AppleTranslationInternalPlugin: InternalPlugin {
     func makeSettingsViewController(subpageID: String) -> NSViewController? {
         nil
     }
+
+    func makePluginConfigurationModel() throws
+        -> PluginConfigurationModel {
+        try PluginConfigurationCatalog.makeRealtimeTranslationModel()
+    }
 }
 
-private final class AITextInternalPlugin: InternalPlugin {
+private final class RemarkableInternalPlugin:
+    InternalPlugin, PluginConfigurationProviding {
+    let descriptor = PluginDescriptor(
+        key: PluginKey(domain: .builtIn, rawID: BuiltInPluginID.remarkable),
+        wireID: nil,
+        name: "Remarkable",
+        symbolName: "rectangle.and.hand.point.up.left",
+        version: "1.1",
+        summary: "通过只读 SSH 拉取 reMarkable 当前页已经转换好的文字；支持保存主机、用户名与本机私有密码。",
+        source: .builtIn,
+        capabilities: [.bufferAction],
+        settings: nil,
+        canUninstall: false
+    )
+
+    func start() {
+        RemarkableWorkspace.shared.start()
+    }
+
+    func stop() {
+        RemarkableWorkspace.shared.stop()
+    }
+
+    func makeSettingsViewController(subpageID: String) -> NSViewController? {
+        nil
+    }
+
+    func makePluginConfigurationModel() throws
+        -> PluginConfigurationModel {
+        let schema = PluginConfigurationSchema(
+            pluginID: BuiltInPluginID.remarkable,
+            title: "Remarkable",
+            summary: "默认连接 USB 地址 10.11.99.1。密码只保存在本机权限为 0600 的私有文件中；SSH 仍严格校验 known_hosts，也可继续使用密钥认证。",
+            fields: [
+                .text(
+                    id: RemarkablePluginConfigurationFieldID.host,
+                    title: "SSH 主机",
+                    helpText: "填写主机名、SSH 别名或 USB 地址；不要包含 user@ 前缀。",
+                    placeholder: "10.11.99.1",
+                    defaultValue: "10.11.99.1",
+                    maximumLength: 253,
+                    isRequired: true,
+                    validator: { value, _ in
+                        guard case let .string(host) = value,
+                              RemarkableSSHTarget.isValidHostOrAlias(host) else {
+                            return "请填写有效的 SSH 主机或别名"
+                        }
+                        return nil
+                    }
+                ),
+                .text(
+                    id: RemarkablePluginConfigurationFieldID.username,
+                    title: "SSH 用户名",
+                    placeholder: "root",
+                    defaultValue: "root",
+                    maximumLength: 64,
+                    isRequired: true,
+                    validator: { value, _ in
+                        guard case let .string(username) = value,
+                              RemarkableSSHTarget.isValidUsername(username) else {
+                            return "请填写有效的 SSH 用户名"
+                        }
+                        return nil
+                    }
+                ),
+                .secureText(
+                    id: RemarkablePluginConfigurationFieldID.password,
+                    title: "SSH 密码",
+                    helpText: "可留空以使用 ~/.ssh/config、私钥或 ssh-agent。",
+                    placeholder: "留空则使用密钥认证",
+                    maximumLength: 4_096,
+                    validator: { value, _ in
+                        guard case let .string(password) = value,
+                              !password.contains("\r"),
+                              !password.contains("\n") else {
+                            return "SSH 密码格式无效"
+                        }
+                        return nil
+                    }
+                ),
+            ]
+        )
+        return try PluginConfigurationModel(
+            schema: schema,
+            store: RemarkablePluginConfigurationStore()
+        )
+    }
+}
+
+private final class AITextInternalPlugin:
+    InternalPlugin, PluginConfigurationProviding {
     let descriptor = PluginDescriptor(
         key: AITextBuiltInPluginID.key,
         wireID: nil,
@@ -210,6 +308,11 @@ private final class AITextInternalPlugin: InternalPlugin {
         nil
     }
 
+    func makePluginConfigurationModel() throws
+        -> PluginConfigurationModel {
+        try PluginConfigurationCatalog.makeAITextModel()
+    }
+
     private func migrateLegacyProviderSelectionIfNeeded() {
         let bufferSelection = BufferPluginSelectionStore.shared
         guard let legacyKind = AITextProviderKind.legacyKind(
@@ -223,14 +326,15 @@ private final class AITextInternalPlugin: InternalPlugin {
     }
 }
 
-private final class StreamInputInternalPlugin: InternalPlugin {
+private final class StreamInputInternalPlugin:
+    InternalPlugin, PluginConfigurationProviding {
     let descriptor = PluginDescriptor(
         key: StreamInputWorkspace.pluginKey,
         wireID: nil,
         name: "意识流输入",
         symbolName: "waveform",
-        version: "1.0",
-        summary: "连续输入不分词的全拼，由已配置的低延迟 OpenAI 兼容模型实时给出 1–3 个完整猜测。",
+        version: "1.1",
+        summary: "连续输入不分词的全拼，按单独配置的 AI 渠道和响应节奏实时给出 1–3 个完整猜测。",
         source: .builtIn,
         capabilities: [.bufferAction],
         settings: nil,
@@ -247,6 +351,11 @@ private final class StreamInputInternalPlugin: InternalPlugin {
 
     func makeSettingsViewController(subpageID: String) -> NSViewController? {
         nil
+    }
+
+    func makePluginConfigurationModel() throws
+        -> PluginConfigurationModel {
+        try PluginConfigurationCatalog.makeStreamInputModel()
     }
 }
 

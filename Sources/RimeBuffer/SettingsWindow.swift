@@ -12,6 +12,10 @@ private final class SettingsPluginSwitch: NSSwitch {
     var mode: SettingsPluginSwitchMode = .enablement
 }
 
+private final class SettingsPluginConfigurationButton: NSButton {
+    var pluginKey = PluginKey(domain: .builtIn, rawID: "")
+}
+
 private final class SettingsLexiconButton: NSButton {
     var lexiconKind: UserLexiconKind = .chinese
 }
@@ -109,6 +113,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private let pluginStatusLabel = NSTextField(labelWithString: "")
     private var pluginDownloadInProgress = false
     private var pluginRefreshScheduled = false
+    private var pluginConfigurationSheet: NSPanel?
 
     private var userDir: URL {
         if let override = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DIR"],
@@ -365,6 +370,11 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
     func windowWillClose(_ notification: Notification) {
         guard notification.object as? NSWindow === window else { return }
+        if let sheet = pluginConfigurationSheet {
+            window?.endSheet(sheet)
+            sheet.orderOut(nil)
+            pluginConfigurationSheet = nil
+        }
         if let operation = codexLoginOperation {
             codexLoginCancelling = true
             codexAuthorizationURL = nil
@@ -1465,7 +1475,24 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             : (toggle.state == .on ? "停用扩展" : "启用扩展")
         toggle.setContentHuggingPriority(.required, for: .horizontal)
 
-        let row = NSStackView(views: [icon, labels, flexSpacer(), toggle])
+        var rowViews: [NSView] = [icon, labels, flexSpacer()]
+        if PluginRegistry.shared.hasConfiguration(
+            for: plugin.descriptor.key
+        ) {
+            let configure = SettingsPluginConfigurationButton(
+                title: "设置…",
+                target: self,
+                action: #selector(configureBufferPlugin(_:))
+            )
+            configure.pluginKey = plugin.descriptor.key
+            configure.controlSize = .small
+            configure.toolTip = "配置 \(plugin.descriptor.name)"
+            configure.setContentHuggingPriority(.required, for: .horizontal)
+            rowViews.append(configure)
+        }
+        rowViews.append(toggle)
+
+        let row = NSStackView(views: rowViews)
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 10
@@ -2254,6 +2281,50 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         }
     }
 
+    @objc private func configureBufferPlugin(
+        _ sender: SettingsPluginConfigurationButton
+    ) {
+        guard let parentWindow = window,
+              pluginConfigurationSheet == nil else { return }
+        let plugin = PluginRegistry.shared.allPlugins().first {
+            $0.descriptor.key == sender.pluginKey
+        }
+        do {
+            guard let controller = try PluginRegistry.shared
+                .makePluginConfigurationViewController(
+                    pluginKey: sender.pluginKey
+                ) else {
+                setPluginStatus("这个插件当前没有可配置项", isError: true)
+                return
+            }
+            let sheet = NSPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 700, height: 520),
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: false
+            )
+            sheet.title = "\(plugin?.descriptor.name ?? "插件") 设置"
+            sheet.isReleasedWhenClosed = false
+            sheet.contentViewController = controller
+            pluginConfigurationSheet = sheet
+            if let form = controller as? PluginConfigurationViewController {
+                form.onDismiss = { [weak self, weak parentWindow, weak sheet] in
+                    guard let self, let sheet else { return }
+                    parentWindow?.endSheet(sheet)
+                    sheet.orderOut(nil)
+                    self.pluginConfigurationSheet = nil
+                    self.refreshPluginList()
+                }
+            }
+            parentWindow.beginSheet(sheet)
+        } catch {
+            setPluginStatus(
+                "无法打开插件设置：\(error.localizedDescription)",
+                isError: true
+            )
+        }
+    }
+
     private func uninstallPlugin(id pluginID: String) {
         guard let plugin = ActionPluginManager.shared.listInstalledPlugins()
             .first(where: { $0.id == pluginID }) else {
@@ -2550,6 +2621,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             BufferWindowController.shared.show()
         } else {
             ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
+            DerivedBufferWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
+            BuiltInBufferActionWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
             BufferModel.shared.pauseCapturePreservingContent()
         }
         RimeBufferController.refreshActiveUI()

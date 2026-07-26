@@ -113,9 +113,11 @@ jobs:
             plugin-smoke
             plugin-stream-smoke
             plugin-platform-smoke
+            plugin-configuration-smoke
             translation-smoke
             ai-text-smoke
             stream-input-smoke
+            remarkable-plugin-smoke
             settings-routing-smoke
             history-heatmap-smoke
             typing-speed-smoke

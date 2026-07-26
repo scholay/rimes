@@ -4,6 +4,14 @@ import Network
 import CryptoKit
 import Carbon
 
+// OpenSSH invokes this same executable as a narrowly scoped SSH_ASKPASS
+// helper. Handle that request before any smoke, installer, AppKit, or IMK
+// startup so the helper can return the saved password and terminate without
+// creating a second input-method process.
+if let status = RemarkableSSHAskPassHandler.handleIfRequested() {
+    exit(status)
+}
+
 // Safe maintenance seam used by installers and support diagnostics. Loading
 // applies narrowly scoped, atomic configuration migrations without printing
 // Base URLs, model names, or API keys.
@@ -46,6 +54,9 @@ if CommandLine.arguments.contains("plugin-smoke") {
 if CommandLine.arguments.contains("plugin-platform-smoke") {
     exit(runPluginPlatformSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("plugin-configuration-smoke") {
+    exit(runPluginConfigurationSmokeTest() ? 0 : 1)
+}
 if CommandLine.arguments.contains("translation-smoke") {
     exit(runTranslationPluginSmokeTest() ? 0 : 1)
 }
@@ -54,6 +65,9 @@ if CommandLine.arguments.contains("ai-text-smoke") {
 }
 if CommandLine.arguments.contains("stream-input-smoke") {
     exit(runStreamInputPluginSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("remarkable-plugin-smoke") {
+    exit(runRemarkablePluginSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("settings-routing-smoke") {
     exit(runSettingsRoutingSmokeTest() ? 0 : 1)

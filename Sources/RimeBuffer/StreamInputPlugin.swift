@@ -14,6 +14,14 @@ enum StreamInputRefreshPolicy {
     static let debounce: TimeInterval = 0.22
     static let maximumWait: TimeInterval = 0.80
 
+    static var configuredDebounce: TimeInterval {
+        PluginConfigurationCatalog.streamInputSettings().debounce
+    }
+
+    static var configuredMaximumWait: TimeInterval {
+        PluginConfigurationCatalog.streamInputSettings().maximumWait
+    }
+
     static func deadline(lastChange: TimeInterval,
                          burstStarted: TimeInterval) -> TimeInterval {
         min(lastChange + debounce, burstStarted + maximumWait)
@@ -789,6 +797,7 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
     private let openAIConfigurationStore: OpenAICompatibleConfigurationStore
     private let runtime: StreamInputRuntime
     private let observesRuntimeNotifications: Bool
+    private let refreshSettings: () -> StreamInputPluginSettings
     private let chordMappingLoader: (String) -> StreamInputChordMapping?
     private var observers: [NSObjectProtocol] = []
     private var privacyTimer: Timer?
@@ -859,12 +868,38 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
          chordMappingLoader: @escaping (String) -> StreamInputChordMapping? = {
              StreamInputChordMapping.loadEffective(schemaID: $0)
          }) {
-        self.provider = provider ?? OpenAICompatibleTextProvider(
-            configurationStore: openAIConfigurationStore
-        )
+        let usesLivePluginConfiguration =
+            provider == nil
+                && openAIConfigurationStore ===
+                    OpenAICompatibleConfigurationStore.shared
+                && observesRuntimeNotifications
+        if let provider {
+            self.provider = provider
+        } else if usesLivePluginConfiguration {
+            self.provider = StreamInputConfiguredAITextProvider.shared
+        } else {
+            // Deterministic/custom-store constructions remain pinned to the
+            // historical OpenAI-compatible default used by smoke tests.
+            self.provider = OpenAICompatibleTextProvider(
+                configurationStore: openAIConfigurationStore
+            )
+        }
         self.openAIConfigurationStore = openAIConfigurationStore
         self.runtime = runtime
         self.observesRuntimeNotifications = observesRuntimeNotifications
+        if usesLivePluginConfiguration {
+            refreshSettings = {
+                PluginConfigurationCatalog.streamInputSettings()
+            }
+        } else {
+            refreshSettings = {
+                StreamInputPluginSettings(
+                    connectorKind: .openAICompatible,
+                    debounce: StreamInputRefreshPolicy.debounce,
+                    maximumWait: StreamInputRefreshPolicy.maximumWait
+                )
+            }
+        }
         self.chordMappingLoader = chordMappingLoader
     }
 
@@ -1042,6 +1077,18 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
             object: openAIConfigurationStore,
             queue: .main
         ) { [weak self] _ in
+            self?.openAIConfigurationDidChange()
+        })
+        observers.append(center.addObserver(
+            forName: .pluginConfigurationDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard notification.userInfo?[
+                PluginConfigurationNotificationKey.pluginID
+            ] as? String == BuiltInPluginID.streamInput else {
+                return
+            }
             self?.openAIConfigurationDidChange()
         })
         observers.append(center.addObserver(
@@ -1750,14 +1797,15 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
 
     private func scheduleInference() {
         debounceTimer?.invalidate()
-        let debounce = Timer(timeInterval: StreamInputRefreshPolicy.debounce,
+        let settings = refreshSettings()
+        let debounce = Timer(timeInterval: settings.debounce,
                              repeats: false) { [weak self] _ in
             self?.beginInference()
         }
         debounceTimer = debounce
         RunLoop.main.add(debounce, forMode: .common)
         if maximumWaitTimer == nil {
-            let maximum = Timer(timeInterval: StreamInputRefreshPolicy.maximumWait,
+            let maximum = Timer(timeInterval: settings.maximumWait,
                                 repeats: false) { [weak self] _ in
                 self?.beginInferenceAtMaximumWait()
             }
@@ -1838,7 +1886,7 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         )
         revokeDeliveryAuthorization()
         phase = .running
-        activityMessage = "正在启动快速 Open API 模型"
+        activityMessage = "正在启动 \(provider.kind.displayName)"
         notifyChange()
 
         let isAlternativeRetry = alternativeRetryRevision == job.inputRevision

@@ -1908,6 +1908,7 @@ final class RimeBufferController: IMKInputController {
             suppressBufferEnterForImmediateAction(client: client,
                                                   hardwareKeyCode: hardwareKeyCode)
             DerivedBufferWorkspaceRouter.setProtectedOnAll(true)
+            BuiltInBufferActionWorkspaceRouter.setProtectedOnAll(true)
             ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
             IMELog.write("buffer enter consumed at secure-input boundary")
             updateUI(client: client)
@@ -1977,6 +1978,7 @@ final class RimeBufferController: IMKInputController {
             suppressBufferEnterForImmediateAction(client: client,
                                                   hardwareKeyCode: hardwareKeyCode)
             DerivedBufferWorkspaceRouter.setProtectedOnAll(true)
+            BuiltInBufferActionWorkspaceRouter.setProtectedOnAll(true)
             ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
             IMELog.write("buffer enter consumed; secure input blocked generation")
             updateUI(client: client)
@@ -1995,6 +1997,7 @@ final class RimeBufferController: IMKInputController {
             secureInputEnabled: IsSecureEventInputEnabled()
         ) == .consumeWithoutGuardOrGeneration {
             DerivedBufferWorkspaceRouter.setProtectedOnAll(true)
+            BuiltInBufferActionWorkspaceRouter.setProtectedOnAll(true)
             ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
             IMELog.write("buffer enter consumed; secure input changed before generation request")
             updateUI(client: client)
@@ -2377,6 +2380,7 @@ final class RimeBufferController: IMKInputController {
     private func exitBufferMode(client: IMKTextInput?, source: String) -> Bool {
         resolveComposition(client: client, owner: focusToken)
         ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
+        BuiltInBufferActionWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
         BufferModel.shared.pauseCapturePreservingContent()
         BufferWindowController.shared.hideWithoutPausing()
         IMELog.write("buffer mode paused by \(source); content preserved")

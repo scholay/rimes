@@ -48,6 +48,7 @@ func runPluginPlatformSmokeTest() -> Bool {
     )
     guard shippedBufferPluginIDs == Set([
         BuiltInPluginID.appleTranslation,
+        BuiltInPluginID.remarkable,
         BuiltInPluginID.streamInput,
         BuiltInPluginID.aiText,
     ]) else {
@@ -93,6 +94,14 @@ func runPluginPlatformSmokeTest() -> Bool {
           streamInputPlugins[0].descriptor.capabilities == [.bufferAction],
           streamInputPlugins[0].descriptor.canUninstall == false else {
         return fail("built-in stream input plugin")
+    }
+    let remarkablePlugins = BuiltInPlugins.makeAll().filter {
+        $0.descriptor.key.rawID == BuiltInPluginID.remarkable
+    }
+    guard remarkablePlugins.count == 1,
+          remarkablePlugins[0].descriptor.capabilities == [.bufferAction],
+          remarkablePlugins[0].descriptor.canUninstall == false else {
+        return fail("built-in Remarkable plugin")
     }
 
     let root = fileManager.temporaryDirectory.appendingPathComponent(
