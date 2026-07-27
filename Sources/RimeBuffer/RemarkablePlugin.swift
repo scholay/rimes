@@ -22,16 +22,40 @@ struct BuiltInBufferActionPresentation: Equatable {
     let isEnabled: Bool
 }
 
+struct BuiltInBufferActionOption: Equatable {
+    let identifier: String
+    let title: String
+}
+
+/// Optional, non-text configuration rendered immediately beside a built-in
+/// workbench action. The value stays in the owning workspace; the shelf only
+/// presents stable identifiers and titles.
+struct BuiltInBufferActionOptionPresentation: Equatable {
+    let options: [BuiltInBufferActionOption]
+    let selectedIdentifier: String
+    let toolTip: String
+    let isEnabled: Bool
+}
+
 protocol BuiltInBufferActionWorkspace: AnyObject {
     var workspacePluginKey: PluginKey { get }
     var workbenchDisplayName: String { get }
     var actionPresentation: BuiltInBufferActionPresentation { get }
+    var optionPresentation: BuiltInBufferActionOptionPresentation? { get }
 
     @discardableResult func invoke() -> Bool
     @discardableResult func requestRefresh() -> Bool
+    @discardableResult func selectOption(identifier: String) -> Bool
     func setOwnerActive(_ active: Bool)
     func setProtected(_ protected: Bool)
     func workbenchWillPause()
+}
+
+extension BuiltInBufferActionWorkspace {
+    var optionPresentation: BuiltInBufferActionOptionPresentation? { nil }
+
+    @discardableResult
+    func selectOption(identifier _: String) -> Bool { false }
 }
 
 /// Built-in import actions deliberately stay separate from
@@ -158,7 +182,10 @@ struct RemarkableSSHTarget: Equatable {
 struct RemarkablePageSnapshot: Equatable {
     let documentID: String
     let pageID: String
+    let pageIndex: Int
+    let pageCount: Int
     let data: Data
+    let pdfData: Data
 }
 
 protocol RemarkablePagePulling: AnyObject {
@@ -174,12 +201,15 @@ enum RemarkablePullStage: String, Equatable {
     case content
     case firstPageRead
     case secondPageRead
+    case pdfExport
+    case finalPageRead
 
     var userFacingName: String {
         switch self {
         case .locator: return "文档索引"
         case .content: return "页面目录"
-        case .firstPageRead, .secondPageRead: return "页面"
+        case .firstPageRead, .secondPageRead, .finalPageRead: return "页面"
+        case .pdfExport: return "PDF 导出"
         }
     }
 }
@@ -188,14 +218,22 @@ enum RemarkablePullError: LocalizedError, Equatable {
     case invalidTarget
     case launchFailed
     case passwordAuthenticationUnavailable
+    case hostKeyNotTrusted
+    case hostKeyChanged
+    case authenticationFailed
+    case connectionFailed
     case timedOut
     case cancelled
     case outputTooLarge(RemarkablePullStage)
+    case remoteDataUnavailable(RemarkablePullStage)
     case remoteCommandFailed(RemarkablePullStage)
     case noRecentlyOpenedDocument
     case invalidDocumentLocator
     case invalidDocumentContent
     case pageNotFound
+    case pageMappingMismatch
+    case pdfExportUnavailable
+    case invalidPDFExport
     case pageChangedWhileReading
 
     var errorDescription: String? {
@@ -206,12 +244,22 @@ enum RemarkablePullError: LocalizedError, Equatable {
             return "无法启动系统 SSH"
         case .passwordAuthenticationUnavailable:
             return "无法启动 reMarkable 密码认证助手"
+        case .hostKeyNotTrusted:
+            return "SSH 尚未信任这台 reMarkable，请先核对主机指纹并加入 known_hosts"
+        case .hostKeyChanged:
+            return "reMarkable 的 SSH 主机密钥已变化，请先核对设备身份再更新 known_hosts"
+        case .authenticationFailed:
+            return "reMarkable SSH 认证失败，请检查用户名、密码、密钥或 ssh-agent"
+        case .connectionFailed:
+            return "无法连接 reMarkable，请检查 USB、网络地址和设备状态"
         case .timedOut:
             return "连接 reMarkable 超时，请确认设备仍在线"
         case .cancelled:
             return "拉取已取消"
         case let .outputTooLarge(stage):
             return "\(stage.userFacingName)数据过大，已停止拉取"
+        case let .remoteDataUnavailable(stage):
+            return "\(stage.userFacingName)在读取时发生变化或暂不可用，请重试"
         case .remoteCommandFailed:
             return "SSH 读取失败，请确认设备连接、用户名、密码或密钥和已知主机配置"
         case .noRecentlyOpenedDocument:
@@ -222,6 +270,12 @@ enum RemarkablePullError: LocalizedError, Equatable {
             return "无法识别 reMarkable 的页面目录"
         case .pageNotFound:
             return "没有找到最近打开的页面"
+        case .pageMappingMismatch:
+            return "reMarkable 导出页与当前页面目录不一致，请重试"
+        case .pdfExportUnavailable:
+            return "无法从 reMarkable 导出 PDF，请确认 USB Web Interface 已开启"
+        case .invalidPDFExport:
+            return "reMarkable 导出的 PDF 不完整或无效，请稍后重试"
         case .pageChangedWhileReading:
             return "页面仍在写入，请稍后重试"
         }
@@ -233,37 +287,58 @@ enum RemarkablePullError: LocalizedError, Equatable {
         case .launchFailed: return "launch-failed"
         case .passwordAuthenticationUnavailable:
             return "password-authentication-unavailable"
+        case .hostKeyNotTrusted: return "host-key-not-trusted"
+        case .hostKeyChanged: return "host-key-changed"
+        case .authenticationFailed: return "authentication-failed"
+        case .connectionFailed: return "connection-failed"
         case .timedOut: return "timeout"
         case .cancelled: return "cancelled"
         case let .outputTooLarge(stage): return "output-too-large-\(stage.rawValue)"
+        case let .remoteDataUnavailable(stage):
+            return "remote-data-unavailable-\(stage.rawValue)"
         case let .remoteCommandFailed(stage): return "remote-failed-\(stage.rawValue)"
         case .noRecentlyOpenedDocument: return "no-document"
         case .invalidDocumentLocator: return "invalid-locator"
         case .invalidDocumentContent: return "invalid-content"
         case .pageNotFound: return "page-not-found"
+        case .pageMappingMismatch: return "page-mapping-mismatch"
+        case .pdfExportUnavailable: return "pdf-export-unavailable"
+        case .invalidPDFExport: return "invalid-pdf-export"
         case .pageChangedWhileReading: return "page-changed"
         }
     }
 }
 
 final class RemarkableSSHPagePuller: RemarkablePagePulling {
-    static let defaultTotalTimeout: TimeInterval = 10
+    // Page identity reads, a device-side PDF export, and final revalidation all
+    // share one explicit-action budget. The USB exporter may need several
+    // seconds and a bounded retry while Xochitl finishes its current write.
+    static let defaultTotalTimeout: TimeInterval = 60
 
     private let runner: any AITextCLIProcessRunning
     private let environment: [String: String]
     private let askPassExecutableURL: URL?
     private let totalTimeout: TimeInterval
+    private let pdfValidator: (Data, Int, Int) -> Bool
 
     init(runner: any AITextCLIProcessRunning = AITextFoundationCLIProcessRunner(),
          processEnvironment: [String: String] = ProcessInfo.processInfo.environment,
          askPassExecutableURL: URL? = Bundle.main.executableURL,
-         totalTimeout: TimeInterval = defaultTotalTimeout) {
+         totalTimeout: TimeInterval = defaultTotalTimeout,
+         pdfValidator: @escaping (Data, Int, Int) -> Bool = {
+             RemarkablePDFKitDocumentValidator.isValid(
+                 data: $0,
+                 pageIndex: $1,
+                 expectedPageCount: $2
+             )
+         }) {
         self.runner = runner
         environment = Self.allowedEnvironment(from: processEnvironment)
         self.askPassExecutableURL = askPassExecutableURL?.standardizedFileURL
         self.totalTimeout = totalTimeout.isFinite && totalTimeout > 0
             ? totalTimeout
             : Self.defaultTotalTimeout
+        self.pdfValidator = pdfValidator
     }
 
     @discardableResult
@@ -277,6 +352,7 @@ final class RemarkableSSHPagePuller: RemarkablePagePulling {
             askPassExecutableURL: askPassExecutableURL,
             totalTimeout: totalTimeout,
             target: target,
+            pdfValidator: pdfValidator,
             completion: completion
         )
         operation.start()
@@ -326,11 +402,20 @@ private final class RemarkableSSHPullOperation: AITextCancellable {
         let legacyPageID: String?
     }
 
+    private struct PageSelection: Equatable {
+        let pageID: String
+        let pageIndex: Int
+        let pageCount: Int
+    }
+
     private static let xochitlRoot =
         "/home/root/.local/share/remarkable/xochitl"
     private static let locatorOutputLimit = 8 * 1_024
     private static let contentOutputLimit = 2 * 1_024 * 1_024
     private static let pageOutputLimit = 8 * 1_024 * 1_024
+    private static let pdfOutputLimit = 32 * 1_024 * 1_024
+    private static let maximumPDFExportAttempts = 3
+    private static let pdfExportRetryDelays: [TimeInterval] = [0.75, 1.5]
 
     /// This command is a fixed, read-only program. The SSH destination is a
     /// separately validated argv element and is never interpolated here.
@@ -363,6 +448,7 @@ private final class RemarkableSSHPullOperation: AITextCancellable {
     private let askPassExecutableURL: URL?
     private let totalTimeout: TimeInterval
     private let target: RemarkableSSHTarget
+    private let pdfValidator: (Data, Int, Int) -> Bool
     private let completion: (Result<RemarkablePageSnapshot,
                                     RemarkablePullError>) -> Void
     private let queue = DispatchQueue(
@@ -380,6 +466,7 @@ private final class RemarkableSSHPullOperation: AITextCancellable {
          askPassExecutableURL: URL?,
          totalTimeout: TimeInterval,
          target: RemarkableSSHTarget,
+         pdfValidator: @escaping (Data, Int, Int) -> Bool,
          completion: @escaping (Result<RemarkablePageSnapshot,
                                          RemarkablePullError>) -> Void) {
         self.runner = runner
@@ -387,6 +474,7 @@ private final class RemarkableSSHPullOperation: AITextCancellable {
         self.askPassExecutableURL = askPassExecutableURL
         self.totalTimeout = totalTimeout
         self.target = target
+        self.pdfValidator = pdfValidator
         self.completion = completion
     }
 
@@ -453,12 +541,14 @@ private final class RemarkableSSHPullOperation: AITextCancellable {
                 self.finish(.failure(error))
             case let .success(data):
                 do {
-                    let pageID = try Self.resolvePageID(
+                    let selection = try Self.resolvePageSelection(
                         contentData: data,
                         locator: locator
                     )
-                    self.readPageFirst(documentID: locator.documentID,
-                                       pageID: pageID)
+                    self.readPageFirst(
+                        documentID: locator.documentID,
+                        selection: selection
+                    )
                 } catch let error as RemarkablePullError {
                     self.finish(.failure(error))
                 } catch {
@@ -468,8 +558,12 @@ private final class RemarkableSSHPullOperation: AITextCancellable {
         }
     }
 
-    private func readPageFirst(documentID: String, pageID: String) {
-        let command = Self.pageReadCommand(documentID: documentID, pageID: pageID)
+    private func readPageFirst(documentID: String,
+                               selection: PageSelection) {
+        let command = Self.pageReadCommand(
+            documentID: documentID,
+            pageID: selection.pageID
+        )
         run(stage: .firstPageRead,
             remoteCommand: command,
             maximumOutputBytes: Self.pageOutputLimit) { result in
@@ -477,17 +571,22 @@ private final class RemarkableSSHPullOperation: AITextCancellable {
             case let .failure(error):
                 self.finish(.failure(error))
             case let .success(firstData):
-                self.readPageSecond(documentID: documentID,
-                                    pageID: pageID,
-                                    firstData: firstData)
+                self.readPageSecond(
+                    documentID: documentID,
+                    selection: selection,
+                    firstData: firstData
+                )
             }
         }
     }
 
     private func readPageSecond(documentID: String,
-                                pageID: String,
+                                selection: PageSelection,
                                 firstData: Data) {
-        let command = Self.pageReadCommand(documentID: documentID, pageID: pageID)
+        let command = Self.pageReadCommand(
+            documentID: documentID,
+            pageID: selection.pageID
+        )
         run(stage: .secondPageRead,
             remoteCommand: command,
             maximumOutputBytes: Self.pageOutputLimit) { result in
@@ -499,10 +598,189 @@ private final class RemarkableSSHPullOperation: AITextCancellable {
                     self.finish(.failure(.pageChangedWhileReading))
                     return
                 }
+                self.exportPDF(
+                    documentID: documentID,
+                    selection: selection,
+                    stablePageData: secondData,
+                    attempt: 0
+                )
+            }
+        }
+    }
+
+    private func exportPDF(documentID: String,
+                           selection: PageSelection,
+                           stablePageData: Data,
+                           attempt: Int) {
+        let command =
+            "/usr/bin/wget -Y off -qO- "
+            + "'http://10.11.99.1/download/\(documentID)/pdf'"
+        run(stage: .pdfExport,
+            remoteCommand: command,
+            maximumOutputBytes: Self.pdfOutputLimit) { result in
+            switch result {
+            case let .failure(error):
+                guard error == .remoteDataUnavailable(.pdfExport)
+                        || error == .remoteCommandFailed(.pdfExport) else {
+                    self.finish(.failure(error))
+                    return
+                }
+                self.retryPDFExport(
+                    documentID: documentID,
+                    selection: selection,
+                    stablePageData: stablePageData,
+                    attempt: attempt,
+                    finalError: .pdfExportUnavailable
+                )
+            case let .success(pdfData):
+                guard self.pdfValidator(
+                    pdfData,
+                    selection.pageIndex,
+                    selection.pageCount
+                ) else {
+                    self.retryPDFExport(
+                        documentID: documentID,
+                        selection: selection,
+                        stablePageData: stablePageData,
+                        attempt: attempt,
+                        finalError: .invalidPDFExport
+                    )
+                    return
+                }
+                self.revalidateLocator(
+                    expectedDocumentID: documentID,
+                    expectedSelection: selection,
+                    stablePageData: stablePageData,
+                    pdfData: pdfData
+                )
+            }
+        }
+    }
+
+    private func retryPDFExport(documentID: String,
+                                selection: PageSelection,
+                                stablePageData: Data,
+                                attempt: Int,
+                                finalError: RemarkablePullError) {
+        let nextAttempt = attempt + 1
+        guard nextAttempt < Self.maximumPDFExportAttempts else {
+            finish(.failure(finalError))
+            return
+        }
+        let delay = Self.pdfExportRetryDelays[min(
+            attempt,
+            Self.pdfExportRetryDelays.count - 1
+        )]
+        guard deadline.timeIntervalSinceNow > delay else {
+            finish(.failure(.timedOut))
+            return
+        }
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, !self.cancelled, !self.finished else { return }
+            self.exportPDF(
+                documentID: documentID,
+                selection: selection,
+                stablePageData: stablePageData,
+                attempt: nextAttempt
+            )
+        }
+    }
+
+    private func revalidateLocator(expectedDocumentID: String,
+                                   expectedSelection: PageSelection,
+                                   stablePageData: Data,
+                                   pdfData: Data) {
+        run(stage: .locator,
+            remoteCommand: Self.locateRecentlyOpenedDocumentCommand,
+            maximumOutputBytes: Self.locatorOutputLimit) { result in
+            switch result {
+            case let .failure(error):
+                self.finish(.failure(error))
+            case let .success(data):
+                do {
+                    let locator = try Self.parseLocator(data)
+                    guard locator.documentID == expectedDocumentID else {
+                        self.finish(.failure(.pageChangedWhileReading))
+                        return
+                    }
+                    self.revalidateContent(
+                        locator: locator,
+                        expectedSelection: expectedSelection,
+                        stablePageData: stablePageData,
+                        pdfData: pdfData
+                    )
+                } catch let error as RemarkablePullError {
+                    self.finish(.failure(error))
+                } catch {
+                    self.finish(.failure(.invalidDocumentLocator))
+                }
+            }
+        }
+    }
+
+    private func revalidateContent(locator: Locator,
+                                   expectedSelection: PageSelection,
+                                   stablePageData: Data,
+                                   pdfData: Data) {
+        let command =
+            "cat '\(Self.xochitlRoot)/\(locator.documentID).content'"
+        run(stage: .content,
+            remoteCommand: command,
+            maximumOutputBytes: Self.contentOutputLimit) { result in
+            switch result {
+            case let .failure(error):
+                self.finish(.failure(error))
+            case let .success(data):
+                do {
+                    let currentSelection = try Self.resolvePageSelection(
+                        contentData: data,
+                        locator: locator
+                    )
+                    guard currentSelection == expectedSelection else {
+                        self.finish(.failure(.pageChangedWhileReading))
+                        return
+                    }
+                    self.readPageFinal(
+                        documentID: locator.documentID,
+                        selection: currentSelection,
+                        stablePageData: stablePageData,
+                        pdfData: pdfData
+                    )
+                } catch let error as RemarkablePullError {
+                    self.finish(.failure(error))
+                } catch {
+                    self.finish(.failure(.invalidDocumentContent))
+                }
+            }
+        }
+    }
+
+    private func readPageFinal(documentID: String,
+                               selection: PageSelection,
+                               stablePageData: Data,
+                               pdfData: Data) {
+        let command = Self.pageReadCommand(
+            documentID: documentID,
+            pageID: selection.pageID
+        )
+        run(stage: .finalPageRead,
+            remoteCommand: command,
+            maximumOutputBytes: Self.pageOutputLimit) { result in
+            switch result {
+            case let .failure(error):
+                self.finish(.failure(error))
+            case let .success(finalData):
+                guard finalData == stablePageData else {
+                    self.finish(.failure(.pageChangedWhileReading))
+                    return
+                }
                 self.finish(.success(RemarkablePageSnapshot(
                     documentID: documentID,
-                    pageID: pageID,
-                    data: secondData
+                    pageID: selection.pageID,
+                    pageIndex: selection.pageIndex,
+                    pageCount: selection.pageCount,
+                    data: stablePageData,
+                    pdfData: pdfData
                 )))
             }
         }
@@ -570,7 +848,8 @@ private final class RemarkableSSHPullOperation: AITextCancellable {
             currentDirectoryURL: URL(fileURLWithPath: "/", isDirectory: true),
             environment: processEnvironment,
             timeout: remaining,
-            maximumOutputBytes: maximumOutputBytes
+            maximumOutputBytes: maximumOutputBytes,
+            maximumStandardErrorBytes: 8 * 1_024
         )
         let task = runner.run(spec, onStandardOutput: { _ in }) {
             [weak self, weak relay] result in
@@ -588,13 +867,59 @@ private final class RemarkableSSHPullOperation: AITextCancellable {
                 } else if result.terminationStatus == -1 {
                     completion(.failure(.launchFailed))
                 } else if result.terminationStatus != 0 {
-                    completion(.failure(.remoteCommandFailed(stage)))
+                    completion(.failure(Self.classifySSHFailure(
+                        terminationStatus: result.terminationStatus,
+                        standardError: result.standardError,
+                        stage: stage
+                    )))
                 } else {
                     completion(.success(result.standardOutput))
                 }
             }
         }
         relay.install(task)
+    }
+
+    private static func classifySSHFailure(
+        terminationStatus: Int32,
+        standardError: Data,
+        stage: RemarkablePullStage
+    ) -> RemarkablePullError {
+        guard terminationStatus == 255 else {
+            return .remoteDataUnavailable(stage)
+        }
+        let message = String(
+            decoding: standardError.prefix(8 * 1_024),
+            as: UTF8.self
+        ).lowercased()
+        if message.contains("remote host identification has changed") {
+            return .hostKeyChanged
+        }
+        if message.contains("host key verification failed")
+            || (message.contains("host key is known")
+                && message.contains("no ")) {
+            return .hostKeyNotTrusted
+        }
+        if message.contains("permission denied")
+            || message.contains("authentication failed")
+            || message.contains("no supported authentication methods") {
+            return .authenticationFailed
+        }
+        let connectionMarkers = [
+            "connection refused",
+            "connection reset",
+            "connection closed",
+            "could not resolve hostname",
+            "name or service not known",
+            "no route to host",
+            "network is unreachable",
+            "operation timed out",
+            "connection timed out",
+        ]
+        if connectionMarkers.contains(where: message.contains) {
+            return .connectionFailed
+        }
+        return .remoteCommandFailed(stage)
     }
 
     private func finish(_ result: Result<RemarkablePageSnapshot,
@@ -654,8 +979,10 @@ private final class RemarkableSSHPullOperation: AITextCancellable {
                        legacyPageID: legacyPageID)
     }
 
-    private static func resolvePageID(contentData: Data,
-                                      locator: Locator) throws -> String {
+    private static func resolvePageSelection(
+        contentData: Data,
+        locator: Locator
+    ) throws -> PageSelection {
         guard !contentData.isEmpty,
               contentData.count <= contentOutputLimit,
               let object = try? JSONSerialization.jsonObject(with: contentData),
@@ -664,61 +991,115 @@ private final class RemarkableSSHPullOperation: AITextCancellable {
         }
 
         if let modern = content["cPages"] as? [String: Any] {
-            let pages = pageIDs(from: modern["pages"])
+            let pages = try pageIDs(from: modern["pages"])
             let lastOpenedValue = (modern["lastOpened"] as? [String: Any])?["value"]
-            if let pageID = pageID(from: lastOpenedValue) {
-                return pageID
-            }
-            if let index = pageIndex(from: lastOpenedValue),
-               pages.indices.contains(index) {
-                return pages[index]
-            }
-            for index in [
-                pageIndex(from: content["lastOpenedPage"]),
-                locator.legacyPageIndex,
-            ].compactMap({ $0 }) where pages.indices.contains(index) {
-                return pages[index]
-            }
-            if let pageID = locator.legacyPageID,
-               pages.isEmpty || pages.contains(pageID) {
-                return pageID
-            }
-            if pages.count == 1 {
-                return pages[0]
-            }
+            return try resolveSelection(
+                pages: pages,
+                preferredValue: lastOpenedValue,
+                fallbackIndex: pageIndex(from: content["lastOpenedPage"])
+                    ?? locator.legacyPageIndex,
+                fallbackPageID: locator.legacyPageID
+            )
         }
 
-        let legacyPages = pageIDs(from: content["pages"])
-        if let pageID = locator.legacyPageID,
-           legacyPages.isEmpty || legacyPages.contains(pageID) {
-            return pageID
+        let legacyPages = try pageIDs(from: content["pages"])
+        return try resolveSelection(
+            pages: legacyPages,
+            preferredValue: nil,
+            fallbackIndex: pageIndex(from: content["lastOpenedPage"])
+                ?? locator.legacyPageIndex,
+            fallbackPageID: locator.legacyPageID
+        )
+    }
+
+    private static func resolveSelection(
+        pages: [String],
+        preferredValue: Any?,
+        fallbackIndex: Int?,
+        fallbackPageID: String?
+    ) throws -> PageSelection {
+        guard !pages.isEmpty else {
+            throw RemarkablePullError.pageNotFound
         }
-        for index in [
-            pageIndex(from: content["lastOpenedPage"]),
-            locator.legacyPageIndex,
-        ].compactMap({ $0 }) where legacyPages.indices.contains(index) {
-            return legacyPages[index]
+        if let pageID = pageID(from: preferredValue) {
+            guard let index = pages.firstIndex(of: pageID) else {
+                throw RemarkablePullError.pageMappingMismatch
+            }
+            return PageSelection(
+                pageID: pageID,
+                pageIndex: index,
+                pageCount: pages.count
+            )
         }
-        if legacyPages.count == 1 {
-            return legacyPages[0]
+        if let index = pageIndex(from: preferredValue) {
+            guard pages.indices.contains(index) else {
+                throw RemarkablePullError.pageMappingMismatch
+            }
+            return PageSelection(
+                pageID: pages[index],
+                pageIndex: index,
+                pageCount: pages.count
+            )
+        }
+        if let fallbackIndex {
+            guard pages.indices.contains(fallbackIndex) else {
+                throw RemarkablePullError.pageMappingMismatch
+            }
+            return PageSelection(
+                pageID: pages[fallbackIndex],
+                pageIndex: fallbackIndex,
+                pageCount: pages.count
+            )
+        }
+        if let fallbackPageID {
+            guard let index = pages.firstIndex(of: fallbackPageID) else {
+                throw RemarkablePullError.pageMappingMismatch
+            }
+            return PageSelection(
+                pageID: fallbackPageID,
+                pageIndex: index,
+                pageCount: pages.count
+            )
+        }
+        if pages.count == 1 {
+            return PageSelection(
+                pageID: pages[0],
+                pageIndex: 0,
+                pageCount: 1
+            )
         }
         throw RemarkablePullError.pageNotFound
     }
 
-    private static func pageIDs(from value: Any?) -> [String] {
-        guard let entries = value as? [Any] else { return [] }
-        return entries.compactMap { entry in
-            if let candidate = entry as? String,
-               isCanonicalUUID(candidate) {
-                return candidate
-            }
-            if let dictionary = entry as? [String: Any],
-               let candidate = dictionary["id"] as? String,
-               isCanonicalUUID(candidate) {
-                return candidate
-            }
-            return nil
+    private static func pageIDs(from value: Any?) throws -> [String] {
+        guard let entries = value as? [Any],
+              !entries.isEmpty,
+              entries.count <= 100_000 else {
+            throw RemarkablePullError.invalidDocumentContent
         }
+        var pages: [String] = []
+        pages.reserveCapacity(entries.count)
+        for entry in entries {
+            let candidate: String?
+            if let stringID = entry as? String,
+               isCanonicalUUID(stringID) {
+                candidate = stringID
+            } else if let dictionary = entry as? [String: Any],
+                      let dictionaryID = dictionary["id"] as? String,
+                      isCanonicalUUID(dictionaryID) {
+                candidate = dictionaryID
+            } else {
+                candidate = nil
+            }
+            guard let candidate else {
+                throw RemarkablePullError.invalidDocumentContent
+            }
+            pages.append(candidate)
+        }
+        guard Set(pages).count == pages.count else {
+            throw RemarkablePullError.pageMappingMismatch
+        }
+        return pages
     }
 
     private static func pageID(from value: Any?) -> String? {
@@ -777,15 +1158,18 @@ final class RemarkableWorkspace: BuiltInBufferActionWorkspace {
     var workspacePluginKey: PluginKey { Self.pluginKey }
     let workbenchDisplayName = "Remarkable"
 
-    private struct PageIdentity: Hashable {
+    private struct PageRecognitionIdentity: Hashable {
+        let sourceDestination: String
         let documentID: String
         let pageID: String
+        let language: RemarkableOCRLanguageMode
     }
 
     private let defaults: UserDefaults
     private let credentialStore: RemarkableCredentialStore?
     private let bufferModel: BufferModel
     private let puller: any RemarkablePagePulling
+    private let textRecognizer: any RemarkablePDFTextRecognizing
     private let notificationCenter: NotificationCenter
     private let selectionPredicate: () -> Bool
     private let secureInputEnabled: () -> Bool
@@ -795,7 +1179,7 @@ final class RemarkableWorkspace: BuiltInBufferActionWorkspace {
     private var protectedSession = false
     private var generation: UInt64 = 0
     private var currentTask: (any AITextCancellable)?
-    private var stagedDigests: [PageIdentity: SHA256Digest] = [:]
+    private var stagedDigests: [PageRecognitionIdentity: SHA256Digest] = [:]
     private var lastSucceededCharacterCount = 0
     private var lastStatusOverride: String?
     private(set) var phase: RemarkableWorkspacePhase = .idle
@@ -804,6 +1188,8 @@ final class RemarkableWorkspace: BuiltInBufferActionWorkspace {
          credentialStore: RemarkableCredentialStore? = .shared,
          bufferModel: BufferModel = .shared,
          puller: any RemarkablePagePulling = RemarkableSSHPagePuller(),
+         textRecognizer: any RemarkablePDFTextRecognizing =
+             RemarkableAppleVisionOCR(),
          notificationCenter: NotificationCenter = .default,
          isSelected: @escaping () -> Bool = {
              BufferPluginSelectionStore.shared.isSelected(RemarkableWorkspace.pluginKey)
@@ -815,6 +1201,7 @@ final class RemarkableWorkspace: BuiltInBufferActionWorkspace {
         self.credentialStore = credentialStore
         self.bufferModel = bufferModel
         self.puller = puller
+        self.textRecognizer = textRecognizer
         self.notificationCenter = notificationCenter
         selectionPredicate = isSelected
         self.secureInputEnabled = secureInputEnabled
@@ -825,12 +1212,12 @@ final class RemarkableWorkspace: BuiltInBufferActionWorkspace {
         switch phase {
         case .idle:
             status = lastStatusOverride
-                ?? "请先在 reMarkable 上把当前页转换为文字"
+                ?? "打开要识别的页面，然后在 Mac 本地识别手写内容"
         case .running:
-            status = "正在从 reMarkable 拉取最近打开页"
+            status = "正在导出当前页并在 Mac 本地识别"
         case .succeeded:
             status = lastStatusOverride
-                ?? "已加入缓冲区（\(lastSucceededCharacterCount) 字）"
+                ?? "本地识别已加入缓冲区（\(lastSucceededCharacterCount) 字，请核对）"
         case let .failed(message):
             status = message
         }
@@ -841,13 +1228,33 @@ final class RemarkableWorkspace: BuiltInBufferActionWorkspace {
             && !secureInputEnabled()
             && phase != .running
         return BuiltInBufferActionPresentation(
-            title: phase == .running ? "拉取中…" : "拉取转写",
+            title: phase == .running ? "识别中…" : "识别当前页",
             symbolName: phase == .running ? "hourglass" : "arrow.down.doc",
             statusText: status,
             toolTip: enabled
-                ? "通过 SSH 只读拉取 reMarkable 最近打开页里的已转换文字"
+                ? "只读导出 reMarkable 当前页，并用 Apple Vision 在 Mac 本地识别"
                 : status,
             isRunning: phase == .running,
+            isEnabled: enabled
+        )
+    }
+
+    var optionPresentation: BuiltInBufferActionOptionPresentation? {
+        let selected = RemarkableOCRLanguageMode.configured(in: defaults)
+        let enabled = started
+            && ownerActive
+            && bufferModel.active
+            && !protectedSession
+            && !secureInputEnabled()
+        return BuiltInBufferActionOptionPresentation(
+            options: RemarkableOCRLanguageMode.allCases.map {
+                BuiltInBufferActionOption(
+                    identifier: $0.rawValue,
+                    title: $0.workbenchDisplayName
+                )
+            },
+            selectedIdentifier: selected.rawValue,
+            toolTip: "首选识别语言：\(selected.displayName)",
             isEnabled: enabled
         )
     }
@@ -899,6 +1306,7 @@ final class RemarkableWorkspace: BuiltInBufferActionWorkspace {
         }
 
         let target: RemarkableSSHTarget
+        let language: RemarkableOCRLanguageMode
         do {
             if let credentialStore {
                 target = try credentialStore.configuredTarget(
@@ -907,6 +1315,7 @@ final class RemarkableWorkspace: BuiltInBufferActionWorkspace {
             } else {
                 target = try RemarkableSSHTarget.configured(in: defaults)
             }
+            language = RemarkableOCRLanguageMode.configured(in: defaults)
         } catch {
             let message = (error as? LocalizedError)?.errorDescription
                 ?? RemarkablePullError.invalidTarget.localizedDescription
@@ -919,6 +1328,7 @@ final class RemarkableWorkspace: BuiltInBufferActionWorkspace {
 
         generation &+= 1
         let jobGeneration = generation
+        let requestStartedAt = ProcessInfo.processInfo.systemUptime
         phase = .running
         lastStatusOverride = nil
         notifyChange()
@@ -934,32 +1344,23 @@ final class RemarkableWorkspace: BuiltInBufferActionWorkspace {
                 DispatchQueue.main.async {
                     self?.finishFailure(error,
                                         jobGeneration: jobGeneration,
+                                        requestStartedAt: requestStartedAt,
                                         relay: relay)
                 }
             case let .success(snapshot):
-                // Scene parsing can traverse a large CRDT. Keep that work off
-                // the IMK/AppKit main thread; the generation is revalidated on
-                // main before any text reaches BufferModel.
+                // Hashing and Vision stay off the IMK/AppKit main thread. The
+                // generation is revalidated on main before OCR starts and
+                // again before any recognized text reaches BufferModel.
                 DispatchQueue.global(qos: .userInitiated).async {
                     let digest = SHA256.hash(data: snapshot.data)
-                    let extractedText: String?
-                    do {
-                        let text = try RemarkableSceneTextExtractor.extract(
-                            from: snapshot.data
-                        )
-                        extractedText = text
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                            .isEmpty ? nil : text
-                    } catch {
-                        extractedText = nil
-                    }
                     DispatchQueue.main.async {
-                        self?.finishSuccess(
+                        self?.startRecognition(
                             snapshot,
                             digest: digest,
-                            extractedText: extractedText,
+                            language: language,
                             target: target,
                             jobGeneration: jobGeneration,
+                            requestStartedAt: requestStartedAt,
                             relay: relay
                         )
                     }
@@ -980,6 +1381,59 @@ final class RemarkableWorkspace: BuiltInBufferActionWorkspace {
         invalidate(nextPhase: .idle)
         notifyChange()
         return available
+    }
+
+    @discardableResult
+    func selectOption(identifier: String) -> Bool {
+        guard started,
+              ownerActive,
+              bufferModel.active,
+              !protectedSession,
+              !secureInputEnabled(),
+              let language = RemarkableOCRLanguageMode(
+                  rawValue: identifier
+              ) else {
+            return false
+        }
+        let previous = RemarkableOCRLanguageMode.configured(in: defaults)
+        guard previous != language else { return true }
+
+        // A workbench language switch is an explicit request to replace an
+        // in-flight OCR interpretation. The configuration notification
+        // tombstones the old result before a fresh pull can begin.
+        let shouldRestartRecognition = phase == .running
+        defaults.set(
+            language.rawValue,
+            forKey: RemarkableOCRLanguageMode.defaultsKey
+        )
+        notificationCenter.post(
+            name: .remarkableConfigurationDidChange,
+            object: self
+        )
+        notificationCenter.post(
+            name: .pluginConfigurationDidChange,
+            object: nil,
+            userInfo: [
+                PluginConfigurationNotificationKey.pluginID:
+                    BuiltInPluginID.remarkable,
+                PluginConfigurationNotificationKey.changedFieldIDs: [
+                    RemarkablePluginConfigurationFieldID.ocrLanguage,
+                ],
+            ]
+        )
+
+        if shouldRestartRecognition {
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      RemarkableOCRLanguageMode.configured(
+                          in: self.defaults
+                      ) == language else {
+                    return
+                }
+                _ = self.invoke()
+            }
+        }
+        return true
     }
 
     func setOwnerActive(_ active: Bool) {
@@ -1031,6 +1485,7 @@ final class RemarkableWorkspace: BuiltInBufferActionWorkspace {
 
     private func finishFailure(_ error: RemarkablePullError,
                                jobGeneration: UInt64,
+                               requestStartedAt: TimeInterval,
                                relay: RemarkableCancellationRelay) {
         guard accepts(jobGeneration: jobGeneration, relay: relay) else {
             return
@@ -1038,38 +1493,129 @@ final class RemarkableWorkspace: BuiltInBufferActionWorkspace {
         currentTask = nil
         phase = .failed(error.localizedDescription)
         lastStatusOverride = nil
-        IMELog.write("remarkable pull failed code=\(error.logCode)")
+        IMELog.write(
+            "remarkable pull failed code=\(error.logCode) "
+                + "totalMs=\(Self.elapsedMilliseconds(since: requestStartedAt))"
+        )
         notifyChange()
     }
 
-    private func finishSuccess(_ snapshot: RemarkablePageSnapshot,
-                               digest: SHA256Digest,
-                               extractedText: String?,
-                               target: RemarkableSSHTarget,
-                               jobGeneration: UInt64,
-                               relay: RemarkableCancellationRelay) {
+    private func startRecognition(_ snapshot: RemarkablePageSnapshot,
+                                  digest: SHA256Digest,
+                                  language: RemarkableOCRLanguageMode,
+                                  target: RemarkableSSHTarget,
+                                  jobGeneration: UInt64,
+                                  requestStartedAt: TimeInterval,
+                                  relay: RemarkableCancellationRelay) {
         guard accepts(jobGeneration: jobGeneration, relay: relay) else {
             return
         }
-        currentTask = nil
 
-        let identity = PageIdentity(documentID: snapshot.documentID,
-                                    pageID: snapshot.pageID)
+        let identity = PageRecognitionIdentity(
+            sourceDestination: target.destination,
+            documentID: snapshot.documentID,
+            pageID: snapshot.pageID,
+            language: language
+        )
         if stagedDigests[identity] == digest {
+            currentTask = nil
             phase = .succeeded
             lastStatusOverride = "这一页没有变化，未重复加入缓冲区"
             IMELog.write(
-                "remarkable pull duplicate bytes=\(snapshot.data.count)"
+                "remarkable pull duplicate bytes=\(snapshot.data.count) "
+                    + "totalMs="
+                    + "\(Self.elapsedMilliseconds(since: requestStartedAt))"
             )
             notifyChange()
             return
         }
 
-        guard let text = extractedText else {
-            phase = .failed("页面里没有可用的已转换文字")
+        let recognitionStartedAt = ProcessInfo.processInfo.systemUptime
+        let task = textRecognizer.recognizeText(
+            in: snapshot.pdfData,
+            pageIndex: snapshot.pageIndex,
+            expectedPageCount: snapshot.pageCount,
+            language: language
+        ) { [weak self, weak relay] result in
+            guard let relay else { return }
+            DispatchQueue.main.async {
+                self?.finishRecognition(
+                    snapshot,
+                    digest: digest,
+                    result: result,
+                    language: language,
+                    target: target,
+                    jobGeneration: jobGeneration,
+                    requestStartedAt: requestStartedAt,
+                    recognitionStartedAt: recognitionStartedAt,
+                    relay: relay
+                )
+            }
+        }
+        relay.install(task)
+    }
+
+    private func finishRecognition(
+        _ snapshot: RemarkablePageSnapshot,
+        digest: SHA256Digest,
+        result: Result<RemarkableOCRResult, RemarkableLocalOCRError>,
+        language: RemarkableOCRLanguageMode,
+        target: RemarkableSSHTarget,
+        jobGeneration: UInt64,
+        requestStartedAt: TimeInterval,
+        recognitionStartedAt: TimeInterval,
+        relay: RemarkableCancellationRelay
+    ) {
+        guard accepts(jobGeneration: jobGeneration, relay: relay) else {
+            return
+        }
+        currentTask = nil
+        guard case let .success(recognition) = result else {
+            let error: RemarkableLocalOCRError
+            if case let .failure(recognitionError) = result {
+                error = recognitionError
+            } else {
+                error = .recognitionFailed
+            }
+            phase = .failed(error.localizedDescription)
             lastStatusOverride = nil
             IMELog.write(
-                "remarkable extraction failed bytes=\(snapshot.data.count)"
+                "remarkable local ocr failed code=\(error.logCode) "
+                    + "pageBytes=\(snapshot.data.count) "
+                    + "pdfBytes=\(snapshot.pdfData.count) "
+                    + "ocrMs="
+                    + "\(Self.elapsedMilliseconds(since: recognitionStartedAt)) "
+                    + "totalMs="
+                    + "\(Self.elapsedMilliseconds(since: requestStartedAt))"
+            )
+            notifyChange()
+            return
+        }
+        let text = recognition.text
+        let recognitionValidationError: RemarkableLocalOCRError?
+        if text.utf8.count > RemarkableAppleVisionOCR.maximumOutputBytes {
+            recognitionValidationError = .outputTooLarge
+        } else if text.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty || text.unicodeScalars.contains(where: {
+            $0.value == 0
+        }) {
+            recognitionValidationError = .invalidText
+        } else {
+            recognitionValidationError = nil
+        }
+        if let recognitionValidationError {
+            phase = .failed(recognitionValidationError.localizedDescription)
+            lastStatusOverride = nil
+            IMELog.write(
+                "remarkable local ocr rejected code="
+                    + "\(recognitionValidationError.logCode) "
+                    + "pageBytes=\(snapshot.data.count) "
+                    + "pdfBytes=\(snapshot.pdfData.count) "
+                    + "ocrMs="
+                    + "\(Self.elapsedMilliseconds(since: recognitionStartedAt)) "
+                    + "totalMs="
+                    + "\(Self.elapsedMilliseconds(since: requestStartedAt))"
             )
             notifyChange()
             return
@@ -1078,14 +1624,38 @@ final class RemarkableWorkspace: BuiltInBufferActionWorkspace {
             text,
             origin: .ssh(host: target.destination)
         )
+        let identity = PageRecognitionIdentity(
+            sourceDestination: target.destination,
+            documentID: snapshot.documentID,
+            pageID: snapshot.pageID,
+            language: language
+        )
         stagedDigests[identity] = digest
         lastSucceededCharacterCount = text.count
         lastStatusOverride = nil
         phase = .succeeded
+        let confidence = recognition.meanConfidence.map {
+            String(format: "%.3f", Double($0))
+        } ?? "none"
         IMELog.write(
-            "remarkable pull succeeded bytes=\(snapshot.data.count) characters=\(text.count)"
+            "remarkable local ocr succeeded "
+                + "pageBytes=\(snapshot.data.count) "
+                + "pdfBytes=\(snapshot.pdfData.count) "
+                + "observations=\(recognition.observationCount) "
+                + "confidence=\(confidence) characters=\(text.count) "
+                + "ocrMs="
+                + "\(Self.elapsedMilliseconds(since: recognitionStartedAt)) "
+                + "totalMs="
+                + "\(Self.elapsedMilliseconds(since: requestStartedAt))"
         )
         notifyChange()
+    }
+
+    private static func elapsedMilliseconds(
+        since start: TimeInterval
+    ) -> Int {
+        let elapsed = max(0, ProcessInfo.processInfo.systemUptime - start)
+        return Int((elapsed * 1_000).rounded())
     }
 
     private func invalidate(nextPhase: RemarkableWorkspacePhase) {

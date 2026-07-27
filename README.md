@@ -26,7 +26,9 @@
 
 「实时翻译」是内置缓冲插件，与 Marine 等外部缓冲插件进入同一个列表、使用同一种带图标卡片和独立 Switch；它们可同时开启，但工作台仍只选择一个当前 owner。它默认使用 macOS 15+ 的 Apple 本地翻译，原文不离开本机；也可在插件设置中改为当前 AI 渠道，并配置源语言和目标语言。翻译工作台上方是合并为连续文本、不分 block 的原文缓冲，下方是独立且可分 block 的译文缓冲，两条轨道各自横向滚动。翻译态下，左侧拖拽与展开按钮直接对齐上方原文行，右侧发送按钮直接对齐下方目标语言行。输入停顿 300 ms 后发起刷新；持续输入时至多等待 900 ms 就启动一轮，翻译在途期间只排队最新快照，不反复取消。保存新配置会取消旧请求，并按未改动的源缓冲重新翻译；发送键只投递与当前原文和当前配置完全匹配的已完成译文，永不自动上屏。
 
-「Remarkable」是一个显式、只读的内置缓冲动作。用户先在 reMarkable 上对页面执行官方 “Convert to text”，再在展开的工作台点击“拉取转写”；RIMES 通过系统 `/usr/bin/ssh` 找到最近打开文档的当前页，读取 software 3 的 v6 `.rm` 原生 typed text，并以 `.ssh` 来源加入普通缓冲区。它不会从 SSH 触发设备的云端转写、不会轮询、不会停止 Xochitl、不会修改设备文件。默认目标是 USB 连接的 `10.11.99.1`；“设置 › 插件 › Remarkable › 设置…”可保存主机、SSH 用户名和密码，也仍支持 SSH key/agent。密码只保存于 `~/Library/RimeBuffer/plugin-config/builtin.remarkable/credentials.json`：`plugin-config` 及插件私有目录权限为 `0700`、文件为 `0600`；共享数据根目录可为当前用户所有且不可被他人写入的 `0755`。调用时密码经受限的 `SSH_ASKPASS` 读取，不进入命令参数、环境值或日志；SSH 始终严格校验现有 `known_hosts`，未知主机安全失败。同一页必须连续读取两次且字节完全一致才会解析，修改配置、owner 切换、关闭、锁屏或 secure input 都会取消并作废在途拉取；拉取成功仍需用户用纸飞机或 Return 明确投递。设备官方转写本身仍要求联网和 reMarkable 账户，且 2026 年官方语言列表不含中文；本插件不会把外部 OCR 冒充成设备原生转写。
+「Remarkable」是一个显式、只读的内置缓冲动作，不依赖设备的官方 “Convert to text”。使用前须在 reMarkable 的存储设置中开启 USB Web interface、用 USB 连接 Mac，并让待识别页保持为当前页；用户点击“识别当前页”后，RIMES 才通过系统 `/usr/bin/ssh` 和固定只读命令定位最近打开文档及当前页，连续读取两次当前 `.rm` 并要求字节完全一致。随后它以固定的初始 USB Web URL `http://10.11.99.1/download/<文档 UUID>/pdf` 导出整本文档 PDF；导出完成后会立即复验文档、页序、当前页身份和 `.rm` 快照，任一变化都拒绝结果。通过复验的 PDF 才会在内存中由 PDFKit 以 300 dpi 为目标渲染当前页（最长边不超过 4096 px、总像素不超过 1200 万），再交给 Apple Vision 在 Mac 本地 OCR。PDF 拉取显式禁用代理，初始 URL 不从插件配置扩展；PDF、位图和识别正文只存在于进程内存，不写临时文件或正文日志，也不会上传到官方或其他云端、停止 Xochitl、修改设备文件或自动上屏。识别成功的文字以 `.ssh` 来源加入普通缓冲区，仍需用户用纸飞机或 Return 明确投递。
+
+SSH 默认目标同为 USB 地址 `10.11.99.1`；“设置 › 插件 › Remarkable › 设置…”可保存 SSH 主机、用户名和密码，也仍支持 SSH key/agent。“首选识别语言”同时出现在这里和缓冲工作台的 Remarkable 动作旁，两处共用同一配置：默认“简体中文（推荐）”，Vision 按 `zh-Hans` 优先并保留 `en-US` 英文词识别；也可选繁体中文、英文或繁简混排自动识别。运行中切换会取消旧结果并按新语言重启，完成后切换则用于下一次“识别当前页”。密码只保存于 `~/Library/RimeBuffer/plugin-config/builtin.remarkable/credentials.json`：`plugin-config` 及插件私有目录权限为 `0700`、文件为 `0600`；共享数据根目录可为当前用户所有且不可被他人写入的 `0755`。调用时密码经受限的 `SSH_ASKPASS` 读取，不进入命令参数、环境值或日志；SSH 始终严格校验现有 `known_hosts`，绝不自动信任未知主机。首次使用时，先在终端执行 `ssh <配置的用户名>@<配置的主机>`，从可信渠道核对提示的设备指纹，确认一致后接受，再回到插件重试。修改配置、owner 切换、关闭、锁屏或 secure input 都会取消并作废在途识别。
 
 「AI 生成」现在是唯一的内置 AI 缓冲插件；原来的「Codex CLI」「Claude Code CLI」「通用 Open API（OpenAI 兼容）」不再分别占用三个插件位，而是三个可切换的模型源。既可在“设置 › 连接器 › AI 模型”管理授权与私有连接信息，也可从“设置 › 插件 › AI 生成 › 设置…”选择当前渠道；插件 owner 与连接器选择彼此独立。实时翻译和 Marine 选择“当前 AI 渠道”时复用同一选择。内置 AI，以及整个动作面只有一个 prepared presentation 的外部 owner，共用主生成控件且不在展开层显示独立“生成”按钮：可以请求时右侧显示 AI 图标，生成中显示转圈，结果就绪后变为纸飞机；不可请求时 AI 图标禁用并通过提示说明原因。没有未决组字时，Return 与这个主按钮共用同一状态：先请求 AI，结果就绪后的新一次轻按才发送下一块，长按仍发送全部；Marine 的页面模式仍在请求瞬间决定直评或回复。Marine 投递态只选择匹配其 prepared action group 的最终结果，较早的普通缓冲块、其他动作结果和失效结果会原样保留而不会被这次纸飞机误发。内置 AI 的请求会保留上方源文，首字返回前持续展示连接、思考摘要、重试或校验状态与已等待秒数；正文到达后在下轨按增量真正流式更新，并由宿主细分为短句、分句、列表项或步骤 block（URL、数字、引文与代码保持完整）。完成后才可手动发送；只有下方所有目标 block 都成功发送后，生成时捕获的源 block 才会一次性消费，部分发送失败不会丢失源文。
 
@@ -56,7 +58,7 @@ Codex/Claude 连接器在本机直接启动 CLI，使用各自的 CLI 授权状�
 .build/release/RimeBuffer ai-text-smoke # 单插件/三连接器、prepared prompt 与双轨投递自检
 .build/release/RimeBuffer stream-input-smoke # 意识流按键门、全量重算、连续渲染、OpenAI 路由与 1–3 猜测自检
 .build/release/RimeBuffer plugin-configuration-smoke # 声明式配置、迁移、私有存储与脱敏边界自检
-.build/release/RimeBuffer remarkable-plugin-smoke # Remarkable 场景解析、SSH 状态机与凭据边界自检
+.build/release/RimeBuffer remarkable-plugin-smoke # Remarkable PDF/本地 OCR、SSH 状态机与凭据边界自检
 tail -f ~/rimebuffer.log          # 行为日志
 ```
 

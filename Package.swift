@@ -20,6 +20,8 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("InputMethodKit"),
                 .linkedFramework("Cocoa"),
+                .linkedFramework("PDFKit"),
+                .linkedFramework("Vision"),
             ]
         ),
     ]

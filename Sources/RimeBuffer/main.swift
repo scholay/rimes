@@ -4609,10 +4609,15 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
     status.stringValue = "可生成 · 发送前点选输入框"
     selectorWidth.constant = 108
     spinner.isHidden = false
+    let option = NSView()
+    option.translatesAutoresizingMaskIntoConstraints = false
+    option.widthAnchor.constraint(equalToConstant: 116).isActive = true
+    option.heightAnchor.constraint(equalToConstant: 18).isActive = true
     let action = NSView()
     action.translatesAutoresizingMaskIntoConstraints = false
     action.widthAnchor.constraint(equalToConstant: 80).isActive = true
     action.heightAnchor.constraint(equalToConstant: 18).isActive = true
+    actionRow.addArrangedSubview(option)
     actionRow.addArrangedSubview(action)
     let dynamic = positions()
 

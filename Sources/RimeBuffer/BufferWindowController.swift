@@ -674,6 +674,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private let pluginLoadingIndicator = NSProgressIndicator()
     private let pluginButtonRow = NSStackView()
     private let builtInActionButton = FirstMouseButton(title: "", target: nil, action: nil)
+    private let builtInActionOptionPopup = FirstMousePopUpButton(
+        frame: .zero,
+        pullsDown: false
+    )
     private let translationSourcePopup = FirstMousePopUpButton(frame: .zero, pullsDown: false)
     private let translationTargetPopup = FirstMousePopUpButton(frame: .zero, pullsDown: false)
     private let translationSwapButton = FirstMouseButton(title: "", target: nil, action: nil)
@@ -704,7 +708,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var renderingTranslationControls = false
     private var renderingAIControls = false
     private var renderingBuiltInActionControls = false
+    private var renderedBuiltInActionHasOptions: Bool?
     private var renderedTranslationLanguages: [TranslationLanguageOption] = []
+    private var renderedBuiltInActionOptions: [BuiltInBufferActionOption] = []
     private var sendButtonUsesAccent = false
 
     var isVisible: Bool {
@@ -1194,6 +1200,23 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         translationSourcePopup.action = #selector(translationSourceChanged)
         translationTargetPopup.target = self
         translationTargetPopup.action = #selector(translationTargetChanged)
+
+        builtInActionOptionPopup.controlSize = .mini
+        builtInActionOptionPopup.font = .systemFont(ofSize: 10)
+        builtInActionOptionPopup.target = self
+        builtInActionOptionPopup.action = #selector(builtInActionOptionChanged)
+        builtInActionOptionPopup.translatesAutoresizingMaskIntoConstraints = false
+        builtInActionOptionPopup.widthAnchor.constraint(
+            equalToConstant: 116
+        ).isActive = true
+        builtInActionOptionPopup.setContentHuggingPriority(
+            .required,
+            for: .horizontal
+        )
+        builtInActionOptionPopup.setContentCompressionResistancePriority(
+            .required,
+            for: .horizontal
+        )
         translationSwapButton.image = RimeUI.symbol("arrow.left.arrow.right",
                                                    pointSize: 9,
                                                    weight: .semibold)
@@ -1367,6 +1390,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             : RimeUI.textSecondary
         builtInActionButton.refreshInteractionAppearance()
         pluginSelector.refreshInteractionAppearance()
+        builtInActionOptionPopup.refreshInteractionAppearance()
         translationSourcePopup.refreshInteractionAppearance()
         translationTargetPopup.refreshInteractionAppearance()
     }
@@ -1377,6 +1401,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             $0.setPreviewPointerState(nil)
         }
         pluginSelector.setPreviewPointerState(nil)
+        builtInActionOptionPopup.setPreviewPointerState(nil)
         translationSourcePopup.setPreviewPointerState(nil)
         translationTargetPopup.setPreviewPointerState(nil)
         translationSwapButton.setPreviewPointerState(nil)
@@ -1575,16 +1600,53 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         _ workspace: any BuiltInBufferActionWorkspace
     ) {
         let presentation = workspace.actionPresentation
+        let optionPresentation = workspace.optionPresentation
+        let hasOptions = optionPresentation != nil
         pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)"
         pluginLoadingIndicator.isHidden = !presentation.isRunning
         presentation.isRunning
             ? pluginLoadingIndicator.startAnimation(nil)
             : pluginLoadingIndicator.stopAnimation(nil)
 
-        if !renderingBuiltInActionControls {
+        if !renderingBuiltInActionControls
+            || renderedBuiltInActionHasOptions != hasOptions {
             resetDerivedControlRendering()
             renderingBuiltInActionControls = true
+            renderedBuiltInActionHasOptions = hasOptions
+            if hasOptions {
+                pluginButtonRow.addArrangedSubview(
+                    builtInActionOptionPopup
+                )
+            }
             pluginButtonRow.addArrangedSubview(builtInActionButton)
+        }
+
+        if let optionPresentation {
+            if renderedBuiltInActionOptions
+                != optionPresentation.options {
+                renderedBuiltInActionOptions =
+                    optionPresentation.options
+                builtInActionOptionPopup.removeAllItems()
+                for option in optionPresentation.options {
+                    builtInActionOptionPopup.addItem(
+                        withTitle: option.title
+                    )
+                    builtInActionOptionPopup.lastItem?
+                        .representedObject = option.identifier
+                }
+            }
+            selectPopupExactly(
+                builtInActionOptionPopup,
+                representedValue:
+                    optionPresentation.selectedIdentifier
+            )
+            builtInActionOptionPopup.isEnabled =
+                optionPresentation.isEnabled
+            builtInActionOptionPopup.toolTip =
+                optionPresentation.toolTip
+            builtInActionOptionPopup.setAccessibilityLabel(
+                "\(workspace.workbenchDisplayName) 首选识别语言"
+            )
         }
 
         builtInActionButton.title = presentation.title
@@ -1690,7 +1752,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         renderingTranslationControls = false
         renderingAIControls = false
         renderingBuiltInActionControls = false
+        renderedBuiltInActionHasOptions = nil
         renderedTranslationLanguages.removeAll()
+        renderedBuiltInActionOptions.removeAll()
         renderedPluginKeys.removeAll()
         pluginActionButtons.removeAll()
         pluginButtonRow.arrangedSubviews.forEach {
@@ -1708,6 +1772,16 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                                                        expected: representedValue)
         }) else { return }
         popup.selectItem(at: index)
+    }
+
+    private func selectPopupExactly(
+        _ popup: NSPopUpButton,
+        representedValue: String
+    ) {
+        guard let item = popup.itemArray.first(where: {
+            ($0.representedObject as? String) == representedValue
+        }) else { return }
+        popup.select(item)
     }
 
     private func applyExpandedPresentation() {
@@ -1783,6 +1857,18 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         ) { [weak self] _ in
             self?.refresh()
             RimeBufferController.refreshActiveUI()
+        })
+        observers.append(center.addObserver(
+            forName: .pluginConfigurationDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard notification.userInfo?[
+                PluginConfigurationNotificationKey.pluginID
+            ] as? String == BuiltInPluginID.remarkable else {
+                return
+            }
+            self?.refresh()
         })
         observers.append(center.addObserver(
             forName: .aiTextConnectorAvailabilityDidChange,
@@ -2155,6 +2241,22 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             return
         }
         if !workspace.invoke() { NSSound.beep() }
+        refresh()
+        RimeBufferController.refreshActiveUI()
+    }
+
+    @objc private func builtInActionOptionChanged() {
+        guard !sessionProtectionActive,
+              !IsSecureEventInputEnabled(),
+              let workspace =
+                  BuiltInBufferActionWorkspaceRouter.selectedWorkspace,
+              let identifier = builtInActionOptionPopup.selectedItem?
+                  .representedObject as? String else {
+            return
+        }
+        if !workspace.selectOption(identifier: identifier) {
+            NSSound.beep()
+        }
         refresh()
         RimeBufferController.refreshActiveUI()
     }

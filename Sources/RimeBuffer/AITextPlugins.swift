@@ -1003,14 +1003,48 @@ struct AITextCLIProcessSpec {
     let environment: [String: String]
     let timeout: TimeInterval
     let maximumOutputBytes: Int
+    let maximumStandardErrorBytes: Int
+
+    init(executableURL: URL,
+         arguments: [String],
+         standardInput: Data,
+         currentDirectoryURL: URL,
+         environment: [String: String],
+         timeout: TimeInterval,
+         maximumOutputBytes: Int,
+         maximumStandardErrorBytes: Int = 0) {
+        self.executableURL = executableURL
+        self.arguments = arguments
+        self.standardInput = standardInput
+        self.currentDirectoryURL = currentDirectoryURL
+        self.environment = environment
+        self.timeout = timeout
+        self.maximumOutputBytes = maximumOutputBytes
+        self.maximumStandardErrorBytes = maximumStandardErrorBytes
+    }
 }
 
 struct AITextCLIProcessResult {
     let terminationStatus: Int32
     let standardOutput: Data
+    let standardError: Data
     let timedOut: Bool
     let cancelled: Bool
     let outputTooLarge: Bool
+
+    init(terminationStatus: Int32,
+         standardOutput: Data,
+         standardError: Data = Data(),
+         timedOut: Bool,
+         cancelled: Bool,
+         outputTooLarge: Bool) {
+        self.terminationStatus = terminationStatus
+        self.standardOutput = standardOutput
+        self.standardError = standardError
+        self.timedOut = timedOut
+        self.cancelled = cancelled
+        self.outputTooLarge = outputTooLarge
+    }
 }
 
 protocol AITextCLIProcessRunning: AnyObject {
@@ -1127,8 +1161,33 @@ private final class AITextBoundedDataCollector {
     }
 }
 
+private final class AITextTruncatingDataCollector {
+    private let lock = NSLock()
+    private let maximumBytes: Int
+    private var storage = Data()
+
+    init(maximumBytes: Int) {
+        self.maximumBytes = max(0, maximumBytes)
+    }
+
+    func append(_ data: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        let remainingBytes = maximumBytes - storage.count
+        guard remainingBytes > 0 else { return }
+        storage.append(contentsOf: data.prefix(remainingBytes))
+    }
+
+    func value() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+}
+
 /// Direct argv + stdin process runner. It never invokes a shell, never logs
-/// stdin/stdout/stderr, and drains stderr without retaining its contents.
+/// stdin/stdout/stderr, and retains stderr only when the caller explicitly
+/// requests a bounded prefix for private error classification.
 final class AITextFoundationCLIProcessRunner: AITextCLIProcessRunning {
     @discardableResult
     func run(_ spec: AITextCLIProcessSpec,
@@ -1140,6 +1199,9 @@ final class AITextFoundationCLIProcessRunner: AITextCLIProcessRunning {
         let stderr = Pipe()
         let stdin = Pipe()
         let collector = AITextBoundedDataCollector(maximumBytes: spec.maximumOutputBytes)
+        let standardErrorCollector = spec.maximumStandardErrorBytes > 0
+            ? AITextTruncatingDataCollector(maximumBytes: spec.maximumStandardErrorBytes)
+            : nil
         let readers = DispatchGroup()
         let finishLock = NSLock()
         var didFinish = false
@@ -1157,6 +1219,7 @@ final class AITextFoundationCLIProcessRunner: AITextCLIProcessRunning {
                 completion(AITextCLIProcessResult(
                     terminationStatus: status,
                     standardOutput: collector.value(),
+                    standardError: standardErrorCollector?.value() ?? Data(),
                     timedOut: reason == .timedOut,
                     cancelled: reason == .cancelled,
                     outputTooLarge: reason == .outputTooLarge || collector.exceeded
@@ -1217,7 +1280,11 @@ final class AITextFoundationCLIProcessRunner: AITextCLIProcessRunning {
         }
         DispatchQueue.global(qos: .utility).async {
             defer { readers.leave() }
-            while !stderr.fileHandleForReading.availableData.isEmpty {}
+            while true {
+                let chunk = stderr.fileHandleForReading.availableData
+                guard !chunk.isEmpty else { break }
+                standardErrorCollector?.append(chunk)
+            }
         }
         DispatchQueue.global(qos: .userInitiated).async {
             do {

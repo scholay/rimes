@@ -198,8 +198,8 @@ private final class RemarkableInternalPlugin:
         wireID: nil,
         name: "Remarkable",
         symbolName: "rectangle.and.hand.point.up.left",
-        version: "1.1",
-        summary: "通过只读 SSH 拉取 reMarkable 当前页已经转换好的文字；支持保存主机、用户名与本机私有密码。",
+        version: "2.0",
+        summary: "只读导出 reMarkable 当前页，并用 Apple Vision 在 Mac 本地识别；结果先进入缓冲区供核对。",
         source: .builtIn,
         capabilities: [.bufferAction],
         settings: nil,
@@ -223,7 +223,7 @@ private final class RemarkableInternalPlugin:
         let schema = PluginConfigurationSchema(
             pluginID: BuiltInPluginID.remarkable,
             title: "Remarkable",
-            summary: "默认连接 USB 地址 10.11.99.1。密码只保存在本机权限为 0600 的私有文件中；SSH 仍严格校验 known_hosts，也可继续使用密钥认证。",
+            summary: "默认连接 USB 地址 10.11.99.1。请在平板设置中开启 USB Web Interface；插件通过只读 SSH 锁定当前页，再导出 PDF 并在 Mac 本地识别，不调用官方转写。SSH 严格校验 known_hosts，绝不自动信任未知主机。",
             fields: [
                 .text(
                     id: RemarkablePluginConfigurationFieldID.host,
@@ -252,6 +252,28 @@ private final class RemarkableInternalPlugin:
                         guard case let .string(username) = value,
                               RemarkableSSHTarget.isValidUsername(username) else {
                             return "请填写有效的 SSH 用户名"
+                        }
+                        return nil
+                    }
+                ),
+                .choice(
+                    id: RemarkablePluginConfigurationFieldID.ocrLanguage,
+                    title: "首选识别语言",
+                    helpText: "默认优先识别简体中文并保留英文词；自动模式适合繁简混排页面。全部由 Apple Vision 在这台 Mac 上识别。",
+                    options: RemarkableOCRLanguageMode.allCases.map {
+                        PluginConfigurationChoice(
+                            value: $0.rawValue,
+                            title: $0.displayName
+                        )
+                    },
+                    defaultValue:
+                        RemarkableOCRLanguageMode.defaultMode.rawValue,
+                    validator: { value, _ in
+                        guard case let .string(rawValue) = value,
+                              RemarkableOCRLanguageMode(
+                                  rawValue: rawValue
+                              ) != nil else {
+                            return "请选择有效的手写语言"
                         }
                         return nil
                     }

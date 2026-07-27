@@ -1,6 +1,6 @@
 # RIMES · 系统架构
 
-版本：2026-07-26 · 权威全局架构文档
+版本：2026-07-27 · 权威全局架构文档
 关系：本文档描述**整个系统**（既有输入核心 + 缓冲工作台）。`WORKBENCH-DESIGN.md` 是工作台的产品方案与决策记录；`ARCHITECTURE.md` 是 P1 时代的交接文档（已滞后，仅存档）。三者冲突时以本文档为准。
 
 代码规模：约 31000 行（Swift + 一层 C++ librime 桥）。单进程、后台 agent（`LSUIElement`）。
@@ -41,6 +41,7 @@ RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并�
                           │                                  └─无安全目标→剪贴板累积    │
                           │                                                           │
  实时翻译（Apple 本地/当前 AI）▶ TranslationWorkspace ─▶ 独立译文缓冲     │
+ reMarkable（SSH 定位 + USB Web PDF）▶ PDFKit 目标 300dpi 有界渲染 ─▶ Vision 本地 OCR ─▶ BufferModel │
  唯一「AI 生成」插件────▶ AITextPluginWorkspace ──────▶ 独立生成缓冲     │
  Marine prepare prompt ─▶ ActionPluginHost ─┐                              │
                                             └─▶ AITextConnectorRegistry    │
@@ -223,12 +224,12 @@ BufferDeliveryCoordinator (单例)
 | HTTP push（经 LocalGateway） | 脚本 POST | ✅ M2 |
 | SSE 订阅 | 订阅外部事件流 | 计划 M6 |
 | SSH | `/usr/bin/ssh` 子进程流式读 stdout；密钥全交 ssh-agent，输入法不碰；用 argv 数组防参数注入 | 计划 M6 |
-| Remarkable（显式 SSH 动作） | 用户在设备上完成官方转文字后，只读拉取最近打开文档的当前 v6 页面 typed text | ✅ 内置缓冲插件；不等同于通用 SSH provider |
+| Remarkable（显式只读动作） | SSH 稳定定位当前页；固定初始 USB Web URL 导出 PDF；PDFKit 目标 300 dpi 有界渲染 + Apple Vision 在 Mac 本地 OCR | ✅ 内置缓冲插件；不等同于通用 SSH provider |
 | RemotePeer | 现有 X25519+AES-GCM 通道 | 现状=直通上屏档（不改道，产品决策） |
 | Action Plugin | `~/Library/RimeBuffer/plugins/*/manifest.json` 声明动作；按 runtime config 走本机 Bearer HTTP | ✅ 通用宿主；具体插件独立安装 |
 | MarineBridge | 旧 `/buffer-state/latest` 轮询实现仍保留源码，但 focus 主路径已解除调用 | 仅兼容存档，不是新链路依赖 |
 
-### 4.4 Action Plugin 宿主、实时翻译与 Remarkable 导入
+### 4.4 Action Plugin 宿主、实时翻译与 Remarkable 本地 OCR 导入
 
 每个插件目录包含 schemaVersion=1 的 `manifest.json`，声明插件 id/name、runtime config 候选路径和动作 `id/title/symbol/statusPath/invokePath/modes`；需要由 Rime 执行模型的动作可增量声明 `preparePath`，互斥场景动作还可声明成对的 `presentationId/presentationTitle`。同一插件内共享 presentation id 的动作必须共享标题和 status/prepare/invoke/stream 契约；请求、流事件、结果元数据与发送复核始终保留 status 当前选中的真实 action id。当前 owner 解析后的整个动作面只有一个 presentation 且它是 prepared 时，工作台把它提升到右侧 AI 主控件并从展开层隐藏；只要存在任意第二个 presentation，就全部保留为显式按钮，Return 不猜测。runtime config 只接受 `localhost/127.0.0.1/::1`，必须包含与 manifest 精确相同的 `pluginId` 以及 `apiBase/token/updatedAt`（可附 `instanceId/processId`）；宿主拒绝符号链接、非普通文件、相对路径逃逸和超过 1 MiB 的配置，按更新时间从新到旧探测，跳过已失效的残留配置。一次 status 成功后，prepare/invoke、生成后的复核与发送前复核都锁定该精确 runtime binding，期间出现更新的配置也不能把请求切到另一实例。工作台可见时每秒轻量刷新状态，因此“先开缓冲、后选浏览器目标”和“先选目标、后开缓冲”都成立，设置/菜单中的底层缓冲启停本身不参与目标发现。展开区的刷新/重置会取消当前及过时调用、清掉本次失败状态并强制重新获取当前上下文，但不修改 `BufferModel` 正文。
 
@@ -242,7 +243,11 @@ BufferDeliveryCoordinator (单例)
 
 实时翻译不伪装成 HTTP Action Plugin。`AppleTranslationWorkspace` 读取 `BufferModel.stagedText`；界面上方源轨合并显示全文且不分 block，下方目标轨独立显示译文 block，两条轨道分别横向滚动。翻译态中拖拽与展开按钮对齐上方原文行，发送按钮对齐下方目标语言行。默认 provider 是 Apple 本地翻译：AppKit 工作台挂载 1×1 的 `NSHostingView`，通过 SwiftUI `translationTask` 获得只在视图生命周期内有效的 `TranslationSession`，原文不交给网络服务。用户也可选择当前 AI 渠道；宿主用严格 JSON 边界构造翻译请求，再由共享 `AITextConnectorRegistry` 执行。自动刷新采用 single-in-flight + latest-queued；只有与当前原文、语言和 provider 配置完全匹配的 generation 才进入可发送态。保存配置或点击展开区的刷新/重置时，保留原文 `BufferModel`，作废旧 generation 并按新快照重启。未 review 的 Action Plugin 目标绑定块禁止作为翻译源，避免加工后绕过原焦点/上下文校验。`BufferDeliveryCoordinator` 通过 `BufferDeliveryContentSource` 选择普通缓冲或译文缓冲，并在每个 block 投递前按 workspace/generation/id 重取实时内容。译文 `.processor` 来源继承所有源 block 中最严格的 remote-mirror 策略。
 
-Remarkable 同样不伪装成 HTTP Action Plugin，也不成为派生 delivery source。它实现通用的内置货架动作接口；只有用户点击“拉取转写”才启动 `/usr/bin/ssh`。插件按 `.metadata.lastOpened` 选择最近打开文档，从 `.content.cPages.lastOpened.value` 定位当前页，连续读取两次 `<document UUID>/<page UUID>.rm` 并要求快照完全一致，再用有界的 software 3 / v6 root-text reader 提取原生 typed text。结果经 `BufferModel.stageExternalSemantic(..., origin: .ssh)` 一次性加入普通缓冲；Return 与纸飞机仍只走既有 `BufferDeliveryCoordinator`。用户可配置 host、SSH 用户名和密码，也可不填密码而使用 key/agent。密码保存在 `~/Library/RimeBuffer/plugin-config/builtin.remarkable/credentials.json`（目录 0700、文件 0600）；密码模式以 `BatchMode=no`、禁用公钥回退和受限 `SSH_ASKPASS` 读取该文件，密码不进入 argv、环境值、日志或通知。无密码模式使用 `BatchMode=yes`。两种模式都严格校验 known_hosts、固定只读远端命令、UUID/host 与有界 stdout。插件不触发 reMarkable 私有云转写、不停止 Xochitl，也不修改设备。配置变化、owner 切换、禁用、关闭、secure input、锁屏、睡眠与会话切出都会取消并墓碑化在途读取。
+Remarkable 同样不伪装成 HTTP Action Plugin，也不成为派生 delivery source。它实现通用的内置货架动作接口；设备必须先开启 USB Web interface 并通过 USB 连接，只有用户点击“识别当前页”才开始读取。插件通过 `/usr/bin/ssh` 按 `.metadata.lastOpened` 选择最近打开文档，从 `.content.cPages.lastOpened.value` 定位当前页及其 PDF 页序，连续读取两次 `<document UUID>/<page UUID>.rm` 并要求字节完全一致，以此冻结识别前的页面身份与内容快照。
+
+生产文字路径不再读取 software 3 / v6 root text。插件以固定初始 URL `http://10.11.99.1/download/<document UUID>/pdf` 请求文档 PDF，通过禁用代理的固定 `wget` 命令接收有界数据；初始 URL 不随 SSH host 配置扩展。真机 USB Web interface 没有带可靠页面身份的高分辨率单页导出路由，384×512 文档缩略图也不足以替代正式 OCR，因此生产路径保留整本 PDF 以保证中文手写准确率。PDF 导出后，插件重新读取最近文档、`.content` 当前页和 `.rm`，只有 document UUID、page UUID、页序及页面字节与导出前全部一致时，才把冻结的 PDF 交给 `RemarkableLocalOCR`。后者在内存中用 PDFKit 再次校验文档和目标页，以 300 dpi 为目标渲染该页，并以最长边 4096 px、总像素 1200 万作为安全上限，再交给 Apple Vision accurate recognition 在 Mac 本地生成正文。后台插件页和缓冲工作台动作旁共用一个 OCR 语言配置；默认简体中文以 `zh-Hans` 优先、`en-US` 后备，也可选繁体中文、英文或繁简混排自动识别。运行中切换语言会墓碑化旧请求并立即按新语言重启；去重身份包含来源、页面和语言。成功正文经 `BufferModel.stageExternalSemantic(..., origin: .ssh)` 一次性加入普通缓冲。PDF 数据、渲染位图和 OCR 正文全程只在进程内存中存在，不写临时文件或正文日志；Return 与纸飞机仍只走既有 `BufferDeliveryCoordinator`，绝不自动发送。
+
+SSH 用户可配置 host、用户名和密码，也可不填密码而使用 key/agent；USB Web PDF 目标不随 SSH host 配置扩展为任意 HTTP 主机。密码保存在 `~/Library/RimeBuffer/plugin-config/builtin.remarkable/credentials.json`（目录 0700、文件 0600）；密码模式以 `BatchMode=no`、禁用公钥回退和受限 `SSH_ASKPASS` 读取该文件，密码不进入 argv、环境值、日志或通知。无密码模式使用 `BatchMode=yes`。两种模式都严格校验 known_hosts、固定只读远端命令、UUID/host 与有界 stdout；未知主机必须由用户从可信渠道核对指纹后显式加入 `known_hosts`。插件不调用 reMarkable 官方或其他云端转写、不上传 PDF/页面、不停止 Xochitl，也不修改设备。配置变化、owner 切换、禁用、关闭、secure input、锁屏、睡眠与会话切出都会取消并墓碑化在途识别。
 
 ```
 当前 BufferModel 全文 ─Return/右侧 AI 主按钮─▶ AITextPluginWorkspace 冻结 source text + block IDs
@@ -439,9 +444,10 @@ Sources/RimeBuffer/
   PluginConfiguration.swift     声明式 schema / 通用表单 / 普通与私有存储
   PluginConfigurationCatalog.swift AI/意识流/实时翻译/Marine 的配置与运行时桥
   AppleTranslationPlugin.swift  实时翻译双缓冲 / Apple 本地 session / AI provider
-  RemarkablePlugin.swift        reMarkable 只读 SSH 当前页定位 / 拉取状态机 / 普通缓冲导入
+  RemarkablePlugin.swift        SSH 当前页稳定校验 / 固定初始 USB Web URL 拉取 / 前后复验 / 普通缓冲导入
   RemarkableCredentialStore.swift 0700/0600 SSH 配置 / 受限 askpass
-  RemarkableSceneTextExtractor.swift software 3 / v6 原生 typed-text 有界解析
+  RemarkableLocalOCR.swift      PDFKit 目标 300dpi 有界渲染 / Apple Vision 本地 OCR / 纯内存边界
+  RemarkableSceneTextExtractor.swift 旧 software 3 / v6 typed-text 兼容回归解析器（非生产拉取路径）
   AITextPlugins.swift           唯一 AI workspace、三源 ConnectorRegistry、CLI/API provider 与 0600 配置
   InputTelemetry.swift          无正文/无 IMK 对象的本地输入观测总线
   UserLexiconService.swift      官方 user_dict 导入/导出/快照恢复
@@ -466,7 +472,7 @@ Sources/RimeBuffer/
 
 **测试**：无 XCTest target；CI 运行编进二进制的 smoke 子命令。`plugin-configuration-smoke` 覆盖四插件默认值与运行时桥、每插件普通存储、私有文件 0700/0600、弱权限与 symlink 拒绝、值/通知脱敏，以及 AI 翻译 prompt 的 JSON 边界。`stream-input-smoke` 覆盖 `.chord`/`.mutual` 双路由、同批与跨左右批映射、单键不重组、非和弦边界清配对、自动 soft Space/物理 hard Space 原位提升、提示与宿主分块差异、普通 debounce、首键撤销旧投递权、Backspace 先结算再逐字删除，以及原有焦点/secure/modifier 门、有界双路、迟到回调 tombstone、1–3 个互斥候选、选择/投递和 raw 全选粘贴契约。`fly-chord-learning-smoke` 另验证 fixture 与真实部署 schema 都能被同一 mapper 消费。`buffer-window-smoke` 覆盖普通候选矩阵与意识流 target rail 的真实三行 AppKit 几何、全选显示和动态高度；`matrix-smoke` 覆盖 1–3 行及三行 viewport 上限。`buffer-smoke` 覆盖 Control/Command+A/V 精确组合规则、普通/插件 source 的全选替换、块光标粘贴、语义分块、精确连接文本与纯空白保留；secure input 不读 pasteboard 与延迟读取后租约重验仍需安装后的真实 IMK 交互回归。`ai-text-smoke` 覆盖 provider 逻辑块到工作台的唯一分段、超 20 KB 粗结果、后续上游块 UUID 稳定和 CLI/API 流式收口；`translation-smoke` 与 `plugin-stream-smoke` 覆盖实时翻译、Action/Marine 的分段、权限继承和 partial/final 一致性。这些 smoke 不调用真实模型或用户配置的真实 API；真实 librime 词库桥另有强制隔离 `RIMEBUFFER_USER_DIR` 的 `user-lexicon-bridge-smoke`。
 
-`remarkable-plugin-smoke` 用程序化 v6 fixture 覆盖 root text、CRDT 顺序、删除/格式码与边界拒绝，并可在开发时加载真实 rmscene 样本但绝不打印正文；SSH 拉取状态机则用假 runner 验证 current-page 定位、双读稳定、取消/迟到墓碑、去重和 `.ssh` provenance。CI 不连接真实 reMarkable。
+`remarkable-plugin-smoke` 用假 SSH、PDF 导出和 OCR 依赖验证 current-page 定位、双读稳定、PDF 页序、PDF 导出后的文档/页面/字节复验、取消/迟到墓碑、按来源/页面/语言去重和 `.ssh` provenance；固定初始 USB Web URL、禁代理、数据边界和凭据脱敏也由测试钉住。程序化 v6 fixture 继续覆盖旧 root-text 解析器的 CRDT 顺序、删除/格式码与边界拒绝，但该解析器不再进入生产 Remarkable 拉取路径。所有 smoke 都不连接真实 reMarkable、不调用云端，也不打印识别正文。
 
 - `plugin-smoke` 覆盖 manifest 发现与 schema、可选 `preparePath` 契约、唯一 prepared presentation 提升到主操作及多动作歧义回退、request/generating/deliver 四态、普通块/其他 action/stale 结果不误亮纸飞机、上下文动作聚合及 `status.actionId` 动态切换、`~`/相对 runtime path、runtime 从新到旧回退与 status→prepare/invoke 精确绑定、只允许 loopback、prepared 五字段身份与 `blocks-v1` 格式校验、流式 1 MiB 响应上限、Bearer request、request/context/action/focus 路由规则、切 owner 后已完成 Marine block 仍保留原投递 authority、切换评论后迟到校验不得上屏、收件箱满载显式失败，以及 stale 结果经人工接受后保留来源但安全降级为普通文本。
 
@@ -491,7 +497,7 @@ Sources/RimeBuffer/
 | **M4** AI 插件与连接器 | 唯一「AI 生成」插件 / Codex、Claude Code、OpenAI 三源切换 / CLI/API 授权 / Marine prepare / 双轨 workspace / 0600 凭据 | ✅ 2026-07-20 已实现；待真实宿主端到端验收 |
 | **插件配置** | 统一 schema 与“设置…”表单 / 每插件普通存储 / 0700+0600 敏感存储 / 运行时快照 | ✅ 2026-07-26 已实现 |
 | **M5** 投递路由 | 本地精确焦点已完成；多目标 / 远端 ACK / 持久账本仍属后续，当前明确不保存发送历史 | 部分完成 |
-| **Remarkable** | 显式只读 SSH 动作 / 当前页 v6 typed-text / 普通缓冲导入 / secure 与 owner 取消 | ✅ 2026-07-26 已实现；待设备连接实测 |
+| **Remarkable** | 显式只读动作 / SSH 当前页稳定校验 / 固定初始 USB Web URL / PDFKit 目标 300 dpi 有界渲染 + Vision 本地 OCR / 前后复验 / 普通缓冲导入 | ✅ 2026-07-27 已切换本地 OCR，并通过安装后真机当前页验收 |
 | **M6** SSE/SSH + 收尾 | SSE/SSH provider / 传入轨嵌入独立工作台 / 视觉对齐 | 计划 |
 
 **作废/推迟**（产品决策）：远端改道 + 协议 v2（配对走直通上屏）；剪贴板捕获；AirDrop。

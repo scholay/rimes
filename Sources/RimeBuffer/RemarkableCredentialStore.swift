@@ -263,7 +263,16 @@ final class RemarkableCredentialStore {
     func delete() throws {
         var info = stat()
         if lstat(configurationURL.path, &info) != 0 {
-            if errno == ENOENT { return }
+            if errno == ENOENT {
+                // A legacy configuration may exist only in UserDefaults. A
+                // successful reset must still tombstone any in-flight pull or
+                // OCR before the adapter removes those defaults.
+                NotificationCenter.default.post(
+                    name: .remarkableConfigurationDidChange,
+                    object: self
+                )
+                return
+            }
             throw RemarkableCredentialStoreError.unreadable
         }
         guard (info.st_mode & S_IFMT) == S_IFREG,
@@ -537,6 +546,7 @@ final class RemarkableCredentialStore {
 enum RemarkablePluginConfigurationFieldID {
     static let host = "host"
     static let username = "username"
+    static let ocrLanguage = "ocrLanguage"
     static let password = "password"
 }
 
@@ -568,6 +578,10 @@ final class RemarkablePluginConfigurationStore: PluginConfigurationStoring {
               knownFields.contains(
                   RemarkablePluginConfigurationFieldID.username
               ),
+              let languageField = schema.fields.first(where: {
+                  $0.id == RemarkablePluginConfigurationFieldID.ocrLanguage
+              }),
+              case .choice = languageField.kind,
               let passwordField = schema.fields.first(where: {
                   $0.id == RemarkablePluginConfigurationFieldID.password
               }),
@@ -581,22 +595,32 @@ final class RemarkablePluginConfigurationStore: PluginConfigurationStoring {
     func load(schema: PluginConfigurationSchema) throws
         -> PluginConfigurationSnapshot? {
         if let saved = try credentialStore.load() {
-            return Self.snapshot(from: saved)
+            return Self.snapshot(
+                from: saved,
+                language: RemarkableOCRLanguageMode.configured(in: defaults)
+            )
         }
-        // Preserve an explicitly configured pre-settings-platform destination.
-        // When no legacy override exists, returning nil lets the schema supply
-        // its declared USB defaults.
-        guard defaults.object(
+        // Preserve either an explicitly configured legacy destination or a
+        // language selected from the workbench. With neither override,
+        // returning nil lets the schema supply all declared USB defaults.
+        let hasTargetOverride = defaults.object(
             forKey: RemarkableSSHTarget.defaultsKey
-        ) != nil else {
+        ) != nil
+        let hasLanguageOverride = defaults.object(
+            forKey: RemarkableOCRLanguageMode.defaultsKey
+        ) != nil
+        guard hasTargetOverride || hasLanguageOverride else {
             return nil
         }
         let target = try RemarkableSSHTarget.configured(in: defaults)
-        return Self.snapshot(from: RemarkableSSHConfiguration(
-            host: target.host,
-            username: target.username ?? "root",
-            password: ""
-        ))
+        return Self.snapshot(
+            from: RemarkableSSHConfiguration(
+                host: target.host,
+                username: target.username ?? "root",
+                password: ""
+            ),
+            language: RemarkableOCRLanguageMode.configured(in: defaults)
+        )
     }
 
     func save(_ snapshot: PluginConfigurationSnapshot,
@@ -606,6 +630,12 @@ final class RemarkablePluginConfigurationStore: PluginConfigurationStoring {
               ),
               let username = snapshot.string(
                   RemarkablePluginConfigurationFieldID.username
+              ),
+              let languageRawValue = snapshot.string(
+                  RemarkablePluginConfigurationFieldID.ocrLanguage
+              ),
+              let language = RemarkableOCRLanguageMode(
+                  rawValue: languageRawValue
               ),
               let password = snapshot.string(
                   RemarkablePluginConfigurationFieldID.password
@@ -628,21 +658,29 @@ final class RemarkablePluginConfigurationStore: PluginConfigurationStoring {
             target.destination,
             forKey: RemarkableSSHTarget.defaultsKey
         )
+        defaults.set(
+            language.rawValue,
+            forKey: RemarkableOCRLanguageMode.defaultsKey
+        )
     }
 
     func delete(schema: PluginConfigurationSchema) throws {
         try credentialStore.delete()
         defaults.removeObject(forKey: RemarkableSSHTarget.defaultsKey)
+        defaults.removeObject(forKey: RemarkableOCRLanguageMode.defaultsKey)
     }
 
     private static func snapshot(
-        from configuration: RemarkableSSHConfiguration
+        from configuration: RemarkableSSHConfiguration,
+        language: RemarkableOCRLanguageMode
     ) -> PluginConfigurationSnapshot {
         PluginConfigurationSnapshot(values: [
             RemarkablePluginConfigurationFieldID.host:
                 .string(configuration.host),
             RemarkablePluginConfigurationFieldID.username:
                 .string(configuration.username),
+            RemarkablePluginConfigurationFieldID.ocrLanguage:
+                .string(language.rawValue),
             RemarkablePluginConfigurationFieldID.password:
                 .string(configuration.password),
         ])
