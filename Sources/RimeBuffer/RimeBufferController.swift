@@ -319,6 +319,9 @@ final class RimeBufferController: IMKInputController {
     private var lastStreamAlternativeArrowKeyHandledAt: CFAbsoluteTime = 0
     private var lastStreamAlternativeArrowDirection = 0
     private var streamAlternativeNavigationKeysDown = Set<UInt16>()
+    private var lastDerivedResultArrowKeyHandledAt: CFAbsoluteTime = 0
+    private var lastDerivedResultArrowDirection = 0
+    private var derivedResultNavigationKeysDown = Set<UInt16>()
     private var bufferClipboardShortcutKeysDown = Set<UInt16>()
     private var lastBufferClipboardShortcutHandledAt: CFAbsoluteTime = 0
     private var lastBufferClipboardShortcutHandled: BufferClipboardShortcut?
@@ -1361,6 +1364,17 @@ final class RimeBufferController: IMKInputController {
                     IMELog.write("stream alternative arrow consumed after stale event")
                     return true
                 }
+                if streamAlternativeDirection(
+                    keycode: keysym(for: event),
+                    mask: RimeKey.modifierMask(from: event.modifierFlags)
+                ) != nil,
+                   let controls = DerivedBufferWorkspaceRouter
+                    .selectedWorkspace as? any DerivedResultSelectionControls,
+                   controls.ownsResultNavigation {
+                    derivedResultNavigationKeysDown.remove(event.keyCode)
+                    IMELog.write("derived result arrow consumed after stale event")
+                    return true
+                }
                 switch streamInputDisposition(
                     keycode: keysym(for: event),
                     mask: RimeKey.modifierMask(from: event.modifierFlags),
@@ -1492,6 +1506,19 @@ final class RimeBufferController: IMKInputController {
             if streamInputLease(client: client) == nil {
                 StreamInputWorkspace.shared.authorityRejected()
             }
+            return true
+        }
+        if derivedResultNavigationKeysDown.remove(event.keyCode) != nil {
+            return true
+        }
+        if streamAlternativeDirection(
+            keycode: keycode,
+            mask: RimeKey.modifierMask(from: event.modifierFlags)
+        ) != nil,
+           let controls = DerivedBufferWorkspaceRouter
+            .selectedWorkspace as? any DerivedResultSelectionControls,
+           controls.ownsResultNavigation,
+           bufferControlDisposition(client: client) != .passThrough {
             return true
         }
         if streamAlternativeDirection(
@@ -1776,6 +1803,17 @@ final class RimeBufferController: IMKInputController {
                                     client: client,
                                     source: "shift fallback",
                                     expectedLease: eventLease)
+        }
+        // Result navigation is owned by the visible derived workspace, not by
+        // librime. Keep it available during an engine outage; the helper still
+        // requires exact focus, a settled composition, and no Rime candidates.
+        if handleDerivedResultVerticalArrow(
+            routedKeycode ?? 0,
+            mask: routedMask,
+            event: event,
+            client: client
+        ) {
+            return true
         }
         // Engine down → raw fallback so the user can still type latin.
         guard rimeEngine.start(), ensureSessionReady() else {
@@ -2085,6 +2123,42 @@ final class RimeBufferController: IMKInputController {
         return true
     }
 
+    private func handleDerivedResultVerticalArrow(
+        _ keycode: Int32,
+        mask: Int32,
+        event: NSEvent,
+        client: IMKTextInput
+    ) -> Bool {
+        guard let direction = streamAlternativeDirection(
+                keycode: keycode,
+                mask: mask
+              ),
+              let controls = DerivedBufferWorkspaceRouter
+                .selectedWorkspace as? any DerivedResultSelectionControls,
+              controls.ownsResultNavigation,
+              !candidateWindow.hasCandidates,
+              bufferCompositionIsSettledForSourceEditing() else {
+            return false
+        }
+        // Candidate navigation has already had first refusal. Once the query
+        // composition is settled, plain vertical arrows belong to the visible
+        // My Prompt result list and must not move the host application's caret.
+        guard shouldUseBufferCommands(client: client) else {
+            IMELog.write("derived result arrow consumed without exact focus")
+            return true
+        }
+        guard controls.moveResultSelection(delta: direction),
+              shouldUseBufferCommands(client: client) else {
+            IMELog.write("derived result arrow consumed after authority changed")
+            return true
+        }
+        derivedResultNavigationKeysDown.insert(event.keyCode)
+        lastDerivedResultArrowKeyHandledAt = CFAbsoluteTimeGetCurrent()
+        lastDerivedResultArrowDirection = direction
+        updateUI(client: client)
+        return true
+    }
+
     override func didCommand(by selector: Selector!, client sender: Any!) -> Bool {
         guard let selector else { return false }
         let newlineCommand = isInsertNewlineSelector(selector)
@@ -2173,6 +2247,35 @@ final class RimeBufferController: IMKInputController {
                     return true
                 }
                 updateUI(client: client)
+            }
+            return true
+        }
+        if let direction = verticalMoveDirection(for: selector),
+           let controls = DerivedBufferWorkspaceRouter
+            .selectedWorkspace as? any DerivedResultSelectionControls,
+           controls.ownsResultNavigation,
+           !candidateWindow.hasCandidates,
+           bufferCompositionIsSettledForSourceEditing() {
+            guard !explicitClientMismatch,
+                  shouldUseBufferCommands(client: callbackClient) else {
+                IMELog.write("derived result arrow command consumed without authority")
+                return true
+            }
+            let duplicateKeyEvent = !derivedResultNavigationKeysDown.isEmpty
+                || (CFAbsoluteTimeGetCurrent()
+                    - lastDerivedResultArrowKeyHandledAt
+                        < Self.duplicateArrowCommandWindow
+                    && lastDerivedResultArrowDirection == direction)
+            if !duplicateKeyEvent {
+                guard controls.moveResultSelection(delta: direction),
+                      shouldUseBufferCommands(client: callbackClient) else {
+                    return true
+                }
+                if let client = callbackClient {
+                    updateUI(client: client)
+                } else {
+                    BufferWindowController.shared.refresh()
+                }
             }
             return true
         }
@@ -2380,6 +2483,7 @@ final class RimeBufferController: IMKInputController {
     private func exitBufferMode(client: IMKTextInput?, source: String) -> Bool {
         resolveComposition(client: client, owner: focusToken)
         ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
+        DerivedBufferWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
         BuiltInBufferActionWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
         BufferModel.shared.pauseCapturePreservingContent()
         BufferWindowController.shared.hideWithoutPausing()
@@ -2410,6 +2514,7 @@ final class RimeBufferController: IMKInputController {
         }
         resetCandidateOptionGesture()
         streamAlternativeNavigationKeysDown.removeAll()
+        derivedResultNavigationKeysDown.removeAll()
         bufferClipboardShortcutKeysDown.removeAll()
     }
 

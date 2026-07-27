@@ -9,7 +9,7 @@
 
 ## 0. 一句话
 
-RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并在其上叠加了一个**独立、常驻、上屏前的文本工作台**：中文 commit、ASCII/英文/标点、已接受的外部文字与用户主动请求的插件结果都先进入缓冲，再由用户逐块或长按全部投递到实时校验的输入框。AI、翻译、意识流和 Action/Marine 的上游逻辑块统一在工作台边界细分，英文按完整单词或短词组、中文按句/分句与有界长度组织。意识流在串击与双拼模式下把焦点绑定的物理 `a-z` 当作连续全拼；飞耀并击/互击都使用当前有效 `my_combo` 映射物理批次，并分别保留同批结算与相邻左/右半区跨批重组语义。完整音节自动加入 soft ASCII syllable Space，尚未配对的单侧拼音片段只映射、不切割。它不修改或持久化用户输入方案。用户物理 Space 才是立即请求、以 `·` 可视化并参与短句强分块的 hard boundary；自动 Space 显示为普通空格，只参与全拼音节提示。普通 AI 只在 Return 或主按钮明确请求时运行；意识流按停顿自动猜测最多三个互斥版本，多候选逐行显示并由 ↑/↓ 选择，Return/纸飞机先原子确认当前版本再逐块发送，长按 Return 才发送全部，任何结果都不能自动上屏。`Command+Shift+B` 可全局开关工作台；secure input、失效焦点与工作台自有输入框始终隔离。
+RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并在其上叠加了一个**独立、常驻、上屏前的文本工作台**：中文 commit、ASCII/英文/标点、已接受的外部文字与用户主动请求的插件结果都先进入缓冲，再由用户逐块或长按全部投递到实时校验的输入框。AI、翻译、My Prompt、意识流和 Action/Marine 的上游逻辑块统一经过同一投递边界；My Prompt 把上轨作为查询，从本地 SQLite 索引显示最多三个互斥提示词结果，查询本身永不投递。意识流在串击与双拼模式下把焦点绑定的物理 `a-z` 当作连续全拼；飞耀并击/互击都使用当前有效 `my_combo` 映射物理批次，并分别保留同批结算与相邻左/右半区跨批重组语义。完整音节自动加入 soft ASCII syllable Space，尚未配对的单侧拼音片段只映射、不切割。它不修改或持久化用户输入方案。用户物理 Space 才是立即请求、以 `·` 可视化并参与短句强分块的 hard boundary；自动 Space 显示为普通空格，只参与全拼音节提示。普通 AI 只在 Return 或主按钮明确请求时运行；My Prompt 本地实时检索，意识流按停顿自动猜测最多三个互斥版本；二者的多结果逐行显示并由 ↑/↓ 选择，Return/纸飞机先原子确认当前版本再发送，任何结果都不能自动上屏。`Command+Shift+B` 可全局开关工作台；secure input、失效焦点与工作台自有输入框始终隔离。
 
 ---
 
@@ -41,6 +41,7 @@ RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并�
                           │                                  └─无安全目标→剪贴板累积    │
                           │                                                           │
  实时翻译（Apple 本地/当前 AI）▶ TranslationWorkspace ─▶ 独立译文缓冲     │
+ My Prompt 查询 ───────▶ MyPromptWorkspace ─▶ SQLite FTS ─▶ 1–3 个提示词结果 │
  reMarkable（SSH 定位 + USB Web PDF）▶ PDFKit 目标 300dpi 有界渲染 ─▶ Vision 本地 OCR ─▶ BufferModel │
  唯一「AI 生成」插件────▶ AITextPluginWorkspace ──────▶ 独立生成缓冲     │
  Marine prepare prompt ─▶ ActionPluginHost ─┐                              │
@@ -64,7 +65,7 @@ RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并�
 | **来源层** Sources | 把外部文字收进来，门控后产出待决条目 | InboundBus, LocalGateway, 各 Provider |
 | **缓冲层** Buffer | 所有文本的暂存枢纽；块携带来源 | BufferModel, Origin |
 | **动作插件层** Action Plugins | 用户明确调用 Marine 等外部动作；冻结上下文，必要时接收 prepared prompt，再把 Rime 本地连接器结果安全地路由回缓冲/收件箱 | ActionPluginHost, manifest, loopback HTTP |
-| **加工层** Transforms | 「实时翻译」、唯一「AI 生成」与意识流输入使用独立 source/target 双缓冲；翻译默认 Apple 本地且可选当前 AI，普通 AI 三模型源共享切换，意识流使用自己的渠道与节流配置并给出 1–3 个完整猜测 | AppleTranslationWorkspace, AITextPluginWorkspace, StreamInputWorkspace, AITextConnectorRegistry |
+| **加工层** Transforms | 「实时翻译」、唯一「AI 生成」、My Prompt 与意识流输入使用独立 source/target 双缓冲；My Prompt 从本地 SQLite 返回 1–3 条提示词，翻译默认 Apple 本地且可选当前 AI，普通 AI 三模型源共享切换，意识流使用自己的渠道与节流配置并给出 1–3 个完整猜测 | AppleTranslationWorkspace, AITextPluginWorkspace, MyPromptWorkspace, MyPromptStore, StreamInputWorkspace, AITextConnectorRegistry |
 | **投递层** Delivery | 把确认后的块送到目标；防过期焦点、防回环、防误投 | InputFocusCoordinator, BufferDeliveryCoordinator, Delivery（唯一插入咽喉） |
 
 下面是底座：**输入核心**（Rime 引擎 + IMKit 事件 + 候选窗），它既独立工作（普通打字），又是缓冲层的一个来源（Rime commit）。
@@ -105,7 +106,7 @@ RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并�
 5. **手动投递不等于目标已确认收到**：当前产品在 `Delivery.insert` 成功返回后立即消费 live block，不保留明文发送历史；失败的块和后续尚未发送的块原位保留。
 6. **配对设备是来源侧唯一直通例外**：收到的文字沿既有实时传字路径直接上屏，不进入缓冲工作台。
 7. **缓冲按键与宿主隔离**：缓冲模式下普通/Shift+Return 与 Backspace 总是被输入法消费。有未决 Rime/并击组字或尚未 ready 的意识流 raw 时，本次 Return 只收束/强制生成并抑制同一物理按键余下事件；意识流 final 已 ready 时，keyDown 先确认所选候选并淘汰其余项，同一次按键继续进入轻按/长按投递。其他没有未决组字的内容也在 Return keyDown 中定点重建不可见 marked-text guard。普通/ready 内容仍是轻按发送下一块、按住约 1.2 秒发送全部；AI request 状态则在 keyDown 就吞下整次物理按键并请求生成，running/disabled 只吞键，不进入长按计时。`didCommand` 与 repeat 只有消费权。Backspace 只在精确焦点下编辑 Rime/并击状态或删除缓冲块。焦点不可信时始终吞键且不投递；宿主绝不会收到换行或删除。
-8. **派生 source/target 按生成快照交易**：翻译与普通 AI 只有已完成且仍匹配 source text/block ids/generation 的 target blocks 可投递；目标块未全部送完时源块原样保留，最后一个目标块成功消费后才一次性消费对应源块。意识流的 1–3 个 target rows 是互斥备选而非待发送队列；`prepareForDelivery()` 在冻结投递 generation 之前原子确认所选项并立即淘汰其余候选，不等待首次 `Delivery.insert`。raw 与所选结果在部分投递期间保留，只在最后一个所选 block 成功后清除；首块成功后主动输入新字母/Space 则显式丢弃未发尾部并开始新 raw。
+8. **派生 source/target 按生成快照交易**：翻译、普通 AI 与 My Prompt 只有已完成且仍匹配 source text/block ids/generation 的 target blocks 可投递；目标未成功送完时源块原样保留，最后一个目标成功消费后才一次性消费对应源块。My Prompt 与意识流的 1–3 个 target rows 是互斥备选而非待发送队列；`prepareForDelivery()` 在冻结投递 generation 之前原子确认所选项并立即淘汰其余候选，不等待首次 `Delivery.insert`。My Prompt 的查询永不进入 delivery blocks；意识流 raw 与所选结果在部分投递期间保留，只在最后一个所选 block 成功后清除。
 9. **插件和连接器是两条独立选择轴**：`.bufferAction` owner 只决定当前工作台动作；Codex CLI、Claude Code CLI 与 OpenAI 兼容 API 只决定谁执行 AI。切 Marine/「AI 生成」不会暗中切换模型源，切模型源也不会改写插件 owner。
 10. **意识流 raw 不是输入法 preedit**：只有缓冲开启 + 唯一 owner + 非 secure + 精确外部焦点同时成立时，意识流按键才在 Rime 前进入 `StreamInputWorkspace`。串击与双拼沿用物理 `a-z` 的逐字连续全拼；完整配置为 `.chord` 或 `.mutual` 时，workspace 按 `ChordSettings.duration` 聚合物理批次，并用有效部署的 `my_combo` 映射为全拼。并击只映射当前批；互击可在至少一侧为多键、schema/focus/raw/soft-offset 快照完全一致时，把紧邻的左侧声母批与右侧韵母批回滚重组。它只读取配置做路由，不切换、修改或持久化配置。左右半区共同构成且映射成功的完整音节追加一个 sidecar 标记的 soft ASCII syllable Space；`dv→n`、`km→ong` 等尚未配对的单侧映射只写入可继续补全的拼音片段，不追加 Space。单键字母保持原码且不追加，两个单键批不重组，单独 `,`/`.` 只消费，无映射多键批保留确定性字母原码且不追加。soft Space 显示普通空格、参与音节提示，但不立即请求、不增加短句最小分块数；物理 Space 是显示 `·` 并立即请求的 hard phrase boundary，紧跟 soft Space 时原位提升而不重复写入。第一枚待结算键立即撤销旧结果的投递权；非和弦边界、焦点、secure input、owner 或配置变化都会清除互击配对并作废定时器与批次。raw 与边界 sidecar 不进入 BufferModel、Rime 候选、遥测正文或宿主。字母或已结算 FlyYao 批次只重置 220 ms debounce，800 ms burst 上限不重置；最多两路 make-before-break，跨 revision 的旧结果、partial 与 baseline 都不进入新 prompt，迟到回调按 job/generation 作废。唯一例外是同 revision 的一次补候选重试：只有此前严格校验通过的 terminal guesses 才能作为有界、JSON 编码且明确不可信的 `excludedGuesses`。每轮 prompt 冻结完整 raw、soft-space offsets 与最多三条 lossless 本地音节提示；提示只把 hard Space 写成 ` | `，soft Space 保留为音节边界，多于一种提示时 `minimumGuessCount=2`。不足时两个合法 final 按旧结果优先合并、去重并最多保留三条；重试仍重复或失败时只保留此前合法候选 ready，retry partial 永不可投递，首轮或没有合法 fallback 的畸形、空、超限 final 仍 fail-closed。partial 使用稳定候选槽位，final 精确覆盖且旧尾不能进入 ready/交付。输出是 1–3 个完整互斥猜测，每个候选独占目标行且在行内细分投递 block；只有 hard Space 子句数作为最小分块目标。投递前确认选择并删除其他候选，首块成功后继续输入会撤销未发尾部并建立全新 raw，已经发送的前缀不得复活。
 11. **Shift 只在独立轻点时切换中英**：controller 先保留物理 Shift 手势，不立即启动 Rime 的 standalone-Shift 状态；小于 500 ms、未与其他键/修饰键组合且 session/schema 未变化时，才在抬起阶段向 Rime 补发同侧 Shift press/release，保留 schema 原有切换语义。组合使用、长按、左右 Shift 重叠或失焦手势整对丢弃，因此后续输入维持原模式，也不会触发 `commit_code` 的组字副作用。
@@ -344,7 +345,7 @@ Delivery.insert(_ text, into: client)
 
 - `PluginRegistry` 是发现、命名空间、内置扩展生命周期和统一启停 facade；`PluginKey(domain, rawID)` 防止内置与外部包同名遮蔽。
 - **外部缓冲插件**仍完全沿用 Action Plugin v1：`ActionPluginHost + ActionPluginManager` 是执行、runtime binding、授权与撤权的唯一 authority。Registry 不重建 wire metadata，也不能让外部包贡献原生 AppKit 设置页，因此 Marine 兼容路径不变。
-- **内置扩展/缓冲插件**是随应用编译的可信模块。统计、打字测速和飞耀互击学习贡献动态设置页；实时翻译、Remarkable、唯一「AI 生成」与「意识流输入」贡献 `.bufferAction`，在唯一 owner 下与 Marine 等插件互斥运行且不出现为左侧动态扩展页。Remarkable 是普通缓冲的显式 importer，不建立 source/target 派生轨，也不会自动上屏。Codex CLI、Claude Code CLI 与 OpenAI 兼容 API 是 `AITextConnectorRegistry` 下的三个普通连接器，不再是三个插件；意识流用自己的 provider 字段选择其中一个，默认 OpenAI 兼容，不跟随共享 AI 单选。
+- **内置扩展/缓冲插件**是随应用编译的可信模块。统计、打字测速和飞耀互击学习贡献动态设置页；实时翻译、My Prompt、Remarkable、唯一「AI 生成」与「意识流输入」贡献 `.bufferAction`，在唯一 owner 下与 Marine 等插件互斥运行且不出现为左侧动态扩展页。My Prompt 是本地优先的派生检索 workspace；Remarkable 是普通缓冲的显式 importer，不建立 source/target 派生轨；二者都不会自动上屏。Codex CLI、Claude Code CLI 与 OpenAI 兼容 API 是 `AITextConnectorRegistry` 下的三个普通连接器，不再是三个插件；意识流用自己的 provider 字段选择其中一个，默认 OpenAI 兼容，不跟随共享 AI 单选。
 - `InputTelemetryBus` 是非消费型、脱敏的主线程观测通道：不携带正文、候选、IMK client、FocusToken、应用或焦点身份。secure input、RIMES 自身窗口和不可信/失焦目标不发事件；字符计数只在真正进入缓冲或 `Delivery.insert` 成功后发布。
 
 ### 5.4 其它 UI

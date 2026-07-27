@@ -117,6 +117,7 @@ jobs:
             translation-smoke
             ai-text-smoke
             stream-input-smoke
+            my-prompt-smoke
             remarkable-plugin-smoke
             settings-routing-smoke
             history-heatmap-smoke

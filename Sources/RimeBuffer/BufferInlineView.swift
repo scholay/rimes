@@ -40,6 +40,8 @@ enum TranslationRailRoleSymbolRules {
         case "答": return .init(name: "sparkles", accessibilityLabel: "AI 回答")
         case "拼": return .init(name: "keyboard", accessibilityLabel: "拼音输入")
         case "文": return .init(name: "text.bubble.fill", accessibilityLabel: "转换结果")
+        case "搜": return .init(name: "magnifyingglass", accessibilityLabel: "提示词查询")
+        case "词": return .init(name: "doc.text.magnifyingglass", accessibilityLabel: "提示词结果")
         default:
             return target
                 ? .init(name: "sparkles", accessibilityLabel: "处理结果")
@@ -55,6 +57,13 @@ enum TranslationRailRoleSymbolRules {
 private final class TranslationRailChipView: NSStackView {
     private let valueLabel = NSTextField(labelWithString: "")
     private let target: Bool
+    private var activationHandler: (() -> Void)?
+    private var pointerTrackingArea: NSTrackingArea?
+    private var pointerHovered = false
+    private var pointerPressed = false
+    private var renderedSelected = false
+    private var renderedStale = false
+    private var renderedScale: CGFloat = 2
     private(set) var renderedRetainedTailStart: Int?
 
     init(target: Bool) {
@@ -87,12 +96,82 @@ private final class TranslationRailChipView: NSStackView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if activationHandler != nil, bounds.contains(point) {
+            return self
+        }
+        return super.hitTest(point)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let activationHandler else {
+            super.mouseDown(with: event)
+            return
+        }
+        pointerPressed = true
+        applySurfaceAppearance()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.pointerPressed = false
+            self.applySurfaceAppearance()
+            activationHandler()
+        }
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        activationHandler != nil
+    }
+
+    override func updateTrackingAreas() {
+        if let pointerTrackingArea {
+            removeTrackingArea(pointerTrackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        pointerTrackingArea = area
+        super.updateTrackingAreas()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        guard activationHandler != nil else { return }
+        pointerHovered = true
+        applySurfaceAppearance()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        pointerHovered = false
+        pointerPressed = false
+        applySurfaceAppearance()
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        if activationHandler != nil {
+            addCursorRect(bounds, cursor: .pointingHand)
+        }
+    }
+
     func update(text: String,
                 ordinal: Int? = nil,
                 selected: Bool = false,
                 retainedTailStart: Int? = nil,
                 stale: Bool,
-                scale: CGFloat) {
+                scale: CGFloat,
+                activationHandler: (() -> Void)? = nil) {
+        self.activationHandler = activationHandler
+        renderedSelected = selected
+        renderedStale = stale
+        renderedScale = scale
+        if activationHandler == nil {
+            pointerHovered = false
+            pointerPressed = false
+        }
+        window?.invalidateCursorRects(for: self)
         renderedRetainedTailStart = nil
         let prefix: String
         if let ordinal {
@@ -129,21 +208,42 @@ private final class TranslationRailChipView: NSStackView {
         }
         valueLabel.attributedStringValue = attributed
         valueLabel.toolTip = text
-        toolTip = text
-        alphaValue = stale ? 0.70 : 1
+        toolTip = activationHandler == nil ? text : "\(text)\n点击选择"
+        applySurfaceAppearance()
+    }
+
+    private func applySurfaceAppearance() {
+        let selectable = activationHandler != nil && !renderedStale
+        alphaValue = renderedStale ? 0.70 : (pointerPressed ? 0.82 : 1)
         layer?.cornerRadius = BufferInlineMetrics.chipCornerRadius
+        let extraEmphasis: CGFloat
+        if selectable, pointerPressed {
+            extraEmphasis = 0.10
+        } else if selectable, pointerHovered {
+            extraEmphasis = 0.05
+        } else {
+            extraEmphasis = 0
+        }
         layer?.backgroundColor = (target
             ? RimeUI.accentBlue.withAlphaComponent(
-                selected
-                    ? (RimeUI.isNight ? 0.30 : 0.20)
-                    : (RimeUI.isNight ? 0.22 : 0.14)
+                renderedSelected
+                    ? (RimeUI.isNight ? 0.30 : 0.20) + extraEmphasis
+                    : (RimeUI.isNight ? 0.22 : 0.14) + extraEmphasis
             )
             : RimeUI.surface2).cgColor
-        layer?.borderColor = (selected ? RimeUI.accentBlue : RimeUI.border).cgColor
-        layer?.borderWidth = 1 / max(scale, 1)
+        layer?.borderColor = (renderedSelected || pointerHovered
+            ? RimeUI.accentBlue
+            : RimeUI.border).cgColor
+        layer?.borderWidth = 1 / max(renderedScale, 1)
     }
 
     func scrub() {
+        activationHandler = nil
+        pointerHovered = false
+        pointerPressed = false
+        renderedSelected = false
+        renderedStale = false
+        window?.invalidateCursorRects(for: self)
         renderedRetainedTailStart = nil
         valueLabel.stringValue = ""
         valueLabel.toolTip = nil
@@ -235,6 +335,8 @@ struct BufferTranslationRailLayoutProbe {
 /// Compact block rail used by the independent workbench window. It never holds
 /// an IMK client or action buttons; it only renders staged blocks.
 final class BufferInlineView: NSView {
+    var onDerivedTargetSelection: ((UUID) -> Void)?
+
     static let standardPreferredHeight: CGFloat = 34
     static let translationPreferredHeight: CGFloat = 68
     static let additionalTranslationTargetRowHeight: CGFloat = 31
@@ -791,6 +893,10 @@ final class BufferInlineView: NSView {
         } else {
             rowSnapshots = Array(snapshot.outputRows.prefix(3))
         }
+        let hasSelectableResults =
+            (DerivedBufferWorkspaceRouter.selectedWorkspace
+                as? any DerivedResultSelectionControls)?
+                .ownsResultNavigation == true
         let desiredRowKeys = rowSnapshots.map(\.key)
         let oldRowKeys = Set(renderedTranslationTargetRowKeys)
         for key in desiredRowKeys where translationTargetRails[key] == nil {
@@ -876,7 +982,10 @@ final class BufferInlineView: NSView {
                         selected: block.selected,
                         retainedTailStart: block.retainedTailStart,
                         stale: !targetIsCurrent,
-                        scale: window?.backingScaleFactor ?? 2
+                        scale: window?.backingScaleFactor ?? 2,
+                        activationHandler: hasSelectableResults ? { [weak self] in
+                            self?.onDerivedTargetSelection?(block.id)
+                        } : nil
                     )
                     targetViews.append(chip)
                 }

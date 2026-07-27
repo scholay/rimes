@@ -16,11 +16,14 @@ PROFILE_DIR="$TEST_STATE_ROOT/profile"
 IMPORT_DIR="$TEST_STATE_ROOT/import"
 EXPECTED_CONFIG="$TEST_STATE_ROOT/expected-openai-compatible.json"
 EXPECTED_PLUGIN_CONFIG="$TEST_STATE_ROOT/expected-remarkable-credentials.json"
+EXPECTED_PROMPT="$TEST_STATE_ROOT/expected-prompt.md"
+EXPECTED_PROMPT_INDEX="$TEST_STATE_ROOT/expected-prompt-index.sqlite"
 mkdir -p "$PROFILE_DIR/ai" "$PROFILE_DIR/plugins" "$PROFILE_DIR/stats" \
-         "$PROFILE_DIR/learning" "$PROFILE_DIR/build" \
+         "$PROFILE_DIR/learning" "$PROFILE_DIR/my-prompt/library" \
+         "$PROFILE_DIR/build" \
          "$PROFILE_DIR/plugin-config/builtin.remarkable" "$IMPORT_DIR/ai" \
          "$IMPORT_DIR/plugins" "$IMPORT_DIR/stats" "$IMPORT_DIR/learning" \
-         "$IMPORT_DIR/plugin-config/builtin.remarkable"
+         "$IMPORT_DIR/my-prompt" "$IMPORT_DIR/plugin-config/builtin.remarkable"
 
 # This is an inert fixture, never a credential read from the developer's
 # profile. Keeping it outside PROFILE_DIR gives cmp an independent reference.
@@ -40,6 +43,10 @@ chmod 0700 "$PROFILE_DIR/plugin-config" \
 chmod 0600 \
     "$PROFILE_DIR/plugin-config/builtin.remarkable/credentials.json"
 
+printf '%s\n' '# Research prompt' '' 'Summarize this paper.' > "$EXPECTED_PROMPT"
+printf '%s\n' 'SQLite format 3 prompt-index-fixture' > "$EXPECTED_PROMPT_INDEX"
+cp "$EXPECTED_PROMPT" "$PROFILE_DIR/my-prompt/library/research.md"
+cp "$EXPECTED_PROMPT_INDEX" "$PROFILE_DIR/my-prompt/prompts.sqlite"
 printf '%s\n' 'installed-plugin' > "$PROFILE_DIR/plugins/marker"
 printf '%s\n' 'stats-state' > "$PROFILE_DIR/stats/marker"
 printf '%s\n' 'learning-state' > "$PROFILE_DIR/learning/marker"
@@ -59,6 +66,11 @@ printf '%s\n' '{"password":"must-not-replace"}' \
     > "$IMPORT_DIR/plugin-config/builtin.remarkable/credentials.json"
 printf '%s\n' 'must-not-replace-stats' > "$IMPORT_DIR/stats/marker"
 printf '%s\n' 'must-not-replace-learning' > "$IMPORT_DIR/learning/marker"
+mkdir -p "$IMPORT_DIR/my-prompt/library"
+printf '%s\n' 'must-not-replace-prompt' \
+    > "$IMPORT_DIR/my-prompt/library/research.md"
+printf '%s\n' 'must-not-replace-prompt-index' \
+    > "$IMPORT_DIR/my-prompt/prompts.sqlite"
 printf '%s\n' 'must-not-replace-gateway' > "$IMPORT_DIR/gateway-token"
 printf '%s\n' 'must-not-replace-identity' > "$IMPORT_DIR/remote_identity.key"
 printf '%s\n' 'new-schema' > "$IMPORT_DIR/default.yaml"
@@ -94,6 +106,8 @@ test "$(mode_of "$PROFILE_DIR/plugin-config/builtin.remarkable")" = \
 test "$(cat "$PROFILE_DIR/plugins/marker")" = 'installed-plugin'
 test "$(cat "$PROFILE_DIR/stats/marker")" = 'stats-state'
 test "$(cat "$PROFILE_DIR/learning/marker")" = 'learning-state'
+cmp -s "$EXPECTED_PROMPT" "$PROFILE_DIR/my-prompt/library/research.md"
+cmp -s "$EXPECTED_PROMPT_INDEX" "$PROFILE_DIR/my-prompt/prompts.sqlite"
 test "$(cat "$PROFILE_DIR/gateway-token")" = 'gateway-state'
 test "$(cat "$PROFILE_DIR/remote_identity.key")" = 'identity-state'
 test "$(cat "$PROFILE_DIR/default.yaml")" = 'new-schema'
@@ -110,6 +124,8 @@ reset_rime_user_dir_preserving_product_state "$PROFILE_DIR"
 cmp -s "$EXPECTED_CONFIG" "$PROFILE_DIR/ai/openai-compatible.json"
 test "$(mode_of "$PROFILE_DIR/ai/openai-compatible.json")" = "$CONFIG_MODE_BEFORE"
 test "$(mode_of "$PROFILE_DIR/ai")" = "$AI_DIR_MODE_BEFORE"
+cmp -s "$EXPECTED_PROMPT" "$PROFILE_DIR/my-prompt/library/research.md"
+cmp -s "$EXPECTED_PROMPT_INDEX" "$PROFILE_DIR/my-prompt/prompts.sqlite"
 cmp -s "$EXPECTED_PLUGIN_CONFIG" \
     "$PROFILE_DIR/plugin-config/builtin.remarkable/credentials.json"
 test "$(

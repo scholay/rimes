@@ -10,6 +10,14 @@ enum StreamInputPluginConfigurationFieldID {
     static let maximumWaitSeconds = "maximumWaitSeconds"
 }
 
+enum MyPromptPluginConfigurationFieldID {
+    static let libraryDirectory = "libraryDirectory"
+    static let remoteRepositories = "remoteRepositories"
+    static let resultLimit = "resultLimit"
+    static let includeUserPrompt = "includeUserPrompt"
+    static let syncRemoteOnStart = "syncRemoteOnStart"
+}
+
 enum RealtimeTranslationProviderKind: String, CaseIterable {
     case appleLocal = "apple-local"
     case aiConnector = "ai-connector"
@@ -53,6 +61,14 @@ struct RealtimeTranslationPluginSettings: Equatable {
     let targetLanguageID: String
 }
 
+struct MyPromptPluginSettings: Equatable {
+    let libraryDirectoryURL: URL
+    let remoteRepositoryURLs: [URL]
+    let resultLimit: Int
+    let includeUserPrompt: Bool
+    let syncRemoteOnStart: Bool
+}
+
 /// Central declarations for user-configurable plugin behavior.
 ///
 /// Built-in plugins expose these models through PluginConfigurationProviding.
@@ -71,6 +87,8 @@ enum PluginConfigurationCatalog {
             return try makeStreamInputModel()
         case BuiltInPluginID.appleTranslation:
             return try makeRealtimeTranslationModel()
+        case BuiltInPluginID.myPrompt:
+            return try makeMyPromptModel()
         case marinePluginID:
             return try makeMarineModel()
         default:
@@ -237,6 +255,80 @@ enum PluginConfigurationCatalog {
         )
     }
 
+    static func makeMyPromptModel(
+        defaults: UserDefaults = .standard,
+        notificationCenter: NotificationCenter = .default
+    ) throws -> PluginConfigurationModel {
+        let schema = PluginConfigurationSchema(
+            pluginID: BuiltInPluginID.myPrompt,
+            title: "My Prompt",
+            summary: "本地 Markdown 建立 SQLite 全文索引；远程 HTTPS Git 仓库先同步到本机，实时查询不访问网络。",
+            fields: [
+                .text(
+                    id: MyPromptPluginConfigurationFieldID.libraryDirectory,
+                    title: "本地提示词目录",
+                    helpText: "支持 ~/ 开头或绝对路径。目录不存在时会自动创建；提示词正文不会写入日志。",
+                    placeholder: "~/Library/RimeBuffer/my-prompt/library",
+                    defaultValue: defaultMyPromptLibraryDirectory.path,
+                    maximumLength: 2_048,
+                    isRequired: true,
+                    validator: { value, _ in
+                        guard case let .string(path) = value,
+                              validMyPromptLibraryPath(path) else {
+                            return "请填写 ~/ 开头或绝对的本地目录"
+                        }
+                        return nil
+                    }
+                ),
+                .text(
+                    id: MyPromptPluginConfigurationFieldID.remoteRepositories,
+                    title: "远程 Git 仓库",
+                    helpText: "可留空；多个无凭据 HTTPS 仓库用逗号、分号或换行分隔，保存后立即同步。",
+                    placeholder: "https://github.com/danielmiessler/Fabric.git",
+                    defaultValue: "",
+                    maximumLength: 8_192,
+                    validator: { value, _ in
+                        guard case let .string(raw) = value else {
+                            return "远程仓库格式无效"
+                        }
+                        return myPromptRemoteRepositoryURLs(raw) == nil
+                            ? "只支持不含凭据的 HTTPS Git 仓库 URL"
+                            : nil
+                    }
+                ),
+                .number(
+                    id: MyPromptPluginConfigurationFieldID.resultLimit,
+                    title: "实时结果数",
+                    helpText: "缓冲工作台最多同时展示三条结果。",
+                    defaultValue: 3,
+                    minimum: 1,
+                    maximum: 3,
+                    step: 1
+                ),
+                .toggle(
+                    id: MyPromptPluginConfigurationFieldID.includeUserPrompt,
+                    title: "投递时附加 user.md",
+                    helpText: "默认只投递 system.md。开启后会在其后附加非空的 Fabric user.md 模板。",
+                    defaultValue: false
+                ),
+                .toggle(
+                    id: MyPromptPluginConfigurationFieldID.syncRemoteOnStart,
+                    title: "启动时同步远程仓库",
+                    helpText: "关闭后仍可在缓冲工作台点刷新手动同步；查询始终使用本地索引。",
+                    defaultValue: true
+                ),
+            ]
+        )
+        return try PluginConfigurationModel(
+            schema: schema,
+            store: PluginConfigurationUserDefaultsStore(
+                namespace: BuiltInPluginID.myPrompt,
+                defaults: defaults
+            ),
+            notificationCenter: notificationCenter
+        )
+    }
+
     static func makeMarineModel(
         defaults: UserDefaults = .standard,
         selectionStore: AITextConnectorSelectionStore = .shared,
@@ -340,6 +432,53 @@ enum PluginConfigurationCatalog {
         )
     }
 
+    static func myPromptSettings(
+        defaults: UserDefaults = .standard
+    ) -> MyPromptPluginSettings {
+        let fallback = MyPromptPluginSettings(
+            libraryDirectoryURL: defaultMyPromptLibraryDirectory,
+            remoteRepositoryURLs: [],
+            resultLimit: 3,
+            includeUserPrompt: false,
+            syncRemoteOnStart: true
+        )
+        guard let model = try? makeMyPromptModel(
+                defaults: defaults
+              ),
+              let snapshot = try? model.load(),
+              let rawPath = snapshot.string(
+                MyPromptPluginConfigurationFieldID.libraryDirectory
+              ),
+              validMyPromptLibraryPath(rawPath),
+              let repositories = myPromptRemoteRepositoryURLs(
+                snapshot.string(
+                    MyPromptPluginConfigurationFieldID.remoteRepositories
+                ) ?? ""
+              ) else {
+            return fallback
+        }
+        let expandedPath = NSString(string: rawPath).expandingTildeInPath
+        let resultLimit = Int(
+            snapshot.number(
+                MyPromptPluginConfigurationFieldID.resultLimit
+            ) ?? 3
+        )
+        return MyPromptPluginSettings(
+            libraryDirectoryURL: URL(
+                fileURLWithPath: expandedPath,
+                isDirectory: true
+            ).standardizedFileURL,
+            remoteRepositoryURLs: repositories,
+            resultLimit: min(max(resultLimit, 1), 3),
+            includeUserPrompt: snapshot.bool(
+                MyPromptPluginConfigurationFieldID.includeUserPrompt
+            ) ?? false,
+            syncRemoteOnStart: snapshot.bool(
+                MyPromptPluginConfigurationFieldID.syncRemoteOnStart
+            ) ?? true
+        )
+    }
+
     static func marineInvocationTimeout(
         defaults: UserDefaults = .standard
     ) -> TimeInterval {
@@ -361,6 +500,67 @@ enum PluginConfigurationCatalog {
                 title: $0.displayName
             )
         }
+
+    static var defaultMyPromptDataRoot: URL {
+        let environment = ProcessInfo.processInfo.environment
+        let root = environment["RIMEBUFFER_LOCAL_DATA_ROOT"]
+            ?? environment["RIMEBUFFER_USER_DIR"]
+        return (root.map {
+            URL(fileURLWithPath: $0, isDirectory: true)
+        } ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/RimeBuffer", isDirectory: true))
+            .appendingPathComponent("my-prompt", isDirectory: true)
+    }
+
+    private static var defaultMyPromptLibraryDirectory: URL {
+        defaultMyPromptDataRoot
+            .appendingPathComponent("library", isDirectory: true)
+    }
+
+    private static func validMyPromptLibraryPath(_ raw: String) -> Bool {
+        let path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty,
+              path.utf8.count <= 2_048,
+              !path.unicodeScalars.contains(where: {
+                  CharacterSet.controlCharacters.contains($0)
+              }) else {
+            return false
+        }
+        return path.hasPrefix("/") || path.hasPrefix("~/")
+    }
+
+    /// A nil return means at least one configured token was unsafe. An empty
+    /// list is valid and keeps the plugin fully local.
+    private static func myPromptRemoteRepositoryURLs(
+        _ raw: String
+    ) -> [URL]? {
+        let tokens = raw.components(
+            separatedBy: CharacterSet(charactersIn: ",;\n\r")
+        ).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty }
+        guard tokens.count <= 32 else { return nil }
+        var result: [URL] = []
+        for token in tokens {
+            guard token.utf8.count <= 2_048,
+                  let components = URLComponents(string: token),
+                  components.scheme?.lowercased() == "https",
+                  components.user == nil,
+                  components.password == nil,
+                  let host = components.host,
+                  !host.isEmpty,
+                  components.query == nil,
+                  components.fragment == nil,
+                  let url = components.url else {
+                return nil
+            }
+            let normalized = url.standardized
+            if !result.contains(normalized) {
+                result.append(normalized)
+            }
+        }
+        return result
+    }
 
     private static func translationLanguageChoices(
         defaults: UserDefaults

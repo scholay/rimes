@@ -66,6 +66,9 @@ if CommandLine.arguments.contains("ai-text-smoke") {
 if CommandLine.arguments.contains("stream-input-smoke") {
     exit(runStreamInputPluginSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("my-prompt-smoke") {
+    exit(runMyPromptPluginSmokeTest() ? 0 : 1)
+}
 if CommandLine.arguments.contains("remarkable-plugin-smoke") {
     exit(runRemarkablePluginSmokeTest() ? 0 : 1)
 }

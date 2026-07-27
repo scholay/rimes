@@ -4,6 +4,12 @@ import PackageDescription
 let package = Package(
     name: "RimeBuffer",
     platforms: [.macOS("13.0")],
+    dependencies: [
+        .package(
+            url: "https://github.com/groue/GRDB.swift.git",
+            exact: "7.11.1"
+        ),
+    ],
     targets: [
         .target(
             name: "CRimeBridge",
@@ -15,7 +21,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "RimeBuffer",
-            dependencies: ["CRimeBridge"],
+            dependencies: [
+                "CRimeBridge",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ],
             path: "Sources/RimeBuffer",
             linkerSettings: [
                 .linkedFramework("InputMethodKit"),

@@ -765,6 +765,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         super.init()
         controlsExpanded = expanded
         layoutMode = initialLayoutMode
+        bufferRail.onDerivedTargetSelection = { [weak self] blockID in
+            self?.selectDerivedTarget(blockID: blockID)
+        }
         buildWindow()
         restoreFrame()
         installObservers()
@@ -2082,6 +2085,27 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private var sessionProtectionActive: Bool {
         sessionInactive || screenLocked || sleeping
+    }
+
+    private func selectDerivedTarget(blockID: UUID) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard isVisible,
+              !lastSecureInputState,
+              !IsSecureEventInputEnabled(),
+              !sessionProtectionActive,
+              let lease = InputFocusCoordinator.shared.interactionTarget(),
+              lease.isExternalTarget,
+              let controls = DerivedBufferWorkspaceRouter
+                .selectedWorkspace as? any DerivedResultSelectionControls,
+              controls.ownsResultNavigation,
+              controls.selectResult(blockID: blockID),
+              InputFocusCoordinator.shared.interactionTarget(
+                expected: lease.token
+              ) === lease else {
+            return
+        }
+        refresh()
+        RimeBufferController.refreshActiveUI()
     }
 
     private func saveFrame() {

@@ -8,13 +8,13 @@
 
 ## 缓冲工作台
 
-开启缓冲模式后，提交内容进入独立工作台。普通模式折叠时是 44pt 高的单行细条，依次为拖拽图标、展开箭头、缓冲块轨和右侧发送；向上展开后总高 78pt，上层依次显示状态、缓冲插件选择器与当前插件动作、刷新/重置和关闭。翻译、AI 生成与意识流使用 source/target 派生布局：单个 target row 的折叠/展开高度为 78/112pt，意识流出现 2/3 个候选时高度增为 109/143pt 与 140/174pt；所有模式都只向上增高，底边与候选锚点保持不动。设置页可同时开启多个 `.bufferAction` 插件；工作台选择器只列出这些已开启插件，并以带图标的 `Default` 表示不使用插件。选择器切换时只替换唯一 owner，不改其他插件的启用状态。刷新/重置不清除缓冲正文：外部插件会取消过时任务并重新检测上下文，内置派生插件会保留源文并重启当前生成。插件可用 `presentationId` 把多个场景动作收敛成一个稳定呈现：例如 Marine 的直评与回复继续由当前 `status.actionId` 动态选择；当它是 owner 唯一的 presentation 且属于 prepared generation 时，会提升到主条右侧 AI 控件，展开层不再重复显示“生成评论/回复”按钮。没有有效评论框时 AI 控件保留但禁用；只要还有第二项动作，全部动作都保留在展开层，Return 不猜测。只有拖拽图标能移动窗口；缓冲启停、常显与移到当前屏幕仍由设置或输入法菜单管理，工作台本身不再提供缓冲开关或块编辑器。按 `Command+Shift+B` 可在任意应用中切换工作台：关闭时打开并恢复捕获，打开时收束组字、保留内容并关闭暂停。Rime 组字候选仍只由常规 `CandidateWindow` 呈现在缓冲条下方；意识流的互斥解释是工作台 target rows，不是 Rime 候选投影。
+开启缓冲模式后，提交内容进入独立工作台。普通模式折叠时是 44pt 高的单行细条，依次为拖拽图标、展开箭头、缓冲块轨和右侧发送；向上展开后总高 78pt，上层依次显示状态、缓冲插件选择器与当前插件动作、刷新/重置和关闭。翻译、AI 生成、My Prompt 与意识流使用 source/target 派生布局：单个 target row 的折叠/展开高度为 78/112pt，My Prompt 或意识流出现 2/3 个候选时高度增为 109/143pt 与 140/174pt；所有模式都只向上增高，底边与候选锚点保持不动。设置页可同时开启多个 `.bufferAction` 插件；工作台选择器只列出这些已开启插件，并以带图标的 `Default` 表示不使用插件。选择器切换时只替换唯一 owner，不改其他插件的启用状态。刷新/重置不清除缓冲正文：外部插件会取消过时任务并重新检测上下文，内置派生插件会保留源文并重启当前生成。插件可用 `presentationId` 把多个场景动作收敛成一个稳定呈现：例如 Marine 的直评与回复继续由当前 `status.actionId` 动态选择；当它是 owner 唯一的 presentation 且属于 prepared generation 时，会提升到主条右侧 AI 控件，展开层不再重复显示“生成评论/回复”按钮。没有有效评论框时 AI 控件保留但禁用；只要还有第二项动作，全部动作都保留在展开层，Return 不猜测。只有拖拽图标能移动窗口；缓冲启停、常显与移到当前屏幕仍由设置或输入法菜单管理，工作台本身不再提供缓冲开关或块编辑器。按 `Command+Shift+B` 可在任意应用中切换工作台：关闭时打开并恢复捕获，打开时收束组字、保留内容并关闭暂停。Rime 组字候选仍只由常规 `CandidateWindow` 呈现在缓冲条下方；My Prompt 与意识流的互斥结果是工作台 target rows，不是 Rime 候选投影。
 
 缓冲开启后，librime 在英文/ASCII 模式主动放行的可打印字母、数字、空格与普通标点也由工作台接住，不再流入宿主；逐键英文会合并为短词组 block，连续输入的尾块可逐字退格。Command/Control/Option/Fn 快捷键、工作台自己的输入框与 secure input 不进入这条捕获路径。中文 Rime commit、直接英文和插件结果因此都遵守同一个“先入缓冲、再显式投递”边界。
 
 缓冲模式下，普通或 Shift+Return 与 Backspace 都由输入法吞下，永不落到宿主文本框：若仍在组字/并击，本次 Return 只把它收束为缓冲块；没有未决组字时，Return keyDown 会先重建不可见的 IME guard，轻按抬起发送下一块，持续按住约 1.2 秒发送全部。Backspace 只在精确焦点下编辑 Rime 组字或删除缓冲块。引擎故障但没有未决组字时，已有块仍可安全发送；若未决组字无法收束，或焦点不可信，本次按键只吞下、不投递。主条右侧纸飞机每次只发送下一块。Return 手势只认 keyDown 时绑定且当前仍有效的外部文本框；纸飞机只认点击时的当前实时焦点。切换应用或文本框后不会使用旧目标。成功发送的块会立即从缓冲条消失且不保存发送历史；发送失败或尚未发送的块继续保留。关闭工作台会暂停捕获、结束未完成的加载状态，但保留已有块；可选的跨应用隐私清理不可撤销，只在真实外部应用 A→B 时触发。
 
-工作台对普通缓冲与所有插件统一接管精确的 `Control+A` / `Command+A` 和 `Control+V` / `Command+V`：前者全选当前可编辑 source，后者在块光标处插入，或替换已全选的 source。普通、翻译、AI 生成与 Action/Marine 都编辑 `BufferModel` 源块；意识流只全选/粘贴 raw 上轨，生成的候选行不可编辑。普通粘贴保留精确连接文本（包括纯空白），再用共享语义分块器生成 chips；非空纯文本上限为 1 MiB，含 NUL 或超限时整次不变更 source。仅有单一 Control 或 Command 修饰时才识别这两组快捷键；额外 Shift/Option、Control+Command 组合、本应用窗口或 secure input 均保留宿主原生语义。secure input 下 RIMES 不读取剪贴板；非精确外部焦点则 fail-closed 消费按键且同样不读取。每次粘贴都在读取前后重验同一 `FocusToken`，以防延迟 pasteboard provider 把文本放进已切换的字段。
+工作台对普通缓冲与所有插件统一接管精确的 `Control+A` / `Command+A` 和 `Control+V` / `Command+V`：前者全选当前可编辑 source，后者在块光标处插入，或替换已全选的 source。普通、翻译、AI 生成、My Prompt 与 Action/Marine 都编辑 `BufferModel` 源块；意识流只全选/粘贴 raw 上轨，生成的候选行不可编辑。普通粘贴保留精确连接文本（包括纯空白），再用共享语义分块器生成 chips；非空纯文本上限为 1 MiB，含 NUL 或超限时整次不变更 source。仅有单一 Control 或 Command 修饰时才识别这两组快捷键；额外 Shift/Option、Control+Command 组合、本应用窗口或 secure input 均保留宿主原生语义。secure input 下 RIMES 不读取剪贴板；非精确外部焦点则 fail-closed 消费按键且同样不读取。每次粘贴都在读取前后重验同一 `FocusToken`，以防延迟 pasteboard provider 把文本放进已切换的字段。
 
 窗口位置和显示偏好会保存；缓冲内容只在本次输入法进程内保留。工作台不提供手动遮蔽、发送历史、恢复或清空撤销。
 
@@ -25,6 +25,8 @@
 插件平台分为两类：外部缓冲插件与编译进应用的内置扩展。前者继续由 Action Plugin v1 宿主执行，可从本地目录、`manifest.json` 或 HTTPS 声明文件安装；安装、卸载和管理收进设置页顶部的独立弹窗。每个插件以小图标、说明和独立 Switch 呈现，多个缓冲插件可以同时开启，开启集合决定工作台选择器的内容。具有声明式配置的插件统一显示“设置…”按钮；字段、校验、普通偏好和敏感存储都遵循 [PLUGIN-CONFIGURATION.md](PLUGIN-CONFIGURATION.md)，不再为单个插件追加一次性设置界面。Marine 是首个使用 `preparePath` 的兼容插件：它只冻结页面上下文、整理话术提示词并维护自己的记录与界面信息，真正的模型授权和执行由 RIMES 当前选中的 AI 连接器完成；设置页可选择这个共享渠道，并把新请求的生成超时设为 60–600 秒，每次调用在启动时冻结自己的超时。后者可以贡献设置页和只读、脱敏的本地输入观测能力，但不能被外部包注入 AppKit 视图。两类插件使用带 domain 的身份隔离；仍匹配原上下文和焦点的外部结果进入缓冲区，失效或迟到结果进入收件箱待确认，两条路径都不会直接上屏。
 
 「实时翻译」是内置缓冲插件，与 Marine 等外部缓冲插件进入同一个列表、使用同一种带图标卡片和独立 Switch；它们可同时开启，但工作台仍只选择一个当前 owner。它默认使用 macOS 15+ 的 Apple 本地翻译，原文不离开本机；也可在插件设置中改为当前 AI 渠道，并配置源语言和目标语言。翻译工作台上方是合并为连续文本、不分 block 的原文缓冲，下方是独立且可分 block 的译文缓冲，两条轨道各自横向滚动。翻译态下，左侧拖拽与展开按钮直接对齐上方原文行，右侧发送按钮直接对齐下方目标语言行。输入停顿 300 ms 后发起刷新；持续输入时至多等待 900 ms 就启动一轮，翻译在途期间只排队最新快照，不反复取消。保存新配置会取消旧请求，并按未改动的源缓冲重新翻译；发送键只投递与当前原文和当前配置完全匹配的已完成译文，永不自动上屏。
+
+「My Prompt」是本地优先的提示词检索插件。工作台上轨直接使用当前 `BufferModel` 作为查询输入，下轨在约 60 ms 停顿后显示最多三条“标题 · 摘要”；常规 Rime 候选优先，查询完成后可用 ↑/↓ 或首击目标行切换结果，数字仍属于查询文本。它以 Fabric 的 `patterns/<name>/system.md`（可选 `user.md` 与描述/标签 JSON）为主格式，同时递归导入 Obsidian/front matter 笔记，以及“二/三级标题 + fenced code”合集 Markdown；仓库根 `README.md` 中的每个 fenced prompt 也会独立入库，不会合并投递。本地与远程来源都会先写入私有 SQLite FTS 索引；中文查询额外建立分词、CJK unigram/bigram 和标题/标签的音节边界拼音与首字母索引。远程来源只接受不含凭据的 HTTPS Git URL，在启动、远程配置变更或手动刷新时同步到 `~/Library/RimeBuffer/my-prompt`，每次实时查询都离线执行。设置页可改本地目录、远程仓库、结果数，以及是否附加 `user.md`；默认只投递 `system.md`。Return/纸飞机只发送当前选中的完整提示词，查询本身永不发送，且只有提示词成功插入后才消费查询。库、索引和远程 checkout 在开发重播种、安装与更新时保留；正文和查询不写日志。
 
 「Remarkable」是一个显式、只读的内置缓冲动作，不依赖设备的官方 “Convert to text”。使用前须在 reMarkable 的存储设置中开启 USB Web interface、用 USB 连接 Mac，并让待识别页保持为当前页；用户点击“识别当前页”后，RIMES 才通过系统 `/usr/bin/ssh` 和固定只读命令定位最近打开文档及当前页，连续读取两次当前 `.rm` 并要求字节完全一致。随后它以固定的初始 USB Web URL `http://10.11.99.1/download/<文档 UUID>/pdf` 导出整本文档 PDF；导出完成后会立即复验文档、页序、当前页身份和 `.rm` 快照，任一变化都拒绝结果。通过复验的 PDF 才会在内存中由 PDFKit 以 300 dpi 为目标渲染当前页（最长边不超过 4096 px、总像素不超过 1200 万），再交给 Apple Vision 在 Mac 本地 OCR。PDF 拉取显式禁用代理，初始 URL 不从插件配置扩展；PDF、位图和识别正文只存在于进程内存，不写临时文件或正文日志，也不会上传到官方或其他云端、停止 Xochitl、修改设备文件或自动上屏。识别成功的文字以 `.ssh` 来源加入普通缓冲区，仍需用户用纸飞机或 Return 明确投递。
 
@@ -57,6 +59,7 @@ Codex/Claude 连接器在本机直接启动 CLI，使用各自的 CLI 授权状�
 .build/release/RimeBuffer buffer-window-smoke # 焦点/生命周期门控与多屏恢复自检
 .build/release/RimeBuffer ai-text-smoke # 单插件/三连接器、prepared prompt 与双轨投递自检
 .build/release/RimeBuffer stream-input-smoke # 意识流按键门、全量重算、连续渲染、OpenAI 路由与 1–3 猜测自检
+.build/release/RimeBuffer my-prompt-smoke # Fabric/Obsidian 导入、中文本地检索与安全投递自检
 .build/release/RimeBuffer plugin-configuration-smoke # 声明式配置、迁移、私有存储与脱敏边界自检
 .build/release/RimeBuffer remarkable-plugin-smoke # Remarkable PDF/本地 OCR、SSH 状态机与凭据边界自检
 tail -f ~/rimebuffer.log          # 行为日志

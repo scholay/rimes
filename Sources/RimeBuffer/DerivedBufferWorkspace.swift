@@ -36,6 +36,16 @@ protocol DerivedLanguagePairControls: AnyObject {
     @discardableResult func swapLanguages() -> Bool
 }
 
+/// A derived workspace may expose a small mutually-exclusive result set. The
+/// workbench keeps navigation generic: query ownership and delivery authority
+/// remain inside the concrete workspace, while the renderer/controller only
+/// forwards a stable block identity or a vertical delta.
+protocol DerivedResultSelectionControls: AnyObject {
+    var ownsResultNavigation: Bool { get }
+    @discardableResult func moveResultSelection(delta: Int) -> Bool
+    @discardableResult func selectResult(blockID: UUID) -> Bool
+}
+
 /// The right-side workbench control has one shared state machine whether the
 /// generator is a trusted two-rail workspace or an external prepared Action
 /// Plugin. Keeping this contract outside `DerivedBufferWorkspace` prevents
@@ -135,6 +145,7 @@ enum DerivedBufferWorkspaceRouter {
             AppleTranslationWorkspace.shared,
             AITextPluginRuntimeRegistry.shared.workspace,
             StreamInputWorkspace.shared,
+            MyPromptWorkspace.shared,
         ]
     }
 

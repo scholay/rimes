@@ -6,6 +6,7 @@ enum BuiltInPluginID {
     static let typingSpeed = "builtin.typing-speed"
     static let flyChordLearning = "builtin.fly-chord-learning"
     static let appleTranslation = "builtin.apple-translation"
+    static let myPrompt = "builtin.my-prompt"
     static let remarkable = "builtin.remarkable"
     static let streamInput = "builtin.stream-input"
     static let aiText = AITextBuiltInPluginID.aiText
@@ -22,6 +23,7 @@ enum BuiltInPlugins {
             TypingSpeedInternalPlugin(),
             FlyChordLearningInternalPlugin(),
             AppleTranslationInternalPlugin(),
+            MyPromptInternalPlugin(),
             RemarkableInternalPlugin(),
             StreamInputInternalPlugin(),
             AITextInternalPlugin(),
@@ -299,6 +301,39 @@ private final class RemarkableInternalPlugin:
             schema: schema,
             store: RemarkablePluginConfigurationStore()
         )
+    }
+}
+
+private final class MyPromptInternalPlugin:
+    InternalPlugin, PluginConfigurationProviding {
+    let descriptor = PluginDescriptor(
+        key: MyPromptWorkspace.pluginKey,
+        wireID: nil,
+        name: "My Prompt",
+        symbolName: "doc.text.magnifyingglass",
+        version: "1.0",
+        summary: "从本地 Markdown、Obsidian 或 Fabric 风格提示词库实时检索；远程 Git 仓库先同步到本地索引。",
+        source: .builtIn,
+        capabilities: [.bufferAction, .localStorage],
+        settings: nil,
+        canUninstall: false
+    )
+
+    func start() {
+        MyPromptWorkspace.shared.start()
+    }
+
+    func stop() {
+        MyPromptWorkspace.shared.stop()
+    }
+
+    func makeSettingsViewController(subpageID: String) -> NSViewController? {
+        nil
+    }
+
+    func makePluginConfigurationModel() throws
+        -> PluginConfigurationModel {
+        try PluginConfigurationCatalog.makeMyPromptModel()
     }
 }
 

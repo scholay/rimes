@@ -59,6 +59,7 @@ reset_rime_user_dir_preserving_product_state() {
         ! -name ai \
         ! -name stats \
         ! -name learning \
+        ! -name my-prompt \
         ! -name gateway-token \
         ! -name remote_identity.key \
         -exec rm -rf -- {} +
@@ -111,6 +112,7 @@ import_rime_user_dir_preserving_product_state() {
         --exclude ai
         --exclude stats
         --exclude learning
+        --exclude my-prompt
         --exclude gateway-token
         --exclude remote_identity.key
     )

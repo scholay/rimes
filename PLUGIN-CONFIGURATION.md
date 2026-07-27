@@ -32,6 +32,15 @@ Plugin 提供的可信配置。插件设置必须通过
   复用通用表单，不能再生成第二份密钥副本。
 - 密码、token、API key 不得进入 UserDefaults、argv、URL、通知、
   `description`、日志、崩溃诊断或测试输出。
+- 配置值与插件管理的显式产品数据分开：My Prompt 的普通偏好仍进
+  UserDefaults，用户导入的 Markdown、远程 checkout 与 SQLite 索引放在
+  `~/Library/RimeBuffer/my-prompt`（测试优先
+  `RIMEBUFFER_LOCAL_DATA_ROOT` / `RIMEBUFFER_USER_DIR`）。开发重播种、
+  pkg 与应用内更新必须保留该目录；查询词和提示词正文不得进入日志。
+- 远程仓库字段只接受不含 user/password/query/fragment 的 HTTPS URL；
+  Git 同步使用固定 argv、清除继承的 `GIT_*`/`SSH_*` 环境、关闭交互和
+  `file`/`ext` protocol，不能把
+  token 塞进 URL 来绕过安全存储。
 - 保存必须先验证、写入同目录临时文件、`fsync`、设为 `0600`，再原子
   `rename`；读取拒绝符号链接、非普通文件、非当前用户所有者、错误权限
   与超限文档。
@@ -47,6 +56,9 @@ Plugin 提供的可信配置。插件设置必须通过
   模型请求不因设置窗口再次保存而半途变更。
 - 配置变化可以取消尚未获得结果的旧 generation，但迟到回调仍必须通过
   原有 generation、焦点与 owner 校验，不能恢复投递权。
+- My Prompt 只在本地目录或远程仓库变化时重建来源索引；结果数只触发
+  本地重查，`user.md` 开关只撤销旧投递快照，启动同步开关不触发实时
+  工作。保存新的远程仓库列表会执行一次显式同步。
 - 默认值必须保持升级前的行为，除非产品明确要求迁移。损坏或不安全的
   敏感配置必须 fail closed，并给出不含敏感值的状态。
 - 连接器与缓冲插件 owner 是两个维度。选择 AI 渠道不能暗中切换当前
