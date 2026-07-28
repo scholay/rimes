@@ -33,6 +33,7 @@ enum AITextClaudeAuthentication {
             currentDirectoryURL: FileManager.default.temporaryDirectory,
             environment: AITextCLIExecutableLocator.sanitizedEnvironment(
                 for: .claudeCodeCLI,
+                executableURL: executableURL,
                 from: environment
             ),
             timeout: 2,
@@ -179,7 +180,9 @@ final class AITextClaudeLoginOperation: AITextCancellable {
               let verified = AITextVerifiedCLIExecutable.capture(before.url),
               verified == before else {
             finish(
-                .failure(.unavailable("Claude Code CLI 版本尚未通过安全兼容性验证")),
+                .failure(.unavailable(
+                    "Claude Code CLI 未提供授权所需的安全参数与流式能力"
+                )),
                 terminateProcess: false
             )
             return
@@ -210,6 +213,7 @@ final class AITextClaudeLoginOperation: AITextCancellable {
         child.currentDirectoryURL = workspaceURL
         var processEnvironment = AITextCLIExecutableLocator.sanitizedEnvironment(
             for: .claudeCodeCLI,
+            executableURL: executableURL,
             from: environment
         )
         processEnvironment["TMPDIR"] = workspaceURL.path

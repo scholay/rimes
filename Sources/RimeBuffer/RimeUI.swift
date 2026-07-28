@@ -40,7 +40,7 @@ struct RimeThemePalette {
     let textPrimary: UInt32
     let textSecondary: UInt32
     let textMuted: UInt32
-    let selectedCandidate: UInt32
+    let selectedCandidateBackground: UInt32
     let candidateBackground: UInt32
 }
 
@@ -59,7 +59,7 @@ enum RimeThemePalettes {
         textPrimary: 0xF3F5F8,
         textSecondary: 0x9AA2AE,
         textMuted: 0x838B98,
-        selectedCandidate: 0x22C55E,
+        selectedCandidateBackground: 0x22C55E,
         candidateBackground: 0x101318
     )
 
@@ -80,7 +80,7 @@ enum RimeThemePalettes {
         textPrimary: 0x17202B,
         textSecondary: 0x334155,
         textMuted: 0x4B5563,
-        selectedCandidate: 0x0F6A3F,
+        selectedCandidateBackground: 0x0F6A3F,
         candidateBackground: 0xF8FAFC
     )
 }
@@ -102,6 +102,18 @@ enum RimeColorContrast {
         let lighter = max(luminance(composite), luminance(backgroundRGB))
         let darker = min(luminance(composite), luminance(backgroundRGB))
         return (lighter + 0.05) / (darker + 0.05)
+    }
+
+    /// Choose the higher-contrast monochrome foreground for any opaque theme
+    /// color. One of black/white always clears WCAG AA for normal text, so a
+    /// future palette change cannot make selected candidate text disappear.
+    static func preferredForeground(background: UInt32) -> UInt32 {
+        let light: UInt32 = 0xFFFFFF
+        let dark: UInt32 = 0x000000
+        return ratio(foreground: light, background: background)
+            >= ratio(foreground: dark, background: background)
+            ? light
+            : dark
     }
 
     private static func components(_ hex: UInt32) -> (Double, Double, Double) {
@@ -166,7 +178,14 @@ enum RimeUI {
     static var textPrimary: NSColor { color(palette.textPrimary) }
     static var textSecondary: NSColor { color(palette.textSecondary) }
     static var textMuted: NSColor { color(palette.textMuted) }
-    static var selectedCandidateColor: NSColor { color(palette.selectedCandidate) }
+    static var selectedCandidateBackgroundColor: NSColor {
+        color(palette.selectedCandidateBackground)
+    }
+    static var selectedCandidateTextColor: NSColor {
+        color(RimeColorContrast.preferredForeground(
+            background: palette.selectedCandidateBackground
+        ))
+    }
     static var candidateBackgroundColor: NSColor { color(palette.candidateBackground) }
 
     static func color(_ hex: UInt32, alpha: CGFloat = 1) -> NSColor {

@@ -78,9 +78,9 @@ final class WorkbenchBarView: NSView {
     private func candidateRow() -> NSView {
         let items = ["时间", "实践", "事件", "时刻", "识记"].enumerated().map { i, text -> NSView in
             let selected = i == 0
-            let num = label("\(i + 1)", selected ? RimeUI.candidateBackgroundColor : RimeUI.textMuted,
+            let num = label("\(i + 1)", selected ? RimeUI.selectedCandidateTextColor : RimeUI.textMuted,
                             11, weight: .semibold)
-            let word = label(text, selected ? RimeUI.candidateBackgroundColor : RimeUI.textPrimary,
+            let word = label(text, selected ? RimeUI.selectedCandidateTextColor : RimeUI.textPrimary,
                              13, weight: .regular)
             let cell = NSStackView(views: [num, word])
             cell.spacing = 3
@@ -88,7 +88,9 @@ final class WorkbenchBarView: NSView {
             cell.edgeInsets = NSEdgeInsets(top: 2, left: 6, bottom: 2, right: 7)
             cell.wantsLayer = true
             cell.layer?.cornerRadius = 5
-            if selected { cell.layer?.backgroundColor = RimeUI.selectedCandidateColor.cgColor }
+            if selected {
+                cell.layer?.backgroundColor = RimeUI.selectedCandidateBackgroundColor.cgColor
+            }
             return cell
         }
         return alignedRow(items, right: false)

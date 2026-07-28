@@ -1067,7 +1067,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 secondaryLabel("候选显示位置"),
                 candidatePlacementPopUp,
                 moveBufferWindowButton,
-                caption("工作台只允许从左侧拖拽手柄移动，其他区域不会拖动窗口。"),
+                caption("顶部功能栏始终展开；可拖动其空白区域移动工作台，按钮和下拉框仍保持正常点击。"),
             ])
         }
         return contentColumn([
@@ -1171,8 +1171,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         case let .unavailable(message):
             claudeDetail = message
         }
-        refreshCodexLoginControls(codexReady: codexReady)
-        refreshClaudeLoginControls(claudeReady: claudeReady)
+        refreshCodexLoginControls(
+            hasCredential: connectors.codexHasStoredChatGPTCredential
+        )
+        refreshClaudeLoginControls(
+            authenticationStatus: connectors.claudeAuthenticationStatus
+        )
         codexLoginButton.removeFromSuperview()
         codexCopyLoginLinkButton.removeFromSuperview()
         codexLoginSpinner.removeFromSuperview()
@@ -1784,13 +1788,14 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         }
     }
 
-    private func refreshCodexLoginControls(codexReady: Bool? = nil) {
-        let ready = codexReady
-            ?? (AITextConnectorRegistry.shared.availability(for: .codexCLI) == .ready)
+    private func refreshCodexLoginControls(hasCredential: Bool? = nil) {
+        let authenticated = hasCredential
+            ?? AITextConnectorRegistry.shared.codexHasStoredChatGPTCredential
         let isRunning = codexLoginOperation != nil
-        codexLoginButton.title = isRunning
-            ? "取消登录"
-            : (ready ? "重新授权 Codex" : "登录 Codex")
+        codexLoginButton.title = AITextCodexLoginPresentation.buttonTitle(
+            isRunning: isRunning,
+            hasCredential: authenticated
+        )
         codexLoginButton.isEnabled = !codexLoginCancelling
         codexCopyLoginLinkButton.isHidden = codexAuthorizationURL == nil
         if isRunning {
@@ -1803,12 +1808,13 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             codexLoginStatusLabel.textColor = codexLoginFeedbackIsError
                 ? .systemRed
                 : .secondaryLabelColor
-        } else if ready {
-            codexLoginStatusLabel.stringValue = "ChatGPT 订阅登录已保存在 \(ProductIdentity.displayName) 专用目录中。"
-            codexLoginStatusLabel.textColor = .systemGreen
         } else {
-            codexLoginStatusLabel.stringValue = "登录仅供输入法连接器使用，不会读取或修改 ~/.codex。"
-            codexLoginStatusLabel.textColor = .tertiaryLabelColor
+            codexLoginStatusLabel.stringValue = AITextCodexLoginPresentation.idleMessage(
+                hasCredential: authenticated
+            )
+            codexLoginStatusLabel.textColor = authenticated
+                ? .systemGreen
+                : .tertiaryLabelColor
         }
     }
 
@@ -1829,13 +1835,14 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         }
     }
 
-    private func refreshClaudeLoginControls(claudeReady: Bool? = nil) {
-        let ready = claudeReady
-            ?? (AITextConnectorRegistry.shared.availability(for: .claudeCodeCLI) == .ready)
+    private func refreshClaudeLoginControls(authenticationStatus: Bool? = nil) {
+        let status = authenticationStatus
+            ?? AITextConnectorRegistry.shared.claudeAuthenticationStatus
         let isRunning = claudeLoginOperation != nil
-        claudeLoginButton.title = isRunning
-            ? "取消登录"
-            : (ready ? "重新授权 Claude" : "登录 Claude")
+        claudeLoginButton.title = AITextClaudeLoginPresentation.buttonTitle(
+            isRunning: isRunning,
+            authenticationStatus: status
+        )
         claudeLoginButton.isEnabled = !claudeLoginCancelling
         if isRunning {
             claudeLoginSpinner.startAnimation(nil)
@@ -1847,12 +1854,13 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             claudeLoginStatusLabel.textColor = claudeLoginFeedbackIsError
                 ? .systemRed
                 : .secondaryLabelColor
-        } else if ready {
-            claudeLoginStatusLabel.stringValue = "Claude Code CLI 授权已就绪。"
-            claudeLoginStatusLabel.textColor = .systemGreen
         } else {
-            claudeLoginStatusLabel.stringValue = "登录由本机 Claude Code CLI 管理；\(ProductIdentity.displayName) 不读取或展示凭据。"
-            claudeLoginStatusLabel.textColor = .tertiaryLabelColor
+            claudeLoginStatusLabel.stringValue = AITextClaudeLoginPresentation.idleMessage(
+                authenticationStatus: status
+            )
+            claudeLoginStatusLabel.textColor = status == true
+                ? .systemGreen
+                : .tertiaryLabelColor
         }
     }
 

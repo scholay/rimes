@@ -175,7 +175,7 @@ if let i = CommandLine.arguments.firstIndex(of: "settings-render"),
         : "failed to render one or more settings routes")
     exit(rendered ? 0 : 1)
 }
-// Dev-only: `ETInput panel-render <path> [expanded] [translation]
+// Dev-only: `ETInput panel-render <path> [translation]
 // [hover=<control>]` renders the actual compact workbench.
 if let i = CommandLine.arguments.firstIndex(of: "panel-render"),
    i + 1 < CommandLine.arguments.count {
@@ -189,7 +189,6 @@ if let i = CommandLine.arguments.firstIndex(of: "panel-render"),
     model.append("做了", origin: .mcp(client: "preview"))
     model.append("缓冲工作台", origin: .remotePeer(deviceID: "preview"))
     let options = Array(CommandLine.arguments.dropFirst(i + 2))
-    let expanded = options.contains("expanded")
     let translation = options.contains("translation")
     let scaleValue = options.first { Double($0) != nil }.flatMap { Double($0) }
     let scale = CGFloat(scaleValue ?? 2)
@@ -209,13 +208,12 @@ if let i = CommandLine.arguments.firstIndex(of: "panel-render"),
     ) : nil
     let rendered = BufferWindowController.shared.renderForPreview(
         to: CommandLine.arguments[i + 1],
-        expanded: expanded,
         scale: scale,
         translationSnapshot: translationSnapshot,
         hoveredControl: hoveredControl
     )
     print(rendered
-        ? "rendered \(translation ? "translation " : "")\(expanded ? "expanded" : "collapsed") workbench @\(scale)x"
+        ? "rendered \(translation ? "translation " : "")expanded workbench @\(scale)x"
         : "failed to render workbench")
     exit(rendered ? 0 : 1)
 }
@@ -4734,14 +4732,21 @@ func runBufferWindowSmokeTest() -> Bool {
         row: .target, mode: .derived(targetRows: 3)
     )
     guard BufferWorkbenchLayout.mainBar
-            == [.dragHandle, .disclosure, .bufferRail, .send],
-          BufferWorkbenchLayout.expandedShelf
+            == [.bufferRail, .send],
+          BufferWorkbenchLayout.toolbar
             == [.status, .pluginActions, .refresh, .close],
-          BufferWorkbenchLayout.dragControls == [.dragHandle],
           BufferWorkbenchLayout.hoverControls
-            == [.dragHandle, .disclosure, .send, .pluginActions, .refresh, .close],
+            == [.send, .pluginActions, .refresh, .close],
           BufferWorkbenchLayout.passiveControls == [.bufferRail, .status],
-          BufferWorkbenchLayout.dragCursor == .pointingHand,
+          BufferWorkbenchLayout.toolbarAlwaysExpanded,
+          BufferWorkbenchLayout.toolbarEmptySpaceDraggable,
+          BufferWorkbenchToolbarDragRules.disposition(
+            hitIsInteractiveControl: false
+          ) == .dragWindow,
+          BufferWorkbenchToolbarDragRules.disposition(
+            hitIsInteractiveControl: true
+          ) == .interactWithControl,
+          runBufferWorkbenchToolbarHitTestProbe(),
           BufferWorkbenchPointerRules.state(
             enabled: true, hovered: false, pressed: false
           ) == .idle,
@@ -6125,20 +6130,26 @@ func runBufferWindowSmokeTest() -> Bool {
     let primary = NSRect(x: 0, y: 0, width: 1440, height: 900)
     let secondary = NSRect(x: 1440, y: 0, width: 1280, height: 800)
     let offscreen = NSRect(x: 4000, y: -900, width: 680, height: 230)
-    let restored = BufferWindowGeometry.clampedFrame(offscreen,
-                                                     visibleFrames: [primary, secondary],
-                                                     fallback: primary)
+    let restored = BufferWindowGeometry.clampedFrame(
+        offscreen,
+        expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
+        visibleFrames: [primary, secondary],
+        fallback: primary
+    )
     guard primary.contains(restored),
           restored.width >= BufferWindowGeometry.standardMinimumWidth,
-          restored.height == BufferWindowGeometry.collapsedHeight else {
+          restored.height == BufferWindowGeometry.expandedHeight else {
         print("FAILED: offscreen frame was not restored to fallback screen", restored)
         return false
     }
 
     let legacyWorkbench = NSRect(x: 120, y: 220, width: 680, height: 340)
-    let migrated = BufferWindowGeometry.clampedFrame(legacyWorkbench,
-                                                      visibleFrames: [primary],
-                                                      fallback: primary)
+    let migrated = BufferWindowGeometry.clampedFrame(
+        legacyWorkbench,
+        expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
+        visibleFrames: [primary],
+        fallback: primary
+    )
     let anchor = BufferWindowGeometry.candidateAnchor(for: migrated)
     let candidateSize = NSSize(width: 420, height: 60)
     let belowBar = CandidatePanelGeometry.origin(anchor: anchor,
@@ -6162,59 +6173,49 @@ func runBufferWindowSmokeTest() -> Bool {
     let oldCompact = NSRect(x: 180, y: 240, width: 680, height: 52)
     let migratedOldCompact = BufferWindowGeometry.clampedFrame(
         oldCompact,
+        expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
         visibleFrames: [primary],
         fallback: primary
     )
-    let expanded = BufferWindowGeometry.clampedFrame(
+    let legacyCollapsed = BufferWindowGeometry.clampedFrame(
         migratedOldCompact,
-        expanded: true,
-        visibleFrames: [primary],
-        fallback: primary
-    )
-    let collapsedAgain = BufferWindowGeometry.clampedFrame(
-        expanded,
         expanded: false,
         visibleFrames: [primary],
         fallback: primary
     )
-    let translationCollapsed = BufferWindowGeometry.clampedFrame(
-        collapsedAgain,
-        mode: .translation,
-        visibleFrames: [primary],
-        fallback: primary
-    )
     let translationExpanded = BufferWindowGeometry.clampedFrame(
-        translationCollapsed,
-        expanded: true,
+        migratedOldCompact,
+        expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
         mode: .translation,
         visibleFrames: [primary],
         fallback: primary
     )
-    let streamCandidatesCollapsed = BufferWindowGeometry.clampedFrame(
-        translationCollapsed,
-        mode: .derived(targetRows: 3),
+    let streamCandidatesTwoExpanded = BufferWindowGeometry.clampedFrame(
+        translationExpanded,
+        expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
+        mode: .derived(targetRows: 2),
         visibleFrames: [primary],
         fallback: primary
     )
     let streamCandidatesExpanded = BufferWindowGeometry.clampedFrame(
-        streamCandidatesCollapsed,
-        expanded: true,
+        streamCandidatesTwoExpanded,
+        expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
         mode: .derived(targetRows: 3),
         visibleFrames: [primary],
         fallback: primary
     )
     let standardAfterTranslation = BufferWindowGeometry.clampedFrame(
         translationExpanded,
-        expanded: false,
+        expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
         mode: .standard,
         visibleFrames: [primary],
         fallback: primary
     )
-    let standardCompactAnchor = BufferWindowGeometry.candidateAnchor(for: collapsedAgain)
+    let standardCompactAnchor = BufferWindowGeometry.candidateAnchor(for: migratedOldCompact)
     let belowStandardCompact = CandidatePanelGeometry.origin(anchor: standardCompactAnchor,
                                                               panelSize: candidateSize,
                                                               visibleFrame: primary)
-    let translatedAnchor = BufferWindowGeometry.candidateAnchor(for: translationCollapsed)
+    let translatedAnchor = BufferWindowGeometry.candidateAnchor(for: translationExpanded)
     let belowTranslatedBar = CandidatePanelGeometry.origin(anchor: translatedAnchor,
                                                             panelSize: candidateSize,
                                                             visibleFrame: primary)
@@ -6222,26 +6223,23 @@ func runBufferWindowSmokeTest() -> Bool {
         NSRect(x: 10.24, y: 20.26, width: 680.24, height: 44),
         scale: 2
     )
-    guard migrated.height == BufferWindowGeometry.collapsedHeight,
+    guard migrated.height == BufferWindowGeometry.expandedHeight,
           migrated.maxY == legacyWorkbench.maxY,
           migratedOldCompact.minY == oldCompact.minY,
-          expanded.height == BufferWindowGeometry.expandedHeight,
-          expanded.minY == migratedOldCompact.minY,
-          collapsedAgain.height == BufferWindowGeometry.collapsedHeight,
-          collapsedAgain.minY == expanded.minY,
-          translationCollapsed.height == BufferWindowGeometry.translationCollapsedHeight,
-          translationCollapsed.minY == collapsedAgain.minY,
+          migratedOldCompact.height == BufferWindowGeometry.expandedHeight,
+          legacyCollapsed.height == BufferWindowGeometry.collapsedHeight,
+          legacyCollapsed.minY == migratedOldCompact.minY,
           translationExpanded.height == BufferWindowGeometry.translationExpandedHeight,
-          translationExpanded.minY == translationCollapsed.minY,
-          streamCandidatesCollapsed.height
-            == BufferWindowGeometry.translationCollapsedHeight
-                + BufferInlineView.additionalTranslationTargetRowHeight * 2,
-          streamCandidatesCollapsed.minY == translationCollapsed.minY,
+          translationExpanded.minY == migratedOldCompact.minY,
+          streamCandidatesTwoExpanded.height
+            == BufferWindowGeometry.translationExpandedHeight
+                + BufferInlineView.additionalTranslationTargetRowHeight,
+          streamCandidatesTwoExpanded.minY == translationExpanded.minY,
           streamCandidatesExpanded.height
             == BufferWindowGeometry.translationExpandedHeight
                 + BufferInlineView.additionalTranslationTargetRowHeight * 2,
-          streamCandidatesExpanded.minY == streamCandidatesCollapsed.minY,
-          standardAfterTranslation.height == BufferWindowGeometry.collapsedHeight,
+          streamCandidatesExpanded.minY == streamCandidatesTwoExpanded.minY,
+          standardAfterTranslation.height == BufferWindowGeometry.expandedHeight,
           standardAfterTranslation.minY == translationExpanded.minY,
           anchor.minY == migrated.minY,
           anchor.maxY == migrated.maxY,
@@ -6258,11 +6256,14 @@ func runBufferWindowSmokeTest() -> Bool {
     }
 
     let oversized = NSRect(x: 1500, y: 40, width: 3000, height: 2000)
-    let fitted = BufferWindowGeometry.clampedFrame(oversized,
-                                                   visibleFrames: [primary, secondary],
-                                                   fallback: primary)
+    let fitted = BufferWindowGeometry.clampedFrame(
+        oversized,
+        expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
+        visibleFrames: [primary, secondary],
+        fallback: primary
+    )
     guard fitted.width <= secondary.width,
-          fitted.height == BufferWindowGeometry.collapsedHeight,
+          fitted.height == BufferWindowGeometry.expandedHeight,
           secondary.contains(fitted) else {
         print("FAILED: oversized frame was not clamped to its screen", fitted)
         return false
@@ -6271,6 +6272,7 @@ func runBufferWindowSmokeTest() -> Bool {
     let tiny = NSRect(x: -480, y: 0, width: 480, height: 160)
     let tinyFitted = BufferWindowGeometry.clampedFrame(
         NSRect(x: -900, y: -500, width: 680, height: 230),
+        expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
         visibleFrames: [tiny],
         fallback: tiny
     )
@@ -6537,7 +6539,6 @@ func runThemeSmokeTest() -> Bool {
         ("primary", day.textPrimary),
         ("secondary", day.textSecondary),
         ("muted", day.textMuted),
-        ("selected candidate", day.selectedCandidate),
     ]
     for (name, color) in textColors {
         let ratio = RimeColorContrast.ratio(
@@ -6547,13 +6548,21 @@ func runThemeSmokeTest() -> Bool {
         check(ratio >= 4.5, "day \(name) contrast \(ratio) should be >= 4.5")
     }
 
-    let selectedLabelRatio = RimeColorContrast.ratio(
-        foreground: day.selectedCandidate,
-        alpha: 0.85,
+    let daySelectedText = RimeColorContrast.preferredForeground(
+        background: day.selectedCandidateBackground
+    )
+    let daySelectedTextRatio = RimeColorContrast.ratio(
+        foreground: daySelectedText,
+        background: day.selectedCandidateBackground
+    )
+    check(daySelectedTextRatio >= 4.5,
+          "day selected text contrast \(daySelectedTextRatio) should be >= 4.5")
+    let daySelectionRatio = RimeColorContrast.ratio(
+        foreground: day.selectedCandidateBackground,
         background: day.candidateBackground
     )
-    check(selectedLabelRatio >= 4.5,
-          "day selected label contrast \(selectedLabelRatio) should be >= 4.5")
+    check(daySelectionRatio >= 3,
+          "day selected background contrast \(daySelectionRatio) should be >= 3")
 
     let mutedBufferRatio = RimeColorContrast.ratio(
         foreground: day.textMuted,
@@ -6574,7 +6583,6 @@ func runThemeSmokeTest() -> Bool {
         ("primary", night.textPrimary),
         ("secondary", night.textSecondary),
         ("muted", night.textMuted),
-        ("selected candidate", night.selectedCandidate),
     ]
     for (name, color) in nightTextColors {
         let ratio = RimeColorContrast.ratio(
@@ -6583,6 +6591,22 @@ func runThemeSmokeTest() -> Bool {
         )
         check(ratio >= 4.5, "night \(name) contrast \(ratio) should be >= 4.5")
     }
+
+    let nightSelectedText = RimeColorContrast.preferredForeground(
+        background: night.selectedCandidateBackground
+    )
+    let nightSelectedTextRatio = RimeColorContrast.ratio(
+        foreground: nightSelectedText,
+        background: night.selectedCandidateBackground
+    )
+    check(nightSelectedTextRatio >= 4.5,
+          "night selected text contrast \(nightSelectedTextRatio) should be >= 4.5")
+    let nightSelectionRatio = RimeColorContrast.ratio(
+        foreground: night.selectedCandidateBackground,
+        background: night.candidateBackground
+    )
+    check(nightSelectionRatio >= 3,
+          "night selected background contrast \(nightSelectionRatio) should be >= 3")
 
     let nightWorkbenchStatusRatio = RimeColorContrast.ratio(
         foreground: night.textSecondary,

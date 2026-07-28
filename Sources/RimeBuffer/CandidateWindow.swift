@@ -197,6 +197,7 @@ enum CandidateLayout {
     static let barSpacing: CGFloat = 4
     static let barHorizontalPadding: CGFloat = 5
     static let compactCandidateHorizontalPadding: CGFloat = 6
+    static let selectedCandidateCornerRadius: CGFloat = 6
     static let bufferActionMinWidth: CGFloat = 38
     static let rootSpacing: CGFloat = 5
 
@@ -1222,7 +1223,9 @@ final class CandidateWindow {
         button.attributedTitle = candidateTitle(candidate,
                                                 highlighted: highlighted,
                                                 showsLabel: showsLabel)
-        button.layer?.backgroundColor = NSColor.clear.cgColor
+        button.layer?.backgroundColor = highlighted
+            ? RimeUI.selectedCandidateBackgroundColor.cgColor
+            : NSColor.clear.cgColor
         button.layer?.borderWidth = 0
         button.toolTip = candidate.comment.isEmpty
             ? candidate.text
@@ -1249,8 +1252,12 @@ final class CandidateWindow {
     ) -> NSAttributedString {
         let metrics = CandidateWindowMetrics.current
         let line = NSMutableAttributedString()
-        let labelColor = highlighted ? RimeUI.selectedCandidateColor.withAlphaComponent(0.85) : RimeUI.textSecondary
-        let textColor = highlighted ? RimeUI.selectedCandidateColor : RimeUI.textPrimary
+        let labelColor = highlighted
+            ? RimeUI.selectedCandidateTextColor
+            : RimeUI.textSecondary
+        let textColor = highlighted
+            ? RimeUI.selectedCandidateTextColor
+            : RimeUI.textPrimary
         let baseline = (metrics.candidateFontSize - metrics.labelFontSize) / 2
 
         if showsLabel, !c.label.isEmpty {
@@ -1589,7 +1596,7 @@ private final class CandidatePillButton: NSButton {
         focusRingType = .none
         alignment = .center
         wantsLayer = true
-        layer?.cornerRadius = 0
+        layer?.cornerRadius = CandidateLayout.selectedCandidateCornerRadius
         layer?.masksToBounds = true
         cell?.lineBreakMode = .byTruncatingTail
         cell?.usesSingleLineMode = true
@@ -1886,6 +1893,7 @@ final class CandidatePreviewView: NSView {
             }
             used = next
             candidateRow.addArrangedSubview(candidatePill(attr,
+                                                          highlighted: i == 0,
                                                           width: w,
                                                           height: buttonHeight))
         }
@@ -1893,6 +1901,7 @@ final class CandidatePreviewView: NSView {
             candidateRow.addArrangedSubview(candidateSeparator(m: m))
         }
         candidateRow.addArrangedSubview(candidatePill(bufferAttr,
+                                                      highlighted: false,
                                                       width: min(bufferWidth, available),
                                                       height: buttonHeight))
 
@@ -1906,10 +1915,16 @@ final class CandidatePreviewView: NSView {
 
     private func candidatePill(
         _ title: NSAttributedString,
+        highlighted: Bool,
         width: CGFloat,
         height: CGFloat
     ) -> NSView {
         let pill = NSView()
+        pill.wantsLayer = true
+        pill.layer?.cornerRadius = CandidateLayout.selectedCandidateCornerRadius
+        pill.layer?.backgroundColor = highlighted
+            ? RimeUI.selectedCandidateBackgroundColor.cgColor
+            : NSColor.clear.cgColor
         pill.translatesAutoresizingMaskIntoConstraints = false
         let label = NSTextField(labelWithAttributedString: title)
         label.alignment = .center
@@ -1936,8 +1951,12 @@ final class CandidatePreviewView: NSView {
 
     private func candidateAttr(label: String, text: String, highlighted: Bool, m: CandidateWindowMetrics) -> NSAttributedString {
         let line = NSMutableAttributedString()
-        let labelColor = highlighted ? RimeUI.selectedCandidateColor.withAlphaComponent(0.85) : RimeUI.textSecondary
-        let textColor = highlighted ? RimeUI.selectedCandidateColor : RimeUI.textPrimary
+        let labelColor = highlighted
+            ? RimeUI.selectedCandidateTextColor
+            : RimeUI.textSecondary
+        let textColor = highlighted
+            ? RimeUI.selectedCandidateTextColor
+            : RimeUI.textPrimary
         let baseline = (m.candidateFontSize - m.labelFontSize) / 2
         if !label.isEmpty {
             line.append(NSAttributedString(string: "\(label) ", attributes: [

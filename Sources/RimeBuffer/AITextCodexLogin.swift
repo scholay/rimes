@@ -248,7 +248,9 @@ final class AITextCodexLoginOperation: AITextCancellable {
               compatibilityResolver(before.url),
               let verified = AITextVerifiedCLIExecutable.capture(before.url),
               verified == before else {
-            finish(.failure(.unavailable("Codex CLI 版本尚未通过安全兼容性验证")))
+            finish(.failure(.unavailable(
+                "Codex CLI 未通过所需启动参数与 app-server 握手检查"
+            )))
             return
         }
         let executableURL = verified.url
@@ -279,10 +281,14 @@ final class AITextCodexLoginOperation: AITextCancellable {
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         child.executableURL = executableURL
+        // Login exchanges no buffer text and needs Codex's authentication
+        // control plane. Generation compatibility has already been verified
+        // with the complete isolation argv before this process is launched.
         child.arguments = ["app-server", "--strict-config", "--listen", "stdio://"]
         child.currentDirectoryURL = workspaceURL
         var processEnvironment = AITextCLIExecutableLocator.sanitizedEnvironment(
             for: .codexCLI,
+            executableURL: executableURL,
             from: environment
         )
         processEnvironment["CODEX_HOME"] = homeStore.homeDirectory.path

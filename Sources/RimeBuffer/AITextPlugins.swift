@@ -1089,11 +1089,13 @@ private final class AITextProcessTask: AITextCancellable {
 
     private let lock = NSLock()
     private var process: Process?
+    private var readHandles: [FileHandle] = []
     private(set) var reason: StopReason = .none
 
-    func attach(_ process: Process) {
+    func attach(_ process: Process, readHandles: [FileHandle]) {
         lock.lock()
         self.process = process
+        self.readHandles = readHandles
         let shouldStop = reason != .none
         lock.unlock()
         if shouldStop { stop(process) }
@@ -1113,7 +1115,9 @@ private final class AITextProcessTask: AITextCancellable {
         lock.lock()
         if reason == .none { reason = requested }
         let process = self.process
+        let handles = readHandles
         lock.unlock()
+        handles.forEach { try? $0.close() }
         if let process { stop(process) }
     }
 
@@ -1260,7 +1264,13 @@ final class AITextFoundationCLIProcessRunner: AITextCLIProcessRunning {
                                               outputTooLarge: false))
             return task
         }
-        task.attach(process)
+        task.attach(
+            process,
+            readHandles: [
+                stdout.fileHandleForReading,
+                stderr.fileHandleForReading,
+            ]
+        )
 
         DispatchQueue.global(qos: .userInitiated).async {
             defer { readers.leave() }
@@ -1295,7 +1305,7 @@ final class AITextFoundationCLIProcessRunner: AITextCLIProcessRunning {
             try? stdin.fileHandleForWriting.close()
         }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + max(1, spec.timeout)) {
-            if process.isRunning { task.timeOut() }
+            task.timeOut()
         }
         return task
     }
@@ -1373,14 +1383,89 @@ enum AITextCLIExecutableLocator {
         environment: [String: String],
         fileManager: FileManager
     ) -> [URL] {
-        let candidatePaths = candidatePaths(
+        let homeDirectory = fileManager.homeDirectoryForCurrentUser.path
+        var paths = candidatePaths(
             for: kind,
             environment: environment,
-            homeDirectory: fileManager.homeDirectoryForCurrentUser.path
+            homeDirectory: homeDirectory
         )
-        return candidatePaths.compactMap { path in
-            executableURL(atPath: path, fileManager: fileManager)
+        paths += discoveredManagedInstallPaths(
+            for: kind,
+            homeDirectory: homeDirectory,
+            fileManager: fileManager
+        )
+        var seen = Set<String>()
+        return paths.compactMap { path in
+            guard seen.insert(path).inserted else { return nil }
+            return executableURL(atPath: path, fileManager: fileManager)
         }
+    }
+
+    /// GUI input methods inherit a minimal PATH, so common version managers
+    /// and editor-bundled CLIs need bounded, explicit discovery. Every match
+    /// still passes the same live capability probe before use.
+    static func discoveredManagedInstallPaths(
+        for kind: AITextProviderKind,
+        homeDirectory: String,
+        fileManager: FileManager
+    ) -> [String] {
+        guard kind != .openAICompatible else { return [] }
+        let executableName = kind == .codexCLI ? "codex" : "claude"
+        var paths: [String] = []
+
+        func appendVersionedBins(root: String, suffix: String) {
+            guard let entries = try? fileManager.contentsOfDirectory(atPath: root) else {
+                return
+            }
+            for entry in entries.sorted(by: descendingNaturalOrder).prefix(64) {
+                paths.append("\(root)/\(entry)/\(suffix)/\(executableName)")
+            }
+        }
+
+        appendVersionedBins(
+            root: "\(homeDirectory)/.nvm/versions/node",
+            suffix: "bin"
+        )
+        appendVersionedBins(
+            root: "\(homeDirectory)/.local/share/fnm/node-versions",
+            suffix: "installation/bin"
+        )
+
+        if kind == .codexCLI {
+            #if arch(arm64)
+            let platformDirectory = "macos-aarch64"
+            #else
+            let platformDirectory = "macos-x86_64"
+            #endif
+            for extensionsRoot in [
+                "\(homeDirectory)/.cursor/extensions",
+                "\(homeDirectory)/.vscode/extensions",
+            ] {
+                guard let entries = try? fileManager.contentsOfDirectory(
+                    atPath: extensionsRoot
+                ) else {
+                    continue
+                }
+                for entry in entries
+                    .filter({ $0.hasPrefix("openai.chatgpt-") })
+                    .sorted(by: descendingNaturalOrder)
+                    .prefix(16) {
+                    paths.append(
+                        "\(extensionsRoot)/\(entry)/bin/\(platformDirectory)/codex"
+                    )
+                }
+            }
+        }
+        return paths
+    }
+
+    private static func descendingNaturalOrder(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.compare(
+            rhs,
+            options: [.numeric, .caseInsensitive],
+            range: nil,
+            locale: Locale(identifier: "en_US_POSIX")
+        ) == .orderedDescending
     }
 
     private static func executableURL(atPath path: String,
@@ -1419,10 +1504,9 @@ enum AITextCLIExecutableLocator {
             candidates.append(override)
         }
         if kind == .codexCLI {
-            // ChatGPT ships the app-server build whose exact tool surface is
-            // validated below. Prefer it to older Homebrew/npm shims; the old
-            // order stopped at the first executable and never reached this
-            // compatible binary.
+            // ChatGPT ships an app-server build that can be checked directly.
+            // Prefer it to Homebrew/npm shims, while still falling through to
+            // every other candidate whose live capability probe succeeds.
             candidates += extraCandidates
         }
         if kind == .claudeCodeCLI {
@@ -1431,6 +1515,14 @@ enum AITextCLIExecutableLocator {
             // binary before any prompt is sent.
             candidates += ["~/.local/bin/claude", "~/.claude/local/claude"]
         }
+        candidates += [
+            "~/.volta/bin/\(executableName)",
+            "~/.asdf/shims/\(executableName)",
+            "~/.local/share/mise/shims/\(executableName)",
+            "~/.bun/bin/\(executableName)",
+            "~/.npm-global/bin/\(executableName)",
+            "~/Library/pnpm/\(executableName)",
+        ]
         candidates += [
             "/opt/homebrew/bin/\(executableName)",
             "/usr/local/bin/\(executableName)",
@@ -1452,6 +1544,7 @@ enum AITextCLIExecutableLocator {
 
     static func sanitizedEnvironment(
         for kind: AITextProviderKind,
+        executableURL: URL? = nil,
         from source: [String: String] = ProcessInfo.processInfo.environment
     ) -> [String: String] {
         let allowed = [
@@ -1476,7 +1569,49 @@ enum AITextCLIExecutableLocator {
         for key in allowed {
             if let value = source[key] { result[key] = value }
         }
-        result["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        let fixedPath = [
+            "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin",
+            "/bin", "/usr/sbin", "/sbin",
+        ]
+        var pathComponents: [String] = []
+        if let executableURL {
+            let executablePath = executableURL.standardizedFileURL.path
+            pathComponents.append(
+                executableURL.deletingLastPathComponent().standardizedFileURL.path
+            )
+            if let nvmRange = executablePath.range(of: "/.nvm/versions/node/") {
+                let tail = executablePath[nvmRange.upperBound...]
+                if let version = tail.split(separator: "/").first {
+                    let prefix = executablePath[..<nvmRange.upperBound]
+                    pathComponents.append("\(prefix)\(version)/bin")
+                }
+            }
+            if let fnmRange = executablePath.range(
+                of: "/.local/share/fnm/node-versions/"
+            ) {
+                let tail = executablePath[fnmRange.upperBound...]
+                if let version = tail.split(separator: "/").first {
+                    let prefix = executablePath[..<fnmRange.upperBound]
+                    pathComponents.append("\(prefix)\(version)/installation/bin")
+                }
+            }
+            if executablePath.contains("/.volta/"),
+               let home = source["HOME"], home.hasPrefix("/") {
+                pathComponents.append("\(home)/.volta/bin")
+            }
+            if executablePath.contains("/.bun/"),
+               let home = source["HOME"], home.hasPrefix("/") {
+                // Bun global executables are commonly symlinks into
+                // ~/.bun/install/global. Keep the trusted user runtime bin
+                // available after canonicalizing that symlink.
+                pathComponents.append("\(home)/.bun/bin")
+            }
+        }
+        pathComponents += fixedPath
+        var seenPathComponents = Set<String>()
+        result["PATH"] = pathComponents
+            .filter { !$0.isEmpty && seenPathComponents.insert($0).inserted }
+            .joined(separator: ":")
         return result
     }
 }
@@ -1558,126 +1693,214 @@ enum AITextCodexIsolation {
     }
 }
 
-/// The Codex CLI has no version-independent "disable every built-in tool"
-/// switch. Keep a deliberately narrow allowlist whose exact request tool
-/// surface has been captured against a loopback mock before buffer text is
-/// allowed to reach it. A CLI update therefore fails closed until RimeBuffer
-/// repeats that compatibility check and extends the list.
+/// Compatibility is determined only by behavior, never a release-number or
+/// version-output format. The gate starts the candidate with RimeBuffer's
+/// complete isolation argv and requires a prompt-free initialize + empty-MCP
+/// handshake.
 enum AITextCodexCompatibility {
-    static let supportedVersionOutput: Set<String> = [
-        "codex-cli 0.144.1",
-        "codex-cli 0.145.0-alpha.18",
-    ]
-
-    /// The stream-input request shape depends on request-level model locking
-    /// that has only been captured against this exact app-server build. Keep
-    /// this narrower than the ordinary connector allowlist until another
-    /// Codex build has passed the same protocol fixture.
-    static let streamInputSupportedVersionOutput: Set<String> = [
-        "codex-cli 0.145.0-alpha.18",
-    ]
-
-    static func allowedVersionOutput(
-        for inferenceProfile: AITextCodexInferenceProfile?
-    ) -> Set<String> {
-        inferenceProfile == .streamInput
-            ? streamInputSupportedVersionOutput
-            : supportedVersionOutput
+    private struct CacheEntry {
+        let accepted: Bool
+        let checkedAt: TimeInterval
     }
 
-    static func accepts(
-        versionOutput: String,
-        inferenceProfile: AITextCodexInferenceProfile? = nil
-    ) -> Bool {
-        allowedVersionOutput(for: inferenceProfile).contains(
-            versionOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-    }
-
-    static func isSupported(executableURL: URL,
-                            environment: [String: String],
-                            inferenceProfile: AITextCodexInferenceProfile? = nil) -> Bool {
-        let runner = AITextFoundationCLIProcessRunner()
-        let semaphore = DispatchSemaphore(value: 0)
-        var processResult: AITextCLIProcessResult?
-        let spec = AITextCLIProcessSpec(
-            executableURL: executableURL,
-            arguments: ["--version"],
-            standardInput: Data(),
-            currentDirectoryURL: FileManager.default.temporaryDirectory,
-            environment: AITextCLIExecutableLocator.sanitizedEnvironment(
-                for: .codexCLI,
-                from: environment
-            ),
-            timeout: 2,
-            maximumOutputBytes: 4_096
-        )
-        let task = runner.run(spec, onStandardOutput: { _ in }, completion: { result in
-            processResult = result
-            semaphore.signal()
-        })
-        guard semaphore.wait(timeout: .now() + 3) == .success else {
-            task.cancel()
-            return false
-        }
-        guard let processResult,
-              processResult.terminationStatus == 0,
-              !processResult.timedOut,
-              !processResult.cancelled,
-              !processResult.outputTooLarge,
-              let output = String(data: processResult.standardOutput, encoding: .utf8) else {
-            return false
-        }
-        return accepts(versionOutput: output,
-                       inferenceProfile: inferenceProfile)
-    }
-}
-
-/// Claude flags also change across releases (`--safe-mode` is absent from the
-/// stale Homebrew build on this machine). Pin the exact compatible
-/// CLI whose tool-free surface was exercised before accepting any prompt.
-enum AITextClaudeCompatibility {
-    static let supportedVersionOutput: Set<String> = [
-        "2.1.211 (Claude Code)",
-        "2.1.215 (Claude Code)",
-    ]
+    private static let cacheLock = NSLock()
+    private static var cache: [AITextVerifiedCLIExecutable: CacheEntry] = [:]
+    private static var inFlight: [AITextVerifiedCLIExecutable: DispatchGroup] = [:]
+    private static let acceptedCacheTTL: TimeInterval = 60
+    private static let rejectedCacheTTL: TimeInterval = 5
 
     static func isSupported(executableURL: URL,
                             environment: [String: String]) -> Bool {
+        guard let fingerprint = AITextVerifiedCLIExecutable.capture(executableURL) else {
+            return false
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        cacheLock.lock()
+        if let cached = cache[fingerprint] {
+            let ttl = cached.accepted ? acceptedCacheTTL : rejectedCacheTTL
+            if now - cached.checkedAt < ttl {
+                cacheLock.unlock()
+                return cached.accepted
+            }
+        }
+        if let pending = inFlight[fingerprint] {
+            cacheLock.unlock()
+            guard pending.wait(timeout: .now() + 15) == .success else {
+                return false
+            }
+            cacheLock.lock()
+            let accepted = cache[fingerprint]?.accepted ?? false
+            cacheLock.unlock()
+            return accepted
+        }
+        let pending = DispatchGroup()
+        pending.enter()
+        inFlight[fingerprint] = pending
+        cacheLock.unlock()
+
+        let accepted = AITextCodexCapabilityProbe.run(
+            executableURL: fingerprint.url,
+            environment: environment
+        ) && fingerprint.stillMatches
+
+        cacheLock.lock()
+        cache[fingerprint] = CacheEntry(
+            accepted: accepted,
+            checkedAt: ProcessInfo.processInfo.systemUptime
+        )
+        inFlight.removeValue(forKey: fingerprint)
+        if cache.count > 32,
+           let oldest = cache.min(by: { $0.value.checkedAt < $1.value.checkedAt })?.key {
+            cache.removeValue(forKey: oldest)
+        }
+        cacheLock.unlock()
+        pending.leave()
+        return accepted
+    }
+}
+
+/// Claude compatibility is likewise capability-based. The help contract is
+/// queried with no prompt and must expose every fixed option used by the
+/// tool-free streaming invocation.
+enum AITextClaudeCompatibility {
+    private struct CacheEntry {
+        let accepted: Bool
+        let checkedAt: TimeInterval
+    }
+
+    private static let requiredHelpOptions = [
+        "--print",
+        "--verbose",
+        "--output-format",
+        "--include-partial-messages",
+        "--tools",
+        "--disable-slash-commands",
+        "--safe-mode",
+        "--strict-mcp-config",
+        "--no-session-persistence",
+        "--permission-mode",
+        "--no-chrome",
+    ]
+    private static let cacheLock = NSLock()
+    private static var cache: [AITextVerifiedCLIExecutable: CacheEntry] = [:]
+    private static let acceptedCacheTTL: TimeInterval = 60
+    private static let rejectedCacheTTL: TimeInterval = 5
+
+    static func isSupported(executableURL: URL,
+                            environment: [String: String]) -> Bool {
+        guard let fingerprint = AITextVerifiedCLIExecutable.capture(executableURL) else {
+            return false
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        cacheLock.lock()
+        if let cached = cache[fingerprint] {
+            let ttl = cached.accepted ? acceptedCacheTTL : rejectedCacheTTL
+            if now - cached.checkedAt < ttl {
+                cacheLock.unlock()
+                return cached.accepted
+            }
+        }
+        cacheLock.unlock()
+
+        let accepted = probeCapabilities(
+            executableURL: fingerprint.url,
+            environment: environment
+        ) && fingerprint.stillMatches
+        cacheLock.lock()
+        cache[fingerprint] = CacheEntry(
+            accepted: accepted,
+            checkedAt: ProcessInfo.processInfo.systemUptime
+        )
+        if cache.count > 32,
+           let oldest = cache.min(by: { $0.value.checkedAt < $1.value.checkedAt })?.key {
+            cache.removeValue(forKey: oldest)
+        }
+        cacheLock.unlock()
+        return accepted
+    }
+
+    private static func probeCapabilities(executableURL: URL,
+                                          environment: [String: String]) -> Bool {
+        guard let help = runProbeCommand(
+            executableURL: executableURL,
+            arguments: ["--help"],
+            environment: environment,
+            maximumOutputBytes: 128 * 1_024
+        ) else {
+            return false
+        }
+        return requiredHelpOptions.allSatisfy {
+            helpAdvertisesOption($0, in: help)
+        }
+    }
+
+    /// Match only option declaration columns, not prose that merely mentions
+    /// an option (for example a deprecation notice). Aliases and `--flag=value`
+    /// forms remain accepted.
+    static func helpAdvertisesOption(_ option: String, in help: String) -> Bool {
+        for rawLine in help.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("-") else { continue }
+
+            var declaration = line[...]
+            if let tab = declaration.firstIndex(of: "\t") {
+                declaration = declaration[..<tab]
+            }
+            if let spacing = declaration.range(of: "  ") {
+                declaration = declaration[..<spacing.lowerBound]
+            }
+            let tokens = declaration.split {
+                $0.isWhitespace || $0 == ","
+            }
+            if tokens.contains(where: { token in
+                token.split(separator: "=", maxSplits: 1).first
+                    == Substring(option)
+            }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func runProbeCommand(executableURL: URL,
+                                        arguments: [String],
+                                        environment: [String: String],
+                                        maximumOutputBytes: Int) -> String? {
         let runner = AITextFoundationCLIProcessRunner()
         let semaphore = DispatchSemaphore(value: 0)
         var processResult: AITextCLIProcessResult?
-        let spec = AITextCLIProcessSpec(
-            executableURL: executableURL,
-            arguments: ["--version"],
-            standardInput: Data(),
-            currentDirectoryURL: FileManager.default.temporaryDirectory,
-            environment: AITextCLIExecutableLocator.sanitizedEnvironment(
-                for: .claudeCodeCLI,
-                from: environment
+        let task = runner.run(
+            AITextCLIProcessSpec(
+                executableURL: executableURL,
+                arguments: arguments,
+                standardInput: Data(),
+                currentDirectoryURL: FileManager.default.temporaryDirectory,
+                environment: AITextCLIExecutableLocator.sanitizedEnvironment(
+                    for: .claudeCodeCLI,
+                    executableURL: executableURL,
+                    from: environment
+                ),
+                timeout: 2,
+                maximumOutputBytes: maximumOutputBytes
             ),
-            timeout: 2,
-            maximumOutputBytes: 4_096
+            onStandardOutput: { _ in },
+            completion: {
+                processResult = $0
+                semaphore.signal()
+            }
         )
-        let task = runner.run(spec, onStandardOutput: { _ in }, completion: { result in
-            processResult = result
-            semaphore.signal()
-        })
         guard semaphore.wait(timeout: .now() + 3) == .success else {
             task.cancel()
-            return false
+            return nil
         }
         guard let processResult,
               processResult.terminationStatus == 0,
               !processResult.timedOut,
               !processResult.cancelled,
-              !processResult.outputTooLarge,
-              let output = String(data: processResult.standardOutput, encoding: .utf8) else {
-            return false
+              !processResult.outputTooLarge else {
+            return nil
         }
-        return supportedVersionOutput.contains(
-            output.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
+        return String(data: processResult.standardOutput, encoding: .utf8)
     }
 }
 
@@ -1813,6 +2036,43 @@ final class AITextCodexHomeStore {
         guard (info.st_mode & S_IFMT) == S_IFREG,
               info.st_uid == getuid() else {
             throw AITextProviderError.failed
+        }
+    }
+}
+
+enum AITextCodexLoginPresentation {
+    static func buttonTitle(isRunning: Bool, hasCredential: Bool) -> String {
+        if isRunning { return "取消登录" }
+        return hasCredential ? "重新授权 Codex" : "登录 Codex"
+    }
+
+    static func idleMessage(hasCredential: Bool) -> String {
+        if hasCredential {
+            return "ChatGPT 订阅登录已保存在 \(ProductIdentity.displayName) 专用目录中。"
+        }
+        return "登录仅供输入法连接器使用，不会读取或修改 ~/.codex。"
+    }
+}
+
+enum AITextClaudeLoginPresentation {
+    static func buttonTitle(isRunning: Bool,
+                            authenticationStatus: Bool?) -> String {
+        if isRunning { return "取消登录" }
+        switch authenticationStatus {
+        case true: return "重新授权 Claude"
+        case false: return "登录 Claude"
+        case nil: return "授权 Claude"
+        }
+    }
+
+    static func idleMessage(authenticationStatus: Bool?) -> String {
+        switch authenticationStatus {
+        case true:
+            return "Claude Code CLI 授权已就绪。"
+        case false:
+            return "Claude Code CLI 尚未登录；\(ProductIdentity.displayName) 不读取或展示凭据。"
+        case nil:
+            return "Claude 登录状态未知；CLI 能力检查结果会在上方单独显示。"
         }
     }
 }
@@ -2238,16 +2498,21 @@ private final class AITextClaudeParserBox {
     }
 }
 
-/// A version-compatible CLI is cached off the IMK main thread. The stat
+/// A capability-compatible CLI is cached off the IMK main thread. The stat
 /// fingerprint makes generation fail closed if that executable is replaced
-/// after validation, without rerunning `--version` on every UI refresh.
-struct AITextVerifiedCLIExecutable: Equatable {
+/// after validation, without restarting a probe process on every UI refresh.
+struct AITextVerifiedCLIExecutable: Hashable {
     let url: URL
     let device: UInt64
     let inode: UInt64
     let size: Int64
     let modifiedSeconds: Int64
     let modifiedNanoseconds: Int64
+    let changedSeconds: Int64
+    let changedNanoseconds: Int64
+    let mode: UInt32
+    let owner: UInt32
+    let group: UInt32
 
     static func capture(_ url: URL) -> AITextVerifiedCLIExecutable? {
         let canonicalURL = url.resolvingSymlinksInPath()
@@ -2259,7 +2524,12 @@ struct AITextVerifiedCLIExecutable: Equatable {
             inode: UInt64(info.st_ino),
             size: Int64(info.st_size),
             modifiedSeconds: Int64(info.st_mtimespec.tv_sec),
-            modifiedNanoseconds: Int64(info.st_mtimespec.tv_nsec)
+            modifiedNanoseconds: Int64(info.st_mtimespec.tv_nsec),
+            changedSeconds: Int64(info.st_ctimespec.tv_sec),
+            changedNanoseconds: Int64(info.st_ctimespec.tv_nsec),
+            mode: UInt32(info.st_mode),
+            owner: UInt32(info.st_uid),
+            group: UInt32(info.st_gid)
         )
     }
 
@@ -2295,8 +2565,7 @@ final class CodexCLITextProvider: AITextProvider {
          probeTTL: TimeInterval = 60) {
         let resolvedCompatibility = compatibilityResolver ?? { executableURL in
             AITextCodexCompatibility.isSupported(executableURL: executableURL,
-                                                 environment: environment,
-                                                 inferenceProfile: inferenceProfile)
+                                                 environment: environment)
         }
         self.environment = environment
         self.homeStore = homeStore ?? AITextCodexHomeStore(environment: environment)
@@ -2323,12 +2592,16 @@ final class CodexCLITextProvider: AITextProvider {
         case let .unavailable(message)?:
             return .unavailable(message)
         case nil:
-            return .unavailable("正在检查 Codex CLI 兼容性…")
+            return .unavailable("正在检查 Codex CLI 能力…")
         }
         guard homeStore.hasChatGPTCredential else {
             return .unavailable("Codex 尚未完成 \(ProductIdentity.displayName) 专用的 ChatGPT 登录")
         }
         return .ready
+    }
+
+    var hasStoredChatGPTCredential: Bool {
+        homeStore.hasChatGPTCredential
     }
 
     private func scheduleProbeIfNeeded(force: Bool = false) {
@@ -2348,13 +2621,13 @@ final class CodexCLITextProvider: AITextProvider {
             guard let self else { return }
             let result: ProbeResult
             guard let executableURL = self.executableResolver() else {
-                result = .unavailable(self.missingCompatibleExecutableMessage)
+                result = .unavailable("未找到具备所需 app-server 能力的 Codex CLI")
                 self.publishProbe(result, generation: generation)
                 return
             }
             guard let before = AITextVerifiedCLIExecutable.capture(executableURL),
                   self.compatibilityResolver(before.url) else {
-                result = .unavailable(self.unsupportedVersionMessage)
+                result = .unavailable("Codex CLI 未通过所需启动参数与 app-server 握手检查")
                 self.publishProbe(result, generation: generation)
                 return
             }
@@ -2374,20 +2647,6 @@ final class CodexCLITextProvider: AITextProvider {
             result = .ready(verified)
             self.publishProbe(result, generation: generation)
         }
-    }
-
-    private var missingCompatibleExecutableMessage: String {
-        guard inferenceProfile == .streamInput else {
-            return "未找到已通过安全兼容性验证的 Codex CLI"
-        }
-        return "未找到可用于意识流输入的 Codex CLI；需要已验证的 codex-cli 0.145.0-alpha.18"
-    }
-
-    private var unsupportedVersionMessage: String {
-        guard inferenceProfile == .streamInput else {
-            return "Codex CLI 版本尚未通过安全兼容性验证"
-        }
-        return "当前 Codex CLI 不支持意识流输入；需要已验证的 codex-cli 0.145.0-alpha.18"
     }
 
     private func publishProbe(_ result: ProbeResult, generation: UInt64) {
@@ -2412,7 +2671,8 @@ final class CodexCLITextProvider: AITextProvider {
         }
     }
 
-    private func executableForGeneration() -> Result<URL, AITextProviderError> {
+    private func executableForGeneration()
+        -> Result<AITextVerifiedCLIExecutable, AITextProviderError> {
         scheduleProbeIfNeeded()
         probeLock.lock()
         let snapshot = cachedProbe
@@ -2425,13 +2685,13 @@ final class CodexCLITextProvider: AITextProvider {
                 lastProbeUptime = nil
                 probeLock.unlock()
                 scheduleProbeIfNeeded(force: true)
-                return .failure(.unavailable("Codex CLI 已发生变化，正在重新验证"))
+                return .failure(.unavailable("Codex CLI 已发生变化，正在重新检查能力"))
             }
-            return .success(verified.url)
+            return .success(verified)
         case let .unavailable(message)?:
             return .failure(.unavailable(message))
         case nil:
-            return .failure(.unavailable("正在检查 Codex CLI 兼容性…"))
+            return .failure(.unavailable("正在检查 Codex CLI 能力…"))
         }
     }
 
@@ -2451,10 +2711,10 @@ final class CodexCLITextProvider: AITextProvider {
             completion(.failure(.resultTooLarge))
             return relay
         }
-        let executableURL: URL
+        let verifiedExecutable: AITextVerifiedCLIExecutable
         switch executableForGeneration() {
         case let .success(value):
-            executableURL = value
+            verifiedExecutable = value
         case let .failure(error):
             completion(.failure(error))
             return relay
@@ -2493,12 +2753,21 @@ final class CodexCLITextProvider: AITextProvider {
         }
         var processEnvironment = AITextCLIExecutableLocator.sanitizedEnvironment(
             for: .codexCLI,
+            executableURL: verifiedExecutable.url,
             from: environment
         )
         processEnvironment["TMPDIR"] = temporary.directoryURL.path
         processEnvironment["CODEX_HOME"] = homeStore.homeDirectory.path
+        guard verifiedExecutable.stillMatches else {
+            temporary.remove()
+            completion(.failure(.unavailable(
+                "Codex CLI 已发生变化，请等待能力检查刷新"
+            )))
+            return relay
+        }
         let operation = AITextCodexAppServerOperation(
-            executableURL: executableURL,
+            executableURL: verifiedExecutable.url,
+            verifiedExecutable: verifiedExecutable,
             arguments: Self.appServerArguments(workspaceURL: workspaceURL),
             environment: processEnvironment,
             currentDirectoryURL: workspaceURL,
@@ -2545,6 +2814,7 @@ final class ClaudeCodeCLITextProvider: AITextProvider {
     private var probeInFlight = false
     private var probeGeneration: UInt64 = 0
     private var lastProbeUptime: TimeInterval?
+    private var lastAuthenticationStatus: Bool?
 
     init(runner: any AITextCLIProcessRunning = AITextFoundationCLIProcessRunner(),
          environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -2590,6 +2860,13 @@ final class ClaudeCodeCLITextProvider: AITextProvider {
         }
     }
 
+    var authenticationStatus: Bool? {
+        scheduleProbeIfNeeded()
+        probeLock.lock()
+        defer { probeLock.unlock() }
+        return lastAuthenticationStatus
+    }
+
     private func scheduleProbeIfNeeded(force: Bool = false) {
         let now = ProcessInfo.processInfo.systemUptime
         probeLock.lock()
@@ -2607,37 +2884,58 @@ final class ClaudeCodeCLITextProvider: AITextProvider {
             guard let self else { return }
             let result: ProbeResult
             guard let executableURL = self.executableResolver() else {
-                result = .unavailable("未找到已通过安全兼容性验证的 Claude Code CLI")
-                self.publishProbe(result, generation: generation)
+                result = .unavailable("未找到具备所需流式生成能力的 Claude Code CLI")
+                self.publishProbe(
+                    result,
+                    authenticationStatus: nil,
+                    generation: generation
+                )
                 return
             }
             guard let before = AITextVerifiedCLIExecutable.capture(executableURL),
                   self.compatibilityResolver(before.url) else {
-                result = .unavailable("Claude Code CLI 版本尚未通过安全兼容性验证")
-                self.publishProbe(result, generation: generation)
+                result = .unavailable("Claude Code CLI 未提供生成所需的安全参数与流式能力")
+                self.publishProbe(
+                    result,
+                    authenticationStatus: nil,
+                    generation: generation
+                )
                 return
             }
             guard let verified = AITextVerifiedCLIExecutable.capture(before.url),
                   verified == before else {
                 result = .unavailable("无法验证 Claude Code CLI 可执行文件")
-                self.publishProbe(result, generation: generation)
+                self.publishProbe(
+                    result,
+                    authenticationStatus: nil,
+                    generation: generation
+                )
                 return
             }
-            result = self.authenticationResolver(verified.url)
-                ? .ready(verified)
-                : .signedOut(verified)
-            self.publishProbe(result, generation: generation)
+            let authenticated = self.authenticationResolver(verified.url)
+            result = authenticated ? .ready(verified) : .signedOut(verified)
+            self.publishProbe(
+                result,
+                authenticationStatus: authenticated,
+                generation: generation
+            )
         }
     }
 
-    private func publishProbe(_ result: ProbeResult, generation: UInt64) {
+    private func publishProbe(_ result: ProbeResult,
+                              authenticationStatus: Bool?,
+                              generation: UInt64) {
         probeLock.lock()
         guard probeGeneration == generation else {
             probeLock.unlock()
             return
         }
-        let changed = cachedProbe != result
+        var changed = cachedProbe != result
         cachedProbe = result
+        if let authenticationStatus {
+            changed = changed || lastAuthenticationStatus != authenticationStatus
+            lastAuthenticationStatus = authenticationStatus
+        }
         probeInFlight = false
         lastProbeUptime = ProcessInfo.processInfo.systemUptime
         probeLock.unlock()
@@ -2664,11 +2962,15 @@ final class ClaudeCodeCLITextProvider: AITextProvider {
         probeLock.lock()
         probeGeneration &+= 1
         probeInFlight = false
+        if let loggedIn {
+            changed = lastAuthenticationStatus != loggedIn
+            lastAuthenticationStatus = loggedIn
+        }
         if loggedIn == true,
            let verified = cachedProbe?.verifiedExecutable,
            verified.stillMatches {
             let next = ProbeResult.ready(verified)
-            changed = cachedProbe != next
+            changed = changed || cachedProbe != next
             cachedProbe = next
             lastProbeUptime = ProcessInfo.processInfo.systemUptime
         } else {
@@ -2679,7 +2981,8 @@ final class ClaudeCodeCLITextProvider: AITextProvider {
         if needsProbe { scheduleProbeIfNeeded(force: true) }
     }
 
-    private func executableForGeneration() -> Result<URL, AITextProviderError> {
+    private func executableForGeneration()
+        -> Result<AITextVerifiedCLIExecutable, AITextProviderError> {
         scheduleProbeIfNeeded()
         probeLock.lock()
         let snapshot = cachedProbe
@@ -2694,7 +2997,7 @@ final class ClaudeCodeCLITextProvider: AITextProvider {
                 scheduleProbeIfNeeded(force: true)
                 return .failure(.unavailable("Claude Code CLI 已发生变化，正在重新验证"))
             }
-            return .success(verified.url)
+            return .success(verified)
         case .signedOut?:
             return .failure(.unavailable("Claude 尚未登录，请点击“登录 Claude”完成 CLI 授权"))
         case let .unavailable(message)?:
@@ -2714,10 +3017,10 @@ final class ClaudeCodeCLITextProvider: AITextProvider {
             completion(.failure(.resultTooLarge))
             return relay
         }
-        let executableURL: URL
+        let verifiedExecutable: AITextVerifiedCLIExecutable
         switch executableForGeneration() {
         case let .success(value):
-            executableURL = value
+            verifiedExecutable = value
         case let .failure(error):
             completion(.failure(error))
             return relay
@@ -2739,13 +3042,21 @@ final class ClaudeCodeCLITextProvider: AITextProvider {
         }
         var processEnvironment = AITextCLIExecutableLocator.sanitizedEnvironment(
             for: .claudeCodeCLI,
+            executableURL: verifiedExecutable.url,
             from: environment
         )
         processEnvironment["TMPDIR"] = temporary.directoryURL.path
+        guard verifiedExecutable.stillMatches else {
+            temporary.remove()
+            completion(.failure(.unavailable(
+                "Claude Code CLI 已发生变化，请等待能力检查刷新"
+            )))
+            return relay
+        }
         let spec = AITextCLIProcessSpec(
-            executableURL: executableURL,
+            executableURL: verifiedExecutable.url,
             arguments: [
-                "-p", "--verbose", "--output-format", "stream-json",
+                "--print", "--verbose", "--output-format", "stream-json",
                 // Claude only streams free-form text; `--json-schema` moves the
                 // structured body to the terminal result and suppresses these
                 // partial message deltas. Rime still validates the final JSON.
@@ -3458,6 +3769,16 @@ final class AITextConnectorRegistry: AITextProvider {
     func availability(for kind: AITextProviderKind) -> AITextProviderAvailability {
         provider(for: kind)?.availability
             ?? .unavailable("连接器不可用：\(kind.displayName)")
+    }
+
+    var codexHasStoredChatGPTCredential: Bool {
+        (provider(for: .codexCLI) as? CodexCLITextProvider)?
+            .hasStoredChatGPTCredential ?? false
+    }
+
+    var claudeAuthenticationStatus: Bool? {
+        (provider(for: .claudeCodeCLI) as? ClaudeCodeCLITextProvider)?
+            .authenticationStatus
     }
 
     func claudeAuthenticationDidChange(_ loggedIn: Bool?) {

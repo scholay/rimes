@@ -9,9 +9,11 @@
 
 > 2026-07-17 早期决策（已被下一条覆盖）：缓冲区从候选 panel 拆成独立工作台，曾采用内嵌候选投影、全文预览与发送后留块方案。
 >
-> **2026-07-22 简化工作台覆盖决策（当前）**：普通工作台折叠为 44pt 单行细条，主条严格为拖拽图标、展开箭头、缓冲块轨和右侧发送；向上展开到总高 78pt 后，固定显示无应用去向的状态、当前插件与动作、刷新/重置和关闭。派生布局按 1/2/3 个 target rows 动态使用折叠 78/109/140pt 与展开 112/143/174pt，只向上增高。刷新/重置始终保留缓冲正文：对外部插件取消过时任务并重新探测上下文，对内置派生工作区保留源文并重启 generation。工作台不再提供块编辑器或面板内缓冲开关；底层缓冲启停、pin 和移屏仍从设置或输入法菜单进入。插件控件按稳定动作身份原位更新，只有拖拽图标可移动窗口。手动遮蔽、历史/恢复、清空/撤销已移除。缓冲模式继续复用常规 `CandidateWindow` 作为唯一 Rime 组字候选面板；意识流 target rows 不是 Rime 候选投影。普通/Shift+Return 与 Backspace 保持宿主隔离，Return 轻按逐块、长按批量，纸飞机每次只发送下一块。单独且小于 500 ms 的 Shift 轻点才切换中英；与字母/标点组合或长按后保持按下前模式。成功发送的 block 立即从 live buffer 消失且不保留明文历史，失败和未发送 block 原位保留。本文后续若仍描述“Rime 候选投影 / 全文预览 / 已发送对号留块”，均视为历史方案。
+> **2026-07-28 工作台工具栏覆盖决策（当前）**：顶部功能栏永久展开；主条只保留缓冲轨与右侧主操作，不再显示左侧拖拽手柄或展开/收起按钮。功能栏空白、间距与弹性留白可拖动窗口，按钮、下拉框、状态控件和正文轨保持原有交互且不能拖窗。普通工作台固定为 78pt，1/2/3 个 target rows 固定为 112/143/174pt；旧折叠偏好静默忽略，frame、pin 和候选锚点继续持久化。本文后续所有 44pt 折叠、drag handle、disclosure 和展开态持久化描述均为历史方案。
+>
+> **2026-07-22 简化工作台覆盖决策（被 2026-07-28 工具栏决策部分覆盖）**：刷新/重置始终保留缓冲正文：对外部插件取消过时任务并重新探测上下文，对内置派生工作区保留源文并重启 generation。工作台不再提供块编辑器或面板内缓冲开关；底层缓冲启停、pin 和移屏仍从设置或输入法菜单进入。手动遮蔽、历史/恢复、清空/撤销已移除。缓冲模式继续复用常规 `CandidateWindow` 作为唯一 Rime 组字候选面板；意识流 target rows 不是 Rime 候选投影。普通/Shift+Return 与 Backspace 保持宿主隔离，Return 轻按逐块、长按批量，纸飞机每次只发送下一块。单独且小于 500 ms 的 Shift 轻点才切换中英；与字母/标点组合或长按后保持按下前模式。成功发送的 block 立即从 live buffer 消失且不保留明文历史，失败和未发送 block 原位保留。本文后续若仍描述“Rime 候选投影 / 全文预览 / 已发送对号留块”，均视为历史方案。
 
-> **2026-07-19 本地翻译覆盖决策（当前）**：苹果翻译已作为只出现在缓冲插件列表的内置 `.bufferAction` 落地，与 Marine 共用唯一 owner。源文复用 `BufferModel`，在上方连续轨合并显示且不分 block；译文位于下方独立 `AppleTranslationWorkspace` 分块轨，两轨分别横向滚动。翻译态折叠/展开为 78/112pt，普通工作台仍严格为 44/78pt，模式切换保持底边。拖拽与展开按钮对齐上方原文行，发送按钮对齐下方目标语言行。仅完成且 generation 匹配的译文可由统一投递协调器手动发送。框架保持 macOS 13 最低版本，macOS 15+ 通过工作台内的 SwiftUI `translationTask` 弱链接桥接本地语言模型。本文后续将 Translation 标记为“计划”或描述无头 initializer 的内容均已被此决策覆盖。
+> **2026-07-19 本地翻译覆盖决策（UI 部分由 2026-07-28 覆盖）**：苹果翻译已作为只出现在缓冲插件列表的内置 `.bufferAction` 落地，与 Marine 共用唯一 owner。源文复用 `BufferModel`，在上方连续轨合并显示且不分 block；译文位于下方独立 `AppleTranslationWorkspace` 分块轨，两轨分别横向滚动。当前翻译态固定为 112pt，顶部功能栏常显并提供空白拖动，发送按钮对齐下方目标语言行。仅完成且 generation 匹配的译文可由统一投递协调器手动发送。框架保持 macOS 13 最低版本，macOS 15+ 通过工作台内的 SwiftUI `translationTask` 弱链接桥接本地语言模型。本文后续将 Translation 标记为“计划”或描述无头 initializer 的内容均已被此决策覆盖。
 >
 > **2026-07-23 AI 插件/连接器覆盖决策（当前）**：内置 `.bufferAction` 已收敛为唯一「AI 生成」插件；Codex CLI、Claude Code CLI 与 OpenAI 兼容 API 是“连接器 › AI 模型”中的三个独立可切换模型源。当外部 owner 的整个动作面只有一个 prepared presentation 时，它与内置 AI 共用主生成控件，展开层不再放独立“生成”按钮；主条右侧控件以 AI 图标/转圈/纸飞机表达不可请求、可请求、生成中和可投递。Return 与它共用同一状态：无结果时请求 AI，ready 后的新一次轻按逐块发送、长按全部发送。Marine 仍以 `presentationId` 合并直评/回复并按 `status.actionId` 选择真实动作；若还存在任意第二个 presentation，则全部保留为显式按钮而不让 Return 猜测。内置生成冻结当前缓冲全文，在下方 target rail 以稳定 block 原位更新；只有目标块全部成功发送后才消费上方对应 source blocks。两轨角色使用图标，不再显示“原/答”文字。
 
@@ -53,7 +55,7 @@
 
 ### 1.1 独立缓冲工作台（缓冲模式主交互面）
 
-下图是三轨产品路线的历史结构参考；当前普通运行时折叠为 44pt 单行缓冲条，功能层向上展开后总高 78pt，派生模式则按 1–3 个 target rows 向上增高。Rime 组字候选使用工作台底边下方的常规候选窗，传入轨仍由独立收件箱承载。
+下图是三轨产品路线的历史结构参考；当前顶部功能栏常显，普通运行时固定为 78pt，派生模式按 1–3 个 target rows 使用 112/143/174pt 并向上增高。Rime 组字候选使用工作台底边下方的常规候选窗，传入轨仍由独立收件箱承载。
 
 ```
 ┌────────────────────────────────────────────────┐
@@ -65,12 +67,12 @@
 └────────────────────────────────────────────────┘
 ```
 
-实现载体：`BufferWindowController` 拥有独立 `nonactivatingPanel`。普通折叠态是 44pt 单行主条：拖拽图标 → 展开箭头 → `BufferInlineView` → 发送；向上工具层只有状态 → 带小图标的缓冲插件选择器与当前动作 → 刷新/重置 → 关闭，展开后总高 78pt。苹果翻译、AI 生成与单候选意识流使用 78/112pt 的 source + target 布局；意识流出现 2/3 个候选时增加 1/2 条 target row，高度为 109/143pt 与 140/174pt。设置页可独立开启多个缓冲插件；选择器只枚举已开启集合，以 `Default` 表示无插件，并直接切换唯一 owner。刷新/重置不清除缓冲正文，只重置当前插件的请求、失败与 generation。切换 owner/展开态/target row 数时保持窗口底边不动，因此条下方 Rime 候选锚点稳定；只有 22pt 拖拽图标可移动面板。`Command+Shift+B` 通过全局 Carbon hot key 调用 `toggleVisibility()`：关闭时显示并恢复捕获，打开时复用普通关闭语义，收束当前组字、保留内容并暂停捕获。窗口仍可调整宽度、关闭、固定到所有桌面/全屏空间，frame 与展开态持久化并在多屏变化后校正。`CandidateWindow` 继续独占 Rime 组字候选状态；意识流互斥解释在 target rows 内呈现。拖拽/展开对齐 source 行，发送对齐最下方 target 行。
+实现载体：`BufferWindowController` 拥有独立 `nonactivatingPanel`。顶部功能栏常显，内容是状态 → 带小图标的缓冲插件选择器与当前动作 → 弹性空白 → 刷新/重置 → 关闭；空白、间距与弹性留白通过 `performDrag` 移动窗口，所有 `NSControl` 保持首击。主条只保留 `BufferInlineView` → 右侧主操作。普通布局固定 78pt；苹果翻译、AI 生成与单候选意识流固定为 112pt 的 source + target 布局；意识流出现 2/3 个候选时增加 1/2 条 target row，高度为 143/174pt。设置页可独立开启多个缓冲插件；选择器只枚举已开启集合，以 `Default` 表示无插件，并直接切换唯一 owner。刷新/重置不清除缓冲正文，只重置当前插件的请求、失败与 generation。切换 owner/target row 数时保持窗口底边不动，因此条下方 Rime 候选锚点稳定。`Command+Shift+B` 通过全局 Carbon hot key 调用 `toggleVisibility()`：关闭时显示并恢复捕获，打开时复用普通关闭语义，收束当前组字、保留内容并暂停捕获。窗口仍可调整宽度、关闭、固定到所有桌面/全屏空间，frame 持久化并在多屏变化后校正。`CandidateWindow` 继续独占 Rime 组字候选状态；意识流互斥解释在 target rows 内呈现。发送对齐最下方 target 行。
 
 各层职责：
 
 - **① 传入轨（后续）**：当前外部待决项仍在 `InboundTrayWindow` 接受/拒绝，异步来源不得自行拉起工作台。未来可作为工作台内固定高度区域加入。
-- **② 缓冲轨（已实现基础）**：主条显示拖拽、展开、待发送块 chips、来源徽标、插入点、Enter 长按进度和右侧纸飞机；轻按 Enter 或点击纸飞机发送下一块，按住 Enter 约 1.2 秒发送全部。成功发送后 block 从 live rail 消失且不保存历史；失败和未发送 block 保留。
+- **② 缓冲轨（已实现基础）**：主条显示待发送块 chips、来源徽标、插入点、Enter 长按进度和右侧纸飞机；轻按 Enter 或点击纸飞机发送下一块，按住 Enter 约 1.2 秒发送全部。成功发送后 block 从 live rail 消失且不保存历史；失败和未发送 block 保留。
 - **③ 候选区（已实现常规面板复用）**：候选、preedit、矩阵/单字选择始终由同一个 `CandidateWindow` 呈现；缓冲模式只把锚点移到细条下方，任何点击仍必须携带当前 `FocusToken`，过期动作无效。
 - **块交互与隐私（已实现）**：缓冲 chip 是被动呈现单元，不可点选后编辑；被动工作台不抢外部焦点。工作台没有手动遮蔽，保留 secure-input 自动遮蔽与会话锁定隐藏。
 
@@ -203,7 +205,7 @@ struct AITextGeneration {
 | FocusCoordinator | 新（已实现） | `InputFocusCoordinator.swift` | FocusToken、client 租约、前台与对象身份校验 |
 | BufferDeliveryCoordinator | 新（已实现） | `BufferDeliveryCoordinator.swift` | 逐块复核目标、成功块无历史消费、失败后缀保留 |
 | DeliveryRouter | 后续 | `Delivery.swift` → `Delivery/DeliveryRouter.swift` | 多目标、远端 ACK、持久账本 |
-| 独立工作台 | 新（已实现） | `BufferWindowController.swift` + `BufferInlineView.swift` | 普通44/78pt；1–3 target rows的78/109/140与112/143/174pt；source全选、多行target、插件动作/刷新/关闭/多屏/安全遮蔽 |
+| 独立工作台 | 新（已实现） | `BufferWindowController.swift` + `BufferInlineView.swift` | 常显工具栏空白拖动；普通78pt；1–3 target rows为112/143/174pt；source全选、多行target、插件动作/刷新/关闭/多屏/安全遮蔽 |
 | 候选状态机 | 改（已实现） | `CandidateWindow.swift` | 同一个常规 panel 锚定 caret 或缓冲条下方 |
 | 设置窗 | 新 IA 已实现 | `SettingsWindow.swift` + `SettingsRouting.swift` | 左侧一级导航、右侧横向子页、动态内置扩展页；含真实插件管理 |
 
@@ -298,14 +300,14 @@ claude mcp add --transport http etinput http://127.0.0.1:47700/mcp \
 - **Apple Translation framework**（macOS 15+）已通过工作台内 1×1 `NSHostingView` 的 SwiftUI `translationTask` 桥接；`TranslationSession` 只在该视图生命周期内使用。`LSMinimumSystemVersion` 仍为 13.0，13/14 只呈现不可用状态。
 - `AppleTranslationWorkspace` 读取当前 `BufferModel.stagedText`：原文在上方连续轨合并显示，译文在下方独立分块轨显示，两轨各自横向滚动。
 - 输入停顿 300ms 后启动翻译，持续输入最长等待 900ms；运行中只排队最新快照。只有原文、语言与 generation 全部匹配的完整译文可发送。
-- 展开区的刷新/重置保留原文，作废当前译文 generation 并重启当前语言组合；工作台上的拖拽/展开对齐原文行，发送对齐目标语言行。
+- 顶部功能栏的刷新/重置保留原文，作废当前译文 generation 并重启当前语言组合；功能栏空白可拖动窗口，发送对齐目标语言行。
 
 ### 5.3 单一 AI 文本缓冲插件与三个连接器（已实现）
 
 - **统一插件**：`AITextInternalPlugin` 是唯一占用缓冲插件 owner 的「AI 生成」入口，`AITextConnectorSelectionStore` 单独持久化当前模型源；切换连接器不会变成另一个插件，也不会改写其他缓冲插件的 owner。
-- **Codex CLI 连接器**：显式 `RIMEBUFFER_CODEX_PATH` 仍是最高优先级；普通自动探测则优先 ChatGPT app bundled Codex，再查找 `/opt/homebrew/bin`、`/usr/local/bin`、`~/.local/bin` 与 PATH，避免旧 shim 遮挡已验证的 bundled 版本。它用一次性 app-server 的双向 stdio JSON-RPC 接收 answer delta。专用 ChatGPT 登录持久化在 `~/Library/RimeBuffer/ai/codex-home`，不读取 `~/.codex` 中的订阅登录或 MCP/Hook/插件/技能；设置页可直接发起、取消或重新授权结构化浏览器登录，并在完成事件后复核账户。每次请求创建私有临时工作目录，并在发送正文前用 `mcpServerStatus/list` 再次断言零 MCP。严格 permission profile 将文件读取限制到临时目录并关闭工具网络、shell/连接器等能力；未知版本在正文出进程前失败关闭。
-- **Claude Code CLI 连接器**：设置页用固定 `claude auth login --claudeai` 发起官方浏览器授权，可取消或重新授权；后台探测用 `claude auth status --json` 的 `loggedIn` 布尔值缓存就绪状态，定期复核时不阻塞输入法主线程。生成以 `claude -p --output-format stream-json --include-partial-messages` 运行，禁用 tools、slash commands、会话持久化与交互式授权，只经 stdin 传源正文。RimeBuffer 不读取凭据文件、不展示账户元数据，也不把 `CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CONFIG_DIR` 或 ambient API key 传给子进程；官方 CLI 只通过白名单中的 `HOME` 解析它自己管理的 CLI 授权。
-- 上述两个 CLI 都由 `Process` 直接启动，不调 shell，不显示 stderr/reasoning/tool 输出，且在 0700 临时目录内受 120s/1MiB 上限约束。当前经安全工具面验证的精确白名单为 Codex `0.144.1`/`0.145.0-alpha.18` 和 Claude Code `2.1.211`/`2.1.215`；其他版本在正文出进程前 fail-closed。**这不是本地推理**：点击生成后，缓冲全文会通过各自 CLI 的已登录服务发送。
+- **Codex CLI 连接器**：显式 `RIMEBUFFER_CODEX_PATH` 仍是最高优先级；普通自动探测则优先 ChatGPT app bundled Codex，再查找 Homebrew、用户 PATH、常见版本管理器、nvm/fnm 与 Cursor/VS Code 扩展内置安装。它用一次性 app-server 的双向 stdio JSON-RPC 接收 answer delta。专用 ChatGPT 登录持久化在 `~/Library/RimeBuffer/ai/codex-home`，不读取 `~/.codex` 中的订阅登录或 MCP/Hook/插件/技能；设置页把登录凭据与 CLI 能力分开呈现，可直接发起、取消或重新授权结构化浏览器登录，并在完成事件后复核账户。每次请求创建私有临时工作目录，并在发送正文前用 `mcpServerStatus/list` 再次断言零 MCP。严格 permission profile 将文件读取限制到临时目录并关闭工具网络、shell/连接器等能力；完整隔离握手不成立时在正文出进程前失败关闭。
+- **Claude Code CLI 连接器**：设置页用固定 `claude auth login --claudeai` 发起官方浏览器授权，可取消或重新授权；后台探测用 `claude auth status --json` 的 `loggedIn` 布尔值缓存就绪状态，定期复核时不阻塞输入法主线程。生成以 `claude -p --output-format stream-json --include-partial-messages` 运行，禁用 tools、slash commands、会话持久化与交互式授权，只经 stdin 传源正文。RimeBuffer 不读取凭据文件、不展示账户元数据，也不把 `CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CONFIG_DIR` 或 ambient API key 传给子进程；官方 CLI 只从经过滤的进程环境中的 `HOME` 解析它自己管理的 CLI 授权。
+- 上述两个 CLI 都由 `Process` 直接启动，不调 shell，不显示 stderr/reasoning/tool 输出，且在 0700 临时目录内受 120s/1MiB 上限约束。准入不依赖版本号：Codex 必须以完整隔离参数完成无提示词的 app-server initialize 与空 MCP 握手，Claude 必须提供实际生成所需的工具关闭和流式参数；能力契约不成立时在正文出进程前 fail-closed。**这不是本地推理**：点击生成后，缓冲全文会通过各自 CLI 的已登录服务发送。
 - **OpenAI 兼容 API 连接器**：用户可在“设置 › 连接器 › AI 模型”配置 Base URL、model 和 API key。请求为 `POST {baseURL}/chat/completions`，`stream: true`，要求标准 SSE `choices[].delta.content`/`[DONE]`；2xx 非 SSE 响应失败关闭。远程地址必须 HTTPS，HTTP 仅允许 `localhost`/`127.0.0.1`/`::1`；拒绝 userinfo、query、fragment 和 redirect，避免 Authorization 泄露。
 - Base URL/model/key 保存于 **0600 文件** `~/Library/RimeBuffer/ai/openai-compatible.json`，不进 UserDefaults、Keychain 或日志。继续沿用 ad-hoc 签名下避免 Keychain ACL 重复弹窗的决策，Developer ID 后再评估迁移。
 - 「AI 生成」插件只在用户显式点击右侧 AI 主按钮或按 Return 时把当前缓冲全文交给所选连接器，永不附带输入历史、preedit、剪贴板或屏幕上下文。预置/自定义提示词模板仍属后续，不写成当前能力。
@@ -423,7 +425,7 @@ claude mcp add --transport http etinput http://127.0.0.1:47700/mcp \
 | 11 | 无条件镜像 | v1 保持既有隔空传字设置；自身窗口永不镜像，`.remotePeer` 来源永不回镜（§6.3） |
 | 12 | Return 轻按/长按发送 | 已实现；无未决组字时 keyDown 建立隔离，轻按发下一块、按住约 1.2 秒发全部。有未决 Rime/并击或未 ready raw 时本次只收束/强制生成；ready 意识流在 keyDown 确认候选后使用同一次手势发送（§1.1） |
 | 13 | 清空按钮 | 2026-07-18 覆盖裁决：移除按钮、清空与撤销功能；只保留不可恢复的自动安全清理 |
-| 14 | 紧凑面板两轨还是三轨 | 三层仍是历史路线目标；当前普通模式为 44/78pt，派生模式为 source + 1–3 target rows 的动态高度，工作台底边下方仍是常规 Rime 候选窗，传入轨仍待嵌入 |
+| 14 | 紧凑面板两轨还是三轨 | 三层仍是历史路线目标；当前顶部功能栏常显，普通模式为 78pt，派生模式为 source + 1–3 target rows 的 112/143/174pt 动态高度，工作台底边下方仍是常规 Rime 候选窗，传入轨仍待嵌入 |
 | 15 | 「远端」语义 | 本方案中远端=配对设备（出入站同一对端）；「远端算力」概念废弃，算力即处理器 |
 | 16 | 分期 | §9 |
 | 17 | 路线图还是草稿 | 草稿；本文档为收敛后的路线图 |
@@ -456,7 +458,7 @@ claude mcp add --transport http etinput http://127.0.0.1:47700/mcp \
   - ⏸ **传入轨 UI**：M2 网关前置条件已经满足；当前仍使用 `InboundToast` + `InboundTrayWindow`，嵌入独立工作台的传入轨尚未实现。配对设备继续直通不入轨；Action Plugin 的有效结果进入 buffer，失效或迟到结果进入收件箱。
   - ⏹ **远端改道 + 协议 v2**：按 §12.1 决策**作废**。
 - **M2 网关+MCP** — ✅ 主干已实现：`LocalGateway`、MCP tools、`InboundBus`、token 与收件箱可用；传入轨嵌入工作台仍后续。
-- **稳定缓冲窗口** — ✅ 2026-07-22：FocusToken、Return 轻按逐块/长按全部、纸飞机逐块发送、Return/Backspace 宿主隔离、普通44/78pt与1–3 target rows动态高度、状态/插件动作/刷新/关闭契约、派生多行控件对齐、条下方常规 Rime 候选窗、普通/插件/意识流 source 全选粘贴、成功块无历史消费、多屏/常显与 secure-input 保护（包括不读剪贴板）已实现；待重新安装后的真实宿主输入交互验收。
+- **稳定缓冲窗口** — ✅ 2026-07-28：FocusToken、Return 轻按逐块/长按全部、纸飞机逐块发送、Return/Backspace 宿主隔离、常显且空白可拖的顶部功能栏、普通78pt与1–3 target rows的112/143/174pt动态高度、状态/插件动作/刷新/关闭契约、派生多行控件对齐、条下方常规 Rime 候选窗、普通/插件/意识流 source 全选粘贴、成功块无历史消费、多屏/常显与 secure-input 保护（包括不读剪贴板）已实现；待重新安装后的真实宿主输入交互验收。
 - **AI 生成插件 + 三连接器 + 工作台快捷入口** — ✅ 2026-07-20：唯一「AI 生成」插件、Codex CLI/Claude Code CLI/OpenAI 兼容 API 三连接器、source/target 双轨、工作台插件选择器、`Command+Shift+B` 全局打开/关闭、OpenAI 0600 配置与 owner 切换后 Marine 权限保留已落地；待安装后的真 CLI/API 和快捷键验收。
 
 ### 12.3 下一步真实工作量

@@ -34,7 +34,7 @@ enum BufferWindowGeometry {
     static let expandedHeight: CGFloat = 78
     static let translationCollapsedHeight: CGFloat = 78
     static let translationExpandedHeight: CGFloat = 112
-    static let standardMinimumHeight = collapsedHeight
+    static let standardMinimumHeight = expandedHeight
     static let screenSafetyMargin: CGFloat = 8
 
     static func height(expanded: Bool,
@@ -51,7 +51,7 @@ enum BufferWindowGeometry {
     }
 
     static func clampedFrame(_ proposed: NSRect,
-                             expanded: Bool = false,
+                             expanded: Bool = true,
                              mode: BufferWorkbenchLayoutMode = .standard,
                              visibleFrames: [NSRect],
                              fallback: NSRect) -> NSRect {
@@ -123,8 +123,6 @@ enum BufferWindowVisibilityRules {
 }
 
 enum BufferWorkbenchControl: String, Equatable {
-    case dragHandle
-    case disclosure
     case bufferRail
     case send
     case status
@@ -157,7 +155,22 @@ enum BufferWorkbenchPointerState: Equatable {
     case disabled
 }
 
-/// Pure pointer-state policy shared by buttons, popups, the drag handle, and
+enum BufferWorkbenchToolbarPointerDisposition: Equatable {
+    case dragWindow
+    case interactWithControl
+}
+
+/// Empty toolbar chrome moves the workbench, while controls keep their normal
+/// first-click behavior inside the nonactivating panel.
+enum BufferWorkbenchToolbarDragRules {
+    static func disposition(
+        hitIsInteractiveControl: Bool
+    ) -> BufferWorkbenchToolbarPointerDisposition {
+        hitIsInteractiveControl ? .interactWithControl : .dragWindow
+    }
+}
+
+/// Pure pointer-state policy shared by buttons, popups, and
 /// `buffer-window-smoke`. The workbench is nonactivating, so AppKit does not
 /// reliably synthesize these states for borderless controls on its own.
 enum BufferWorkbenchPointerRules {
@@ -280,17 +293,17 @@ enum BufferWorkbenchShelfLayout {
 /// Shared by the live stack construction and the pure layout smoke test.
 enum BufferWorkbenchLayout {
     static let mainBar: [BufferWorkbenchControl] = [
-        .dragHandle, .disclosure, .bufferRail, .send,
+        .bufferRail, .send,
     ]
-    static let expandedShelf: [BufferWorkbenchControl] = [
+    static let toolbar: [BufferWorkbenchControl] = [
         .status, .pluginActions, .refresh, .close,
     ]
-    static let dragControls: Set<BufferWorkbenchControl> = [.dragHandle]
     static let hoverControls: Set<BufferWorkbenchControl> = [
-        .dragHandle, .disclosure, .send, .pluginActions, .refresh, .close,
+        .send, .pluginActions, .refresh, .close,
     ]
     static let passiveControls: Set<BufferWorkbenchControl> = [.bufferRail, .status]
-    static let dragCursor = BufferWorkbenchCursorKind.pointingHand
+    static let toolbarAlwaysExpanded = true
+    static let toolbarEmptySpaceDraggable = true
     static let windowBackgroundDraggable = false
 }
 
@@ -359,87 +372,62 @@ private final class BufferPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-private final class BufferDragHandleView: NSImageView {
-    private var pointerTrackingArea: NSTrackingArea?
-    private var pointerHovered = false
-    private var pointerPressed = false
-    private var previewPointerState: BufferWorkbenchPointerState?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        configurePointerFeedback()
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        configurePointerFeedback()
-    }
-
+private final class BufferWorkbenchToolbarView: NSStackView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    override func mouseDown(with event: NSEvent) {
-        pointerPressed = true
-        refreshInteractionAppearance()
-        defer {
-            pointerPressed = false
-            refreshInteractionAppearance()
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        let control = interactiveControl(containing: hit)
+        switch BufferWorkbenchToolbarDragRules.disposition(
+            hitIsInteractiveControl: control != nil
+        ) {
+        case .dragWindow:
+            return self
+        case .interactWithControl:
+            return control
         }
+    }
+
+    override func mouseDown(with event: NSEvent) {
         window?.performDrag(with: event)
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let pointerTrackingArea { removeTrackingArea(pointerTrackingArea) }
-        let area = NSTrackingArea(
-            rect: .zero,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
+    private func interactiveControl(containing hit: NSView) -> NSControl? {
+        var view: NSView? = hit
+        while let current = view, current !== self {
+            if let control = current as? NSControl {
+                return control
+            }
+            view = current.superview
+        }
+        return nil
+    }
+
+    static func runHitTestProbe() -> Bool {
+        let toolbar = BufferWorkbenchToolbarView(
+            frame: NSRect(x: 0, y: 0, width: 240, height: 32)
         )
-        addTrackingArea(area)
-        pointerTrackingArea = area
-    }
-
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        addCursorRect(bounds, cursor: BufferWorkbenchLayout.dragCursor.cursor)
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        pointerHovered = true
-        refreshInteractionAppearance()
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        pointerHovered = false
-        refreshInteractionAppearance()
-    }
-
-    func refreshInteractionAppearance() {
-        let state = previewPointerState ?? BufferWorkbenchPointerRules.state(
-            enabled: true,
-            hovered: pointerHovered,
-            pressed: pointerPressed
+        let button = NSButton(
+            frame: NSRect(x: 8, y: 5, width: 40, height: 22)
         )
-        wantsLayer = true
-        layer?.cornerRadius = 6
-        layer?.backgroundColor = BufferWorkbenchPointerRules.backgroundColor(for: state).cgColor
-        layer?.borderColor = BufferWorkbenchPointerRules.borderColor(for: state).cgColor
-        layer?.borderWidth = (state == .idle || state == .disabled)
-            ? 0
-            : 1 / max(window?.backingScaleFactor ?? 2, 1)
+        let status = NSTextField(labelWithString: "状态")
+        status.frame = NSRect(x: 56, y: 5, width: 48, height: 22)
+        let emptySpace = NSView(
+            frame: NSRect(x: 112, y: 5, width: 100, height: 22)
+        )
+        toolbar.addSubview(button)
+        toolbar.addSubview(status)
+        toolbar.addSubview(emptySpace)
+        return toolbar.acceptsFirstMouse(for: nil)
+            && toolbar.hitTest(NSPoint(x: 20, y: 16)) === button
+            && toolbar.hitTest(NSPoint(x: 70, y: 16)) === status
+            && toolbar.hitTest(NSPoint(x: 150, y: 16)) === toolbar
+            && toolbar.hitTest(NSPoint(x: 220, y: 16)) === toolbar
     }
+}
 
-    func setPreviewPointerState(_ state: BufferWorkbenchPointerState?) {
-        previewPointerState = state
-        refreshInteractionAppearance()
-    }
-
-    private func configurePointerFeedback() {
-        wantsLayer = true
-        layer?.masksToBounds = true
-        refreshInteractionAppearance()
-    }
+func runBufferWorkbenchToolbarHitTestProbe() -> Bool {
+    BufferWorkbenchToolbarView.runHitTestProbe()
 }
 
 private final class FirstMousePopUpButton: NSPopUpButton {
@@ -656,7 +644,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         static let legacyFrame = "bufferWindow.frame.v1"
         static let pinned = "bufferWindow.pinned.v1"
         static let placement = "bufferWindow.candidatePlacement.v1"
-        static let controlsExpanded = "bufferWindow.controlsExpanded.v1"
     }
 
     private let panel: BufferPanel
@@ -664,9 +651,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private let visual = BufferChromeView()
     private let bufferRail = BufferInlineView()
     private lazy var translationBridgeView = AppleTranslationWorkspace.shared.makeBridgeView()
-    private let utilityShelf = NSStackView()
+    private let utilityShelf = BufferWorkbenchToolbarView()
     private let shelfDivider = NSView()
-    private let dragHandle = BufferDragHandleView()
     private let statusLabel = NSTextField(labelWithString: "")
     private let pluginActionsControl = NSStackView()
     private let shelfFlexibleSpace = NSView()
@@ -681,20 +667,16 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private let translationSourcePopup = FirstMousePopUpButton(frame: .zero, pullsDown: false)
     private let translationTargetPopup = FirstMousePopUpButton(frame: .zero, pullsDown: false)
     private let translationSwapButton = FirstMouseButton(title: "", target: nil, action: nil)
-    private let disclosureButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let sendButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let sendButtonProgressIndicator = NSProgressIndicator()
     private let refreshButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let closeButton = FirstMouseButton(title: "", target: nil, action: nil)
-    private lazy var dragHandleSlot = BufferMainControlSlot(control: dragHandle, row: .source)
-    private lazy var disclosureSlot = BufferMainControlSlot(control: disclosureButton, row: .source)
     private lazy var sendSlot = BufferMainControlSlot(control: sendButton, row: .target)
     private var hiddenForSession = false
     private var sessionInactive = false
     private var screenLocked = false
     private var sleeping = false
     private var adjustingFrame = false
-    private var controlsExpanded = false
     private var layoutMode: BufferWorkbenchLayoutMode = .standard
     private var mainBarHeightConstraint: NSLayoutConstraint?
     private var bufferRailHeightConstraint: NSLayoutConstraint?
@@ -749,21 +731,20 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private override init() {
-        let expanded = UserDefaults.standard.bool(forKey: Key.controlsExpanded)
         let initialLayoutMode: BufferWorkbenchLayoutMode =
             DerivedBufferWorkspaceRouter.selectedWorkspace != nil
                 ? .translation
                 : .standard
         panel = BufferPanel(contentRect: NSRect(x: 0, y: 0, width: 760,
                                                 height: BufferWindowGeometry.height(
-                                                    expanded: expanded,
+                                                    expanded: BufferWorkbenchLayout
+                                                        .toolbarAlwaysExpanded,
                                                     mode: initialLayoutMode
                                                 )),
                             styleMask: [.borderless, .nonactivatingPanel, .resizable],
                             backing: .buffered,
                             defer: false)
         super.init()
-        controlsExpanded = expanded
         layoutMode = initialLayoutMode
         bufferRail.onDerivedTargetSelection = { [weak self] blockID in
             self?.selectDerivedTarget(blockID: blockID)
@@ -869,12 +850,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// into two unrelated designs again.
     @discardableResult
     func renderForPreview(to path: String,
-                          expanded: Bool = false,
                           scale: CGFloat = 2,
                           translationSnapshot: TranslationRailSnapshot? = nil,
                           hoveredControl: BufferWorkbenchControl? = nil) -> Bool {
-        controlsExpanded = expanded
-        applyExpandedPresentation()
         let previewMode: BufferWorkbenchLayoutMode = translationSnapshot == nil
             ? (DerivedBufferWorkspaceRouter.selectedWorkspace != nil
                 ? .translation
@@ -883,8 +861,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         syncLayoutMode(previewMode)
         adjustingFrame = true
         panel.setFrame(NSRect(x: 0, y: 0, width: 760,
-                              height: BufferWindowGeometry.height(expanded: expanded,
-                                                                  mode: previewMode)),
+                              height: BufferWindowGeometry.height(
+                                  expanded: BufferWorkbenchLayout
+                                      .toolbarAlwaysExpanded,
+                                  mode: previewMode
+                              )),
                        display: false)
         adjustingFrame = false
         if let translationSnapshot {
@@ -1085,12 +1066,14 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         panel.isMovableByWindowBackground = BufferWorkbenchLayout.windowBackgroundDraggable
         panel.minSize = NSSize(width: BufferWindowGeometry.standardMinimumWidth,
                                height: BufferWindowGeometry.height(
-                                   expanded: controlsExpanded,
+                                   expanded: BufferWorkbenchLayout
+                                       .toolbarAlwaysExpanded,
                                    mode: layoutMode
                                ))
         panel.maxSize = NSSize(width: BufferWindowGeometry.standardMaximumWidth,
                                height: BufferWindowGeometry.height(
-                                   expanded: controlsExpanded,
+                                   expanded: BufferWorkbenchLayout
+                                       .toolbarAlwaysExpanded,
                                    mode: layoutMode
                                ))
         panel.delegate = self
@@ -1120,22 +1103,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             translationBridgeView.heightAnchor.constraint(equalToConstant: 1),
         ])
 
-        dragHandle.image = RimeUI.symbol("line.3.horizontal", pointSize: 12, weight: .semibold)
-        dragHandle.image?.isTemplate = true
-        dragHandle.imageScaling = .scaleProportionallyDown
-        dragHandle.toolTip = "拖动缓冲工作台"
-        dragHandle.translatesAutoresizingMaskIntoConstraints = false
-        dragHandle.setContentHuggingPriority(.required, for: .horizontal)
-        dragHandle.setContentCompressionResistancePriority(.required, for: .horizontal)
-        NSLayoutConstraint.activate([
-            dragHandle.widthAnchor.constraint(equalToConstant: BufferWorkbenchMetrics.controlSize),
-            dragHandle.heightAnchor.constraint(equalToConstant: BufferWorkbenchMetrics.controlSize),
-        ])
-
-        configureIconButton(disclosureButton,
-                            controlsExpanded ? "chevron.down" : "chevron.up",
-                            controlsExpanded ? "收起功能" : "向上展开功能",
-                            #selector(disclosureTapped))
         configureIconButton(sendButton, "paperplane.fill", "发送下一块", #selector(sendTapped))
         sendButtonProgressIndicator.style = .spinning
         sendButtonProgressIndicator.controlSize = .small
@@ -1329,7 +1296,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             railHeight,
         ])
         updateMainControlAlignment(for: layoutMode)
-        applyExpandedPresentation()
         applyAppearance()
         rebuildPluginSelector()
     }
@@ -1353,8 +1319,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func view(for control: BufferWorkbenchControl) -> NSView {
         switch control {
-        case .dragHandle: return dragHandleSlot
-        case .disclosure: return disclosureSlot
         case .bufferRail: return bufferRail
         case .send: return sendSlot
         case .status: return statusLabel
@@ -1370,12 +1334,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         visual.fillColor = RimeUI.workbenchChrome
         visual.strokeColor = RimeUI.borderStrong
         shelfDivider.layer?.backgroundColor = RimeUI.borderStrong.withAlphaComponent(0.55).cgColor
-        dragHandle.contentTintColor = RimeUI.textSecondary
-        dragHandle.refreshInteractionAppearance()
         pluginActionsControl.layer?.backgroundColor = RimeUI.surface2.cgColor
         pluginActionsControl.layer?.borderColor = RimeUI.border.cgColor
         pluginActionsControl.layer?.borderWidth = 1 / max(panel.backingScaleFactor, 1)
-        [refreshButton, closeButton, sendButton, disclosureButton].forEach {
+        [refreshButton, closeButton, sendButton].forEach {
             $0.contentTintColor = RimeUI.textSecondary
             $0.refreshInteractionAppearance()
         }
@@ -1399,8 +1361,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func applyPreviewPointerState(_ hoveredControl: BufferWorkbenchControl?) {
-        dragHandle.setPreviewPointerState(nil)
-        [disclosureButton, sendButton, refreshButton, closeButton].forEach {
+        [sendButton, refreshButton, closeButton].forEach {
             $0.setPreviewPointerState(nil)
         }
         pluginSelector.setPreviewPointerState(nil)
@@ -1412,10 +1373,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         pluginActionButtons.values.forEach { $0.setPreviewPointerState(nil) }
 
         switch hoveredControl {
-        case .dragHandle:
-            dragHandle.setPreviewPointerState(.hovered)
-        case .disclosure:
-            disclosureButton.setPreviewPointerState(.hovered)
         case .send:
             sendButton.setPreviewPointerState(.hovered)
         case .pluginActions:
@@ -1787,18 +1744,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         popup.select(item)
     }
 
-    private func applyExpandedPresentation() {
-        utilityShelf.isHidden = !controlsExpanded
-        shelfDivider.isHidden = !controlsExpanded
-        disclosureButton.image = RimeUI.symbol(
-            controlsExpanded ? "chevron.down" : "chevron.up",
-            pointSize: 12,
-            weight: .semibold
-        )
-        disclosureButton.image?.isTemplate = true
-        disclosureButton.toolTip = controlsExpanded ? "收起功能" : "向上展开功能"
-    }
-
     private func syncLayoutMode(_ nextMode: BufferWorkbenchLayoutMode) {
         updateMainControlAlignment(for: nextMode)
         guard layoutMode != nextMode else { return }
@@ -1806,8 +1751,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         mainBarHeightConstraint?.constant = BufferWorkbenchMetrics.mainBarHeight(for: nextMode)
         bufferRailHeightConstraint?.constant = BufferWorkbenchMetrics.railHeight(for: nextMode)
         var proposed = panel.frame
-        proposed.size.height = BufferWindowGeometry.height(expanded: controlsExpanded,
-                                                           mode: nextMode)
+        proposed.size.height = BufferWindowGeometry.height(
+            expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
+            mode: nextMode
+        )
         let fallback = panel.screen?.visibleFrame
             ?? NSScreen.main?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -1822,8 +1769,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func updateMainControlAlignment(for mode: BufferWorkbenchLayoutMode) {
-        dragHandleSlot.update(for: mode)
-        disclosureSlot.update(for: mode)
         sendSlot.update(for: mode)
     }
 
@@ -2024,9 +1969,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         let stored = defaults.string(forKey: Key.frame).map(NSRectFromString)
             ?? defaults.string(forKey: Key.legacyFrame).map(NSRectFromString)
             ?? NSRect(x: fallback.midX - 340,
-                      y: fallback.midY - BufferWindowGeometry.collapsedHeight / 2,
+                      y: fallback.midY - BufferWindowGeometry.expandedHeight / 2,
                       width: 680,
-                      height: BufferWindowGeometry.collapsedHeight)
+                      height: BufferWindowGeometry.expandedHeight)
         applyClampedFrame(stored,
                           visibleFrames: NSScreen.screens.map(\.visibleFrame),
                           fallback: fallback,
@@ -2049,7 +1994,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                                    display: Bool) {
         let clamped = BufferWindowGeometry.clampedFrame(
             proposed,
-            expanded: controlsExpanded,
+            expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
             mode: layoutMode,
             visibleFrames: visibleFrames,
             fallback: fallback
@@ -2070,8 +2015,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func syncMinimumSize(to visibleFrame: NSRect) {
         let usableWidth = max(1, visibleFrame.width - BufferWindowGeometry.screenSafetyMargin * 2)
-        let targetHeight = min(BufferWindowGeometry.height(expanded: controlsExpanded,
-                                                            mode: layoutMode),
+        let targetHeight = min(BufferWindowGeometry.height(
+            expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
+            mode: layoutMode
+        ),
                                visibleFrame.height)
         panel.minSize = NSSize(
             width: min(BufferWindowGeometry.standardMinimumWidth, usableWidth),
@@ -2110,7 +2057,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func saveFrame() {
         var canonical = panel.frame
-        canonical.size.height = BufferWindowGeometry.collapsedHeight
+        canonical.size.height = BufferWindowGeometry.expandedHeight
         UserDefaults.standard.set(NSStringFromRect(canonical), forKey: Key.frame)
     }
 
@@ -2173,25 +2120,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             IMELog.write("workbench plugin switch failed")
         }
         schedulePluginSelectorRefresh()
-    }
-
-    @objc private func disclosureTapped() {
-        controlsExpanded.toggle()
-        UserDefaults.standard.set(controlsExpanded, forKey: Key.controlsExpanded)
-        applyExpandedPresentation()
-        var proposed = panel.frame
-        proposed.size.height = BufferWindowGeometry.height(expanded: controlsExpanded,
-                                                            mode: layoutMode)
-        let fallback = panel.screen?.visibleFrame
-            ?? NSScreen.main?.visibleFrame
-            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        applyClampedFrame(proposed,
-                          visibleFrames: NSScreen.screens.map(\.visibleFrame),
-                          fallback: fallback,
-                          display: true)
-        saveFrame()
-        refresh()
-        candidateWindow.syncWorkbenchAnchor(candidateAnchorRect)
     }
 
     @objc private func sendTapped() {

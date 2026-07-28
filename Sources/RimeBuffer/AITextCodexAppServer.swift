@@ -77,6 +77,7 @@ final class AITextCodexAppServerOperation: AITextCancellable {
     }
 
     private let executableURL: URL
+    private let verifiedExecutable: AITextVerifiedCLIExecutable
     private let arguments: [String]
     private let environment: [String: String]
     private let currentDirectoryURL: URL
@@ -108,6 +109,7 @@ final class AITextCodexAppServerOperation: AITextCancellable {
     private var stdoutReachedEOF = false
 
     init(executableURL: URL,
+         verifiedExecutable: AITextVerifiedCLIExecutable,
          arguments: [String],
          environment: [String: String],
          currentDirectoryURL: URL,
@@ -120,6 +122,7 @@ final class AITextCodexAppServerOperation: AITextCancellable {
          completion: @escaping (Result<[AITextProviderBlock], AITextProviderError>) -> Void,
          cleanup: @escaping () -> Void) {
         self.executableURL = executableURL
+        self.verifiedExecutable = verifiedExecutable
         self.arguments = arguments
         self.environment = environment
         self.currentDirectoryURL = currentDirectoryURL
@@ -145,11 +148,6 @@ final class AITextCodexAppServerOperation: AITextCancellable {
             return
         }
 
-        onEvent(.activity(AITextProviderActivity(
-            kind: .launching,
-            message: "正在启动 Codex CLI"
-        )))
-
         let child = Process()
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -161,6 +159,11 @@ final class AITextCodexAppServerOperation: AITextCancellable {
         child.standardInput = stdinPipe
         child.standardOutput = stdoutPipe
         child.standardError = stderrPipe
+        child.terminationHandler = { [weak self] terminated in
+            self?.parserQueue.async {
+                self?.processDidExit(status: terminated.terminationStatus)
+            }
+        }
 
         stateLock.lock()
         guard lifecycle == .idle else {
@@ -170,6 +173,20 @@ final class AITextCodexAppServerOperation: AITextCancellable {
         lifecycle = .starting
         process = child
         standardInput = stdinPipe.fileHandleForWriting
+        guard verifiedExecutable.stillMatches else {
+            lifecycle = .finished
+            process = nil
+            standardInput = nil
+            stateLock.unlock()
+            close(stdinPipe.fileHandleForWriting)
+            close(stdoutPipe.fileHandleForReading)
+            close(stderrPipe.fileHandleForReading)
+            cleanup()
+            completion(.failure(.unavailable(
+                "Codex CLI 已发生变化，请等待能力检查刷新"
+            )))
+            return
+        }
         do {
             try child.run()
             lifecycle = .running
@@ -185,12 +202,6 @@ final class AITextCodexAppServerOperation: AITextCancellable {
             cleanup()
             completion(.failure(.failed))
             return
-        }
-
-        child.terminationHandler = { [weak self] terminated in
-            self?.parserQueue.async {
-                self?.processDidExit(status: terminated.terminationStatus)
-            }
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -222,6 +233,13 @@ final class AITextCodexAppServerOperation: AITextCancellable {
         } else {
             stateLock.unlock()
         }
+
+        // External callbacks may block or re-enter. Emit only after process
+        // termination, both pipe drains, and the timeout are fully armed.
+        onEvent(.activity(AITextProviderActivity(
+            kind: .launching,
+            message: "正在启动 Codex CLI"
+        )))
 
         sendInitialize()
     }

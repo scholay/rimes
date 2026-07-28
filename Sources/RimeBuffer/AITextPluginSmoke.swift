@@ -1162,6 +1162,30 @@ private enum AITextPluginSmoke {
 
     private static func fakeCLIRunners() -> Bool {
         let fakeExecutable = URL(fileURLWithPath: "/usr/bin/true")
+        if let realCodexPath = ProcessInfo.processInfo.environment[
+            "RIMEBUFFER_CODEX_CAPABILITY_SMOKE_PATH"
+        ], !realCodexPath.isEmpty {
+            let realCodexURL = URL(fileURLWithPath: realCodexPath)
+            guard AITextCodexCompatibility.isSupported(
+                executableURL: realCodexURL,
+                environment: ProcessInfo.processInfo.environment
+            ) else {
+                print("AI text CLI smoke failed: real Codex capability probe")
+                return false
+            }
+        }
+        if let realClaudePath = ProcessInfo.processInfo.environment[
+            "RIMEBUFFER_CLAUDE_CAPABILITY_SMOKE_PATH"
+        ], !realClaudePath.isEmpty {
+            let realClaudeURL = URL(fileURLWithPath: realClaudePath)
+            guard AITextClaudeCompatibility.isSupported(
+                executableURL: realClaudeURL,
+                environment: ProcessInfo.processInfo.environment
+            ) else {
+                print("AI text CLI smoke failed: real Claude capability probe")
+                return false
+            }
+        }
         let codexWorkspace = URL(fileURLWithPath: "/tmp/rime-codex-app-server-smoke")
         let codexArguments = CodexCLITextProvider.appServerArguments(
             workspaceURL: codexWorkspace
@@ -1197,23 +1221,97 @@ private enum AITextPluginSmoke {
                                    isDirectory: true)
         defer { try? FileManager.default.removeItem(at: locatorRoot) }
         let pinnedSymlink = locatorRoot.appendingPathComponent("codex")
+        let nvm9Root = locatorRoot.appendingPathComponent(
+            ".nvm/versions/node/v9.0.0",
+            isDirectory: true
+        )
+        let nvm22Root = locatorRoot.appendingPathComponent(
+            ".nvm/versions/node/v22.1.0",
+            isDirectory: true
+        )
+        let cursorExtensionRoot = locatorRoot.appendingPathComponent(
+            ".cursor/extensions/openai.chatgpt-0.999.0",
+            isDirectory: true
+        )
         do {
             try FileManager.default.createDirectory(at: locatorRoot,
                                                     withIntermediateDirectories: false)
+            try FileManager.default.createDirectory(
+                at: nvm9Root,
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.createDirectory(
+                at: nvm22Root,
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.createDirectory(
+                at: cursorExtensionRoot,
+                withIntermediateDirectories: true
+            )
             try FileManager.default.createSymbolicLink(at: pinnedSymlink,
                                                        withDestinationURL: acceptedCandidate)
         } catch {
             return false
         }
-        func makeVersionExecutable(name: String, versionOutput: String) -> URL? {
+        let managedCodexPaths = AITextCLIExecutableLocator.discoveredManagedInstallPaths(
+            for: .codexCLI,
+            homeDirectory: locatorRoot.path,
+            fileManager: .default
+        )
+        let nvm9Candidate = nvm9Root.appendingPathComponent("bin/codex").path
+        let nvm22Candidate = nvm22Root.appendingPathComponent("bin/codex").path
+        #if arch(arm64)
+        let cursorPlatform = "macos-aarch64"
+        #else
+        let cursorPlatform = "macos-x86_64"
+        #endif
+        let cursorCandidate = cursorExtensionRoot
+            .appendingPathComponent("bin/\(cursorPlatform)/codex")
+            .path
+        let managedRuntimeEnvironment = AITextCLIExecutableLocator.sanitizedEnvironment(
+            for: .codexCLI,
+            executableURL: URL(fileURLWithPath: nvm22Candidate),
+            from: ["HOME": locatorRoot.path]
+        )
+        func makeCodexCapabilityExecutable(
+            name: String,
+            initializeResult: String = #"{"id":1,"result":{"userAgent":"smoke"}}"#,
+            mcpResult: String = #"{"id":2,"result":{"data":[],"nextCursor":null}}"#,
+            responds: Bool = true,
+            floodsOutput: Bool = false
+        ) -> URL? {
             let executable = locatorRoot.appendingPathComponent(name)
             let script = """
             #!/bin/sh
             if [ "$1" = "--version" ]; then
-              printf '%s\\n' '\(versionOutput)'
+              exit 64
+            fi
+            if [ "$1" != "app-server" ]; then
+              exit 64
+            fi
+            if [ "\(floodsOutput ? "1" : "0")" = "1" ]; then
+              /usr/bin/yes '{"method":"capability/notice"}' | /usr/bin/head -c 300000
+              /bin/sleep 5
               exit 0
             fi
-            exit 1
+            if [ "\(responds ? "1" : "0")" != "1" ]; then
+              while IFS= read -r line; do :; done
+              exit 0
+            fi
+            seen_initialize=0
+            while IFS= read -r line; do
+              case "$line" in
+                *mcpServerStatus*)
+                  printf '%s\\n' '\(mcpResult)'
+                  ;;
+                *initialize*)
+                  if [ "$seen_initialize" = "0" ]; then
+                    seen_initialize=1
+                    printf '%s\\n' '\(initializeResult)'
+                  fi
+                  ;;
+              esac
+            done
             """
             do {
                 try Data(script.utf8).write(to: executable, options: .atomic)
@@ -1223,14 +1321,119 @@ private enum AITextPluginSmoke {
                 return nil
             }
         }
-        guard let oldCodexExecutable = makeVersionExecutable(
-            name: "codex-0.144.1",
-            versionOutput: "codex-cli 0.144.1"
+        func makeClaudeCapabilityExecutable(name: String) -> URL? {
+            let executable = locatorRoot.appendingPathComponent(name)
+            let options = [
+                "--print", "--verbose", "--output-format",
+                "--include-partial-messages", "--tools",
+                "--disable-slash-commands", "--safe-mode", "--strict-mcp-config",
+                "--no-session-persistence", "--permission-mode", "--no-chrome",
+            ].joined(separator: "\n")
+            let script = """
+            #!/bin/sh
+            if [ "$1" = "--version" ]; then
+              exit 64
+            fi
+            if [ "$1" = "--help" ]; then
+              printf '%s\\n' '\(options)'
+              exit 0
+            fi
+            exit 64
+            """
+            do {
+                try Data(script.utf8).write(to: executable, options: .atomic)
+                guard chmod(executable.path, S_IRWXU) == 0 else { return nil }
+                return executable
+            } catch {
+                return nil
+            }
+        }
+        func makeBunManagedCodexExecutable() -> URL? {
+            let bunBin = locatorRoot.appendingPathComponent(
+                ".bun/bin",
+                isDirectory: true
+            )
+            let targetDirectory = locatorRoot.appendingPathComponent(
+                ".bun/install/global/node_modules/@openai/codex/bin",
+                isDirectory: true
+            )
+            let bunRuntime = bunBin.appendingPathComponent("bun")
+            let target = targetDirectory.appendingPathComponent("codex.js")
+            let link = bunBin.appendingPathComponent("codex")
+            let runtimeScript = """
+            #!/bin/sh
+            exec /bin/sh "$@"
+            """
+            let codexScript = """
+            #!/usr/bin/env bun
+            if [ "$1" != "app-server" ]; then
+              exit 64
+            fi
+            seen_initialize=0
+            while IFS= read -r line; do
+              case "$line" in
+                *mcpServerStatus*)
+                  printf '%s\\n' '{"id":2,"result":{"data":[],"nextCursor":null}}'
+                  ;;
+                *initialize*)
+                  if [ "$seen_initialize" = "0" ]; then
+                    seen_initialize=1
+                    printf '%s\\n' '{"id":1,"result":{"userAgent":"bun-smoke"}}'
+                  fi
+                  ;;
+              esac
+            done
+            """
+            do {
+                try FileManager.default.createDirectory(
+                    at: bunBin,
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.createDirectory(
+                    at: targetDirectory,
+                    withIntermediateDirectories: true
+                )
+                try Data(runtimeScript.utf8).write(to: bunRuntime, options: .atomic)
+                try Data(codexScript.utf8).write(to: target, options: .atomic)
+                guard chmod(bunRuntime.path, S_IRWXU) == 0,
+                      chmod(target.path, S_IRWXU) == 0 else {
+                    return nil
+                }
+                try FileManager.default.createSymbolicLink(
+                    at: link,
+                    withDestinationURL: target
+                )
+                return link
+            } catch {
+                return nil
+            }
+        }
+        guard let futureCodexExecutable = makeCodexCapabilityExecutable(
+            name: "codex-future"
         ),
-        let streamCodexExecutable = makeVersionExecutable(
-            name: "codex-0.145.0-alpha.18",
-            versionOutput: "codex-cli 0.145.0-alpha.18"
-        ) else {
+        let versionlessCodexExecutable = makeCodexCapabilityExecutable(
+            name: "codex-without-version-command"
+        ),
+        let failedProtocolCodexExecutable = makeCodexCapabilityExecutable(
+            name: "codex-bad-protocol",
+            initializeResult: #"{"id":1,"error":{"message":"unsupported"}}"#
+        ),
+        let unsafeMCPCodexExecutable = makeCodexCapabilityExecutable(
+            name: "codex-unsafe-mcp",
+            mcpResult: #"{"id":2,"result":{"data":[{"name":"unsafe"}],"nextCursor":null}}"#
+        ),
+        let timeoutCodexExecutable = makeCodexCapabilityExecutable(
+            name: "codex-timeout",
+            responds: false
+        ),
+        let outputFloodCodexExecutable = makeCodexCapabilityExecutable(
+            name: "codex-output-flood",
+            floodsOutput: true
+        ),
+        let futureClaudeExecutable = makeClaudeCapabilityExecutable(
+            name: "claude-future"
+        ),
+        let bunManagedCodexExecutable = makeBunManagedCodexExecutable() else {
             return false
         }
         var compatibilitySawCanonicalURL = false
@@ -1242,6 +1445,59 @@ private enum AITextPluginSmoke {
                 return true
             }
         )
+        let futureCodexSupported = AITextCodexCompatibility.isSupported(
+            executableURL: futureCodexExecutable,
+            environment: ["HOME": "/tmp"]
+        )
+        let versionlessCodexSupported = AITextCodexCompatibility.isSupported(
+            executableURL: versionlessCodexExecutable,
+            environment: ["HOME": "/tmp"]
+        )
+        let failedProtocolCodexRejected = !AITextCodexCompatibility.isSupported(
+            executableURL: failedProtocolCodexExecutable,
+            environment: ["HOME": "/tmp"]
+        )
+        let unsafeMCPCodexRejected = !AITextCodexCompatibility.isSupported(
+            executableURL: unsafeMCPCodexExecutable,
+            environment: ["HOME": "/tmp"]
+        )
+        let timeoutCodexRejected = !AITextCodexCompatibility.isSupported(
+            executableURL: timeoutCodexExecutable,
+            environment: ["HOME": "/tmp"]
+        )
+        let outputFloodCodexRejected = !AITextCodexCompatibility.isSupported(
+            executableURL: outputFloodCodexExecutable,
+            environment: ["HOME": "/tmp"]
+        )
+        let bunManagedCodexSupported = AITextCodexCompatibility.isSupported(
+            executableURL: bunManagedCodexExecutable,
+            environment: ["HOME": locatorRoot.path]
+        )
+        let futureClaudeSupported = AITextClaudeCompatibility.isSupported(
+            executableURL: futureClaudeExecutable,
+            environment: ["HOME": "/tmp"]
+        )
+        guard futureCodexSupported,
+              versionlessCodexSupported,
+              failedProtocolCodexRejected,
+              unsafeMCPCodexRejected,
+              timeoutCodexRejected,
+              outputFloodCodexRejected,
+              bunManagedCodexSupported,
+              futureClaudeSupported else {
+            print(
+                "AI text CLI smoke failed: capability matrix "
+                    + "codex=\(futureCodexSupported) "
+                    + "noVersion=\(versionlessCodexSupported) "
+                    + "protocol=\(failedProtocolCodexRejected) "
+                    + "mcp=\(unsafeMCPCodexRejected) "
+                    + "timeout=\(timeoutCodexRejected) "
+                    + "flood=\(outputFloodCodexRejected) "
+                    + "bun=\(bunManagedCodexSupported) "
+                    + "claude=\(futureClaudeSupported)"
+            )
+            return false
+        }
         guard codexArguments.first == "app-server",
               codexArguments.suffix(2) == ["--listen", "stdio://"],
               codexArguments.contains("--strict-config"),
@@ -1259,6 +1515,18 @@ private enum AITextPluginSmoke {
               codexEnvironment["CODEX_HOME"] == nil,
               codexEnvironment["ANTHROPIC_API_KEY"] == nil,
               codexCandidates.first == AITextCLIExecutableLocator.bundledChatGPTCodexPath,
+              codexCandidates.contains("/Users/smoke/.volta/bin/codex"),
+              codexCandidates.contains("/Users/smoke/.asdf/shims/codex"),
+              codexCandidates.contains("/Users/smoke/.local/share/mise/shims/codex"),
+              codexCandidates.contains("/Users/smoke/.bun/bin/codex"),
+              codexCandidates.contains("/Users/smoke/.npm-global/bin/codex"),
+              codexCandidates.contains("/Users/smoke/Library/pnpm/codex"),
+              (managedCodexPaths.firstIndex(of: nvm22Candidate) ?? Int.max)
+                < (managedCodexPaths.firstIndex(of: nvm9Candidate) ?? Int.max),
+              managedCodexPaths.contains(cursorCandidate),
+              managedRuntimeEnvironment["PATH"]?.hasPrefix(
+                nvm22Root.appendingPathComponent("bin").path + ":"
+              ) == true,
               compatibleFallback == acceptedCandidate,
               invalidPinnedExecutable == nil,
               compatibilitySawCanonicalURL,
@@ -1267,67 +1535,43 @@ private enum AITextPluginSmoke {
                 of: AITextCLIExecutableLocator.bundledChatGPTCodexPath
               ) ?? Int.max)
                 < (codexCandidates.firstIndex(of: "/opt/homebrew/bin/codex") ?? Int.max),
-              AITextCodexCompatibility.accepts(
-                versionOutput: "codex-cli 0.144.1\n"
+              AITextClaudeCompatibility.helpAdvertisesOption(
+                "--print",
+                in: "  -p, --print <prompt>  Print a response"
               ),
-              AITextCodexCompatibility.accepts(
-                versionOutput: "codex-cli 0.145.0-alpha.18"
-              ),
-              !AITextCodexCompatibility.accepts(
-                versionOutput: "codex-cli 0.144.1",
-                inferenceProfile: .streamInput
-              ),
-              AITextCodexCompatibility.accepts(
-                versionOutput: "codex-cli 0.145.0-alpha.18\n",
-                inferenceProfile: .streamInput
-              ),
-              AITextCodexCompatibility.allowedVersionOutput(for: nil)
-                == AITextCodexCompatibility.supportedVersionOutput,
-              AITextCodexCompatibility.allowedVersionOutput(for: .streamInput)
-                == AITextCodexCompatibility.streamInputSupportedVersionOutput else {
+              !AITextClaudeCompatibility.helpAdvertisesOption(
+                "--print",
+                in: "  --other  Compatibility note mentioning --print"
+              )
+              else {
+            print("AI text CLI smoke failed: capability/isolation invariants")
             return false
         }
 
-        let ordinaryOldCodex = CodexCLITextProvider(
+        let ordinaryFutureCodex = CodexCLITextProvider(
             environment: ["HOME": "/tmp"],
             homeStore: AITextCodexHomeStore(
-                rootDirectory: locatorRoot.appendingPathComponent("ordinary-old-home")
+                rootDirectory: locatorRoot.appendingPathComponent("ordinary-future-home")
             ),
-            executableResolver: { oldCodexExecutable }
+            executableResolver: { futureCodexExecutable }
         )
         guard waitUntil(timeout: 2, {
-            if case let .unavailable(message) = ordinaryOldCodex.availability {
+            if case let .unavailable(message) = ordinaryFutureCodex.availability {
                 return message.contains("尚未完成")
             }
             return false
         }) else { return false }
 
-        let streamOldCodex = CodexCLITextProvider(
+        let streamFutureCodex = CodexCLITextProvider(
             environment: ["HOME": "/tmp"],
             homeStore: AITextCodexHomeStore(
-                rootDirectory: locatorRoot.appendingPathComponent("stream-old-home")
+                rootDirectory: locatorRoot.appendingPathComponent("stream-future-home")
             ),
             inferenceProfile: .streamInput,
-            executableResolver: { oldCodexExecutable }
+            executableResolver: { futureCodexExecutable }
         )
         guard waitUntil(timeout: 2, {
-            if case let .unavailable(message) = streamOldCodex.availability {
-                return message.contains("意识流输入")
-                    && message.contains("codex-cli 0.145.0-alpha.18")
-            }
-            return false
-        }) else { return false }
-
-        let streamCurrentCodex = CodexCLITextProvider(
-            environment: ["HOME": "/tmp"],
-            homeStore: AITextCodexHomeStore(
-                rootDirectory: locatorRoot.appendingPathComponent("stream-current-home")
-            ),
-            inferenceProfile: .streamInput,
-            executableResolver: { streamCodexExecutable }
-        )
-        guard waitUntil(timeout: 2, {
-            if case let .unavailable(message) = streamCurrentCodex.availability {
+            if case let .unavailable(message) = streamFutureCodex.availability {
                 return message.contains("尚未完成")
             }
             return false
@@ -1443,8 +1687,7 @@ private enum AITextPluginSmoke {
         )
         guard waitUntil(timeout: 2, {
             if case let .unavailable(message) = unsupportedStreamCodex.availability {
-                return message.contains("意识流输入")
-                    && message.contains("codex-cli 0.145.0-alpha.18")
+                return message.contains("app-server 握手检查")
             }
             return false
         }) else { return false }
@@ -1455,7 +1698,7 @@ private enum AITextPluginSmoke {
             completion: { unsupportedStreamResult = $0 }
         )
         guard case let .failure(.unavailable(message))? = unsupportedStreamResult,
-              message.contains("codex-cli 0.145.0-alpha.18") else { return false }
+              message.contains("app-server 握手检查") else { return false }
 
         let authenticationGate = DispatchSemaphore(value: 0)
         let nonblockingClaude = ClaudeCodeCLITextProvider(
@@ -1504,6 +1747,8 @@ private enum AITextPluginSmoke {
         guard claudeRunner.specs.count == 1,
               !claudeRunner.specs[0].arguments.contains(where: { $0.contains("claude-source") }),
               String(data: claudeRunner.specs[0].standardInput, encoding: .utf8)?.contains("claude-source") == true,
+              claudeRunner.specs[0].arguments.contains("--print"),
+              claudeRunner.specs[0].arguments.contains("--verbose"),
               claudeRunner.specs[0].arguments.contains("--strict-mcp-config"),
               !claudeRunner.specs[0].arguments.contains("--json-schema"),
               claudeRunner.specs[0].arguments.contains("--no-chrome"),
@@ -1543,20 +1788,33 @@ private enum AITextPluginSmoke {
         guard case .success? = preparedClaudeResult,
               AITextCLIExecutableLocator.bundledChatGPTCodexPath
                 == "/Applications/ChatGPT.app/Contents/Resources/codex",
-              AITextCodexCompatibility.supportedVersionOutput.contains(
-                "codex-cli 0.144.1"
-              ),
-              AITextCodexCompatibility.supportedVersionOutput.contains(
-                "codex-cli 0.145.0-alpha.18"
-              ),
-              AITextCodexCompatibility.streamInputSupportedVersionOutput
-                == ["codex-cli 0.145.0-alpha.18"],
-              AITextClaudeCompatibility.supportedVersionOutput.contains(
-                "2.1.211 (Claude Code)"
-              ),
-              AITextClaudeCompatibility.supportedVersionOutput.contains(
-                "2.1.215 (Claude Code)"
-              ) else { return false }
+              AITextCodexLoginPresentation.buttonTitle(
+                isRunning: false,
+                hasCredential: true
+              ) == "重新授权 Codex",
+              AITextCodexLoginPresentation.buttonTitle(
+                isRunning: false,
+                hasCredential: false
+              ) == "登录 Codex",
+              AITextCodexLoginPresentation.buttonTitle(
+                isRunning: true,
+                hasCredential: true
+              ) == "取消登录",
+              AITextCodexLoginPresentation.idleMessage(
+                hasCredential: true
+              ).contains("已保存在"),
+              AITextClaudeLoginPresentation.buttonTitle(
+                isRunning: false,
+                authenticationStatus: true
+              ) == "重新授权 Claude",
+              AITextClaudeLoginPresentation.buttonTitle(
+                isRunning: false,
+                authenticationStatus: nil
+              ) == "授权 Claude",
+              AITextClaudeLoginPresentation.idleMessage(
+                authenticationStatus: nil
+              ).contains("状态未知")
+              else { return false }
 
         let unsupportedClaudeRunner = AITextSmokeRunner()
         let unsupportedClaude = ClaudeCodeCLITextProvider(
