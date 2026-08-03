@@ -4203,7 +4203,38 @@ func runBufferSmokeTest() -> Bool {
           ) == .paste,
           BufferClipboardTextRules.validated("可粘贴") == "可粘贴",
           BufferClipboardTextRules.validated("") == nil,
-          BufferClipboardTextRules.validated("a\0b") == nil else {
+          BufferClipboardTextRules.validated("a\0b") == nil,
+          BufferPluginKeyboardShortcutRules.direction(
+            keycode: RimeKey.up,
+            mask: RimeKey.superMask | RimeKey.shiftMask
+          ) == -1,
+          BufferPluginKeyboardShortcutRules.direction(
+            keycode: RimeKey.down,
+            mask: RimeKey.superMask | RimeKey.shiftMask
+          ) == 1,
+          BufferPluginKeyboardShortcutRules.direction(
+            keycode: RimeKey.up,
+            mask: RimeKey.superMask | RimeKey.shiftMask | RimeKey.controlMask
+          ) == nil,
+          BufferPluginKeyboardShortcutRules.direction(
+            keycode: RimeKey.up, mask: RimeKey.altMask
+          ) == nil,
+          BufferPluginKeyboardShortcutRules.direction(
+            keycode: RimeKey.left,
+            mask: RimeKey.superMask | RimeKey.shiftMask
+          ) == nil,
+          BufferPluginKeyboardShortcutRules.commandDirection(
+            selectorName: "moveToBeginningOfDocumentAndModifySelection:",
+            physicalDirection: -1
+          ) == -1,
+          BufferPluginKeyboardShortcutRules.commandDirection(
+            selectorName: "moveToEndOfDocumentAndModifySelection:",
+            physicalDirection: 1
+          ) == 1,
+          BufferPluginKeyboardShortcutRules.commandDirection(
+            selectorName: "moveDown:",
+            physicalDirection: -1
+          ) == nil else {
         print("FAILED: buffer control-key escape gate")
         return false
     }
@@ -6548,11 +6579,8 @@ func runThemeSmokeTest() -> Bool {
         check(ratio >= 4.5, "day \(name) contrast \(ratio) should be >= 4.5")
     }
 
-    let daySelectedText = RimeColorContrast.preferredForeground(
-        background: day.selectedCandidateBackground
-    )
     let daySelectedTextRatio = RimeColorContrast.ratio(
-        foreground: daySelectedText,
+        foreground: day.selectedCandidateText,
         background: day.selectedCandidateBackground
     )
     check(daySelectedTextRatio >= 4.5,
@@ -6592,15 +6620,14 @@ func runThemeSmokeTest() -> Bool {
         check(ratio >= 4.5, "night \(name) contrast \(ratio) should be >= 4.5")
     }
 
-    let nightSelectedText = RimeColorContrast.preferredForeground(
-        background: night.selectedCandidateBackground
-    )
     let nightSelectedTextRatio = RimeColorContrast.ratio(
-        foreground: nightSelectedText,
+        foreground: night.selectedCandidateText,
         background: night.selectedCandidateBackground
     )
     check(nightSelectedTextRatio >= 4.5,
           "night selected text contrast \(nightSelectedTextRatio) should be >= 4.5")
+    check(night.selectedCandidateText == 0xFFFFFF,
+          "night selected candidate text should stay white")
     let nightSelectionRatio = RimeColorContrast.ratio(
         foreground: night.selectedCandidateBackground,
         background: night.candidateBackground

@@ -199,6 +199,17 @@ func runPluginPlatformSmokeTest() -> Bool {
               menuEntries.count == 3 else {
             return fail("enabled workbench menu catalog")
         }
+        guard BufferPluginMenuCatalog.adjacentEntry(
+                from: nil, direction: 1, plugins: snapshot
+              ).key == bufferBuiltInKey,
+              BufferPluginMenuCatalog.adjacentEntry(
+                from: nil, direction: -1, plugins: snapshot
+              ).key == externalKey,
+              BufferPluginMenuCatalog.adjacentEntry(
+                from: externalKey, direction: 1, plugins: snapshot
+              ).key == nil else {
+            return fail("workbench keyboard plugin cycling")
+        }
         let disabledExternalSnapshot = snapshot.map { plugin in
             plugin.id == externalKey
                 ? RegisteredPlugin(descriptor: plugin.descriptor, isEnabled: false)

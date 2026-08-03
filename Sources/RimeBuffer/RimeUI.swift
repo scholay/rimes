@@ -41,6 +41,7 @@ struct RimeThemePalette {
     let textSecondary: UInt32
     let textMuted: UInt32
     let selectedCandidateBackground: UInt32
+    let selectedCandidateText: UInt32
     let candidateBackground: UInt32
 }
 
@@ -59,7 +60,8 @@ enum RimeThemePalettes {
         textPrimary: 0xF3F5F8,
         textSecondary: 0x9AA2AE,
         textMuted: 0x838B98,
-        selectedCandidateBackground: 0x22C55E,
+        selectedCandidateBackground: 0x15803D,
+        selectedCandidateText: 0xFFFFFF,
         candidateBackground: 0x101318
     )
 
@@ -81,6 +83,7 @@ enum RimeThemePalettes {
         textSecondary: 0x334155,
         textMuted: 0x4B5563,
         selectedCandidateBackground: 0x0F6A3F,
+        selectedCandidateText: 0xFFFFFF,
         candidateBackground: 0xF8FAFC
     )
 }
@@ -182,9 +185,7 @@ enum RimeUI {
         color(palette.selectedCandidateBackground)
     }
     static var selectedCandidateTextColor: NSColor {
-        color(RimeColorContrast.preferredForeground(
-            background: palette.selectedCandidateBackground
-        ))
+        color(palette.selectedCandidateText)
     }
     static var candidateBackgroundColor: NSColor { color(palette.candidateBackground) }
 

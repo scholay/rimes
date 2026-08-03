@@ -104,6 +104,43 @@ enum BufferClipboardTextRules {
     }
 }
 
+enum BufferPluginKeyboardShortcutRules {
+    /// Only the exact Command+Shift+Up/Down chord belongs to plugin cycling.
+    /// Extra modifiers retain their host/Rime behavior.
+    static func direction(keycode: Int32?, mask: Int32) -> Int? {
+        guard mask == RimeKey.superMask | RimeKey.shiftMask else { return nil }
+        switch keycode {
+        case RimeKey.up: return -1
+        case RimeKey.down: return 1
+        default: return nil
+        }
+    }
+
+    /// Some AppKit clients translate Command+Shift+arrow to selection commands
+    /// before IMK sees an NSEvent. Accept only the matching physical chord.
+    static func commandDirection(selectorName: String,
+                                 physicalDirection: Int?) -> Int? {
+        guard let physicalDirection else { return nil }
+        let upward = ["moveUp:",
+                      "moveUpAndModifySelection:",
+                      "moveToBeginningOfParagraph:",
+                      "moveToBeginningOfParagraphAndModifySelection:",
+                      "moveToBeginningOfDocumentAndModifySelection:",
+                      "moveParagraphBackward:",
+                      "moveParagraphBackwardAndModifySelection:"]
+        let downward = ["moveDown:",
+                        "moveDownAndModifySelection:",
+                        "moveToEndOfParagraph:",
+                        "moveToEndOfParagraphAndModifySelection:",
+                        "moveToEndOfDocumentAndModifySelection:",
+                        "moveParagraphForward:",
+                        "moveParagraphForwardAndModifySelection:"]
+        if physicalDirection < 0, upward.contains(selectorName) { return -1 }
+        if physicalDirection > 0, downward.contains(selectorName) { return 1 }
+        return nil
+    }
+}
+
 enum BufferUnhandledPrintableRules {
     private static let excludedModifiers: NSEvent.ModifierFlags = [
         .command, .control, .option, .function,
@@ -322,6 +359,9 @@ final class RimeBufferController: IMKInputController {
     private var lastDerivedResultArrowKeyHandledAt: CFAbsoluteTime = 0
     private var lastDerivedResultArrowDirection = 0
     private var derivedResultNavigationKeysDown = Set<UInt16>()
+    private var bufferPluginNavigationKeysDown = Set<UInt16>()
+    private var lastBufferPluginArrowKeyHandledAt: CFAbsoluteTime = 0
+    private var lastBufferPluginArrowDirection = 0
     private var bufferClipboardShortcutKeysDown = Set<UInt16>()
     private var lastBufferClipboardShortcutHandledAt: CFAbsoluteTime = 0
     private var lastBufferClipboardShortcutHandled: BufferClipboardShortcut?
@@ -507,6 +547,14 @@ final class RimeBufferController: IMKInputController {
     private func bufferClipboardDisposition(client: IMKTextInput?) -> BufferControlDisposition {
         // Secure fields retain native shortcut handling. In particular, never
         // inspect NSPasteboard while macOS secure event input is active.
+        guard !IsSecureEventInputEnabled() else { return .passThrough }
+        return bufferControlDisposition(client: client)
+    }
+
+    private func bufferPluginShortcutDisposition(client: IMKTextInput?)
+        -> BufferControlDisposition {
+        // A protected workbench must neither reveal nor activate a plugin;
+        // leave native Command+Shift+arrow selection intact in secure fields.
         guard !IsSecureEventInputEnabled() else { return .passThrough }
         return bufferControlDisposition(client: client)
     }
@@ -1353,6 +1401,15 @@ final class RimeBufferController: IMKInputController {
                     IMELog.write("buffer clipboard shortcut consumed after stale event")
                     return true
                 }
+                if BufferPluginKeyboardShortcutRules.direction(
+                    keycode: keysym(for: event),
+                    mask: RimeKey.modifierMask(from: event.modifierFlags)
+                ) != nil,
+                   bufferPluginShortcutDisposition(client: client) != .passThrough {
+                    bufferPluginNavigationKeysDown.remove(event.keyCode)
+                    IMELog.write("buffer plugin arrow consumed after stale event")
+                    return true
+                }
                 if streamAlternativeDirection(
                     keycode: keysym(for: event),
                     mask: RimeKey.modifierMask(from: event.modifierFlags)
@@ -1492,6 +1549,16 @@ final class RimeBufferController: IMKInputController {
 
     private func handleKeyUp(_ event: NSEvent, client: IMKTextInput) -> Bool {
         guard let keycode = keysym(for: event) else { return false }
+        if bufferPluginNavigationKeysDown.remove(event.keyCode) != nil {
+            return true
+        }
+        if BufferPluginKeyboardShortcutRules.direction(
+            keycode: keycode,
+            mask: RimeKey.modifierMask(from: event.modifierFlags)
+        ) != nil,
+           bufferPluginShortcutDisposition(client: client) != .passThrough {
+            return true
+        }
         if bufferClipboardShortcutKeysDown.remove(event.keyCode) != nil {
             return true
         }
@@ -1638,6 +1705,31 @@ final class RimeBufferController: IMKInputController {
                 )
                 lastBufferClipboardShortcutHandledAt = CFAbsoluteTimeGetCurrent()
                 lastBufferClipboardShortcutHandled = shortcut
+                return true
+            }
+        }
+
+        if let direction = BufferPluginKeyboardShortcutRules.direction(
+            keycode: routedKeycode,
+            mask: routedMask
+        ) {
+            switch bufferPluginShortcutDisposition(client: client) {
+            case .passThrough:
+                break
+            case .consumeOnly:
+                IMELog.write("buffer plugin arrow consumed without authority")
+                return true
+            case .executeBufferAction:
+                bufferPluginNavigationKeysDown.insert(event.keyCode)
+                if event.isARepeat {
+                    IMELog.write("buffer plugin arrow repeat consumed")
+                    return true
+                }
+                lastBufferPluginArrowKeyHandledAt = CFAbsoluteTimeGetCurrent()
+                lastBufferPluginArrowDirection = direction
+                _ = performBufferPluginSwitch(direction: direction,
+                                              client: client,
+                                              source: "key")
                 return true
             }
         }
@@ -2206,6 +2298,33 @@ final class RimeBufferController: IMKInputController {
                 return true
             }
         }
+        let physicalPluginDirection = physicalBufferPluginSwitchDirection()
+        if let direction = BufferPluginKeyboardShortcutRules.commandDirection(
+            selectorName: NSStringFromSelector(selector),
+            physicalDirection: physicalPluginDirection
+        ) {
+            switch bufferPluginShortcutDisposition(client: callbackClient) {
+            case .passThrough:
+                return false
+            case .consumeOnly:
+                IMELog.write("buffer plugin arrow command consumed without authority")
+                return true
+            case .executeBufferAction:
+                let duplicateKeyEvent = !bufferPluginNavigationKeysDown.isEmpty
+                    || (CFAbsoluteTimeGetCurrent()
+                        - lastBufferPluginArrowKeyHandledAt
+                            < Self.duplicateArrowCommandWindow
+                        && lastBufferPluginArrowDirection == direction)
+                if !duplicateKeyEvent, let client = callbackClient {
+                    lastBufferPluginArrowKeyHandledAt = CFAbsoluteTimeGetCurrent()
+                    lastBufferPluginArrowDirection = direction
+                    _ = performBufferPluginSwitch(direction: direction,
+                                                  client: client,
+                                                  source: "command")
+                }
+                return true
+            }
+        }
         if newlineCommand {
             if explicitClientMismatch, bufferEnterGestureActive {
                 // Do not let an old field's command mutate ownership belonging
@@ -2426,6 +2545,58 @@ final class RimeBufferController: IMKInputController {
         )
     }
 
+    private func physicalBufferPluginSwitchDirection() -> Int? {
+        let flags = CGEventSource.flagsState(.combinedSessionState)
+        var mask: Int32 = 0
+        if flags.contains(.maskShift) { mask |= RimeKey.shiftMask }
+        if flags.contains(.maskControl) { mask |= RimeKey.controlMask }
+        if flags.contains(.maskAlternate) { mask |= RimeKey.altMask }
+        if flags.contains(.maskCommand) { mask |= RimeKey.superMask }
+        let up = CGEventSource.keyState(.combinedSessionState,
+                                       key: CGKeyCode(126))
+        let down = CGEventSource.keyState(.combinedSessionState,
+                                         key: CGKeyCode(125))
+        guard up != down else { return nil }
+        return BufferPluginKeyboardShortcutRules.direction(
+            keycode: up ? RimeKey.up : RimeKey.down,
+            mask: mask
+        )
+    }
+
+    @discardableResult
+    private func performBufferPluginSwitch(direction: Int,
+                                           client: IMKTextInput,
+                                           source: String) -> Bool {
+        guard shouldUseBufferCommands(client: client),
+              !IsSecureEventInputEnabled() else { return false }
+        let plugins = PluginRegistry.shared.plugins(capability: .bufferAction)
+        let entry = BufferPluginMenuCatalog.adjacentEntry(
+            from: BufferPluginSelectionStore.shared.activeKey,
+            direction: direction,
+            plugins: plugins
+        )
+        do {
+            if let key = entry.key {
+                try PluginRegistry.shared.setBufferPluginActive(true, for: key)
+            } else {
+                BufferPluginSelectionStore.shared.clear()
+            }
+        } catch {
+            NSSound.beep()
+            IMELog.write("buffer plugin switch failed source=\(source)")
+            return true
+        }
+        guard shouldUseBufferCommands(client: client),
+              BufferPluginSelectionStore.shared.activeKey == entry.key else {
+            IMELog.write("buffer plugin switch consumed after state changed source=\(source)")
+            return true
+        }
+        IMELog.write("buffer plugin switched direction=\(direction) title=\(entry.title) source=\(source)")
+        updateUI(client: client)
+        BufferWindowController.shared.refresh()
+        return true
+    }
+
     private func isCancelOperationSelector(_ selector: Selector) -> Bool {
         selector == #selector(NSResponder.cancelOperation(_:))
     }
@@ -2515,6 +2686,7 @@ final class RimeBufferController: IMKInputController {
         resetCandidateOptionGesture()
         streamAlternativeNavigationKeysDown.removeAll()
         derivedResultNavigationKeysDown.removeAll()
+        bufferPluginNavigationKeysDown.removeAll()
         bufferClipboardShortcutKeysDown.removeAll()
     }
 

@@ -1135,7 +1135,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         pluginSelector.imageHugsTitle = true
         pluginSelector.target = self
         pluginSelector.action = #selector(bufferPluginSelectionChanged)
-        pluginSelector.toolTip = "切换缓冲插件"
+        pluginSelector.toolTip = "切换缓冲插件（⌘⇧↑/↓）"
         pluginSelector.translatesAutoresizingMaskIntoConstraints = false
         let pluginSelectorMinimumWidth = pluginSelector.widthAnchor.constraint(
             greaterThanOrEqualToConstant: 64
@@ -1504,8 +1504,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             names.append(presentation.pluginName)
         }
         pluginSelector.toolTip = pluginNames.isEmpty
-            ? "切换缓冲插件"
-            : "当前插件：\(pluginNames.joined(separator: "、"))"
+            ? "切换缓冲插件（⌘⇧↑/↓）"
+            : "当前插件：\(pluginNames.joined(separator: "、"))（⌘⇧↑/↓ 切换）"
 
         let keys = presentations.map(\.presentationKey)
         if keys != renderedPluginKeys {
@@ -1562,7 +1562,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         let presentation = workspace.actionPresentation
         let optionPresentation = workspace.optionPresentation
         let hasOptions = optionPresentation != nil
-        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)"
+        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)（⌘⇧↑/↓ 切换）"
         pluginLoadingIndicator.isHidden = !presentation.isRunning
         presentation.isRunning
             ? pluginLoadingIndicator.startAnimation(nil)
@@ -1625,7 +1625,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func refreshLanguageControls(workspace: any DerivedBufferWorkspace,
                                          controls: any DerivedLanguagePairControls) {
-        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)"
+        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)（⌘⇧↑/↓ 切换）"
         let loading: Bool
         if lastSecureInputState || sessionProtectionActive {
             loading = false
@@ -1679,7 +1679,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         workspace: any DerivedBufferWorkspace,
         controls _: any WorkbenchManualGenerationControls
     ) {
-        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)"
+        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)（⌘⇧↑/↓ 切换）"
         // The target rail owns the animated first-content indicator. Keep the
         // shelf compact; the right-side primary button owns generation state.
         pluginLoadingIndicator.isHidden = true
@@ -1703,7 +1703,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         _ workspace: any DerivedBufferWorkspace
     ) {
         resetDerivedControlRendering()
-        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)"
+        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)（⌘⇧↑/↓ 切换）"
         pluginLoadingIndicator.isHidden = true
         pluginLoadingIndicator.stopAnimation(nil)
     }

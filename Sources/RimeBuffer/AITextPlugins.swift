@@ -2059,19 +2059,19 @@ enum AITextClaudeLoginPresentation {
                             authenticationStatus: Bool?) -> String {
         if isRunning { return "取消登录" }
         switch authenticationStatus {
-        case true: return "重新授权 Claude"
-        case false: return "登录 Claude"
-        case nil: return "授权 Claude"
+        case .some(true): return "重新授权 Claude"
+        case .some(false): return "登录 Claude"
+        case .none: return "授权 Claude"
         }
     }
 
     static func idleMessage(authenticationStatus: Bool?) -> String {
         switch authenticationStatus {
-        case true:
+        case .some(true):
             return "Claude Code CLI 授权已就绪。"
-        case false:
+        case .some(false):
             return "Claude Code CLI 尚未登录；\(ProductIdentity.displayName) 不读取或展示凭据。"
-        case nil:
+        case .none:
             return "Claude 登录状态未知；CLI 能力检查结果会在上方单独显示。"
         }
     }

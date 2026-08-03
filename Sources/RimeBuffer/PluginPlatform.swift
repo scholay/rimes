@@ -178,6 +178,21 @@ enum BufferPluginMenuCatalog {
             ),
         ] + enabled
     }
+
+    /// Keyboard cycling uses the exact same ordered surface as the popup so
+    /// Default and every enabled buffer plugin remain reachable. A stale
+    /// selection is treated as Default, and both ends wrap around.
+    static func adjacentEntry(from activeKey: PluginKey?,
+                              direction: Int,
+                              plugins: [RegisteredPlugin])
+        -> BufferPluginMenuEntry {
+        let entries = entries(from: plugins)
+        precondition(!entries.isEmpty)
+        let currentIndex = entries.firstIndex(where: { $0.key == activeKey }) ?? 0
+        let step = direction < 0 ? -1 : 1
+        let nextIndex = (currentIndex + step + entries.count) % entries.count
+        return entries[nextIndex]
+    }
 }
 
 enum BufferPluginActivationError: LocalizedError, Equatable {
