@@ -103,7 +103,7 @@
       Protocol.MAX_SOURCE_BYTES).trim();
   }
 
-  function article(documentLike, locationLike) {
+  function articleSnapshot(documentLike, locationLike) {
     const rootElement = contentRoot(documentLike);
     let body = rootElement ? domToMarkdown(rootElement) : '';
     if (!body && rootElement) body = Text.textOf(rootElement, Protocol.MAX_SOURCE_BYTES);
@@ -117,13 +117,30 @@
     if (title) parts.push('# ' + title);
     if (sourceURL) parts.push('> 来源：' + sourceURL);
     if (body) parts.push(body);
-    return Protocol.cleanText(parts.join('\n\n'), Protocol.MAX_SOURCE_BYTES).trim();
+    const text = Protocol.cleanText(parts.join('\n\n'), Protocol.MAX_SOURCE_BYTES).trim();
+    const quality = body ? 'content' : title ? 'title' : sourceURL ? 'url' : 'empty';
+    return {
+      text,
+      body,
+      title,
+      url: sourceURL,
+      quality,
+      // Generic capture is an explicit user action. A URL-only snapshot is a
+      // legitimate locator context there, even though platform integrations
+      // may impose a stricter readiness threshold before publishing.
+      usable: !!text,
+    };
+  }
+
+  function article(documentLike, locationLike) {
+    return articleSnapshot(documentLike, locationLike).text;
   }
 
   root.MarineChromeExtract = Object.freeze({
     selectedText,
     contentRoot,
     domToMarkdown,
+    articleSnapshot,
     article,
   });
 })(globalThis);

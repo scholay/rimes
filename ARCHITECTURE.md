@@ -6,9 +6,11 @@
 > "永不 setMarkedText" 的假设，组字协议全面改为 **marked-text 会话常驻**（§4）。
 > 修改本文档时保持"先说做什么、再说为什么"的写法。
 >
-> **2026-08-06 Marine Chrome 0.2 覆盖**：`builtin.marine-chrome` 是内置派生 workspace，配套 MV3 扩展使用固定 ID、RIMES 原生允许 + 扩展页确认的双确认流程自动领取内部凭据，日常不复制、不显示 token。没有网页上下文或用户备注时工作台隐藏空 source rail，以 78pt 单 target rail 显示“等待网页上下文”；真实 source 到达后恢复 112pt 双轨。工具栏右侧分别显示“Chrome 已配对/未配对”“上下文 在线/未挂载”“字幕来源”和“AI 就绪/未就绪”，其中“已配对”只表达本机信任关系，不能冒充扩展在线。AI capability/auth 探测完成后必须刷新被缓存的 unavailable phase；生成日志只记录 request ID、provider、来源枚举、结果分类与 block 数，不记录 URL、标题、网页正文、提示词、结果或凭据。
+> **2026-08-06 工作台焦点定位覆盖**：用户显式从隐藏态唤出缓冲工作台时，先为当前精确外部 `FocusToken` 同步恢复 marked-text guard，再以 `liveTarget` 的 controller/client、前台 PID 和 secure-input 门控前后夹住一次 caret 查询。`attributes(forCharacterIndex:)` 的下标按 InputMethodKit 契约相对于 inline session，必须沿用稳定的相对下标 `0`；宿主的 `selectedRange`/`markedRange` 是文档级坐标，禁止直接混入，否则普通候选与工作台会一起漂移。合法零宽 caret 所在屏幕有空间时工作台优先位于输入框下方，否则翻到上方；174pt 最大布局只用于预判稳定方向，真实 78/112/143/174pt frame 均贴输入行 10pt。高度变化沿远离输入框的方向展开，候选窗贴真实外沿继续向外，不能用虚拟最大高度制造空隙。无精确目标、矩形非法或离屏时，才在鼠标所在屏幕居中靠下。定位只发生在显式 hidden→visible 转换，显示期间不会跟随焦点或流式刷新跳动；被动启动/锁屏恢复仍保留持久化 frame，自动开窗位置不覆盖用户保存的 origin。
 >
-> **2026-07-28 当前缓冲 UI/按键覆盖**：顶部功能栏永久展开，固定显示无去向信息的状态文字、插件动作、刷新/重置和关闭；其空白、间距与弹性留白可拖动窗口，所有控件继续接收首击，正文轨不能拖窗。主条只保留缓冲块轨和右侧主按钮，不再显示拖拽手柄或展开/收起按钮。普通工作台固定为 78pt，派生布局有 1/2/3 个 target row 时固定为 112/143/174pt，始终保持底边与候选锚点。刷新/重置保留缓冲正文，只取消过时插件任务、重新检测上下文或重启当前派生操作。工作台不再提供块编辑器或面板内缓冲开关，缓冲启停仍由设置/输入法菜单管理。精确外部缓冲租约下，`Command+Shift+↑/↓` 按选择器同一顺序循环切换 `Default + 已启用缓冲插件`，首尾相接；额外修饰键、自有窗口与 secure input 不接管。缓冲模式复用常规 `CandidateWindow` 呈现 Rime 组字候选，默认显示在工作台下方；意识流的互斥解释是工作台 target rows，不是第二份 Rime 候选。普通/Shift+Return 与 Backspace 在缓冲模式下永不落到宿主文本框：若有未决 Rime/并击组字，本次 Return 只收束为块；否则 keyDown 定点重建 IME guard，轻按发送下一块，按住约 1.2 秒发送全部，并显示底部进度。右侧纸飞机每次只发送下一块。成功发送的 block 立即从 live buffer 消失且不保留发送历史；失败和未发送 block 保留。本文若有更早的折叠、投影或留块描述，以本条和 `SYSTEM-ARCHITECTURE.md` 为准。
+> **2026-08-06 Marine Chrome 0.2.3 覆盖**：`builtin.marine-chrome` 是内置派生 workspace，配套 MV3 扩展使用固定 ID、RIMES 原生允许 + 扩展页确认的双确认流程自动领取内部凭据，日常不复制、不显示 token。没有网页上下文或用户备注时工作台隐藏空 source rail，以 78pt 单 target rail 显示“等待网页上下文”；真实 source 到达后恢复 112pt 双轨。工具栏右侧分别显示“Chrome 已配对/未配对”“上下文 在线/未挂载”“字幕来源”和“AI 就绪/未就绪”，其中“已配对”只表达本机信任关系，不能冒充扩展在线。抓取复用旧 Marine 的宿主标签绑定语义：popup 独立窗口造成的 `WINDOW_ID_NONE` 与父窗口 `focused=false` 不撤销同一 selected tab；worker 仍要求 main frame/document、tab/window/URL/epoch 与 `lastFocusedWindow` 的 active tab 全部一致，并在 PUT 前后重验。可恢复的前台 409、回环网络中断、正文未就绪和 503 必须保留不含正文的 suspended 读取意图；手动读取与无精确目标的 B 站直评可用只含 protocolVersion/URL 的前台探针恢复，精确回复仍要求真实 deep active editor 并重新解析评论 ID。Bilibili 的标题/URL 只是未就绪元数据，只有字幕、已捕获评论或明确视频简介可发布；空字幕按 2/5/10/30 秒退避重试，成功按 BV/分 P 缓存，隐藏页停发，导航 generation 拒绝迟到结果。popup 占焦期间到达的数据必须保留 dirty 标记并在页面恢复后用新 revision 重建；心跳必须单飞，不能在慢回环上排队。`dom` 权限只用于穿透 Bilibili 开放/闭合 Shadow DOM。状态轮询必须与 PUT/心跳串行，并且只把当前标签与 content identity 同时匹配的租约报为在线。切标签、跳转、关闭、Escape 或评论框失焦立即取消。AI capability/auth 探测完成后必须刷新被缓存的 unavailable phase；生成日志只记录 request ID、provider、来源枚举、结果分类与 block 数，不记录 URL、标题、网页正文、提示词、结果或凭据。
+>
+> **2026-07-28 当前缓冲 UI/按键覆盖**：顶部功能栏永久展开，固定显示无去向信息的状态文字、插件动作、刷新/重置和关闭；其空白、间距与弹性留白可拖动窗口，所有控件继续接收首击，正文轨不能拖窗。主条只保留缓冲块轨和右侧主按钮，不再显示拖拽手柄或展开/收起按钮。普通工作台固定为 78pt，派生布局有 1/2/3 个 target row 时固定为 112/143/174pt；手动/无目标布局保持底边，焦点锚定布局保持靠输入框的一侧并向外增高。刷新/重置保留缓冲正文，只取消过时插件任务、重新检测上下文或重启当前派生操作。工作台不再提供块编辑器或面板内缓冲开关，缓冲启停仍由设置/输入法菜单管理。精确外部缓冲租约下，`Command+Shift+↑/↓` 按选择器同一顺序循环切换 `Default + 已启用缓冲插件`，首尾相接；额外修饰键、自有窗口与 secure input 不接管。缓冲模式复用常规 `CandidateWindow` 呈现 Rime 组字候选，手动/无目标布局默认显示在工作台下方，焦点锚定布局沿远离输入框的一侧显示；意识流的互斥解释是工作台 target rows，不是第二份 Rime 候选。普通/Shift+Return 与 Backspace 在缓冲模式下永不落到宿主文本框：若有未决 Rime/并击组字，本次 Return 只收束为块；否则 keyDown 定点重建 IME guard，轻按发送下一块，按住约 1.2 秒发送全部，并显示底部进度。右侧纸飞机每次只发送下一块。成功发送的 block 立即从 live buffer 消失且不保留发送历史；失败和未发送 block 保留。本文若有更早的折叠、投影或留块描述，以本条和 `SYSTEM-ARCHITECTURE.md` 为准。
 >
 > **2026-07-20 输入配置/翻译覆盖**：设置层已把输入编码（自然码双拼/全拼/英文）与键入模式（串击/并击/互击）拆开，再映射到经过验证的固定 schema。飞耀互击复用 `my_combo`：并击结算同一计时批内的全部按键，多键的左侧、右侧或跨区组合均可映射但不跨批重组；互击在此基础上允许相邻的左侧声母与右侧韵母跨批配对。单独敲下的物理字母保留为英文原码，不自动插入分词符，也不与另一个单键批次重组。「实时翻译」作为内置缓冲插件只出现在缓冲插件列表，与 Marine 共用唯一 owner；默认用 Apple 本地翻译，也可改用当前 AI 渠道。源文在上方连续缓冲轨显示，译文在下方独立分块轨显示，顶部功能栏常显且空白可拖，发送与目标语言行对齐，只能经 `BufferDeliveryCoordinator -> Delivery.insert` 手动发送。
 >
@@ -134,7 +136,7 @@
 │    │  键路由: keysym 映射 → processRimeKey → commit drain → UI 更新           │
 │    ├─ CompositionSession   ★v2 组字协议(marked text 常驻, inline/placeholder) │
 │    ├─ ChordController      并击重放(仅 my_combo; duration=ChordSettings)     │
-│    ├─ CandidateWindow      唯一候选 panel：锚定 caret / 缓冲条下方           │
+│    ├─ CandidateWindow      唯一候选 panel：锚定 caret / 工作台真实外沿       │
 │    ├─ InputFocusCoordinator FocusToken + 当前 IMK client 租约                │
 │    ├─ StatusMenu           IMK menu() 构建器(设置/健康/更新/重载)             │
 │    ├─ FocusObserver        失焦强制 flush chord + 提交/清组字                 │
@@ -193,12 +195,12 @@
 - NSPanel（borderless + nonactivating，`.popUpMenu` 层级，canJoinAllSpaces + fullScreenAuxiliary + stationary，orderFrontRegardless）。宿主进程必须 `NSApp.setActivationPolicy(.accessory)`（纯 LSBackgroundOnly 应用不能可靠置窗，已在 main.swift 落实）。
 - 渲染：`page_size` 行（用户=9）· label 用 librime select_labels · 高亮行 `highlightedIndex` 以日/夜主题高亮色作实底，并在黑/白文字中自动选择 WCAG 对比度更高者 · comment 淡色 · 翻页指示（page_no/is_last_page）· stacked 竖排 · 字号对齐用户（候选 20pt/标签 14pt）· 配色向 purity_of_form_custom 靠（P4 精调）。
 - **定位链**（每次更新执行）：
-  1. `client.attributes(forCharacterIndex: <marked 区 caret 下标>, lineHeightRectangle: &rect)`——有 marked 会话后这是可靠主路径（Squirrel 同款）；窗放 rect 下沿、必要时翻到上方防出屏。
+  1. `client.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)`——该下标相对于 inline session；没有 inline session 时 `0` 按 IMK 契约定位 current selection。它不能替换成文档级 `selectedRange`/`markedRange`。有 marked 会话后这是可靠主路径（Squirrel 同款）；窗放 rect 下沿、必要时翻到上方防出屏。
   2. rect 为零/明显非法 → 该 client（bundleId）**最近一次合法 rect** 缓存。
   3. 仍无 → 前台窗口底部居中（P4 再精化）。**禁止**默认屏幕角落。
 - 交互：鼠标点候选 → `select_candidate_on_current_page` → 正常 commit drain（**不许**直接 insertText 绕过控制器）。数字/减号/等号/空格/回车**一律进 Rime**，让用户 has_menu 翻页与选重绑定生效。
 - 方案选单（switcher）就是一页候选——本窗即渲染载体，无需特殊逻辑。
-- 缓冲模式默认把同一个带 `FocusToken` 的 Rime 候选 panel 锚定在工作台底边下方；普通工作台固定 78pt，单 target 固定 112pt，意识流多 target 固定 143/174pt，并只向上改变高度，因此底边与候选锚点不跳位。用户可在设置中切回 caret。两种位置共享完全相同的 Rime 候选视觉、矩阵翻页、单字选择与提交状态，过期点击无效；工作台不再维护 Rime 候选投影，意识流 target rows 是独立派生结果。
+- 缓冲模式把同一个带 `FocusToken` 的 Rime 候选 panel 锚定在工作台外沿；普通工作台固定 78pt，单 target 固定 112pt，意识流多 target 固定 143/174pt。手动或无目标布局保持底边并默认把候选放在下方；焦点锚定布局保持靠输入框的一边，增高时向外展开，匹配原 `FocusToken` 的候选也严格贴外沿，外侧空间不足则暂时隐藏而不穿过输入行。用户可在设置中切回 caret。两种位置共享完全相同的 Rime 候选视觉、矩阵翻页、单字选择与提交状态，过期点击无效；工作台不再维护 Rime 候选投影，意识流 target rows 是独立派生结果。
 
 ### 5.6 ChordController（并击）— 状态：✅ 已实现
 
@@ -232,10 +234,10 @@ macOS 版本不可靠。`Info.plist` 的 `etinput-menu.pdf` 继续负责系统�
 
 ### 5.10 BufferWindowController + BufferModel（P2）— 状态：✅ 已实现
 
-- 工作台是独立、nonactivating、可调整宽度的 `NSPanel`。顶部功能栏永久展开；它的空白、间距和弹性留白调用 `performDrag`，按钮、弹窗和其他 `NSControl` 保持首击，整个窗口背景与正文轨均不可拖。主条只保留缓冲轨和右侧主控件，不再显示专用拖拽手柄或 disclosure。普通缓冲及 Marine Chrome 的无 source 空态固定为 78pt；实时翻译、AI 生成和带真实 source 的 Marine Chrome 使用上 source、下 target 两条独立横向滚动轨，固定为 112pt。意识流出现 2/3 个候选时 target 增至 2/3 行，高度为 143/174pt，始终只向上增高并保持底边/候选锚点不动。新增 target row 前先完成 panel/rail 扩高与 layout，删除旧 row 后才缩高；每条横向 document row 关闭 autoresizing-mask constraints 并将高度绑定到 scroll viewport，避免第三行在旧/零高度中被 AppKit 压坏。右侧主控件对齐最下方目标行。内置 AI，或整个 resolved action surface 只有一个 prepared presentation 的外部 owner 被选中时，该主控件在禁用 AI 图标/可请求 AI 图标/转圈/纸飞机间原位切换，顶部功能栏不再放第二个生成按钮；只要还有第二项 presentation，就全部保留为显式插件动作。顶部功能栏固定为状态、带小图标的缓冲插件选择器及其他插件的当前动作、选中 workspace 提供的隐私安全右侧状态、刷新/重置与关闭。设置页可多选启用缓冲插件，选择器只显示该集合并用 `Default` 表示无插件；选择器直接改写唯一 owner，刷新/重置保留缓冲正文并只重置当前插件运行状态。切换插件或 target row 数始终固定底边与候选锚点。圆角表面使用日/夜固定 palette，内缩到透明窗口边距，并按 backing scale 在路径内绘制 hairline。显隐、frame、pin 与候选锚点持久化，多屏变化时恢复到可见区域；旧展开态偏好被忽略。普通关闭会收束组字、暂停捕获、结束 transient 加载/错误状态并保留已有块。`Command+Shift+B` 通过全局 Carbon hot key 调用 `toggleVisibility()`；工作台不提供块编辑器、面板内缓冲开关、手动遮蔽、历史恢复或清空撤销。
+- 工作台是独立、nonactivating、可调整宽度的 `NSPanel`。顶部功能栏永久展开；它的空白、间距和弹性留白调用 `performDrag`，按钮、弹窗和其他 `NSControl` 保持首击，整个窗口背景与正文轨均不可拖。主条只保留缓冲轨和右侧主控件，不再显示专用拖拽手柄或 disclosure。普通缓冲及 Marine Chrome 的无 source 空态固定为 78pt；实时翻译、AI 生成和带真实 source 的 Marine Chrome 使用上 source、下 target 两条独立横向滚动轨，固定为 112pt。意识流出现 2/3 个候选时 target 增至 2/3 行，高度为 143/174pt。新增 target row 前先完成 panel/rail 扩高与 layout，删除旧 row 后才缩高；每条横向 document row 关闭 autoresizing-mask constraints 并将高度绑定到 scroll viewport，避免第三行在旧/零高度中被 AppKit 压坏。右侧主控件对齐最下方目标行。内置 AI，或整个 resolved action surface 只有一个 prepared presentation 的外部 owner 被选中时，该主控件在禁用 AI 图标/可请求 AI 图标/转圈/纸飞机间原位切换，顶部功能栏不再放第二个生成按钮；只要还有第二项 presentation，就全部保留为显式插件动作。顶部功能栏固定为状态、带小图标的缓冲插件选择器及其他插件的当前动作、选中 workspace 提供的隐私安全右侧状态、刷新/重置与关闭。设置页可多选启用缓冲插件，选择器只显示该集合并用 `Default` 表示无插件；选择器直接改写唯一 owner，刷新/重置保留缓冲正文并只重置当前插件运行状态。显式从隐藏态唤出时，工作台只读取当前精确外部 IMK 租约的一次新鲜 caret 行矩形：最大 174pt 布局只用于选择稳定的一侧，真实当前高度仍与输入行保持 10pt；通常位于下方，空间不足则连同候选展开方向一起翻到上方。焦点锚定布局切 owner 或改变 target row 数时保持靠输入框的一侧并向外增减，候选紧贴真实外沿；手动/无目标布局仍固定底边。没有可信目标时才在鼠标所在屏幕居中靠下，显示后不追踪光标。圆角表面使用日/夜固定 palette，内缩到透明窗口边距，并按 backing scale 在路径内绘制 hairline。显隐、frame、pin 与候选位置持久化，多屏变化时恢复到可见区域；自动开窗 origin 不覆盖用户保存位置，旧展开态偏好被忽略。普通关闭会收束组字、暂停捕获、结束 transient 加载/错误状态并保留已有块。`Command+Shift+B` 通过全局 Carbon hot key 调用 `toggleVisibility()`；工作台不提供块编辑器、面板内缓冲开关、手动遮蔽、历史恢复或清空撤销。
 - Rime commit 只在捕获开启时进入 `BufferModel`；preedit 永不存入模型。成功调用 `Delivery.insert` 后，该 block 立即从 live buffer 消失且不保留明文发送历史；失败 block 和未发送后缀保留。
 - 缓冲块在工作台中是被动展示单元，不再支持点选后单块编辑；Backspace 删除和显式投递仍由模型/协调器保持身份与顺序不变。输入法自身所有文本框都绕过缓冲捕获与远端镜像。
-- Rime 组字候选默认使用常规 `CandidateWindow` 固定显示在工作台下方，也可继续跟随 caret；工作台自身不包含 Rime 候选投影或全文预览，但意识流的 1–3 个互斥解释会作为派生 target rows 显示。缓冲启停、常显与移屏入口保留在设置/输入法菜单；secure-input 检测与锁屏隐藏由 `BufferWindowController` 管理。锁屏、睡眠或会话切出会撤销租约、在 Rime 内收束组字并隐藏窗口，恢复后仍必须等新 activation/event。
+- Rime 组字候选默认使用常规 `CandidateWindow` 跟随工作台真实外沿：焦点锚定布局沿远离输入框的一侧显示，手动或无目标布局默认显示在下方；用户也可切回跟随 caret。工作台自身不包含 Rime 候选投影或全文预览，但意识流的 1–3 个互斥解释会作为派生 target rows 显示。缓冲启停、常显与移屏入口保留在设置/输入法菜单；secure-input 检测与锁屏隐藏由 `BufferWindowController` 管理。锁屏、睡眠或会话切出会撤销租约、在 Rime 内收束组字并隐藏窗口，恢复后仍必须等新 activation/event。
 
 ### 5.11 AI 文本插件与连接器（P3）— 状态：✅ 单插件、三连接器已实现
 

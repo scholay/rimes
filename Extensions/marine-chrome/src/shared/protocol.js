@@ -12,6 +12,7 @@
   const MESSAGE_CONTEXT = 'marine-chrome/context-v1';
   const MESSAGE_CAPTURE = 'marine-chrome/capture-active-tab-v1';
   const MESSAGE_CAPTURE_PAGE = 'marine-chrome/capture-page-v1';
+  const MESSAGE_FOREGROUND = 'marine-chrome/foreground-probe-v1';
   const MESSAGE_STATUS = 'marine-chrome/status-v1';
   const MESSAGE_TEST = 'marine-chrome/test-v1';
   const MESSAGE_PAIR = 'marine-chrome/pair-interactive-v1';
@@ -160,6 +161,19 @@
     } catch (error) { return false; }
   }
 
+  function makeForegroundProbe(rawURL) {
+    const url = String(rawURL || '');
+    return validPageURL(url) ? { protocolVersion: VERSION, url } : null;
+  }
+
+  function validateForegroundProbe(payload) {
+    if (!payload || payload.protocolVersion !== VERSION || !validPageURL(payload.url)) {
+      return false;
+    }
+    const keys = Object.keys(payload).sort();
+    return keys.length === 2 && keys[0] === 'protocolVersion' && keys[1] === 'url';
+  }
+
   function makeContextId(sourceId, revision, platform) {
     const compactPlatform = normalizeInline(platform || 'web', 64)
       .toLowerCase().replace(/[^a-z0-9_.-]+/g, '-') || 'web';
@@ -265,6 +279,7 @@
     MESSAGE_CONTEXT,
     MESSAGE_CAPTURE,
     MESSAGE_CAPTURE_PAGE,
+    MESSAGE_FOREGROUND,
     MESSAGE_STATUS,
     MESSAGE_TEST,
     MESSAGE_PAIR,
@@ -300,6 +315,8 @@
     serverProofInput,
     pairingCredentialAuthorized,
     validPageURL,
+    makeForegroundProbe,
+    validateForegroundProbe,
     makeContextId,
     normalizeTarget,
     validTarget,

@@ -2620,8 +2620,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     @objc private func bufferToggled() {
         let enabled = bufferCheck.state == .on
         if enabled {
-            BufferModel.shared.enabled = true
-            BufferWindowController.shared.show()
+            BufferWindowController.shared.openAndResume()
         } else {
             ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
             DerivedBufferWorkspaceRouter.selectedWorkspace?.workbenchWillPause()

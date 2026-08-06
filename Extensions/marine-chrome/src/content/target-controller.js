@@ -24,6 +24,7 @@
       this.retryTimer = null;
       this.blurTimer = null;
       this.refreshTimer = null;
+      this.contextDataDirty = false;
       this.positionFrame = null;
       this.transportQueue = Promise.resolve();
       this.overlay = null;
@@ -50,9 +51,9 @@
         this.document.addEventListener('click', this.bound.click, true);
         this.document.addEventListener('focusin', this.bound.focusin, true);
         this.document.addEventListener('focusout', this.bound.focusout, true);
-        this.document.addEventListener('keydown', this.bound.keydown, true);
         Bilibili.prefetchSubtitle(this.location);
       }
+      this.document.addEventListener('keydown', this.bound.keydown, true);
       this.document.addEventListener('visibilitychange', this.bound.visibility, true);
       root.addEventListener('pagehide', this.bound.pagehide, true);
       root.addEventListener('focus', this.bound.focus, true);
@@ -140,27 +141,58 @@
         return { ok: false, error: '无法安全识别当前评论目标' };
       }
       if (!force && this.active && this.active.semanticKey === info.semanticKey &&
-          this.active.editor === info.editor && this.active.context) {
-        this.scheduleOverlay();
-        return { ok: true, contextId: this.active.context.contextId };
+          this.active.editor === info.editor) {
+        if (this.active.accepted && this.active.context && !this.contextDataDirty) {
+          this.scheduleOverlay();
+          return { ok: true, contextId: this.active.context.contextId };
+        }
+        if (this.active.retrying) {
+          this.scheduleFullPutRetry(this.active, 0);
+          return {
+            ok: false,
+            retrying: true,
+            retryReason: this.active.retryReason,
+            error: this.active.retryDetail,
+          };
+        }
       }
       return this.publish(info);
     }
 
-    async captureGeneric() {
+    async captureGeneric(intentURL) {
+      // Opening the action popup fires focusout on a Bilibili editor before
+      // the popup's explicit manual capture message arrives. Cancel that
+      // delayed editor reclassification so it cannot overwrite the newer
+      // manual intent after capture has already started.
+      if (this.blurTimer) clearTimeout(this.blurTimer);
+      this.blurTimer = null;
+      this.clearPendingReply();
+      const currentURL = String(this.location.href || '');
+      const expectedURL = typeof intentURL === 'string' && intentURL
+        ? intentURL : currentURL;
+      if (currentURL !== expectedURL) {
+        await this.clear('manual-url-changed');
+        return { ok: false, stale: true, error: '网页已变化，请重新读取' };
+      }
       const info = {
         mode: 'direct',
         editor: null,
         boundary: null,
         target: null,
-        semanticKey: 'manual:' + String(this.location.href || ''),
+        semanticKey: 'manual:' + expectedURL,
         manual: true,
+        intentURL: expectedURL,
       };
       return this.publish(info);
     }
 
     async publish(info) {
       this.stopRetry();
+      this.stopRefresh();
+      // Every publish performs a fresh extraction, so it consumes all data
+      // changes observed before this generation began. A later change will set
+      // the flag again and schedule another refresh.
+      this.contextDataDirty = false;
       const generation = ++this.generation;
       const previous = this.active;
       this.active = null;
@@ -177,6 +209,9 @@
         contextId,
         context: null,
         accepted: false,
+        retrying: false,
+        retryDetail: '',
+        retryReason: '',
       });
       this.active = next;
       this.renderOverlay();
@@ -194,10 +229,25 @@
         });
       } catch (error) { context = null; }
       if (generation !== this.generation || this.active !== next) return { ok: false, stale: true };
+      if (info.manual === true &&
+          (String(this.location.href || '') !== info.intentURL ||
+           (context && String(context.page && context.page.url || '') !== info.intentURL))) {
+        await this.clear('manual-url-changed');
+        return { ok: false, stale: true, error: '网页已变化，请重新读取' };
+      }
       if (!context) {
-        this.active = null;
+        this.suspendForRetry(
+          next,
+          '当前页面暂时没有可用正文',
+          'content-not-ready',
+        );
         this.renderOverlay();
-        return { ok: false, error: '当前页面没有可用正文' };
+        return {
+          ok: false,
+          retrying: true,
+          retryReason: next.retryReason,
+          error: next.retryDetail,
+        };
       }
       next.context = context;
       const response = await this.enqueueTransport('put', context);
@@ -206,16 +256,29 @@
         return { ok: false, stale: true };
       }
       if (!response || response.ok !== true) {
-        if (response && response.status === 503) {
-          this.scheduleFullPutRetry(next);
+        if (response && (response.retryable === true || response.status === 503)) {
+          this.suspendForRetry(
+            next,
+            response.error || 'RIMES 暂时未接受网页上下文',
+            response.retryReason || 'rimes-unavailable',
+          );
           this.renderOverlay();
-          return { ok: false, retrying: true, status: 503, error: response.error };
+          return {
+            ok: false,
+            retrying: true,
+            status: response.status,
+            retryReason: next.retryReason,
+            error: next.retryDetail,
+          };
         }
         this.active = null;
         this.renderOverlay();
         return { ok: false, error: response && response.error || 'RIMES 未接受网页上下文' };
       }
       next.accepted = true;
+      next.retrying = false;
+      next.retryDetail = '';
+      next.retryReason = '';
       this.startHeartbeat(next);
       this.renderOverlay();
       return { ok: true, contextId };
@@ -241,15 +304,26 @@
 
     startHeartbeat(active) {
       this.stopHeartbeat();
+      // setInterval may fire again while the proof + heartbeat round trip is
+      // still pending. Keep the guard local to this interval generation so an
+      // old completion cannot unlock a newer heartbeat loop.
+      let inFlight = false;
       this.heartbeatTimer = setInterval(async () => {
-        if (this.active !== active || !active.context) return;
-        const response = await this.enqueueTransport('heartbeat',
-          Protocol.makeHeartbeat(active.context));
-        if (this.active !== active) return;
-        if (response && response.status === 503) {
-          this.stopHeartbeat();
-          this.scheduleFullPutRetry(active);
-        } else if (!response || response.ok !== true) this.abandon('heartbeat-rejected');
+        if (inFlight || this.active !== active || !active.context) return;
+        inFlight = true;
+        try {
+          const response = await this.enqueueTransport('heartbeat',
+            Protocol.makeHeartbeat(active.context));
+          if (this.active !== active) return;
+          if (response && (response.retryable === true || response.status === 503)) {
+            this.suspendForRetry(
+              active,
+              response.error || '网页上下文租约暂时中断',
+              response.retryReason || 'rimes-unavailable',
+            );
+            this.renderOverlay();
+          } else if (!response || response.ok !== true) this.abandon('heartbeat-rejected');
+        } finally { inFlight = false; }
       }, Protocol.HEARTBEAT_INTERVAL_MS);
     }
 
@@ -258,21 +332,120 @@
       this.heartbeatTimer = null;
     }
 
-    scheduleFullPutRetry(active) {
+    suspendForRetry(active, detail, reason) {
+      if (this.active !== active) return;
+      active.context = null;
+      active.accepted = false;
+      active.retrying = true;
+      active.retryDetail = String(detail || '正在等待网页可读取');
+      active.retryReason = String(reason || 'retry');
+      this.stopHeartbeat();
+      this.scheduleFullPutRetry(active);
+    }
+
+    scheduleFullPutRetry(active, delayMilliseconds) {
       this.stopRetry();
+      const delay = Number.isFinite(delayMilliseconds)
+        ? Math.max(0, delayMilliseconds)
+        : Protocol.HEARTBEAT_INTERVAL_MS;
       this.retryTimer = setTimeout(() => {
         this.retryTimer = null;
-        if (this.active !== active) return;
-        const info = {
-          mode: active.mode,
-          editor: active.editor,
-          boundary: active.boundary,
-          target: active.target,
-          semanticKey: active.semanticKey,
-          manual: active.manual === true,
-        };
-        void this.publish(info);
-      }, Protocol.HEARTBEAT_INTERVAL_MS);
+        void this.retrySuspendedIntent(active);
+      }, delay);
+    }
+
+    async retrySuspendedIntent(active) {
+      if (this.active !== active || active.retrying !== true) return;
+      if (this.document.hidden) {
+        this.scheduleFullPutRetry(active);
+        return;
+      }
+      if (active.manual === true) {
+        if (String(this.location.href || '') !== active.intentURL) {
+          await this.clear('manual-url-changed');
+          return;
+        }
+      } else if (!this.retryIntentIsCurrent(active)) {
+        await this.clear('retry-target-lost');
+        return;
+      }
+
+      // An action popup takes DOM focus away from the page even though the
+      // same Chrome window and tab remain authoritative. Ask the worker for a
+      // read-only foreground verdict instead of treating document.hasFocus()
+      // as authority. The subsequent PUT still repeats the full pre/post
+      // foreground checks, so this probe can never grant a lease by itself.
+      if (!this.pageCanRetry()) {
+        // Like Marine's GRAB_ALL path, manual page capture and a non-targeted
+        // direct editor are bound to the selected host tab rather than to
+        // document.hasFocus(). Exact replies remain strict: relaxing them
+        // could revive a stale comment target after popup focusout.
+        const mayProbeSelectedPage = active.manual === true ||
+          (active.mode === 'direct' && !active.target);
+        if (!mayProbeSelectedPage) {
+          this.scheduleFullPutRetry(active);
+          return;
+        }
+        const probeURL = active.manual === true
+          ? active.intentURL
+          : String(this.location.href || '');
+        const payload = Protocol.makeForegroundProbe(probeURL);
+        if (!payload) {
+          await this.clear('retry-url-invalid');
+          return;
+        }
+        let response;
+        try {
+          response = await this.sendMessage({
+            type: Protocol.MESSAGE_FOREGROUND,
+            payload,
+          });
+        } catch (error) {
+          response = { ok: false, error: String(error && error.message || error) };
+        }
+        if (this.active !== active || active.retrying !== true) return;
+        if (!response || response.ok !== true) {
+          const status = response && response.status;
+          const terminal = status === 400 || status === 403;
+          if (terminal) {
+            this.abandon('foreground-probe-rejected');
+            return;
+          }
+          active.retryDetail = response && response.error || '前台状态暂时不可用';
+          active.retryReason = response && response.retryReason || 'foreground-unavailable';
+          this.renderOverlay();
+          this.scheduleFullPutRetry(active);
+          return;
+        }
+        if (response.foreground !== true) {
+          active.retryDetail = '网页已不在前台';
+          active.retryReason = 'page-not-foreground';
+          this.renderOverlay();
+          this.scheduleFullPutRetry(active);
+          return;
+        }
+      }
+
+      if (this.active !== active || active.retrying !== true) return;
+      if (active.manual === true) {
+        void this.captureGeneric(active.intentURL);
+      } else if (this.retryIntentIsCurrent(active)) {
+        // Re-classify the live editor instead of replaying a stale reply ID.
+        void this.activateEditor(active.editor, true);
+      } else void this.clear('retry-target-lost');
+    }
+
+    retryIntentIsCurrent(active) {
+      if (!active || !active.editor || !active.editor.isConnected ||
+          !Text.isVisible(active.editor)) return false;
+      return Text.deepActiveElement(this.document) === active.editor;
+    }
+
+    pageCanRetry() {
+      if (this.document.hidden) return false;
+      if (typeof this.document.hasFocus !== 'function') return true;
+      try { return this.document.hasFocus() === true; }
+      catch (error) { return false; }
     }
 
     stopRetry() {
@@ -280,11 +453,18 @@
       this.retryTimer = null;
     }
 
+    stopRefresh() {
+      if (this.refreshTimer) clearTimeout(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+
     abandon() {
       ++this.generation;
       this.active = null;
+      this.contextDataDirty = false;
       this.stopHeartbeat();
       this.stopRetry();
+      this.stopRefresh();
       this.renderOverlay();
     }
 
@@ -292,8 +472,10 @@
       ++this.generation;
       const previous = this.active;
       this.active = null;
+      this.contextDataDirty = false;
       this.stopHeartbeat();
       this.stopRetry();
+      this.stopRefresh();
       this.renderOverlay();
       if (previous && previous.context) await this.revokeContext(previous.context);
       return { ok: true };
@@ -378,18 +560,40 @@
     }
 
     rearmFocusedEditor() {
+      const active = this.active;
+      if (active && active.retrying) {
+        const targetStillValid = active.manual === true || this.retryIntentIsCurrent(active);
+        if (targetStillValid) this.scheduleFullPutRetry(active, 0);
+        return;
+      }
+      if (active && this.contextDataDirty && this.pageCanRetry()) {
+        if (active.manual) {
+          void this.captureGeneric(active.intentURL);
+          return;
+        }
+        if (active.editor && this.retryIntentIsCurrent(active)) {
+          void this.activateEditor(active.editor, true);
+          return;
+        }
+      }
       if (!Bilibili.isVideoPage(this.location)) return;
       const editor = Text.deepActiveElement(this.document);
       if (Text.isEditor(editor)) void this.activateEditor(editor, true);
     }
 
     contextDataChanged() {
-      if (!this.active || !this.active.context || this.refreshTimer) return;
+      if (!this.active) return;
+      this.contextDataDirty = true;
+      if (this.refreshTimer) return;
       this.refreshTimer = setTimeout(() => {
         this.refreshTimer = null;
         const active = this.active;
-        if (!active) return;
-        if (active.manual) void this.captureGeneric();
+        if (!active || !this.contextDataDirty) return;
+        if (!this.pageCanRetry()) {
+          if (active.retrying) this.scheduleFullPutRetry(active);
+          return;
+        }
+        if (active.manual) void this.captureGeneric(active.intentURL);
         else if (active.editor && active.editor.isConnected) void this.activateEditor(active.editor, true);
       }, 600);
     }
@@ -483,10 +687,17 @@
     }
 
     status() {
+      const active = this.active;
       return {
-        active: !!(this.active && this.active.context && this.active.accepted),
-        mode: this.active && this.active.mode || null,
-        targetSummary: this.active && this.active.context && this.active.context.targetSummary || null,
+        active: !!(active && active.context && active.accepted),
+        retrying: !!(active && active.retrying),
+        retryDetail: active && active.retryDetail || '',
+        retryReason: active && active.retryReason || '',
+        mode: active && active.mode || null,
+        targetSummary: active && active.context && active.context.targetSummary || null,
+        sourceId: active && active.sourceId || this.sourceId,
+        revision: active && active.revision || 0,
+        contextId: active && active.contextId || null,
       };
     }
   }

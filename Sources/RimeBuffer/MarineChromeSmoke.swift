@@ -942,7 +942,7 @@ private func runMarineChromeAvailabilityRefreshSmoke() -> Bool {
 private func runMarineChromeStatusSmoke() -> Bool {
     guard BuiltInPlugins.makeAll().first(where: {
         $0.descriptor.key == MarineChromeWorkspace.pluginKey
-    })?.descriptor.version == "0.2.0" else {
+    })?.descriptor.version == "0.2.3" else {
         return marineChromeSmokeFail("built-in/extension version alignment")
     }
 

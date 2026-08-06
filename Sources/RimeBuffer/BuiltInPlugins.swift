@@ -40,7 +40,7 @@ private final class MarineChromeInternalPlugin: InternalPlugin {
         wireID: nil,
         name: "Marine Chrome",
         symbolName: "network",
-        version: "0.2.0",
+        version: "0.2.3",
         summary: "由配套 Chrome 扩展读取当前网页和精确回复目标；生成与发送仍由 RIMES 安全处理。",
         source: .builtIn,
         capabilities: [.bufferAction],

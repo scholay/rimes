@@ -8,7 +8,7 @@ enum BufferCandidatePlacement: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .workbench: return "显示在缓冲条下方"
+        case .workbench: return "跟随缓冲工作台"
         case .caret: return "跟随输入光标"
         }
     }
@@ -30,6 +30,38 @@ enum BufferWorkbenchLayoutMode: Equatable {
     }
 }
 
+enum BufferOpeningSide: Equatable {
+    case belowTarget
+    case aboveTarget
+    case bottomFallback
+}
+
+struct BufferOpeningPlacement: Equatable {
+    let frame: NSRect
+    let side: BufferOpeningSide
+}
+
+enum BufferCandidateSideRules {
+    static func preferredSide(openingSide: BufferOpeningSide,
+                              openingToken: FocusToken?,
+                              candidateOwner: FocusToken?)
+        -> CandidatePanelPreferredSide {
+        openingSide == .aboveTarget
+            && openingToken != nil
+            && openingToken == candidateOwner
+            ? .above
+            : .below
+    }
+
+    static func requiresOutwardPlacement(openingSide: BufferOpeningSide,
+                                         openingToken: FocusToken?,
+                                         candidateOwner: FocusToken?) -> Bool {
+        openingSide != .bottomFallback
+            && openingToken != nil
+            && openingToken == candidateOwner
+    }
+}
+
 /// Pure frame math shared by runtime restoration and the CLI smoke test.
 enum BufferWindowGeometry {
     static let standardMinimumWidth: CGFloat = 520
@@ -40,6 +72,11 @@ enum BufferWindowGeometry {
     static let translationExpandedHeight: CGFloat = 112
     static let standardMinimumHeight = expandedHeight
     static let screenSafetyMargin: CGFloat = 8
+    static let inputAnchorGap: CGFloat = 10
+    static let fallbackBottomOffset: CGFloat = 120
+    static var maximumRuntimeHeight: CGFloat {
+        height(expanded: true, mode: .derived(targetRows: 3))
+    }
 
     static func height(expanded: Bool,
                        mode: BufferWorkbenchLayoutMode = .standard) -> CGFloat {
@@ -91,11 +128,140 @@ enum BufferWindowGeometry {
         return NSRect(x: x, y: y, width: width, height: height)
     }
 
+    /// Places a newly summoned workbench near the exact current input caret.
+    /// The caller must supply only a fresh, token-validated host rect. Invalid
+    /// or missing rects deliberately use a lower-center screen fallback rather
+    /// than a remembered app/field coordinate.
+    static func openingPlacement(currentFrame: NSRect,
+                                 targetRect: NSRect?,
+                                 visibleFrames: [NSRect],
+                                 fallback: NSRect,
+                                 forecastHeight: CGFloat = maximumRuntimeHeight)
+        -> BufferOpeningPlacement {
+        let screens = visibleFrames.isEmpty ? [fallback] : visibleFrames
+        let targetScreen = targetRect.flatMap { rect in
+            screens.first { isPlausibleInputAnchor(rect, visibleFrame: $0) }
+        }
+        let target = targetScreen ?? fallback
+        let horizontalMargin = min(screenSafetyMargin, max(0, (target.width - 1) / 2))
+        let verticalMargin = min(screenSafetyMargin, max(0, (target.height - 1) / 2))
+        let safeTarget = target.insetBy(dx: horizontalMargin, dy: verticalMargin)
+        let minimumWidth = min(standardMinimumWidth, safeTarget.width)
+        let maximumWidth = min(standardMaximumWidth, safeTarget.width)
+        let proposedWidth = currentFrame.width > 0 ? currentFrame.width : 680
+        let proposedHeight = currentFrame.height > 0 ? currentFrame.height : expandedHeight
+        let width = min(max(proposedWidth, minimumWidth), maximumWidth)
+        let height = min(proposedHeight, safeTarget.height)
+        // Forecast the largest current layout only to choose a stable side.
+        // The real (usually 78pt) panel still sits exactly `inputAnchorGap`
+        // from the input line instead of reserving invisible vertical space.
+        let plannedHeight = min(max(height, forecastHeight), safeTarget.height)
+
+        guard let targetRect, targetScreen != nil else {
+            let availableTravel = max(0, safeTarget.height - height)
+            let bottomOffset = min(fallbackBottomOffset, availableTravel / 4)
+            return BufferOpeningPlacement(
+                frame: NSRect(x: safeTarget.midX - width / 2,
+                              y: safeTarget.minY + bottomOffset,
+                              width: width,
+                              height: height),
+                side: .bottomFallback
+            )
+        }
+
+        var x = targetRect.midX - width / 2
+        x = min(max(x, safeTarget.minX), max(safeTarget.minX, safeTarget.maxX - width))
+
+        let belowRoom = max(0, targetRect.minY - inputAnchorGap - safeTarget.minY)
+        let aboveRoom = max(0, safeTarget.maxY - targetRect.maxY - inputAnchorGap)
+        let belowY = targetRect.minY - inputAnchorGap - height
+        let aboveY = targetRect.maxY + inputAnchorGap
+        let side: BufferOpeningSide
+        let y: CGFloat
+        if belowRoom >= plannedHeight {
+            side = .belowTarget
+            y = belowY
+        } else if aboveRoom >= plannedHeight {
+            side = .aboveTarget
+            y = aboveY
+        } else {
+            // On a short screen, prefer the side with enough room for the
+            // current layout; otherwise choose the larger deterministic side.
+            let belowFitsCurrent = belowRoom >= height
+            let aboveFitsCurrent = aboveRoom >= height
+            if belowFitsCurrent && (!aboveFitsCurrent || belowRoom >= aboveRoom) {
+                side = .belowTarget
+                y = belowY
+            } else if aboveFitsCurrent {
+                side = .aboveTarget
+                y = aboveY
+            } else if belowRoom >= aboveRoom {
+                side = .belowTarget
+                y = safeTarget.minY
+            } else {
+                side = .aboveTarget
+                y = safeTarget.maxY - height
+            }
+        }
+        return BufferOpeningPlacement(
+            frame: NSRect(x: x, y: y, width: width, height: height),
+            side: side
+        )
+    }
+
+    static func isPlausibleInputAnchor(_ rect: NSRect,
+                                       visibleFrames: [NSRect]) -> Bool {
+        visibleFrames.contains { isPlausibleInputAnchor(rect, visibleFrame: $0) }
+    }
+
+    private static func isPlausibleInputAnchor(_ rect: NSRect,
+                                               visibleFrame: NSRect) -> Bool {
+        guard rect != .zero,
+              rect.origin.x.isFinite,
+              rect.origin.y.isFinite,
+              rect.width.isFinite,
+              rect.height.isFinite,
+              rect.width >= 0,
+              rect.height > 2,
+              rect.height < 300 else { return false }
+        // A caret is commonly zero-width, so point containment is intentional;
+        // CGRect intersection would reject a perfectly valid insertion point.
+        return visibleFrame.insetBy(dx: -screenSafetyMargin,
+                                    dy: -screenSafetyMargin)
+            .contains(rect.origin)
+    }
+
     static func candidateAnchor(for frame: NSRect) -> NSRect {
         NSRect(x: frame.minX + 8,
                y: frame.minY,
                width: max(4, frame.width - 16),
                height: frame.height)
+    }
+
+    /// Contextual openings grow away from the input line: a below-target
+    /// workbench keeps its top edge fixed, while an above-target workbench
+    /// keeps its bottom edge fixed. Manual and fallback layouts retain the
+    /// historical bottom-edge behavior in `clampedFrame`.
+    static func resizedOutward(_ frame: NSRect,
+                               height: CGFloat,
+                               openingSide: BufferOpeningSide) -> NSRect {
+        var resized = frame
+        resized.size.height = height
+        if openingSide == .belowTarget {
+            resized.origin.y = frame.maxY - height
+        }
+        return resized
+    }
+
+    static func canonicalPersistedFrame(_ currentFrame: NSRect,
+                                        persistedOrigin: NSPoint?,
+                                        transientOpeningOrigin: Bool) -> NSRect {
+        var canonical = currentFrame
+        canonical.size.height = expandedHeight
+        if transientOpeningOrigin, let persistedOrigin {
+            canonical.origin = persistedOrigin
+        }
+        return canonical
     }
 
     static func pixelAligned(_ frame: NSRect, scale: CGFloat) -> NSRect {
@@ -767,6 +933,26 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var renderedTranslationLanguages: [TranslationLanguageOption] = []
     private var renderedBuiltInActionOptions: [BuiltInBufferActionOption] = []
     private var sendButtonUsesAccent = false
+    private var openingSide: BufferOpeningSide = .bottomFallback
+    private var openingFocusToken: FocusToken?
+    private var transientOpeningOrigin = false
+    private var persistedFrameOrigin: NSPoint?
+
+    func preferredCandidatePanelSide(for owner: FocusToken?) -> CandidatePanelPreferredSide {
+        BufferCandidateSideRules.preferredSide(
+            openingSide: openingSide,
+            openingToken: openingFocusToken,
+            candidateOwner: owner
+        )
+    }
+
+    func requiresOutwardCandidatePanelPlacement(for owner: FocusToken?) -> Bool {
+        BufferCandidateSideRules.requiresOutwardPlacement(
+            openingSide: openingSide,
+            openingToken: openingFocusToken,
+            candidateOwner: owner
+        )
+    }
 
     var isVisible: Bool {
         BufferWindowVisibilityRules.isVisibleOnActiveSpace(
@@ -835,10 +1021,15 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         let visible = defaults.object(forKey: Key.visible) == nil
             ? BufferModel.shared.enabled
             : defaults.bool(forKey: Key.visible)
-        if visible { show() }
+        if visible { show(repositionOnOpen: false) }
     }
 
     func show() {
+        show(repositionOnOpen: true)
+    }
+
+    private func show(repositionOnOpen: Bool) {
+        let wasVisibleOnActiveSpace = isVisible
         UserDefaults.standard.set(true, forKey: Key.visible)
         guard !sessionProtectionActive else {
             hiddenForSession = true
@@ -846,8 +1037,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         hiddenForSession = false
         ActionPluginHost.shared.refreshStatuses(force: true)
-        clampFrameToScreens()
         refresh()
+        if repositionOnOpen, !wasVisibleOnActiveSpace {
+            positionForExplicitOpening()
+        } else {
+            clampFrameToScreens()
+        }
         // Re-ordering is required for an unpinned panel that is still ordered
         // on another Space. `.moveToActiveSpace` applies when it is ordered
         // again; simply calling orderFront on the old ordered window may leave
@@ -860,10 +1055,14 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     /// Explicit user-facing open actions resume capture after a previous
-    /// close-and-pause. Passive restoration still uses `show()` so it does not
-    /// silently change the persisted buffer mode.
+    /// close-and-pause. Passive restoration uses `show(repositionOnOpen: false)`
+    /// so it neither resumes capture nor replaces the persisted window origin.
     func openAndResume() {
         BufferModel.shared.enabled = true
+        // Establish the host's marked-text guard before asking for its caret
+        // rectangle. Chromium/Electron clients commonly return a zero rect
+        // while no marked session exists.
+        RimeBufferController.refreshActiveUI()
         show()
     }
 
@@ -909,6 +1108,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         var frame = panel.frame
         frame.origin = NSPoint(x: target.midX - frame.width / 2,
                                y: target.midY - frame.height / 2)
+        transientOpeningOrigin = false
+        openingSide = .bottomFallback
+        openingFocusToken = nil
         applyClampedFrame(frame,
                           visibleFrames: [target],
                           fallback: target,
@@ -1146,6 +1348,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     func windowDidMove(_ notification: Notification) {
         guard !adjustingFrame else { return }
+        transientOpeningOrigin = false
+        openingSide = .bottomFallback
+        openingFocusToken = nil
         if let visibleFrame = panel.screen?.visibleFrame {
             syncMinimumSize(to: visibleFrame)
             if panel.frame.width > visibleFrame.width
@@ -1892,11 +2097,20 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         layoutMode = nextMode
         mainBarHeightConstraint?.constant = BufferWorkbenchMetrics.mainBarHeight(for: nextMode)
         bufferRailHeightConstraint?.constant = BufferWorkbenchMetrics.railHeight(for: nextMode)
-        var proposed = panel.frame
-        proposed.size.height = BufferWindowGeometry.height(
+        let desiredHeight = BufferWindowGeometry.height(
             expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
             mode: nextMode
         )
+        var proposed = panel.frame
+        if transientOpeningOrigin, openingSide != .bottomFallback {
+            proposed = BufferWindowGeometry.resizedOutward(
+                proposed,
+                height: desiredHeight,
+                openingSide: openingSide
+            )
+        } else {
+            proposed.size.height = desiredHeight
+        }
         let fallback = panel.screen?.visibleFrame
             ?? NSScreen.main?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -2118,6 +2332,47 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                           visibleFrames: NSScreen.screens.map(\.visibleFrame),
                           fallback: fallback,
                           display: false)
+        persistedFrameOrigin = panel.frame.origin
+        transientOpeningOrigin = false
+        openingSide = .bottomFallback
+        openingFocusToken = nil
+    }
+
+    private func positionForExplicitOpening() {
+        let screens = NSScreen.screens
+        let visibleFrames = screens.map(\.visibleFrame)
+        let mouse = NSEvent.mouseLocation
+        let fallback = screens.first { $0.frame.contains(mouse) }?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let focusedAnchor = freshFocusedInputAnchor()
+        let placement = BufferWindowGeometry.openingPlacement(
+            currentFrame: panel.frame,
+            targetRect: focusedAnchor?.rect,
+            visibleFrames: visibleFrames,
+            fallback: fallback
+        )
+        applyClampedFrame(placement.frame,
+                          visibleFrames: visibleFrames,
+                          fallback: fallback,
+                          display: panel.isVisible)
+        openingSide = placement.side
+        openingFocusToken = placement.side == .bottomFallback
+            ? nil
+            : focusedAnchor?.token
+        transientOpeningOrigin = true
+    }
+
+    private func freshFocusedInputAnchor() -> (rect: NSRect, token: FocusToken)? {
+        guard !IsSecureEventInputEnabled(),
+              let lease = InputFocusCoordinator.shared.liveTarget(
+                forceOverlayVisibilityRefresh: true
+              ),
+              let controller = lease.controller else { return nil }
+        guard let rect = controller.workbenchCaretRect(expected: lease) else {
+            return nil
+        }
+        return (rect, lease.token)
     }
 
     private func clampFrameToScreens() {
@@ -2198,8 +2453,14 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func saveFrame() {
-        var canonical = panel.frame
-        canonical.size.height = BufferWindowGeometry.expandedHeight
+        let canonical = BufferWindowGeometry.canonicalPersistedFrame(
+            panel.frame,
+            persistedOrigin: persistedFrameOrigin,
+            transientOpeningOrigin: transientOpeningOrigin
+        )
+        if !transientOpeningOrigin || persistedFrameOrigin == nil {
+            persistedFrameOrigin = canonical.origin
+        }
         UserDefaults.standard.set(NSStringFromRect(canonical), forKey: Key.frame)
     }
 

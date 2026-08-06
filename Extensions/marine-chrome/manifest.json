@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "marine-chrome",
-  "version": "0.2.0",
+  "version": "0.2.3",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoiknzqEuzNftWlPxTlPbmqNPAmPXTTG5aBXdCQMody5vyguLpFIr6+u4DfZsy5rfDy5zo1otGeO3QD6AZMJ3VL3nfvtWHElyHZntZD8l9hDsxneA8GU/tcabUKaiyEUfSMOQn5dGVGu/pySPiQ5IA3X8XHxC2ryEXZDmuQl+5J1e1W9gLG6TaNP3y62Uo5chLWNu/oTZ2QRVqMTUYEMUpkIzaKvsC+zRgzmud2+AkI+fDfLmk06udZ3AVwFzm2AwfgNKDPO+CawXLvbAQsfHJb4UWKg1PQ9aJGJYTeNgKkaB/EC+qd9oprqWUDG0SSCp0t8xl6Nl3l0tPM18nwQr0wIDAQAB",
   "description": "把当前网页与 Bilibili 精确评论目标安全交给 RIMES。",
   "minimum_chrome_version": "114",
@@ -11,6 +11,7 @@
   },
   "permissions": [
     "activeTab",
+    "dom",
     "scripting",
     "storage"
   ],

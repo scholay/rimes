@@ -8,8 +8,14 @@
   const listeners = new Set();
   const MAX_RECORDS = 1500;
   const POSITIVE_ID = /^[1-9]\d*$/;
+  const SUBTITLE_RETRY_DELAYS_MS = [2000, 5000, 10000, 30000];
   let subtitleText = '';
   let subtitlePromise = null;
+  let subtitleKey = '';
+  let subtitleGeneration = 0;
+  let subtitleRetryTimer = null;
+  let subtitleRetryAttempt = 0;
+  let subtitleRetryEnabled = false;
 
   function isVideoPage(locationLike) {
     const hostname = String(locationLike && locationLike.hostname || '').toLowerCase();
@@ -281,12 +287,14 @@
     return Protocol.cleanText(lines.join('\n'), Protocol.MAX_SOURCE_BYTES).trim();
   }
 
-  function articleSource(documentLike, locationLike) {
+  function articleSnapshot(documentLike, locationLike) {
     let title = '';
     let description = '';
     try {
-      title = Text.textOf(documentLike.querySelector('h1.video-title,h1'), 2 * 1024) ||
-        Text.normalize(documentLike.title, 2 * 1024);
+      title = Text.textOf(documentLike.querySelector('h1.video-title,h1'), 2 * 1024);
+    } catch (error) {}
+    if (!title) title = Text.normalize(documentLike && documentLike.title, 2 * 1024);
+    try {
       const descriptionElement = documentLike.querySelector(
         '.video-desc-container,.desc-info-text,[data-vue-meta="true"][name="description"]',
       );
@@ -294,11 +302,30 @@
         ? Text.attribute(descriptionElement, ['content'])
         : Text.textOf(descriptionElement, Protocol.MAX_SOURCE_BYTES);
     } catch (error) {}
+    // Bilibili's generic <body> is mostly player/navigation chrome while the
+    // video application is still hydrating. Only the platform's explicit
+    // description counts as article body; generic title/URL remain metadata
+    // and must not stop the subtitle/comment readiness retry loop.
+    const body = description;
+    const sourceURL = String(locationLike && locationLike.href || '');
     const parts = [];
     if (title) parts.push('# ' + title);
-    parts.push('> 来源：' + String(locationLike && locationLike.href || ''));
-    if (description) parts.push(description);
-    return Protocol.cleanText(parts.join('\n\n'), Protocol.MAX_SOURCE_BYTES).trim();
+    if (sourceURL) parts.push('> 来源：' + sourceURL);
+    if (body) parts.push(body);
+    const text = Protocol.cleanText(parts.join('\n\n'), Protocol.MAX_SOURCE_BYTES).trim();
+    const quality = body ? 'article' : title ? 'metadata' : sourceURL ? 'locator' : 'empty';
+    return {
+      ready: quality === 'article',
+      quality,
+      text,
+      body,
+      title,
+      url: sourceURL,
+    };
+  }
+
+  function articleSource(documentLike, locationLike) {
+    return articleSnapshot(documentLike, locationLike).text;
   }
 
   function withTimeout(promise, milliseconds) {
@@ -323,11 +350,18 @@
     finally { clearTimeout(timer); }
   }
 
-  async function loadSubtitle(locationLike) {
+  function subtitleRequest(locationLike) {
     const match = String(locationLike && locationLike.pathname || '').match(/\/video\/(BV[0-9A-Za-z]+)/);
-    if (!match) return '';
+    if (!match) return null;
     const bvid = match[1];
     const part = Math.max(1, Number(new URLSearchParams(locationLike.search || '').get('p')) || 1);
+    return { bvid, part, key: bvid + ':p' + part };
+  }
+
+  async function loadSubtitle(locationLike) {
+    const request = subtitleRequest(locationLike);
+    if (!request) return '';
+    const { bvid, part } = request;
     const view = await fetchJSON(
       'https://api.bilibili.com/x/web-interface/view?bvid=' + encodeURIComponent(bvid), 4500,
     );
@@ -353,29 +387,89 @@
       .filter(Boolean).join('\n'), Protocol.MAX_SOURCE_BYTES).trim();
   }
 
-  function prefetchSubtitle(locationLike) {
+  function stopSubtitleRetry() {
+    if (subtitleRetryTimer) clearTimeout(subtitleRetryTimer);
+    subtitleRetryTimer = null;
+    subtitleRetryAttempt = 0;
+  }
+
+  function scheduleSubtitleRetry(locationLike, generation, key) {
+    if (!subtitleRetryEnabled || subtitleRetryTimer || subtitleText ||
+        generation !== subtitleGeneration || key !== subtitleKey) return;
+    const delay = SUBTITLE_RETRY_DELAYS_MS[Math.min(
+      subtitleRetryAttempt,
+      SUBTITLE_RETRY_DELAYS_MS.length - 1,
+    )];
+    subtitleRetryAttempt += 1;
+    subtitleRetryTimer = setTimeout(() => {
+      subtitleRetryTimer = null;
+      if (!subtitleRetryEnabled || subtitleText ||
+          generation !== subtitleGeneration || key !== subtitleKey) return;
+      if (root.document && root.document.hidden) {
+        scheduleSubtitleRetry(locationLike, generation, key);
+        return;
+      }
+      void prefetchSubtitle(locationLike, true);
+    }, delay);
+  }
+
+  function prefetchSubtitle(locationLike, retryUntilReady) {
+    const request = subtitleRequest(locationLike);
+    if (!request) return Promise.resolve('');
+    if (request.key !== subtitleKey) {
+      stopSubtitleRetry();
+      subtitleGeneration += 1;
+      subtitleKey = request.key;
+      subtitleText = '';
+      subtitlePromise = null;
+      subtitleRetryEnabled = retryUntilReady === true;
+    } else if (retryUntilReady === true) {
+      subtitleRetryEnabled = true;
+    }
+    if (subtitleText) return Promise.resolve(subtitleText);
     if (subtitlePromise) return subtitlePromise;
-    subtitlePromise = loadSubtitle(locationLike).then(value => {
+
+    const generation = subtitleGeneration;
+    let pending;
+    pending = loadSubtitle(locationLike).then(value => {
+      if (generation !== subtitleGeneration || request.key !== subtitleKey) return '';
       if (value && value !== subtitleText) {
         subtitleText = value;
+        subtitleRetryEnabled = false;
+        stopSubtitleRetry();
         notifyChanged();
       }
       return subtitleText;
-    }).catch(() => '');
+    }).catch(() => '').finally(() => {
+      // An empty response can mean the player API or subtitle track has not
+      // appeared yet. Do not memoize that absence: a later controller retry
+      // must be allowed to perform the complete request again. A successful
+      // subtitle remains cached for this exact BV/part until navigation.
+      if (generation === subtitleGeneration && request.key === subtitleKey &&
+          subtitlePromise === pending && !subtitleText) {
+        subtitlePromise = null;
+        scheduleSubtitleRetry(locationLike, generation, request.key);
+      }
+    });
+    subtitlePromise = pending;
     return subtitlePromise;
   }
 
   async function bestSource(documentLike, locationLike) {
-    if (!subtitleText) await withTimeout(prefetchSubtitle(locationLike), 900);
+    if (!subtitleText) await withTimeout(prefetchSubtitle(locationLike, true), 900);
     if (subtitleText) return { kind: 'subtitle', text: subtitleText };
     const comments = commentsSource();
     if (comments) return { kind: 'comments', text: comments };
-    return { kind: 'article', text: articleSource(documentLike, locationLike) ||
-      root.MarineChromeExtract.article(documentLike, locationLike) };
+    const article = articleSnapshot(documentLike, locationLike);
+    return article.ready ? { kind: 'article', text: article.text } : null;
   }
 
   function resetForNavigation() {
     records.clear();
+    stopSubtitleRetry();
+    subtitleRetryEnabled = false;
+    subtitleGeneration += 1;
+    subtitleKey = '';
     subtitleText = '';
     subtitlePromise = null;
     notifyChanged();
@@ -398,7 +492,9 @@
     replyAuthor,
     replyControl,
     commentsSource,
+    articleSnapshot,
     articleSource,
+    subtitleRequest,
     prefetchSubtitle,
     bestSource,
     resetForNavigation,

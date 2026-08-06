@@ -6284,8 +6284,255 @@ func runBufferWindowSmokeTest() -> Bool {
         return false
     }
 
+    var forwardedCaretIndex: Int?
+    let caretIndexProbe = InputCaretGeometryRules.queryAtInlineSessionAnchor { index in
+        forwardedCaretIndex = index
+        return index
+    }
+    guard caretIndexProbe == 0, forwardedCaretIndex == 0 else {
+        print("FAILED: IMK inline-session caret index contract")
+        return false
+    }
+
+    var openingEpochs = FocusEpochState()
+    let openingToken = openingEpochs.activate()
+    let newerToken = openingEpochs.activate()
+    guard BufferCandidateSideRules.preferredSide(
+            openingSide: .aboveTarget,
+            openingToken: openingToken,
+            candidateOwner: openingToken
+          ) == .above,
+          BufferCandidateSideRules.preferredSide(
+            openingSide: .aboveTarget,
+            openingToken: openingToken,
+            candidateOwner: newerToken
+          ) == .below,
+          BufferCandidateSideRules.preferredSide(
+            openingSide: .belowTarget,
+            openingToken: openingToken,
+            candidateOwner: openingToken
+          ) == .below,
+          BufferCandidateSideRules.requiresOutwardPlacement(
+            openingSide: .belowTarget,
+            openingToken: openingToken,
+            candidateOwner: openingToken
+          ),
+          BufferCandidateSideRules.requiresOutwardPlacement(
+            openingSide: .aboveTarget,
+            openingToken: openingToken,
+            candidateOwner: openingToken
+          ),
+          !BufferCandidateSideRules.requiresOutwardPlacement(
+            openingSide: .aboveTarget,
+            openingToken: openingToken,
+            candidateOwner: newerToken
+          ),
+          !BufferCandidateSideRules.requiresOutwardPlacement(
+            openingSide: .bottomFallback,
+            openingToken: nil,
+            candidateOwner: nil
+          ) else {
+        print("FAILED: workbench candidate side focus binding")
+        return false
+    }
+
     let primary = NSRect(x: 0, y: 0, width: 1440, height: 900)
     let secondary = NSRect(x: 1440, y: 0, width: 1280, height: 800)
+    let leftSecondary = NSRect(x: -1280, y: 0, width: 1280, height: 800)
+    let openingFrame = NSRect(x: 200,
+                              y: 200,
+                              width: 680,
+                              height: BufferWindowGeometry.expandedHeight)
+    let middleCaret = NSRect(x: 720, y: 500, width: 0, height: 22)
+    let belowCaret = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: middleCaret,
+        visibleFrames: [primary, secondary, leftSecondary],
+        fallback: primary
+    )
+    let runtimeHeights = [
+        BufferWindowGeometry.expandedHeight,
+        BufferWindowGeometry.translationExpandedHeight,
+        BufferWindowGeometry.height(expanded: true, mode: .derived(targetRows: 2)),
+        BufferWindowGeometry.maximumRuntimeHeight,
+        BufferWindowGeometry.expandedHeight,
+    ]
+    let belowResizes = runtimeHeights.reduce(into: [belowCaret.frame]) { frames, height in
+        frames.append(BufferWindowGeometry.resizedOutward(
+            frames.last!,
+            height: height,
+            openingSide: .belowTarget
+        ))
+    }
+    let bottomCaret = NSRect(x: 720, y: 12, width: 0, height: 22)
+    let aboveCaret = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: bottomCaret,
+        visibleFrames: [primary, secondary, leftSecondary],
+        fallback: primary
+    )
+    let aboveResizes = runtimeHeights.reduce(into: [aboveCaret.frame]) { frames, height in
+        frames.append(BufferWindowGeometry.resizedOutward(
+            frames.last!,
+            height: height,
+            openingSide: .aboveTarget
+        ))
+    }
+    let belowAnchor = BufferWindowGeometry.candidateAnchor(for: belowCaret.frame)
+    let belowCandidateSize = NSSize(width: 420, height: 60)
+    let belowCandidateOrigin = CandidatePanelGeometry.origin(
+        anchor: belowAnchor,
+        panelSize: belowCandidateSize,
+        visibleFrame: primary,
+        preferredSide: .below
+    )
+    let aboveAnchor = BufferWindowGeometry.candidateAnchor(for: aboveCaret.frame)
+    let aboveCandidateSize = NSSize(width: 420, height: 60)
+    let aboveCandidateOrigin = CandidatePanelGeometry.origin(
+        anchor: aboveAnchor,
+        panelSize: aboveCandidateSize,
+        visibleFrame: primary,
+        preferredSide: .above
+    )
+    let strictUnavailableAboveCandidate = CandidatePanelGeometry.originIfAvailable(
+        anchor: NSRect(x: 200, y: 850, width: 680, height: 40),
+        panelSize: NSSize(width: 420, height: 60),
+        visibleFrame: primary,
+        preferredSide: .above,
+        strictPreferredSide: true
+    )
+    let strictUnavailableBelowCandidate = CandidatePanelGeometry.originIfAvailable(
+        anchor: NSRect(x: 200, y: 12, width: 680, height: 40),
+        panelSize: NSSize(width: 420, height: 60),
+        visibleFrame: primary,
+        preferredSide: .below,
+        strictPreferredSide: true
+    )
+    // Current height fits below, but the forecast does not. Choose the roomy
+    // upper side immediately, while still keeping the real 78pt frame close.
+    let forecastAwareOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: NSRect(x: 720, y: 150, width: 0, height: 22),
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    let leftCaret = NSRect(x: -640, y: 520, width: 0, height: 22)
+    let leftScreenOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: leftCaret,
+        visibleFrames: [primary, secondary, leftSecondary],
+        fallback: primary
+    )
+    let rightEdgeOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: NSRect(x: 1438, y: 520, width: 0, height: 22),
+        visibleFrames: [primary, secondary, leftSecondary],
+        fallback: primary
+    )
+    let maximumHeightOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: NSRect(
+            x: openingFrame.minX,
+            y: openingFrame.minY,
+            width: openingFrame.width,
+            height: BufferWindowGeometry.height(
+                expanded: true,
+                mode: .derived(targetRows: 3)
+            )
+        ),
+        targetRect: NSRect(x: 720, y: 700, width: 0, height: 22),
+        visibleFrames: [primary, secondary, leftSecondary],
+        fallback: primary
+    )
+    let noTargetOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: nil,
+        visibleFrames: [primary, secondary, leftSecondary],
+        fallback: primary
+    )
+    let invalidTargetOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: NSRect(x: CGFloat.nan, y: 300, width: 0, height: 22),
+        visibleFrames: [primary, secondary, leftSecondary],
+        fallback: primary
+    )
+    let offscreenTargetOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: NSRect(x: 4000, y: 300, width: 0, height: 22),
+        visibleFrames: [primary, secondary, leftSecondary],
+        fallback: primary
+    )
+    let manualOrigin = NSPoint(x: 160, y: 240)
+    let transientPersistence = BufferWindowGeometry.canonicalPersistedFrame(
+        belowCaret.frame,
+        persistedOrigin: manualOrigin,
+        transientOpeningOrigin: true
+    )
+    let userPersistence = BufferWindowGeometry.canonicalPersistedFrame(
+        belowCaret.frame,
+        persistedOrigin: manualOrigin,
+        transientOpeningOrigin: false
+    )
+    guard BufferWindowGeometry.isPlausibleInputAnchor(
+            middleCaret,
+            visibleFrames: [primary]
+          ),
+          !BufferWindowGeometry.isPlausibleInputAnchor(.zero,
+                                                       visibleFrames: [primary]),
+          !BufferWindowGeometry.isPlausibleInputAnchor(
+            NSRect(x: 200, y: 200, width: 0, height: 300),
+            visibleFrames: [primary]
+          ),
+          belowCaret.side == .belowTarget,
+          belowCaret.frame.maxY
+            == middleCaret.minY - BufferWindowGeometry.inputAnchorGap,
+          belowResizes.allSatisfy({
+              $0.maxY == middleCaret.minY - BufferWindowGeometry.inputAnchorGap
+                  && !$0.intersects(middleCaret)
+          }),
+          belowCaret.frame.midX == middleCaret.midX,
+          aboveCaret.side == .aboveTarget,
+          aboveCaret.frame.minY
+            == bottomCaret.maxY + BufferWindowGeometry.inputAnchorGap,
+          aboveResizes.allSatisfy({
+              $0.minY == bottomCaret.maxY + BufferWindowGeometry.inputAnchorGap
+                  && !$0.intersects(bottomCaret)
+          }),
+          belowCandidateOrigin.y + belowCandidateSize.height
+            == belowAnchor.minY - 6,
+          aboveCandidateOrigin.y == aboveAnchor.maxY + 6,
+          strictUnavailableAboveCandidate == nil,
+          strictUnavailableBelowCandidate == nil,
+          forecastAwareOpening.side == .aboveTarget,
+          forecastAwareOpening.frame.minY == 150 + 22
+            + BufferWindowGeometry.inputAnchorGap,
+          !aboveCaret.frame.intersects(bottomCaret),
+          leftScreenOpening.side == .belowTarget,
+          leftSecondary.contains(leftScreenOpening.frame),
+          rightEdgeOpening.frame.maxX <= primary.maxX
+            - BufferWindowGeometry.screenSafetyMargin,
+          maximumHeightOpening.side == .belowTarget,
+          maximumHeightOpening.frame.height
+            == BufferWindowGeometry.height(
+                expanded: true,
+                mode: .derived(targetRows: 3)
+            ),
+          noTargetOpening.side == .bottomFallback,
+          noTargetOpening.frame.midX == primary.midX,
+          noTargetOpening.frame.minY > primary.minY,
+          noTargetOpening.frame.midY < primary.midY,
+          invalidTargetOpening == noTargetOpening,
+          offscreenTargetOpening == noTargetOpening,
+          transientPersistence.origin == manualOrigin,
+          transientPersistence.width == belowCaret.frame.width,
+          transientPersistence.height == BufferWindowGeometry.expandedHeight,
+          userPersistence.origin == belowCaret.frame.origin else {
+        print("FAILED: focus-aware workbench opening geometry",
+              belowCaret, aboveCaret, leftScreenOpening, rightEdgeOpening,
+              maximumHeightOpening, noTargetOpening,
+              invalidTargetOpening, offscreenTargetOpening)
+        return false
+    }
+
     let offscreen = NSRect(x: 4000, y: -900, width: 680, height: 230)
     let restored = BufferWindowGeometry.clampedFrame(
         offscreen,
@@ -6442,10 +6689,26 @@ func runBufferWindowSmokeTest() -> Bool {
         visibleFrames: [tiny],
         fallback: tiny
     )
+    let tinyOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: NSRect(
+            x: -400,
+            y: 20,
+            width: 680,
+            height: BufferWindowGeometry.height(
+                expanded: true,
+                mode: .derived(targetRows: 3)
+            )
+        ),
+        targetRect: NSRect(x: -240, y: 70, width: 0, height: 20),
+        visibleFrames: [tiny],
+        fallback: tiny
+    )
     guard tiny.contains(tinyFitted),
           tinyFitted.width <= tiny.width,
-          tinyFitted.height <= tiny.height else {
-        print("FAILED: tiny visible frame clamp", tinyFitted)
+          tinyFitted.height <= tiny.height,
+          tiny.contains(tinyOpening.frame),
+          tinyOpening.side != .bottomFallback else {
+        print("FAILED: tiny visible frame clamp", tinyFitted, tinyOpening)
         return false
     }
 

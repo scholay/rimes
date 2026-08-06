@@ -21,7 +21,8 @@ let currentLease = null;
 let authorityEpoch = 0;
 let lastAuthorityTimestamp = 0;
 let operationQueue = Promise.resolve();
-const inFlightPutTabs = new Set();
+const inFlightPutTabs = new Map();
+const tabActivationSequences = new Map();
 let pairingPromise = null;
 let secureStorageAvailable = false;
 let connectionState = 'unknown';
@@ -53,14 +54,17 @@ async function restoreSession() {
   try {
     const stored = await chrome.storage.session.get(Protocol.SESSION_KEY);
     const value = stored && stored[Protocol.SESSION_KEY];
-    const freshEnough = value && Number.isFinite(value.capturedAt) &&
-      value.capturedAt >= Protocol.nowSeconds() - Protocol.LEASE_RESTORE_SECONDS;
     if (LeaseState.validStored(value) && Protocol.validTimestamp(value.capturedAt) &&
-        freshEnough) {
+        leaseIsFresh(value)) {
       currentLease = value;
       lastAuthorityTimestamp = Math.max(lastAuthorityTimestamp, value.capturedAt);
     } else if (value) await chrome.storage.session.remove(Protocol.SESSION_KEY);
   } catch (error) {}
+}
+
+function leaseIsFresh(lease) {
+  return !!lease && Number.isFinite(lease.capturedAt) &&
+    lease.capturedAt >= Protocol.nowSeconds() - Protocol.LEASE_RESTORE_SECONDS;
 }
 
 async function persistSession() {
@@ -239,7 +243,7 @@ async function performRequest(config, path, method, body, bearerToken = '') {
       status: 0,
       error: error && error.name === 'AbortError' ? '连接 RIMES 超时' :
         String(error && error.message || error),
-      retryable: false,
+      retryable: true,
     };
   } finally { clearTimeout(timer); }
 }
@@ -615,10 +619,16 @@ async function foregroundSender(sender, expectedEpoch, expectedURL) {
   if (!Number.isInteger(tabId) || !Number.isInteger(windowId) || sender.frameId !== 0) return false;
   if (expectedEpoch !== authorityEpoch) return false;
   try {
-    const [tab, windowValue, activeTabs] = await Promise.all([
+    // An action popup is hosted in its own focused Chrome window. While it is
+    // open, chrome.windows.get(parent).focused is false even though the same
+    // browser tab remains the user's selected page. Marine's proven capture
+    // path binds to that selected host tab instead of treating DOM/native
+    // popup focus as page authority. Require both the tab's own window and
+    // Chrome's last-focused browser window to select the exact same tab.
+    const [tab, activeTabs, selectedTabs] = await Promise.all([
       chrome.tabs.get(tabId),
-      chrome.windows.get(windowId),
       chrome.tabs.query({ active: true, windowId }),
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }),
     ]);
     const expected = normalizedURL(expectedURL);
     const current = normalizedURL(tab && tab.url);
@@ -626,16 +636,31 @@ async function foregroundSender(sender, expectedEpoch, expectedURL) {
     return expectedEpoch === authorityEpoch && !!tab && tab.active === true &&
       tab.windowId === windowId && !!expected && current === expected &&
       (!pending || pending === expected) &&
-      !!windowValue && windowValue.focused === true && !!activeTabs[0] &&
-      activeTabs[0].id === tabId;
+      !!activeTabs[0] && activeTabs[0].id === tabId &&
+      !!selectedTabs[0] && selectedTabs[0].id === tabId &&
+      selectedTabs[0].windowId === windowId;
   } catch (error) { return false; }
 }
 
-function senderMatchesPage(sender, context) {
-  if (!sender || !sender.tab || !context || !context.page) return false;
-  const expected = normalizedURL(context.page.url);
+function senderMatchesURL(sender, rawURL) {
+  if (!sender || !sender.tab) return false;
+  const expected = normalizedURL(rawURL);
   const candidates = [sender.url, sender.tab.url].map(normalizedURL).filter(Boolean);
   return !!expected && candidates.includes(expected);
+}
+
+function senderMatchesPage(sender, context) {
+  return !!context && !!context.page && senderMatchesURL(sender, context.page.url);
+}
+
+function retryableAuthorityFailure(error, retryReason) {
+  return {
+    ok: false,
+    status: 409,
+    error,
+    retryable: true,
+    retryReason,
+  };
 }
 
 async function compensateContext(context) {
@@ -650,9 +675,9 @@ async function handlePut(payload, sender) {
   const context = authorityPayload(payload);
   const epoch = authorityEpoch;
   if (!await foregroundSender(sender, epoch, context.page.url)) {
-    return { ok: false, status: 409, error: '网页已不在前台' };
+    return retryableAuthorityFailure('网页已不在前台', 'page-not-foreground');
   }
-  inFlightPutTabs.add(sender.tab.id);
+  inFlightPutTabs.set(sender.tab.id, sender.tab.windowId);
   let response;
   try {
     response = await requestAPI('/v1/marine-chrome/context', 'PUT', context);
@@ -670,23 +695,41 @@ async function handlePut(payload, sender) {
   if (epoch !== authorityEpoch ||
       !await foregroundSender(sender, epoch, context.page.url)) {
     await compensateContext(context);
-    return { ok: false, status: 409, error: '网页上下文在传输途中失焦' };
+    return retryableAuthorityFailure(
+      '网页上下文在传输途中失焦',
+      'page-lost-foreground',
+    );
   }
   currentLease = LeaseState.fromContext(context, sender);
   await persistSession();
   return { ok: true, status: response.status, contextId: context.contextId };
 }
 
+async function handleForegroundProbe(payload, sender) {
+  await ready;
+  if (!Protocol.validateForegroundProbe(payload) || !sender || !sender.tab ||
+      sender.frameId !== 0 || typeof sender.documentId !== 'string' ||
+      !sender.documentId || !senderMatchesURL(sender, payload.url)) {
+    return { ok: false, status: 400, error: '无效的前台探测请求' };
+  }
+  const epoch = authorityEpoch;
+  return {
+    ok: true,
+    status: 200,
+    foreground: await foregroundSender(sender, epoch, payload.url),
+  };
+}
+
 async function handleHeartbeat(payload, sender) {
   if (!currentLease || !LeaseState.exactPayload(currentLease, payload) ||
       !LeaseState.exactSender(currentLease, sender) ||
       currentLease.url !== payload.url || currentLease.targetId !== payload.targetId) {
-    return { ok: false, status: 409, error: '网页租约已失效' };
+    return retryableAuthorityFailure('网页租约已失效', 'lease-reacquire');
   }
   const epoch = authorityEpoch;
   if (!await foregroundSender(sender, epoch, payload.url)) {
     await revokeCurrent('heartbeat-background');
-    return { ok: false, status: 409, error: '网页已不在前台' };
+    return retryableAuthorityFailure('网页已不在前台', 'page-not-foreground');
   }
   const heartbeat = authorityPayload(payload);
   const response = await requestAPI('/v1/marine-chrome/heartbeat', 'PUT', heartbeat);
@@ -697,7 +740,10 @@ async function handleHeartbeat(payload, sender) {
     currentLease = null;
     await persistSession();
   }
-  return response.ok ? { ok: true, status: response.status } : response;
+  if (response.ok) return { ok: true, status: response.status };
+  return response.status === 409
+    ? Object.assign({}, response, { retryable: true, retryReason: 'lease-reacquire' })
+    : response;
 }
 
 async function handleDelete(payload, sender) {
@@ -752,12 +798,18 @@ async function revokeCurrent() {
   return response.ok || response.status === 409 ? { ok: true } : response;
 }
 
-async function sendToActivePage(message) {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+async function queryActiveHTTPPageTab() {
+  const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const tab = tabs && tabs[0];
   if (!tab || !Number.isInteger(tab.id) || !/^https?:/i.test(String(tab.url || ''))) {
-    return { ok: false, error: '当前标签页不允许读取' };
+    return null;
   }
+  return tab;
+}
+
+async function sendToActivePage(message) {
+  const tab = await queryActiveHTTPPageTab();
+  if (!tab) return { ok: false, error: '当前标签页不允许读取' };
   try {
     return await chrome.tabs.sendMessage(tab.id, message);
   } catch (firstError) {
@@ -774,10 +826,8 @@ async function sendToActivePage(message) {
   }
 }
 
-async function queryActivePage(message) {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs && tabs[0];
-  if (!tab || !Number.isInteger(tab.id) || !/^https?:/i.test(String(tab.url || ''))) return null;
+async function queryActivePage(tab, message) {
+  if (!tab || !Number.isInteger(tab.id)) return null;
   try { return await chrome.tabs.sendMessage(tab.id, message); }
   catch (error) { return null; }
 }
@@ -801,15 +851,33 @@ async function status() {
       pairingInFlight: false,
       leaseActive: false,
       pageActive: false,
+      pageRetrying: false,
+      pageRetryDetail: '',
+      pageRetryReason: '',
       mode: null,
       targetSummary: null,
     };
   }
+  const activeTab = await queryActiveHTTPPageTab();
   const config = await configuration();
   const pendingPairing = secureStorageAvailable ? await storedPairingSession() : null;
   let page = null;
-  try { page = await queryActivePage({ type: Protocol.MESSAGE_STATUS }); }
+  try { page = await queryActivePage(activeTab, { type: Protocol.MESSAGE_STATUS }); }
   catch (error) {}
+  // Status polling must serialize with PUT/heartbeat. Otherwise a slow but
+  // successful heartbeat can race a stale-lease prune and leave the worker
+  // forgetting a lease that RIMES has just renewed.
+  const leaseActive = await queue(async () => {
+    if (currentLease && !leaseIsFresh(currentLease)) {
+      currentLease = null;
+      await persistSession();
+    }
+    if (!currentLease || !activeTab || !page || page.active !== true) return false;
+    return currentLease.tabId === activeTab.id &&
+      currentLease.windowId === activeTab.windowId &&
+      normalizedURL(currentLease.url) === normalizedURL(activeTab.url) &&
+      LeaseState.exactPayload(currentLease, page);
+  });
   let effectiveState = connectionState;
   if (effectiveState === 'unknown' && pendingPairing) {
     if (pendingPairing.confirmed) effectiveState = 'confirming';
@@ -834,8 +902,11 @@ async function status() {
     pairingNeedsConfirmation: !!(pendingPairing && pendingPairing.challengeSeen &&
       !pendingPairing.confirmed),
     pairingInFlight: !!pairingPromise,
-    leaseActive: !!currentLease,
+    leaseActive,
     pageActive: !!(page && page.active),
+    pageRetrying: !!(page && page.retrying),
+    pageRetryDetail: page && page.retryDetail || '',
+    pageRetryReason: page && page.retryReason || '',
     mode: page && page.mode || null,
     targetSummary: page && page.targetSummary || null,
   };
@@ -856,6 +927,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let operation = null;
   if (message.type === Protocol.MESSAGE_CONTEXT) {
     operation = queue(() => handleContentOperation(message, sender));
+  } else if (message.type === Protocol.MESSAGE_FOREGROUND) {
+    // A probe is read-only and intentionally bypasses the network operation
+    // queue. Suspended pages must be able to notice focus recovery even while
+    // another lease operation is waiting on loopback I/O.
+    operation = handleForegroundProbe(message.payload, sender);
   } else if (message.type === Protocol.MESSAGE_CAPTURE) {
     operation = trustedExtensionPage(sender)
       ? captureActivePage()
@@ -888,11 +964,64 @@ chrome.runtime.onInstalled.addListener(details => {
   if (details.reason === 'install') void chrome.runtime.openOptionsPage();
 });
 
-chrome.tabs.onActivated.addListener(({ tabId }) => {
-  authorityEpoch += 1;
-  void ready.then(() => {
-    if (currentLease && currentLease.tabId !== tabId) {
-      return queue(() => revokeCurrent('tab-activated'));
+chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
+  const sequence = (tabActivationSequences.get(windowId) || 0) + 1;
+  tabActivationSequences.set(windowId, sequence);
+  void ready.then(async () => {
+    // The activation event itself is an authority break. Check it before the
+    // asynchronous "what is active now?" query: in a rapid A -> B -> A
+    // sequence, the older B query is intentionally stale, but B still ended
+    // A's lease when the event happened.
+    const displacedAtEvent = currentLease && currentLease.windowId === windowId &&
+      currentLease.tabId !== tabId ? currentLease : null;
+    const interruptedPut = Array.from(inFlightPutTabs.entries()).some(
+      ([putTabId, putWindowId]) => putWindowId === windowId && putTabId !== tabId,
+    );
+    if (displacedAtEvent || interruptedPut) {
+      authorityEpoch += 1;
+      if (!displacedAtEvent) return null;
+      return queue(() => {
+        if (!currentLease || currentLease.sourceId !== displacedAtEvent.sourceId ||
+            currentLease.revision !== displacedAtEvent.revision ||
+            currentLease.contextId !== displacedAtEvent.contextId ||
+            currentLease.tabId !== displacedAtEvent.tabId ||
+            currentLease.windowId !== displacedAtEvent.windowId ||
+            currentLease.documentId !== displacedAtEvent.documentId) return null;
+        return revokeCurrent('tab-activated');
+      });
+    }
+    let focused = false;
+    let activeTabId = null;
+    try {
+      const [windowValue, activeTabs] = await Promise.all([
+        chrome.windows.get(windowId),
+        chrome.tabs.query({ active: true, windowId }),
+      ]);
+      focused = windowValue.focused === true;
+      activeTabId = activeTabs && activeTabs[0] && activeTabs[0].id;
+    }
+    catch (error) {}
+    if (tabActivationSequences.get(windowId) !== sequence || activeTabId !== tabId) {
+      return null;
+    }
+    const affectsLease = !!currentLease &&
+      (focused || currentLease.windowId === windowId);
+    // A tab activation in another, unfocused Chrome window is not an
+    // authority change for the page currently leased by RIMES.
+    if (!focused && !affectsLease) return null;
+    authorityEpoch += 1;
+    const displacedLease = currentLease && currentLease.tabId !== tabId
+      ? currentLease : null;
+    if (displacedLease) {
+      return queue(() => {
+        if (!currentLease || currentLease.sourceId !== displacedLease.sourceId ||
+            currentLease.revision !== displacedLease.revision ||
+            currentLease.contextId !== displacedLease.contextId ||
+            currentLease.tabId !== displacedLease.tabId ||
+            currentLease.windowId !== displacedLease.windowId ||
+            currentLease.documentId !== displacedLease.documentId) return null;
+        return revokeCurrent('tab-activated');
+      });
     }
     return null;
   });
@@ -920,10 +1049,13 @@ chrome.tabs.onRemoved.addListener(tabId => {
 });
 
 chrome.windows.onFocusChanged.addListener(windowId => {
+  // WINDOW_ID_NONE is also emitted while an extension action popup owns
+  // native focus. It is therefore not proof that the selected host page has
+  // changed. A concrete different Chrome window is still an authority break.
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
   authorityEpoch += 1;
   void ready.then(() => {
-    if (currentLease && (windowId === chrome.windows.WINDOW_ID_NONE ||
-        currentLease.windowId !== windowId)) {
+    if (currentLease && currentLease.windowId !== windowId) {
       return queue(() => revokeCurrent('window-focus'));
     }
     return null;

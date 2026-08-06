@@ -323,6 +323,18 @@ struct ShiftModifierGesture: Equatable {
     }
 }
 
+enum InputCaretGeometryRules {
+    /// `attributes(forCharacterIndex:)` is relative to the inline session.
+    /// Zero also asks for the current selection when no inline session exists.
+    static let inlineSessionAnchorIndex = 0
+
+    static func queryAtInlineSessionAnchor<Result>(
+        _ query: (Int) -> Result
+    ) -> Result {
+        query(inlineSessionAnchorIndex)
+    }
+}
+
 @objc(RimeBufferController)
 final class RimeBufferController: IMKInputController {
 
@@ -4572,12 +4584,49 @@ final class RimeBufferController: IMKInputController {
         StatusMenu.shared.update(schemaId: status.schemaId, schemaName: status.schemaName)
     }
 
+    /// Fresh, exact-target caret geometry for a newly summoned workbench. Host
+    /// proxy calls are bracketed by the same live lease validation used by
+    /// delivery; a synchronous focus change discards the returned rectangle.
+    func workbenchCaretRect(expected lease: FocusLease) -> NSRect? {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !IsSecureEventInputEnabled(),
+              lease.controller === self,
+              focusToken == lease.token,
+              let client = lease.client,
+              ObjectIdentifier(client as AnyObject) == lease.clientIdentity,
+              InputFocusCoordinator.shared.liveTarget(
+                expected: lease.token,
+                forceOverlayVisibilityRefresh: true
+              ) === lease else { return nil }
+
+        let rect = caretRect(for: client)
+        guard !IsSecureEventInputEnabled(),
+              focusToken == lease.token,
+              InputFocusCoordinator.shared.liveTarget(
+                expected: lease.token,
+                forceOverlayVisibilityRefresh: true
+              ) === lease,
+              BufferWindowGeometry.isPlausibleInputAnchor(
+                rect,
+                visibleFrames: NSScreen.screens.map(\.visibleFrame)
+              ) else { return nil }
+        return rect
+    }
+
     /// Caret rect in screen coords. Reliable while a marked-text session is
     /// active (§4.2); the candidate window validates + caches per bundleId.
     private func caretRect(for client: IMKTextInput) -> NSRect {
-        var rect = NSRect.zero
-        _ = client.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)
-        return rect
+        // InputMethodKit defines this index relative to the inline session,
+        // while selectedRange/markedRange are document-relative. Index 0 also
+        // means the current selection when a host exposes no inline session.
+        // Mixing those coordinate systems moves both the ordinary candidate
+        // panel and the workbench anchor in Chromium/Electron clients.
+        return InputCaretGeometryRules.queryAtInlineSessionAnchor { index in
+            var rect = NSRect.zero
+            _ = client.attributes(forCharacterIndex: index,
+                                  lineHeightRectangle: &rect)
+            return rect
+        }
     }
 
     private func bundleId(of client: IMKTextInput) -> String {

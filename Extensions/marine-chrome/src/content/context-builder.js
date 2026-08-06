@@ -21,7 +21,8 @@
   function chooseGenericSource(documentLike, locationLike) {
     const selection = Extract.selectedText(documentLike);
     if (selection) return { kind: 'selection', text: selection };
-    return { kind: 'article', text: Extract.article(documentLike, locationLike) };
+    const article = Extract.articleSnapshot(documentLike, locationLike);
+    return article.usable ? { kind: 'article', text: article.text } : null;
   }
 
   async function chooseSource(documentLike, locationLike, platform) {
@@ -37,6 +38,7 @@
     const locationLike = input.location;
     const platform = platformFor(locationLike);
     const source = await chooseSource(documentLike, locationLike, platform);
+    if (!source) return null;
     return Protocol.makeContext({
       sourceId: input.sourceId,
       revision: input.revision,

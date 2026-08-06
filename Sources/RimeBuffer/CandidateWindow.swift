@@ -273,18 +273,58 @@ enum CandidatePresentationMode {
     case workbench
 }
 
+enum CandidatePanelPreferredSide: Equatable {
+    case below
+    case above
+}
+
 enum CandidatePanelGeometry {
-    static func origin(anchor: NSRect, panelSize: NSSize, visibleFrame: NSRect) -> NSPoint {
+    static func origin(anchor: NSRect,
+                       panelSize: NSSize,
+                       visibleFrame: NSRect,
+                       preferredSide: CandidatePanelPreferredSide = .below) -> NSPoint {
         var x = anchor.minX
-        var y = anchor.minY - panelSize.height - 6
-        if y < visibleFrame.minY {
-            y = anchor.maxY + 6
+        let belowY = anchor.minY - panelSize.height - 6
+        let aboveY = anchor.maxY + 6
+        var y: CGFloat
+        switch preferredSide {
+        case .below:
+            y = belowY
+            if y < visibleFrame.minY {
+                y = aboveY
+            }
+        case .above:
+            y = aboveY
+            if y + panelSize.height > visibleFrame.maxY {
+                y = belowY
+            }
         }
         x = min(max(x, visibleFrame.minX + 6),
                 visibleFrame.maxX - panelSize.width - 6)
         y = min(max(y, visibleFrame.minY + 6),
                 visibleFrame.maxY - panelSize.height - 6)
         return NSPoint(x: x, y: y)
+    }
+
+    static func originIfAvailable(anchor: NSRect,
+                                  panelSize: NSSize,
+                                  visibleFrame: NSRect,
+                                  preferredSide: CandidatePanelPreferredSide,
+                                  strictPreferredSide: Bool) -> NSPoint? {
+        if strictPreferredSide {
+            switch preferredSide {
+            case .below:
+                guard anchor.minY - panelSize.height - 6
+                        >= visibleFrame.minY + 6 else { return nil }
+            case .above:
+                guard anchor.maxY + 6 + panelSize.height
+                        <= visibleFrame.maxY - 6 else { return nil }
+            }
+        }
+        return origin(anchor: anchor,
+                      panelSize: panelSize,
+                      visibleFrame: visibleFrame,
+                      preferredSide: preferredSide)
     }
 }
 
@@ -874,13 +914,18 @@ final class CandidateWindow {
 
     // MARK: Positioning
 
-    private func layoutPanel(caretRect: NSRect, bundleId: String) {
+    @discardableResult
+    private func layoutPanel(caretRect: NSRect, bundleId: String) -> Bool {
         let metrics = CandidateWindowMetrics.current
         panel.setContentSize(desiredPanelContentSize(caretRect: caretRect, metrics: metrics))
         panel.layoutIfNeeded()
         updateCandidateDocumentSize()
         resetCandidateScroll()
-        panel.setFrameOrigin(origin(for: caretRect, bundleId: bundleId))
+        guard let origin = origin(for: caretRect, bundleId: bundleId) else {
+            return false
+        }
+        panel.setFrameOrigin(origin)
+        return true
     }
 
     private func desiredPanelContentSize(
@@ -906,12 +951,17 @@ final class CandidateWindow {
         ))
     }
 
-    private func origin(for caretRect: NSRect, bundleId: String) -> NSPoint {
+    private func origin(for caretRect: NSRect, bundleId: String) -> NSPoint? {
         var anchor = caretRect
         if isPlausible(anchor) {
-            lastGoodRect[bundleId] = anchor
-        } else if let cached = lastGoodRect[bundleId] {
+            if presentationMode == .caret {
+                lastGoodRect[bundleId] = anchor
+            }
+        } else if presentationMode == .caret,
+                  let cached = lastGoodRect[bundleId] {
             anchor = cached
+        } else if presentationMode == .workbench {
+            return nil
         } else {
             let vf = NSScreen.main?.visibleFrame ?? .zero
             return NSPoint(x: vf.midX - panel.frame.width / 2, y: vf.minY + 120)
@@ -919,9 +969,19 @@ final class CandidateWindow {
 
         let screen = screen(containing: anchor)
         let vf = screen?.visibleFrame ?? .zero
-        return CandidatePanelGeometry.origin(anchor: anchor,
-                                             panelSize: panel.frame.size,
-                                             visibleFrame: vf)
+        let preferredSide: CandidatePanelPreferredSide = presentationMode == .workbench
+            ? BufferWindowController.shared.preferredCandidatePanelSide(for: ownerToken)
+            : .below
+        let requiresOutwardPlacement = presentationMode == .workbench
+            && BufferWindowController.shared
+                .requiresOutwardCandidatePanelPlacement(for: ownerToken)
+        return CandidatePanelGeometry.originIfAvailable(
+            anchor: anchor,
+            panelSize: panel.frame.size,
+            visibleFrame: vf,
+            preferredSide: preferredSide,
+            strictPreferredSide: requiresOutwardPlacement
+        )
     }
 
     private func isPlausible(_ r: NSRect) -> Bool {
@@ -955,7 +1015,10 @@ final class CandidateWindow {
             panel.orderOut(nil)
             return
         }
-        layoutPanel(caretRect: lastCaretRect, bundleId: lastBundleId)
+        guard layoutPanel(caretRect: lastCaretRect, bundleId: lastBundleId) else {
+            panel.orderOut(nil)
+            return
+        }
         panel.orderFrontRegardless()
     }
 
