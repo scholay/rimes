@@ -2,6 +2,9 @@ import AppKit
 import Foundation
 import SwiftUI
 import Translation
+#if canImport(_Translation_SwiftUI)
+import _Translation_SwiftUI
+#endif
 
 extension Notification.Name {
     static let appleTranslationWorkspaceDidChange = Notification.Name(
@@ -53,6 +56,10 @@ struct TranslationRailSnapshot: Equatable {
     /// Visual-only source selection used by workbench Select All. It does not
     /// participate in provider generations or delivery authorization.
     let sourceSelected: Bool
+    /// Empty derived workspaces may collapse the source rail until there is
+    /// actual source content worth showing. Translation and every existing
+    /// caller keep the two-rail presentation by default.
+    let showsSourceRail: Bool
     let outputBlocks: [TranslationOutputBlock]
     /// Target blocks grouped into independently visible horizontal rows. Most
     /// derived workspaces use one row; consciousness-stream input uses one
@@ -73,6 +80,7 @@ struct TranslationRailSnapshot: Equatable {
 
     init(sourceText: String,
          sourceSelected: Bool = false,
+         showsSourceRail: Bool = true,
          outputBlocks: [TranslationOutputBlock],
          outputRows: [TranslationOutputRow]? = nil,
          phase: Phase,
@@ -86,6 +94,7 @@ struct TranslationRailSnapshot: Equatable {
          updatingText: String = "更新译文") {
         self.sourceText = sourceText
         self.sourceSelected = sourceSelected
+        self.showsSourceRail = showsSourceRail
         self.outputBlocks = outputBlocks
         self.outputRows = outputRows ?? [
             TranslationOutputRow(key: 0, blocks: outputBlocks),
@@ -103,6 +112,10 @@ struct TranslationRailSnapshot: Equatable {
 
     var targetRowCount: Int {
         min(max(outputRows.count, 1), 3)
+    }
+
+    var visibleRailCount: Int {
+        targetRowCount + (showsSourceRail ? 1 : 0)
     }
 }
 

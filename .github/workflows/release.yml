@@ -72,6 +72,7 @@ jobs:
           bash -n build_install.sh
           bash -n scripts/pkg/scripts/postinstall
           python3 scripts/lint-log-privacy.py
+          node Extensions/marine-chrome/tests/smoke.mjs
 
       - name: Resolve version
         id: version
@@ -173,6 +174,18 @@ jobs:
           echo "SHA256=$SHA256" >> "$GITHUB_OUTPUT"
           echo "ZIP: $ZIP  SHA256: $SHA256"
 
+      - name: Package Marine Chrome extension
+        id: marine_chrome
+        run: |
+          MARINE_VERSION="$(node -p "require('./Extensions/marine-chrome/manifest.json').version")"
+          MARINE_ZIP="marine-chrome-${MARINE_VERSION}.zip"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "Extensions/marine-chrome" "$MARINE_ZIP"
+          MARINE_SHA256="$(shasum -a 256 "$MARINE_ZIP" | awk '{print $1}')"
+          echo "ZIP=$MARINE_ZIP" >> "$GITHUB_OUTPUT"
+          echo "SHA256=$MARINE_SHA256" >> "$GITHUB_OUTPUT"
+          echo "Marine Chrome ZIP: $MARINE_ZIP  SHA256: $MARINE_SHA256"
+
       # Guided .pkg installer — installs to /Library/Input Methods and registers
       # the input source (the drag-from-Downloads path hits App Translocation).
       - name: Build installer (.pkg)
@@ -193,6 +206,7 @@ jobs:
           files: |
             ${{ steps.pkg.outputs.PKG }}
             ${{ steps.package.outputs.ZIP }}
+            ${{ steps.marine_chrome.outputs.ZIP }}
           body: |
             ## RIMES v${{ steps.version.outputs.VERSION }}
 
@@ -211,11 +225,16 @@ jobs:
             已安装并运行的 RIMES 会自动检查最新 Release，静默下载后在状态栏提示；
             点「立即更新」即自动替换并重启。（更新走下方 `.zip`，无需手动。）
 
+            ### Marine Chrome 扩展
+            需要网页上下文时，下载并解压 **`${{ steps.marine_chrome.outputs.ZIP }}`**，
+            在 `chrome://extensions` 开启开发者模式后选择“加载已解压的扩展程序”。
+
             ### 校验和
             | 文件 | SHA256 |
             |------|--------|
             | PKG | `${{ steps.pkg.outputs.PKG_SHA256 }}` |
             | ZIP | `${{ steps.package.outputs.SHA256 }}` |
+            | Marine Chrome | `${{ steps.marine_chrome.outputs.SHA256 }}` |
           draft: false
           prerelease: false
         env:
@@ -229,3 +248,4 @@ jobs:
           path: |
             ${{ steps.pkg.outputs.PKG }}
             ${{ steps.package.outputs.ZIP }}
+            ${{ steps.marine_chrome.outputs.ZIP }}

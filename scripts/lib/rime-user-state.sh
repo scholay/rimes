@@ -61,6 +61,10 @@ reset_rime_user_dir_preserving_product_state() {
         ! -name learning \
         ! -name my-prompt \
         ! -name gateway-token \
+        ! -name marine-chrome-token \
+        ! -name marine-chrome-origin \
+        ! -name marine-chrome-generation \
+        ! -name marine-chrome-credential.lock \
         ! -name remote_identity.key \
         -exec rm -rf -- {} +
 }
@@ -114,6 +118,10 @@ import_rime_user_dir_preserving_product_state() {
         --exclude learning
         --exclude my-prompt
         --exclude gateway-token
+        --exclude marine-chrome-token
+        --exclude marine-chrome-origin
+        --exclude marine-chrome-generation
+        --exclude marine-chrome-credential.lock
         --exclude remote_identity.key
     )
     rsync -a "${import_excludes[@]}" "$source_dir/" "$user_dir/"

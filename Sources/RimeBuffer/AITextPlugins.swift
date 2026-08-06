@@ -1054,7 +1054,7 @@ protocol AITextCLIProcessRunning: AnyObject {
              completion: @escaping (AITextCLIProcessResult) -> Void) -> any AITextCancellable
 }
 
-private final class AITextCancellationRelay: AITextCancellable {
+final class AITextCancellationRelay: AITextCancellable {
     private let lock = NSLock()
     private var downstream: (any AITextCancellable)?
     private var cancelled = false

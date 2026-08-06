@@ -1,4 +1,5 @@
 import Cocoa
+import CoreText
 
 extension Notification.Name {
     static let candidateWindowMetricsDidChange = Notification.Name("CandidateWindowMetricsDidChange")
@@ -224,6 +225,18 @@ enum CandidateLayout {
     static func dividerHeight(_ m: CandidateWindowMetrics) -> CGFloat {
         min(compactStripHeight(m) - 8, max(20, m.compactStripHeight - 10))
     }
+
+    /// Raises the smaller index font so its visual centre matches the candidate
+    /// glyph. Point-size subtraction is not sufficient because AppKit fonts use
+    /// different ascender and descender proportions.
+    static func centeredLabelBaselineOffset(
+        labelFont: NSFont,
+        candidateFont: NSFont
+    ) -> CGFloat {
+        let labelCenter = (labelFont.ascender + labelFont.descender) / 2
+        let candidateCenter = (candidateFont.ascender + candidateFont.descender) / 2
+        return candidateCenter - labelCenter
+    }
 }
 
 extension CandidateWindowMetric {
@@ -286,6 +299,19 @@ struct CandidateMatrixLayoutSnapshot {
     let expectedPanelHeight: CGFloat
     let documentTranslatesAutoresizingMaskIntoConstraints: Bool
     let documentAutoresizingMaskConstraintCount: Int
+}
+
+struct CandidateTextRendererSnapshot {
+    let nativeButtonTitleIsEmpty: Bool
+    let nativeAttributedTitleIsEmpty: Bool
+    let buttonBounds: NSRect
+    let titleViewFrame: NSRect
+    let requiredLineHeight: CGFloat
+    let baselineCenterDelta: CGFloat
+    let titleViewHitTestIsNil: Bool
+    let candidateGlyphPixelCount: Int
+    let horizontalInkCenterDelta: CGFloat
+    let verticalInkCenterDelta: CGFloat
 }
 
 /// In-process candidate window. Candidates default to a compact one-line strip
@@ -1220,9 +1246,17 @@ final class CandidateWindow {
         button.tag = tag ?? candidateTag(pageOffset: pageOffset, index: index)
         button.target = self
         button.action = #selector(candidateTapped(_:))
-        button.attributedTitle = candidateTitle(candidate,
-                                                highlighted: highlighted,
-                                                showsLabel: showsLabel)
+        button.setCandidateTitle(
+            candidateTitle(candidate,
+                           highlighted: highlighted,
+                           showsLabel: showsLabel),
+            accessibilityLabel: showsLabel && !candidate.label.isEmpty
+                ? "\(candidate.label) \(candidate.text)"
+                : candidate.text
+        )
+        if !candidate.comment.isEmpty {
+            button.setAccessibilityHelp(candidate.comment)
+        }
         button.layer?.backgroundColor = highlighted
             ? RimeUI.selectedCandidateBackgroundColor.cgColor
             : NSColor.clear.cgColor
@@ -1258,19 +1292,25 @@ final class CandidateWindow {
         let textColor = highlighted
             ? RimeUI.selectedCandidateTextColor
             : RimeUI.textPrimary
-        let baseline = (metrics.candidateFontSize - metrics.labelFontSize) / 2
+        let labelFont = NSFont.monospacedDigitSystemFont(ofSize: metrics.labelFontSize,
+                                                         weight: .semibold)
+        let candidateFont = NSFont.systemFont(ofSize: metrics.candidateFontSize,
+                                              weight: highlighted ? .semibold : .regular)
+        let baseline = CandidateLayout.centeredLabelBaselineOffset(
+            labelFont: labelFont,
+            candidateFont: candidateFont
+        )
 
         if showsLabel, !c.label.isEmpty {
             line.append(NSAttributedString(
                 string: "\(c.label) ",
-                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: metrics.labelFontSize, weight: .semibold),
+                attributes: [.font: labelFont,
                              .foregroundColor: labelColor,
                              .baselineOffset: baseline]))
         }
         line.append(NSAttributedString(
             string: c.text,
-            attributes: [.font: NSFont.systemFont(ofSize: metrics.candidateFontSize,
-                                                  weight: highlighted ? .semibold : .regular),
+            attributes: [.font: candidateFont,
                          .foregroundColor: textColor]))
         return line
     }
@@ -1280,7 +1320,10 @@ final class CandidateWindow {
         button.tag = bufferActionTag
         button.target = self
         button.action = #selector(candidateTapped(_:))
-        button.attributedTitle = candidateTitle(bufferActionCandidate(), highlighted: false)
+        button.setCandidateTitle(
+            candidateTitle(bufferActionCandidate(), highlighted: false),
+            accessibilityLabel: "开启缓冲区"
+        )
         button.layer?.backgroundColor = NSColor.clear.cgColor
         button.layer?.borderWidth = 0
         button.toolTip = "开启缓冲区"
@@ -1533,6 +1576,151 @@ final class CandidateWindow {
         )
     }
 
+    /// AppKit-backed typography seam for `candidate-metrics-smoke`. It renders
+    /// the real button hierarchy and verifies that the dedicated CoreText view
+    /// is centred while the native NSButtonCell title path stays empty.
+    static func textRendererSnapshotForSmoke(
+        buttonHeight: CGFloat,
+        candidateFontSize: CGFloat,
+        labelFontSize: CGFloat,
+        candidateText: String = "现在的",
+        label: String = "1",
+        usesTightWidth: Bool = false,
+        highlighted: Bool = false
+    ) -> CandidateTextRendererSnapshot {
+        let labelFont = NSFont.monospacedDigitSystemFont(ofSize: labelFontSize,
+                                                         weight: .semibold)
+        let candidateFont = NSFont.systemFont(ofSize: candidateFontSize,
+                                              weight: highlighted ? .semibold : .regular)
+        let baseline = CandidateLayout.centeredLabelBaselineOffset(
+            labelFont: labelFont,
+            candidateFont: candidateFont
+        )
+        let title = NSMutableAttributedString()
+        if !label.isEmpty {
+            title.append(NSAttributedString(string: "\(label) ", attributes: [
+                .font: labelFont,
+                .foregroundColor: NSColor.systemRed,
+                .baselineOffset: baseline,
+            ]))
+        }
+        title.append(NSAttributedString(string: candidateText, attributes: [
+            .font: candidateFont,
+            .foregroundColor: NSColor.systemGreen,
+        ]))
+        let naturalWidth = ceil(title.size().width)
+            + CandidateLayout.compactCandidateHorizontalPadding
+        let buttonWidth = usesTightWidth ? naturalWidth : 180
+        let button = CandidatePillButton()
+        let host = NSView(frame: NSRect(x: 0, y: 0,
+                                        width: buttonWidth,
+                                        height: buttonHeight))
+        host.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            button.topAnchor.constraint(equalTo: host.topAnchor),
+            button.widthAnchor.constraint(equalToConstant: buttonWidth),
+            button.heightAnchor.constraint(equalToConstant: buttonHeight),
+        ])
+        button.setCandidateTitle(
+            title,
+            accessibilityLabel: label.isEmpty
+                ? candidateText
+                : "\(label) \(candidateText)"
+        )
+        host.layoutSubtreeIfNeeded()
+        button.layoutSubtreeIfNeeded()
+
+        let titleView = button.subviews.compactMap { $0 as? CandidateTitleLabel }.first
+        let titleViewFrame = titleView?.frame ?? .zero
+        let requiredLineHeight = candidateFont.ascender
+            - candidateFont.descender
+            + candidateFont.leading
+        let labelCenter = (labelFont.ascender + labelFont.descender) / 2 + baseline
+        let candidateCenter = (candidateFont.ascender + candidateFont.descender) / 2
+        let ink = Self.candidateInkMetrics(in: button)
+
+        return CandidateTextRendererSnapshot(
+            nativeButtonTitleIsEmpty: button.title.isEmpty,
+            nativeAttributedTitleIsEmpty: button.attributedTitle.length == 0,
+            buttonBounds: button.bounds,
+            titleViewFrame: titleViewFrame,
+            requiredLineHeight: requiredLineHeight,
+            baselineCenterDelta: abs(labelCenter - candidateCenter),
+            titleViewHitTestIsNil: titleView?.hitTest(NSPoint(x: 1, y: 1)) == nil,
+            candidateGlyphPixelCount: ink.candidateGlyphPixelCount,
+            horizontalInkCenterDelta: ink.horizontalCenterDelta,
+            verticalInkCenterDelta: ink.verticalCenterDelta
+        )
+    }
+
+    /// Rasterize the real hierarchy. The smoke title colors its index red and
+    /// candidate green, allowing the test to prove both candidate visibility
+    /// and the optical centre of the complete title.
+    private static func candidateInkMetrics(
+        in button: NSButton
+    ) -> (
+        candidateGlyphPixelCount: Int,
+        horizontalCenterDelta: CGFloat,
+        verticalCenterDelta: CGFloat
+    ) {
+        let scale: CGFloat = 2
+        let pixelWidth = max(1, Int(ceil(button.bounds.width * scale)))
+        let pixelHeight = max(1, Int(ceil(button.bounds.height * scale)))
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: pixelWidth,
+            pixelsHigh: pixelHeight,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else { return (0, .greatestFiniteMagnitude, .greatestFiniteMagnitude) }
+        bitmap.size = button.bounds.size
+        button.cacheDisplay(in: button.bounds, to: bitmap)
+
+        var candidateCount = 0
+        var minimumX = bitmap.pixelsWide
+        var minimumY = bitmap.pixelsHigh
+        var maximumX = -1
+        var maximumY = -1
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard let color = bitmap.colorAt(x: x, y: y)?
+                    .usingColorSpace(.deviceRGB) else { continue }
+                guard color.alphaComponent > 0.05 else { continue }
+                let isCandidate = color.greenComponent
+                    > color.redComponent + 0.05
+                    && color.greenComponent > color.blueComponent + 0.05
+                let isLabel = color.redComponent > color.greenComponent + 0.05
+                    && color.redComponent > color.blueComponent + 0.05
+                guard isCandidate || isLabel else { continue }
+                if isCandidate {
+                    candidateCount += 1
+                }
+                minimumX = min(minimumX, x)
+                minimumY = min(minimumY, y)
+                maximumX = max(maximumX, x)
+                maximumY = max(maximumY, y)
+            }
+        }
+        guard maximumX >= minimumX, maximumY >= minimumY else {
+            return (candidateCount,
+                    .greatestFiniteMagnitude,
+                    .greatestFiniteMagnitude)
+        }
+        let inkMidX = CGFloat(minimumX + maximumX + 1) / (2 * scale)
+        let inkMidY = CGFloat(minimumY + maximumY + 1) / (2 * scale)
+        return (
+            candidateCount,
+            abs(inkMidX - button.bounds.midX),
+            abs(inkMidY - button.bounds.midY)
+        )
+    }
+
     private func contextSignature(_ ctx: RimeContextModel) -> String {
         let candidates = ctx.candidates.map { "\($0.label):\($0.text):\($0.comment)" }.joined(separator: "|")
         return "\(ctx.input)#\(ctx.preedit)#\(ctx.pageNo)#\(candidates)"
@@ -1588,48 +1776,130 @@ final class CandidateWindow {
     }
 }
 
-private final class CandidatePillButton: NSButton {
-    init() {
+/// The button remains the click and accessibility target, while a dedicated
+/// CoreText view renders its title. This avoids both NSButtonCell's clipped CJK
+/// title rect and NSTextFieldCell's asymmetric single-line drawing offsets.
+private class CandidateTextButton: NSButton {
+    private let candidateTitleLabel = CandidateTitleLabel()
+
+    init(cornerRadius: CGFloat) {
         super.init(frame: .zero)
+        title = ""
         isBordered = false
         setButtonType(.momentaryChange)
         focusRingType = .none
         alignment = .center
         wantsLayer = true
-        layer?.cornerRadius = CandidateLayout.selectedCandidateCornerRadius
+        layer?.cornerRadius = cornerRadius
         layer?.masksToBounds = true
-        cell?.lineBreakMode = .byTruncatingTail
-        cell?.usesSingleLineMode = true
         translatesAutoresizingMaskIntoConstraints = false
         setContentHuggingPriority(.required, for: .horizontal)
         setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        addSubview(candidateTitleLabel)
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    func setCandidateTitle(_ title: NSAttributedString, accessibilityLabel: String) {
+        candidateTitleLabel.setCandidateTitle(title)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(accessibilityLabel)
+    }
+
+    override func layout() {
+        super.layout()
+        let inset = CandidateLayout.compactCandidateHorizontalPadding / 2
+        candidateTitleLabel.frame = bounds.insetBy(dx: inset, dy: 0)
+    }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
-private final class BufferActionPillButton: NSButton {
+private final class CandidatePillButton: CandidateTextButton {
+    init() {
+        super.init(cornerRadius: CandidateLayout.selectedCandidateCornerRadius)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+private final class BufferActionPillButton: CandidateTextButton {
+    init() {
+        super.init(cornerRadius: 0)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+private final class CandidateTitleLabel: NSView {
+    private var candidateTitle = NSAttributedString()
+
     init() {
         super.init(frame: .zero)
-        isBordered = false
-        setButtonType(.momentaryChange)
-        focusRingType = .none
-        alignment = .center
-        wantsLayer = true
-        layer?.cornerRadius = 0
-        layer?.masksToBounds = true
-        cell?.lineBreakMode = .byTruncatingTail
-        cell?.usesSingleLineMode = true
-        translatesAutoresizingMaskIntoConstraints = false
-        setContentHuggingPriority(.required, for: .horizontal)
-        setContentCompressionResistancePriority(.required, for: .horizontal)
+        setAccessibilityElement(false)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    func setCandidateTitle(_ title: NSAttributedString) {
+        candidateTitle = NSAttributedString(attributedString: title)
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard candidateTitle.length > 0,
+              bounds.width > 0,
+              bounds.height > 0,
+              let context = NSGraphicsContext.current?.cgContext else { return }
+
+        let sourceLine = CTLineCreateWithAttributedString(candidateTitle)
+        let sourceWidth = CGFloat(CTLineGetTypographicBounds(
+            sourceLine, nil, nil, nil
+        ))
+        let renderedLine: CTLine
+        if sourceWidth > bounds.width {
+            let attributes = candidateTitle.attributes(
+                at: candidateTitle.length - 1,
+                effectiveRange: nil
+            )
+            let token = CTLineCreateWithAttributedString(
+                NSAttributedString(string: "…", attributes: attributes)
+            )
+            renderedLine = CTLineCreateTruncatedLine(
+                sourceLine,
+                Double(bounds.width),
+                .end,
+                token
+            ) ?? sourceLine
+        } else {
+            renderedLine = sourceLine
+        }
+
+        var ascent: CGFloat = 0
+        var descent: CGFloat = 0
+        var leading: CGFloat = 0
+        let width = CGFloat(CTLineGetTypographicBounds(
+            renderedLine,
+            &ascent,
+            &descent,
+            &leading
+        ))
+        let origin = CGPoint(
+            x: (bounds.width - width) / 2,
+            y: (bounds.height - (ascent + descent)) / 2 + descent
+        )
+        context.saveGState()
+        context.clip(to: bounds)
+        context.textMatrix = .identity
+        context.textPosition = origin
+        CTLineDraw(renderedLine, context)
+        context.restoreGState()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 private final class CandidateActionButton: NSButton {
@@ -1957,16 +2227,23 @@ final class CandidatePreviewView: NSView {
         let textColor = highlighted
             ? RimeUI.selectedCandidateTextColor
             : RimeUI.textPrimary
-        let baseline = (m.candidateFontSize - m.labelFontSize) / 2
+        let labelFont = NSFont.monospacedDigitSystemFont(ofSize: m.labelFontSize,
+                                                         weight: .semibold)
+        let candidateFont = NSFont.systemFont(ofSize: m.candidateFontSize,
+                                              weight: highlighted ? .semibold : .regular)
+        let baseline = CandidateLayout.centeredLabelBaselineOffset(
+            labelFont: labelFont,
+            candidateFont: candidateFont
+        )
         if !label.isEmpty {
             line.append(NSAttributedString(string: "\(label) ", attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: m.labelFontSize, weight: .semibold),
+                .font: labelFont,
                 .foregroundColor: labelColor,
                 .baselineOffset: baseline,
             ]))
         }
         line.append(NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: m.candidateFontSize, weight: highlighted ? .semibold : .regular),
+            .font: candidateFont,
             .foregroundColor: textColor,
         ]))
         return line

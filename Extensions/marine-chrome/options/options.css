@@ -1,0 +1,186 @@
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f4f7fa;
+  color: #15202b;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+main {
+  width: min(680px, calc(100% - 40px));
+  margin: 48px auto;
+}
+
+header, .connect-card, .status-card, .advanced, .privacy {
+  border: 1px solid rgba(15, 35, 55, .11);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .92);
+  box-shadow: 0 14px 42px rgba(22, 43, 66, .08);
+}
+
+header {
+  padding: 28px 30px;
+  margin-bottom: 16px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #008fc4;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: 28px;
+}
+
+h2 { margin: 0; font-size: 17px; }
+
+.lede, .help, .privacy, #status-detail {
+  color: #5b6976;
+  line-height: 1.55;
+}
+
+.lede { margin: 10px 0 0; }
+
+.connect-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 24px;
+}
+
+.connect-card p {
+  margin: 6px 0 0;
+  color: #5b6976;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.connect-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 10px;
+}
+
+label {
+  display: block;
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(20, 45, 65, .22);
+  border-radius: 10px;
+  padding: 11px 12px;
+  font: inherit;
+  background: rgba(255, 255, 255, .85);
+  color: inherit;
+  outline: none;
+}
+
+input:focus {
+  border-color: #00aeec;
+  box-shadow: 0 0 0 3px rgba(0, 174, 236, .14);
+}
+
+.help {
+  margin: 7px 0 22px;
+  font-size: 12px;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .92em;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 26px;
+}
+
+.actions.compact { margin: -8px 0 24px; }
+
+button {
+  border: 1px solid rgba(20, 45, 65, .18);
+  border-radius: 10px;
+  padding: 9px 15px;
+  background: #fff;
+  color: #23313d;
+  font: 600 13px/1.2 inherit;
+  cursor: pointer;
+}
+
+button:hover { border-color: #00aeec; }
+button:disabled { cursor: wait; opacity: .6; }
+button.primary { border-color: #008fc4; background: #008fc4; color: #fff; }
+
+.status-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 18px 22px;
+}
+
+.dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: #98a2b3;
+}
+
+.dot.ok { background: #12b76a; }
+.dot.error { background: #f04438; }
+#status-detail { margin: 4px 0 0; font-size: 12px; }
+
+.advanced {
+  margin-top: 16px;
+  padding: 0 22px;
+}
+
+.advanced summary {
+  padding: 17px 0;
+  color: #52606d;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.config-fields { padding: 4px 0 22px; }
+.diagnostic-id {
+  margin: 0;
+  border-top: 1px solid rgba(20, 45, 65, .1);
+  padding: 14px 0 16px;
+  color: #7a8793;
+  font-size: 11px;
+}
+
+.privacy {
+  padding: 16px 20px;
+  font-size: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root { background: #111820; color: #edf3f8; }
+  header, .connect-card, .status-card, .advanced, .privacy { background: rgba(27, 37, 47, .94); border-color: rgba(255,255,255,.1); }
+  input, button { background: #16212b; color: #edf3f8; border-color: rgba(255,255,255,.17); }
+  .lede, .help, .privacy, #status-detail, .connect-card p { color: #a8b3bd; }
+  .advanced summary { color: #b7c1ca; }
+  .diagnostic-id { border-color: rgba(255,255,255,.1); }
+}

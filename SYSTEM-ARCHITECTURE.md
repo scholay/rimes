@@ -1,6 +1,6 @@
 # RIMES · 系统架构
 
-版本：2026-07-27 · 权威全局架构文档
+版本：2026-08-04 · 权威全局架构文档
 关系：本文档描述**整个系统**（既有输入核心 + 缓冲工作台）。`WORKBENCH-DESIGN.md` 是工作台的产品方案与决策记录；`ARCHITECTURE.md` 是 P1 时代的交接文档（已滞后，仅存档）。三者冲突时以本文档为准。
 
 代码规模：约 31000 行（Swift + 一层 C++ librime 桥）。单进程、后台 agent（`LSUIElement`）。
@@ -9,7 +9,7 @@
 
 ## 0. 一句话
 
-RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并在其上叠加了一个**独立、常驻、上屏前的文本工作台**：中文 commit、ASCII/英文/标点、已接受的外部文字与用户主动请求的插件结果都先进入缓冲，再由用户逐块或长按全部投递到实时校验的输入框。AI、翻译、My Prompt、意识流和 Action/Marine 的上游逻辑块统一经过同一投递边界；My Prompt 把上轨作为查询，从本地 SQLite 索引显示最多三个互斥提示词结果，查询本身永不投递。意识流在串击与双拼模式下把焦点绑定的物理 `a-z` 当作连续全拼；飞耀并击/互击都使用当前有效 `my_combo` 映射物理批次，并分别保留同批结算与相邻左/右半区跨批重组语义。完整音节自动加入 soft ASCII syllable Space，尚未配对的单侧拼音片段只映射、不切割。它不修改或持久化用户输入方案。用户物理 Space 才是立即请求、以 `·` 可视化并参与短句强分块的 hard boundary；自动 Space 显示为普通空格，只参与全拼音节提示。普通 AI 只在 Return 或主按钮明确请求时运行；My Prompt 本地实时检索，意识流按停顿自动猜测最多三个互斥版本；二者的多结果逐行显示并由 ↑/↓ 选择，Return/纸飞机先原子确认当前版本再发送，任何结果都不能自动上屏。`Command+Shift+B` 可全局开关工作台；secure input、失效焦点与工作台自有输入框始终隔离。
+RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并在其上叠加了一个**独立、常驻、上屏前的文本工作台**：中文 commit、ASCII/英文/标点、已接受的外部文字与用户主动请求的插件结果都先进入缓冲，再由用户逐块或长按全部投递到实时校验的输入框。AI、翻译、Marine Chrome、My Prompt、意识流和旧 Action/Marine 兼容插件的上游逻辑块统一经过同一投递边界；My Prompt 把上轨作为查询，从本地 SQLite 索引显示最多三个互斥提示词结果，查询本身永不投递。意识流在串击与双拼模式下把焦点绑定的物理 `a-z` 当作连续全拼；飞耀并击/互击都使用当前有效 `my_combo` 映射物理批次，并分别保留同批结算与相邻左/右半区跨批重组语义。完整音节自动加入 soft ASCII syllable Space，尚未配对的单侧拼音片段只映射、不切割。它不修改或持久化用户输入方案。用户物理 Space 才是立即请求、以 `·` 可视化并参与短句强分块的 hard boundary；自动 Space 显示为普通空格，只参与全拼音节提示。普通 AI 和 Marine Chrome 只在 Return 或主按钮明确请求时运行；My Prompt 本地实时检索，意识流按停顿自动猜测最多三个互斥版本；二者的多结果逐行显示并由 ↑/↓ 选择，Return/纸飞机先原子确认当前版本再发送，任何结果都不能自动上屏。`Command+Shift+B` 可全局开关工作台；secure input、失效焦点与工作台自有输入框始终隔离。
 
 ---
 
@@ -23,7 +23,7 @@ RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并�
  curl / 脚本  ────HTTP────┤─▶ (127.0.0.1)   ├─▶ InboundBus ─待决─▶ InboundTrayWindow  │
  [计划]服务器推送 ─SSE─────┤─▶ SSEProvider ──┤                         │ 接受            │
  [计划]远程主机 ───SSH─────┤─▶ SSHProvider ──┘                         ▼                 │
- 已安装 Action Plugin manifest ─▶ ActionPluginHost ─Bearer HTTP─▶ 本机插件服务         │
+ 已安装旧 Action Plugin manifest ─▶ ActionPluginHost ─Bearer HTTP─▶ 本机插件服务       │
                           │          │ legacy invoke 或 prepare prompt       │失效结果     │
                           │          ├─prepare─▶ 当前 AI 连接器 ─有效结果─▶ BufferModel │
                           │          └─legacy invoke──────────────▶ BufferModel ◀─ Rime │
@@ -44,7 +44,8 @@ RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并�
  My Prompt 查询 ───────▶ MyPromptWorkspace ─▶ SQLite FTS ─▶ 1–3 个提示词结果 │
  reMarkable（SSH 定位 + USB Web PDF）▶ PDFKit 目标 300dpi 有界渲染 ─▶ Vision 本地 OCR ─▶ BufferModel │
  唯一「AI 生成」插件────▶ AITextPluginWorkspace ──────▶ 独立生成缓冲     │
- Marine prepare prompt ─▶ ActionPluginHost ─┐                              │
+ Stable Chrome MV3 sensor ─专用 6s context lease─▶ MarineChromeWorkspace │
+ 旧 Marine prepare prompt ─▶ ActionPluginHost ─┐                            │
                                             └─▶ AITextConnectorRegistry    │
                                                 ├─ Codex CLI（ChatGPT 登录态） │
                                                 ├─ Claude Code（CLI 授权态）   │
@@ -58,14 +59,16 @@ RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并�
                               └────────────┘
 ```
 
-四个横切层，文本从上（来源）流到下（投递），中间是缓冲区枢纽：
+当前网页主路径不经过 `ActionPluginHost` 或旧 Marine 服务：**Chrome MV3 sensor → 专用 loopback context lease → `builtin.marine-chrome` → 当前 AI connector → `BufferDeliveryCoordinator` → `Delivery.insert`**。
+
+五个横切层，文本从上（来源）流到下（投递），中间是缓冲区枢纽：
 
 | 层 | 职责 | 关键模块 |
 |---|---|---|
-| **来源层** Sources | 把外部文字收进来，门控后产出待决条目 | InboundBus, LocalGateway, 各 Provider |
+| **来源层** Sources | 把外部文字收进来，门控后产出待决条目；Marine Chrome 以专用、短时 context lease 收取网页上下文 | InboundBus, LocalGateway, MarineChromeContextStore, 各 Provider |
 | **缓冲层** Buffer | 所有文本的暂存枢纽；块携带来源 | BufferModel, Origin |
-| **动作插件层** Action Plugins | 用户明确调用 Marine 等外部动作；冻结上下文，必要时接收 prepared prompt，再把 Rime 本地连接器结果安全地路由回缓冲/收件箱 | ActionPluginHost, manifest, loopback HTTP |
-| **加工层** Transforms | 「实时翻译」、唯一「AI 生成」、My Prompt 与意识流输入使用独立 source/target 双缓冲；My Prompt 从本地 SQLite 返回 1–3 条提示词，翻译默认 Apple 本地且可选当前 AI，普通 AI 三模型源共享切换，意识流使用自己的渠道与节流配置并给出 1–3 个完整猜测 | AppleTranslationWorkspace, AITextPluginWorkspace, MyPromptWorkspace, MyPromptStore, StreamInputWorkspace, AITextConnectorRegistry |
+| **动作插件层** Action Plugins | 兼容已安装的旧 Marine 等外部动作；冻结上下文，必要时接收 prepared prompt，再把 Rime 本地连接器结果安全地路由回缓冲/收件箱 | ActionPluginHost, manifest, loopback HTTP |
+| **加工层** Transforms | Marine Chrome、「实时翻译」、唯一「AI 生成」、My Prompt 与意识流输入使用独立 source/target 双缓冲；Marine Chrome 与普通 AI 使用当前连接器，My Prompt 从本地 SQLite 返回 1–3 条提示词，翻译默认 Apple 本地且可选当前 AI，意识流使用自己的渠道与节流配置并给出 1–3 个完整猜测 | MarineChromeWorkspace, AppleTranslationWorkspace, AITextPluginWorkspace, MyPromptWorkspace, MyPromptStore, StreamInputWorkspace, AITextConnectorRegistry |
 | **投递层** Delivery | 把确认后的块送到目标；防过期焦点、防回环、防误投 | InputFocusCoordinator, BufferDeliveryCoordinator, Delivery（唯一插入咽喉） |
 
 下面是底座：**输入核心**（Rime 引擎 + IMKit 事件 + 候选窗），它既独立工作（普通打字），又是缓冲层的一个来源（Rime commit）。
@@ -75,6 +78,8 @@ RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并�
 ## 2. 数据流：一段文字的一生
 
 ```
+
+Marine Chrome 的上下文不进 `InboundBus`，也不进外部 Action Plugin runtime。Stable Chrome 的 MV3 传感器把当前页面/精确回复目标发到专用回环路由，`MarineChromeContextStore` 在 6 秒心跳租约中保持上下文；`MarineChromeWorkspace` 只在该内置插件为当前 owner、缓冲开启且非 secure input 时接收它，之后由当前 AI 连接器生成 target blocks。
 ① 本地打字         ② 外部来源                    ③ Action Plugin
    键盘事件           MCP/HTTP；[计划] SSE/SSH       用户点动作 → 本机服务准备话术
      │                   │                         │
@@ -107,10 +112,11 @@ RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并�
 6. **配对设备是来源侧唯一直通例外**：收到的文字沿既有实时传字路径直接上屏，不进入缓冲工作台。
 7. **缓冲按键与宿主隔离**：缓冲模式下普通/Shift+Return 与 Backspace 总是被输入法消费。有未决 Rime/并击组字或尚未 ready 的意识流 raw 时，本次 Return 只收束/强制生成并抑制同一物理按键余下事件；意识流 final 已 ready 时，keyDown 先确认所选候选并淘汰其余项，同一次按键继续进入轻按/长按投递。其他没有未决组字的内容也在 Return keyDown 中定点重建不可见 marked-text guard。普通/ready 内容仍是轻按发送下一块、按住约 1.2 秒发送全部；AI request 状态则在 keyDown 就吞下整次物理按键并请求生成，running/disabled 只吞键，不进入长按计时。`didCommand` 与 repeat 只有消费权。Backspace 只在精确焦点下编辑 Rime/并击状态或删除缓冲块。焦点不可信时始终吞键且不投递；宿主绝不会收到换行或删除。
 8. **派生 source/target 按生成快照交易**：翻译、普通 AI 与 My Prompt 只有已完成且仍匹配 source text/block ids/generation 的 target blocks 可投递；目标未成功送完时源块原样保留，最后一个目标成功消费后才一次性消费对应源块。My Prompt 与意识流的 1–3 个 target rows 是互斥备选而非待发送队列；`prepareForDelivery()` 在冻结投递 generation 之前原子确认所选项并立即淘汰其余候选，不等待首次 `Delivery.insert`。My Prompt 的查询永不进入 delivery blocks；意识流 raw 与所选结果在部分投递期间保留，只在最后一个所选 block 成功后清除。
-9. **插件和连接器是两条独立选择轴**：`.bufferAction` owner 只决定当前工作台动作；Codex CLI、Claude Code CLI 与 OpenAI 兼容 API 只决定谁执行 AI。切 Marine/「AI 生成」不会暗中切换模型源，切模型源也不会改写插件 owner。精确外部缓冲租约下，`Command+Shift+↑/↓` 按工作台选择器的同一顺序在 `Default + 已启用缓冲插件` 间首尾循环；额外修饰键、自有窗口或 secure input 不触发切换。
+9. **插件和连接器是两条独立选择轴**：`.bufferAction` owner 只决定当前工作台动作；Codex CLI、Claude Code CLI 与 OpenAI 兼容 API 只决定谁执行 AI。切 Marine Chrome/「AI 生成」不会暗中切换模型源，切模型源也不会改写插件 owner。精确外部缓冲租约下，`Command+Shift+↑/↓` 按工作台选择器的同一顺序在 `Default + 已启用缓冲插件` 间首尾循环；额外修饰键、自有窗口或 secure input 不触发切换。
 10. **意识流 raw 不是输入法 preedit**：只有缓冲开启 + 唯一 owner + 非 secure + 精确外部焦点同时成立时，意识流按键才在 Rime 前进入 `StreamInputWorkspace`。串击与双拼沿用物理 `a-z` 的逐字连续全拼；完整配置为 `.chord` 或 `.mutual` 时，workspace 按 `ChordSettings.duration` 聚合物理批次，并用有效部署的 `my_combo` 映射为全拼。并击只映射当前批；互击可在至少一侧为多键、schema/focus/raw/soft-offset 快照完全一致时，把紧邻的左侧声母批与右侧韵母批回滚重组。它只读取配置做路由，不切换、修改或持久化配置。左右半区共同构成且映射成功的完整音节追加一个 sidecar 标记的 soft ASCII syllable Space；`dv→n`、`km→ong` 等尚未配对的单侧映射只写入可继续补全的拼音片段，不追加 Space。单键字母保持原码且不追加，两个单键批不重组，单独 `,`/`.` 只消费，无映射多键批保留确定性字母原码且不追加。soft Space 显示普通空格、参与音节提示，但不立即请求、不增加短句最小分块数；物理 Space 是显示 `·` 并立即请求的 hard phrase boundary，紧跟 soft Space 时原位提升而不重复写入。第一枚待结算键立即撤销旧结果的投递权；非和弦边界、焦点、secure input、owner 或配置变化都会清除互击配对并作废定时器与批次。raw 与边界 sidecar 不进入 BufferModel、Rime 候选、遥测正文或宿主。字母或已结算 FlyYao 批次只重置 220 ms debounce，800 ms burst 上限不重置；最多两路 make-before-break，跨 revision 的旧结果、partial 与 baseline 都不进入新 prompt，迟到回调按 job/generation 作废。唯一例外是同 revision 的一次补候选重试：只有此前严格校验通过的 terminal guesses 才能作为有界、JSON 编码且明确不可信的 `excludedGuesses`。每轮 prompt 冻结完整 raw、soft-space offsets 与最多三条 lossless 本地音节提示；提示只把 hard Space 写成 ` | `，soft Space 保留为音节边界，多于一种提示时 `minimumGuessCount=2`。不足时两个合法 final 按旧结果优先合并、去重并最多保留三条；重试仍重复或失败时只保留此前合法候选 ready，retry partial 永不可投递，首轮或没有合法 fallback 的畸形、空、超限 final 仍 fail-closed。partial 使用稳定候选槽位，final 精确覆盖且旧尾不能进入 ready/交付。输出是 1–3 个完整互斥猜测，每个候选独占目标行且在行内细分投递 block；只有 hard Space 子句数作为最小分块目标。投递前确认选择并删除其他候选，首块成功后继续输入会撤销未发尾部并建立全新 raw，已经发送的前缀不得复活。
 11. **Shift 只在独立轻点时切换中英**：controller 先保留物理 Shift 手势，不立即启动 Rime 的 standalone-Shift 状态；小于 500 ms、未与其他键/修饰键组合且 session/schema 未变化时，才在抬起阶段向 Rime 补发同侧 Shift press/release，保留 schema 原有切换语义。组合使用、长按、左右 Shift 重叠或失焦手势整对丢弃，因此后续输入维持原模式，也不会触发 `commit_code` 的组字副作用。
 12. **全选/粘贴只编辑工作台 source**：精确 Control/Command+A/V 在所有普通与插件模式共享一条控制器路径。非意识流时全选 `BufferModel` 全部 source blocks，粘贴在块光标插入或替换全选，连接后原文完全不变再语义分块；意识流只全选/替换 raw 上轨，候选 target rows 不可编辑。意识流粘贴只接受 ASCII 字母与空白，字母转小写、空白归一为 Space；任一非法字符或 16 KiB 上限失败都原子保留 raw、选择、候选、generation 与请求。普通 pasteboard 文本必须非空、无 NUL 且至多 1 MiB。读剪贴板前后都重验 secure input 和同一精确租约；secure input 下保留宿主命令且输入法绝不读取 pasteboard，失效外部焦点只吞键。
+13. **Marine Chrome 是租约，不是浏览器自动化**：只有当前 owner + 缓冲 active + 非 protected session + 非 secure input 同时成立时才接收上下文；心跳必须在 6 秒内续约同一 source/revision/context/URL/target，且生成和投递需同一 Stable Chrome 焦点租约。浏览器上下文不进 `BufferModel`；用户可在上轨输入可编辑的补充要求，并与上下文一起冻结到本轮 generation。扩展只感知页面，不填入输入框、不点发布；所有结果仍要用户经 `BufferDeliveryCoordinator` 明确发送。
 
 ---
 
@@ -119,7 +125,7 @@ RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并�
 ```
 Origin ──────── 文本从哪来。驱动三件事：UI 来源徽标 / echo 防回环 / 来源门控
   case rime                         本地打字（无徽标）
-  case marine                       Marine 草稿（兼容期，将并入 mcp）
+  case marine                       旧 Marine 草稿（仅兼容）
   case plugin(id)                   用户主动调用的进程外 Action Plugin
   case mcp(client)                  MCP 客户端（自报名，不可验，仅展示）
   case http(source) / sse(feed) / ssh(host)
@@ -138,11 +144,14 @@ AITextPluginWorkspace.Job ── 一次显式 AI 生成
 AITextWorkspaceOutputBlock ── 独立 target rail 的逻辑块
   id(按 index 稳定) / index / text / title? / incomplete
 
+MarineChromeWorkspace.Job ── 一次显式网页评论/回复生成
+  generation / requestID / context(短时快照) / Stable Chrome FocusToken
+
 ```
 
 设计要点：
 - **Origin 是这次工作台重构的第一等公民**。一个枚举同时解决徽标、防回环、门控三件事。
-- **Action Plugin 结果是带 metadata 的 `BufferModel.Block`**；翻译/AI 结果则先留在独立 target workspace，投递时才经 `BufferDeliveryContentSource` 暴露为 `.processor` Block。
+- **旧 Action Plugin 结果是带 metadata 的 `BufferModel.Block`**；Marine Chrome、翻译/AI 结果则先留在独立 target workspace，投递时才经 `BufferDeliveryContentSource` 暴露为 `.processor` Block。
 - **source snapshot = 轻量版「Turn 冻结」**：任务启动时拷贝全文与 block IDs，之后任一边发生变化都作废旧 generation，不引入显式 Turn 实体。
 
 ---
@@ -179,7 +188,7 @@ BufferModel (单例)
   blocks: [Block]          插入点 insertionIndex
   enabled                  缓冲模式开关 (UserDefaults)
   resetOnAppSwitch         切换应用清空（显式隐私选项，默认关）
-  transient 三件套         异步产出→加载态→落缓冲→可失败（Marine/未来处理器复用）
+  transient 三件套         异步产出→加载态→落缓冲→可失败（旧 Marine/未来处理器复用）
   append(text, origin)     每次进块记来源
   insert/remove            显式插入与删除；身份、来源和顺序受模型统一维护
   consumeDelivered         成功块原子离开 live blocks，不留明文历史
@@ -200,7 +209,7 @@ BufferDeliveryCoordinator (单例)
 ```
 各 Provider ──▶ InboundBus.submit(origin, text, title) ──門控──▶
                      │
-      trust(origin): │  trusted → 直接进缓冲 (Marine)
+      trust(origin): │  trusted → 直接进缓冲 (旧 Marine 兼容来源)
                      │  ask     → 进 pending 待决 (MCP/HTTP/SSE/SSH，默认)
                      │  blocked → 丢弃
                      ▼
@@ -315,7 +324,7 @@ Delivery.insert(_ text, into: client)
                                └─────────────────────────────────────┘
 ```
 
-- **缓冲工作台是独立 `NSPanel`**：默认 nonactivating，不抢目标输入框焦点；顶部功能栏永久展开，普通高度固定 78pt。实时翻译、AI 生成与单候选意识流的 source rail 在上、target rail 在下，固定为 112pt；意识流出现 2/3 个候选时 target 增为 2/3 条独立滚动行，对应高度为 143/174pt。每条 target row 行内再以 chips 显示宿主分块。增长时必须先扩展 panel/rail 并完成 layout 再挂新 row；缩小时先移除 row 再收窄高度。每个横向 document stack 禁用 autoresizing-mask constraints，高度绑定 scroll viewport，并在 host geometry 变化后重算 document size。主条只保留正文轨与右侧主操作，发送与最下方目标行对齐。顶部功能栏固定显示状态、紧凑插件选择器与当前动作、刷新/重置与关闭，不再含 disclosure、专用拖拽手柄、块编辑器或面板内缓冲开关；其空白、间距与弹性留白可拖动窗口，`NSControl` 与正文轨不可拖。切 owner 与 target row 数变化都只向上调整并固定底边，所以条下方 Rime 候选锚点不跳。窗口仍可调整宽度，frame 持久化并在屏幕拓扑变化后夹回可见区域，旧展开态偏好不再参与布局。原来的标题/字数、手动遮蔽、历史、清空和工具层发送入口均已移除。
+- **缓冲工作台是独立 `NSPanel`**：默认 nonactivating，不抢目标输入框焦点；顶部功能栏永久展开，普通高度固定 78pt。实时翻译、AI 生成与单候选意识流的 source rail 在上、target rail 在下，固定为 112pt；Marine Chrome 的空上下文态折叠 source rail，以单 target rail 保持 78pt，真实上下文摘要或用户备注出现后才恢复 112pt；意识流出现 2/3 个候选时 target 增为 2/3 条独立滚动行，对应高度为 143/174pt。每条 target row 行内再以 chips 显示宿主分块。增长时必须先扩展 panel/rail 并完成 layout 再挂新 row；缩小时先移除 row 再收窄高度。每个横向 document stack 禁用 autoresizing-mask constraints，高度绑定 scroll viewport，并在 host geometry 变化后重算 document size。主条只保留正文轨与右侧主操作，发送与最下方目标行对齐。顶部功能栏固定显示状态、紧凑插件选择器与当前动作、右侧上下文诊断、刷新/重置与关闭，不再含 disclosure、专用拖拽手柄、块编辑器或面板内缓冲开关；其空白、间距与弹性留白可拖动窗口，`NSControl` 与正文轨不可拖。切 owner 与 target row 数变化都只向上调整并固定底边，所以条下方 Rime 候选锚点不跳。窗口仍可调整宽度，frame 持久化并在屏幕拓扑变化后夹回可见区域，旧展开态偏好不再参与布局。原来的标题/字数、手动遮蔽、历史、清空和工具层发送入口均已移除。
 - **全局切换快捷键**：`GlobalHotKeyController` 用 Carbon 注册精确 `Command+Shift+B`，不需 Accessibility 权限，按下后调用 `BufferWindowController.toggleVisibility()`。关闭时它把非 pin 面板带到当前 Space、显示窗口并恢复 `BufferModel.enabled`；打开时复用 `closeAndPause()`，安全收束当前组字、保留块、暂停捕获并隐藏。该注册快捷键被消费，B 不继续传给前台应用。
 - **边缘绘制**：圆角层内缩到透明窗口边距，并覆盖固定的日/夜工作台背景 token，避免 HUD 背景采样破坏对比度；边框按 backing scale 以路径内 hairline 绘制，避免把居中 border 压在窗口 bounds 上造成圆角或边缘裁剪毛边。
 - **关闭不会删除已有块**：先显式收束当前组字，暂停捕获，结束 transient 加载/错误状态并保留已有模型块，再隐藏。从设置/输入法菜单显示工作台时会恢复底层捕获。工作台没有手动清空或撤销入口；隐私选项触发的跨 app 清理仍是不可恢复的安全操作。
@@ -387,6 +396,7 @@ Delivery.insert(_ text, into: client)
 | 工作台隐私 | secure-input 自动遮蔽正文并禁用发送/插件动作；锁屏/睡眠/会话切出撤销租约且不回写旧 client；自身设置窗口不成为缓冲捕获源 | ✅ |
 | 日志脱敏 | 用户文本走 `IMELog.redact()` 只记长度；日志 0600；CI 断言禁 `'\(…)'` 明文 | ✅ M0 |
 | 本地端口鉴权 | 只绑 127.0.0.1 + Bearer token（0600）+ 常数时间比较 + 严格解析上限 | ✅ M2 |
+| Marine Chrome 配对 | 固定 manifest ID 仅收窄 Origin；首次连接需 RIMES 原生确认，并以 60 秒随机 claim 领取专用 Bearer；拒绝/超时不覆盖旧凭据 | ✅ |
 | 来源门控 | `SourceTrust` 有询问/信任/拦截三种类型；当前规则固定：Marine 信任，MCP/HTTP/SSE/SSH 询问，无按来源覆盖 UI | ✅ 固定规则；可配置化属后续 |
 | echo 防回环 | remotePeer 来源不回镜；规则在 `Origin.allowsRemoteMirror` 与镜像调用点，不依赖尚未实现的 Router | ✅ 规则就位 |
 | MCP 隐私边界 | 工具只给不看不发；无读缓冲/读上下文/触发投递工具 | ✅ 写死 |
@@ -406,7 +416,7 @@ Delivery.insert(_ text, into: client)
 - **持久化**：
   - UserDefaults：缓冲开关、工作台显隐/frame/常显/候选锚点、跨 app 清理选项、并击时长、候选窗尺寸、网关开关/端口、外观。按来源信任覆盖尚未实现，因此当前不在持久化项中。
   - 仅进程内：缓冲 blocks；输入法进程重启后不恢复，发送历史与清空撤销不再保留。
-  - 0600 文件：gateway-token、remote 身份私钥、`ai/openai-compatible.json`（Base URL/model/API key）。
+  - 0600 文件：gateway-token、marine-chrome 专用 token/origin、remote 身份私钥、`ai/openai-compatible.json`（Base URL/model/API key）。
   - 0600 JSON：按键统计（按日 + 全历史）、打字测速聚合、飞耀互击学习进度；测速中的“成文字符”按 Rime commit 计数（直输或进入缓冲均计入），只保存数量、不保存正文；损坏、超限或非普通文件均 fail-closed，不覆盖原数据。
   - Rime 用户数据：`~/Library/RimeBuffer`；词库维护只经官方 `levers` 导入/导出 portable TSV 或恢复官方快照，不直接复制/修改 LevelDB。
   - 日志：`~/rimebuffer.log`（0600，脱敏）。
@@ -426,7 +436,7 @@ Sources/RimeBuffer/
   CompositionSession.swift      marked text / preedit
   CandidateWindow.swift         唯一 Rime 候选状态机/NSPanel + caret/工作台底边锚点
   InputFocusCoordinator.swift   FocusToken / client+前台PID租约 / target-event-lifecycle 规则
-  BufferWindowController.swift  永久展开：普通78pt、1–3 target rows的112/143/174pt + 空白拖动工具栏/状态/插件动作/刷新/关闭
+  BufferWindowController.swift  永久展开：普通/Marine空态78pt、1–3 target rows的112/143/174pt + 空白拖动工具栏/状态/插件动作/右侧诊断/刷新/关闭
   BufferInlineView.swift        工作台 source选中、待发送 chips、来源徽标与多行 target
   BufferModel.swift             缓冲枢纽（blocks / 全选粘贴 / 成功消费 / transient；无发送历史）
   BufferDeliveryCoordinator.swift 精确目标上的逐块投递与成功块消费
@@ -466,6 +476,11 @@ Sources/RimeBuffer/
     LocalGateway.swift          回环 HTTP/MCP 服务器
     GatewayToken.swift          0600 token
     InboundTrayWindow.swift     外部来源收件箱（过渡 UI）
+  MarineChromeGatewayAuth.swift 专用 token / Chrome origin 配对
+  MarineChromePairingPrompt.swift 本机双确认与确认码弹窗
+  MarineChromePlugin.swift      短时网页租约 / AI workspace / 安全投递源
+  MarineChromeSmoke.swift       协议、租约、origin 与 prompt 边界 smoke
+  Extensions/marine-chrome/     MV3 网页传感器、popup、设置与 Node smoke
   AppleTranslationPlugin.swift  实时翻译双缓冲 / SwiftUI session 桥 / AI provider
   AITextPlugins.swift          唯一 AI workspace、三源 ConnectorRegistry、CLI/API provider 与 0600 配置
   [计划] Delivery/DeliveryRouter 多目标投递 + 远端 ACK + 持久账本
@@ -474,6 +489,8 @@ Sources/RimeBuffer/
 **测试**：无 XCTest target；CI 运行编进二进制的 smoke 子命令。`plugin-configuration-smoke` 覆盖四插件默认值与运行时桥、每插件普通存储、私有文件 0700/0600、弱权限与 symlink 拒绝、值/通知脱敏，以及 AI 翻译 prompt 的 JSON 边界。`stream-input-smoke` 覆盖 `.chord`/`.mutual` 双路由、同批与跨左右批映射、单键不重组、非和弦边界清配对、自动 soft Space/物理 hard Space 原位提升、提示与宿主分块差异、普通 debounce、首键撤销旧投递权、Backspace 先结算再逐字删除，以及原有焦点/secure/modifier 门、有界双路、迟到回调 tombstone、1–3 个互斥候选、选择/投递和 raw 全选粘贴契约。`fly-chord-learning-smoke` 另验证 fixture 与真实部署 schema 都能被同一 mapper 消费。`buffer-window-smoke` 覆盖普通候选矩阵与意识流 target rail 的真实三行 AppKit 几何、全选显示和动态高度；`matrix-smoke` 覆盖 1–3 行及三行 viewport 上限。`buffer-smoke` 覆盖 Control/Command+A/V 精确组合规则、普通/插件 source 的全选替换、块光标粘贴、语义分块、精确连接文本与纯空白保留；secure input 不读 pasteboard 与延迟读取后租约重验仍需安装后的真实 IMK 交互回归。`ai-text-smoke` 覆盖 provider 逻辑块到工作台的唯一分段、超 20 KB 粗结果、后续上游块 UUID 稳定和 CLI/API 流式收口；`translation-smoke` 与 `plugin-stream-smoke` 覆盖实时翻译、Action/Marine 的分段、权限继承和 partial/final 一致性。这些 smoke 不调用真实模型或用户配置的真实 API；真实 librime 词库桥另有强制隔离 `RIMEBUFFER_USER_DIR` 的 `user-lexicon-bridge-smoke`。
 
 `remarkable-plugin-smoke` 用假 SSH、PDF 导出和 OCR 依赖验证 current-page 定位、双读稳定、PDF 页序、PDF 导出后的文档/页面/字节复验、取消/迟到墓碑、按来源/页面/语言去重和 `.ssh` provenance；固定初始 USB Web URL、禁代理、数据边界和凭据脱敏也由测试钉住。程序化 v6 fixture 继续覆盖旧 root-text 解析器的 CRDT 顺序、删除/格式码与边界拒绝，但该解析器不再进入生产 Remarkable 拉取路径。所有 smoke 都不连接真实 reMarkable、不调用云端，也不打印识别正文。
+
+`marine-chrome-smoke` 覆盖 Swift wire schema、大小/时间/URL 限制、revision tombstone、6 秒过期、Chrome origin/host gate 与 prompt JSON 信任边界；`Extensions/marine-chrome/tests/smoke.mjs` 另覆盖 MV3 权限、协议镜像、精确评论 ID、歧义拒绝、前台 document lease、503 新 revision 重试和通用页面按需注入。两者都不启动真实 Chrome、Bilibili 或模型，真实网页 DOM/API 仍需安装后回归。
 
 - `plugin-smoke` 覆盖 manifest 发现与 schema、可选 `preparePath` 契约、唯一 prepared presentation 提升到主操作及多动作歧义回退、request/generating/deliver 四态、普通块/其他 action/stale 结果不误亮纸飞机、上下文动作聚合及 `status.actionId` 动态切换、`~`/相对 runtime path、runtime 从新到旧回退与 status→prepare/invoke 精确绑定、只允许 loopback、prepared 五字段身份与 `blocks-v1` 格式校验、流式 1 MiB 响应上限、Bearer request、request/context/action/focus 路由规则、切 owner 后已完成 Marine block 仍保留原投递 authority、切换评论后迟到校验不得上屏、收件箱满载显式失败，以及 stale 结果经人工接受后保留来源但安全降级为普通文本。
 
@@ -496,6 +513,7 @@ Sources/RimeBuffer/
 | **Action Plugin v1** | manifest/runtime config/loopback Bearer HTTP/可选 preparePath/动态动作 UI/插件管理/FocusToken+context 安全分流 | ✅ 基础宿主 2026-07-18；prepare 2026-07-20 |
 | **M3** 实时翻译 | 独立双缓冲 / Apple 本地默认 / 当前 AI 渠道 / 语言选择 / 互斥撤权 | ✅ 已实现；待安装后真语言包验收 |
 | **M4** AI 插件与连接器 | 唯一「AI 生成」插件 / Codex、Claude Code、OpenAI 三源切换 / CLI/API 授权 / Marine prepare / 双轨 workspace / 0600 凭据 | ✅ 2026-07-20 已实现；待真实宿主端到端验收 |
+| **Marine Chrome** | MV3 前台网页传感器 / 固定扩展 ID / Bilibili 精确回复 / 双确认专用凭据 / 6 秒租约 / 当前 AI 连接器 / 单行空态与状态区 / 显式投递 | ✅ 2026-08-06 0.2 已实现；待真实生成与发布前投递验收 |
 | **插件配置** | 统一 schema 与“设置…”表单 / 每插件普通存储 / 0700+0600 敏感存储 / 运行时快照 | ✅ 2026-07-26 已实现 |
 | **M5** 投递路由 | 本地精确焦点已完成；多目标 / 远端 ACK / 持久账本仍属后续，当前明确不保存发送历史 | 部分完成 |
 | **Remarkable** | 显式只读动作 / SSH 当前页稳定校验 / 固定初始 USB Web URL / PDFKit 目标 300 dpi 有界渲染 + Vision 本地 OCR / 前后复验 / 普通缓冲导入 | ✅ 2026-07-27 已切换本地 OCR，并通过安装后真机当前页验收 |

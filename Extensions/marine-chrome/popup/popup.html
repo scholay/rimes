@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>marine-chrome</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header>
+      <span class="mark">M</span>
+      <div>
+        <h1>marine-chrome</h1>
+        <p id="status">正在检查…</p>
+      </div>
+    </header>
+    <p id="target" class="target" hidden></p>
+    <button id="capture" class="primary" type="button">读取当前网页</button>
+    <div class="secondary">
+      <button id="test" type="button">检查连接</button>
+      <button id="options" type="button">连接设置</button>
+    </div>
+    <p id="detail" class="detail" aria-live="polite"></p>
+    <p class="footnote">Bilibili 评论框会自动建立直评或精确回复目标；其他网页仅在点击“读取当前网页”后读取。</p>
+  </main>
+  <script src="../src/shared/protocol.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

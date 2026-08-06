@@ -1,0 +1,53 @@
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #17212b;
+  background: #f7fafc;
+}
+
+body { margin: 0; width: 310px; }
+main { padding: 16px; }
+header { display: flex; align-items: center; gap: 11px; margin-bottom: 14px; }
+.mark {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  color: #fff;
+  background: linear-gradient(145deg, #00aeec, #007cae);
+  font-weight: 800;
+}
+h1 { margin: 0; font-size: 16px; }
+#status { margin: 3px 0 0; color: #667482; font-size: 12px; }
+.target {
+  margin: 0 0 12px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: rgba(0, 174, 236, .09);
+  color: #007cae;
+  font-size: 12px;
+  line-height: 1.45;
+}
+button {
+  border: 1px solid rgba(30, 50, 68, .16);
+  border-radius: 9px;
+  padding: 9px 11px;
+  color: inherit;
+  background: #fff;
+  font: 600 12px/1.2 inherit;
+  cursor: pointer;
+}
+button:hover { border-color: #00aeec; }
+button:disabled { opacity: .55; cursor: wait; }
+.primary { width: 100%; background: #008fc4; border-color: #008fc4; color: #fff; }
+.secondary { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.detail { min-height: 16px; margin: 10px 1px 0; color: #b42318; font-size: 11px; line-height: 1.4; }
+.detail.ok { color: #078a4d; }
+.footnote { margin: 10px 1px 0; color: #768390; font-size: 10px; line-height: 1.5; }
+@media (prefers-color-scheme: dark) {
+  :root { color: #edf3f7; background: #141c24; }
+  button { background: #1b2732; border-color: rgba(255,255,255,.15); }
+  #status, .footnote { color: #9cabb7; }
+  .target { color: #67d0f7; }
+}

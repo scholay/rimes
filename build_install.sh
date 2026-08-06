@@ -81,10 +81,70 @@ fi
 mkdir -p "$RB_USER"
 install -m 0644 rime-data/my_combo.schema.yaml "$RB_USER/my_combo.schema.yaml"
 
-echo "==> swift build ($CONFIG)"
-swift build -c "$CONFIG"
+# GRDB 7.11 requires a newer toolchain than the Command Line Tools Swift on
+# some supported Macs. Allow CI/developers to pin one, otherwise prefer the
+# keg-only Homebrew Swift when present and fall back to the active Xcode Swift.
+if [[ -n "${RB_SWIFT_BIN:-}" ]]; then
+    RIMES_SWIFT_BIN="$RB_SWIFT_BIN"
+elif [[ -x /opt/homebrew/opt/swift/bin/swift ]]; then
+    RIMES_SWIFT_BIN=/opt/homebrew/opt/swift/bin/swift
+elif [[ -x /usr/local/opt/swift/bin/swift ]]; then
+    RIMES_SWIFT_BIN=/usr/local/opt/swift/bin/swift
+else
+    RIMES_SWIFT_BIN="$(command -v swift || true)"
+fi
+if [[ -z "$RIMES_SWIFT_BIN" || ! -x "$RIMES_SWIFT_BIN" ]]; then
+    echo "!! no usable Swift toolchain found"
+    exit 1
+fi
+
+# Homebrew/upstream Swift may compile against the selected CLT SDK while
+# recording the deployment target as both minOS and SDK in LC_BUILD_VERSION.
+# AppKit uses that SDK field for linked-on-or-after rendering behavior, so make
+# both platform versions explicit from their authoritative sources.
+RIMES_PACKAGE_DESCRIPTION="$("$RIMES_SWIFT_BIN" package dump-package)"
+RIMES_PACKAGE_PLATFORM="$(
+    printf '%s' "$RIMES_PACKAGE_DESCRIPTION" |
+        /usr/bin/plutil -extract platforms.0.platformName raw -o - -
+)"
+RIMES_DEPLOYMENT_TARGET="$(
+    printf '%s' "$RIMES_PACKAGE_DESCRIPTION" |
+        /usr/bin/plutil -extract platforms.0.version raw -o - -
+)"
+RIMES_MACOS_SDK_PATH="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
+RIMES_MACOS_SDK_VERSION="$(/usr/bin/xcrun --sdk macosx --show-sdk-version)"
+
+if [[ "$RIMES_PACKAGE_PLATFORM" != "macos" ||
+      ! "$RIMES_DEPLOYMENT_TARGET" =~ ^[0-9]+([.][0-9]+){1,2}$ ||
+      ! "$RIMES_MACOS_SDK_VERSION" =~ ^[0-9]+([.][0-9]+){1,2}$ ]]; then
+    echo "!! could not resolve macOS deployment/SDK versions safely"
+    exit 1
+fi
+
+echo "==> swift build ($CONFIG, macOS $RIMES_DEPLOYMENT_TARGET / SDK $RIMES_MACOS_SDK_VERSION)"
+"$RIMES_SWIFT_BIN" build -c "$CONFIG" \
+    --sdk "$RIMES_MACOS_SDK_PATH" \
+    -Xlinker -platform_version \
+    -Xlinker macos \
+    -Xlinker "$RIMES_DEPLOYMENT_TARGET" \
+    -Xlinker "$RIMES_MACOS_SDK_VERSION"
 
 BIN=".build/$CONFIG/RimeBuffer"
+RIMES_BUILD_VERSION_INFO="$(/usr/bin/vtool -show-build "$BIN")"
+RIMES_BUILT_MIN_OS="$(
+    printf '%s\n' "$RIMES_BUILD_VERSION_INFO" |
+        awk '$1 == "minos" { print $2; exit }'
+)"
+RIMES_BUILT_SDK="$(
+    printf '%s\n' "$RIMES_BUILD_VERSION_INFO" |
+        awk '$1 == "sdk" { print $2; exit }'
+)"
+if [[ "$RIMES_BUILT_MIN_OS" != "$RIMES_DEPLOYMENT_TARGET" ||
+      "$RIMES_BUILT_SDK" != "$RIMES_MACOS_SDK_VERSION" ]]; then
+    echo "!! invalid LC_BUILD_VERSION: minOS=$RIMES_BUILT_MIN_OS SDK=$RIMES_BUILT_SDK"
+    exit 1
+fi
+
 echo "==> assembling $APP (in $STAGE)"
 rm -rf "$APP_PATH"
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources" \

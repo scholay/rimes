@@ -18,12 +18,20 @@ EXPECTED_CONFIG="$TEST_STATE_ROOT/expected-openai-compatible.json"
 EXPECTED_PLUGIN_CONFIG="$TEST_STATE_ROOT/expected-remarkable-credentials.json"
 EXPECTED_PROMPT="$TEST_STATE_ROOT/expected-prompt.md"
 EXPECTED_PROMPT_INDEX="$TEST_STATE_ROOT/expected-prompt-index.sqlite"
+EXPECTED_MARINE_DIR="$TEST_STATE_ROOT/expected-marine-chrome"
+MARINE_STATE_FILES=(
+    marine-chrome-token
+    marine-chrome-origin
+    marine-chrome-generation
+    marine-chrome-credential.lock
+)
 mkdir -p "$PROFILE_DIR/ai" "$PROFILE_DIR/plugins" "$PROFILE_DIR/stats" \
          "$PROFILE_DIR/learning" "$PROFILE_DIR/my-prompt/library" \
          "$PROFILE_DIR/build" \
          "$PROFILE_DIR/plugin-config/builtin.remarkable" "$IMPORT_DIR/ai" \
          "$IMPORT_DIR/plugins" "$IMPORT_DIR/stats" "$IMPORT_DIR/learning" \
-         "$IMPORT_DIR/my-prompt" "$IMPORT_DIR/plugin-config/builtin.remarkable"
+         "$IMPORT_DIR/my-prompt" "$IMPORT_DIR/plugin-config/builtin.remarkable" \
+         "$EXPECTED_MARINE_DIR"
 
 # This is an inert fixture, never a credential read from the developer's
 # profile. Keeping it outside PROFILE_DIR gives cmp an independent reference.
@@ -52,6 +60,11 @@ printf '%s\n' 'stats-state' > "$PROFILE_DIR/stats/marker"
 printf '%s\n' 'learning-state' > "$PROFILE_DIR/learning/marker"
 printf '%s\n' 'gateway-state' > "$PROFILE_DIR/gateway-token"
 printf '%s\n' 'identity-state' > "$PROFILE_DIR/remote_identity.key"
+for state_file in "${MARINE_STATE_FILES[@]}"; do
+    printf 'preserved-%s\n' "$state_file" > "$EXPECTED_MARINE_DIR/$state_file"
+    cp "$EXPECTED_MARINE_DIR/$state_file" "$PROFILE_DIR/$state_file"
+    chmod 0600 "$PROFILE_DIR/$state_file"
+done
 printf '%s\n' 'discard-me' > "$PROFILE_DIR/build/cache"
 printf '%s\n' 'discard-me' > "$PROFILE_DIR/installation.yaml"
 printf '%s\n' 'discard-me' > "$PROFILE_DIR/old.schema.yaml"
@@ -73,6 +86,9 @@ printf '%s\n' 'must-not-replace-prompt-index' \
     > "$IMPORT_DIR/my-prompt/prompts.sqlite"
 printf '%s\n' 'must-not-replace-gateway' > "$IMPORT_DIR/gateway-token"
 printf '%s\n' 'must-not-replace-identity' > "$IMPORT_DIR/remote_identity.key"
+for state_file in "${MARINE_STATE_FILES[@]}"; do
+    printf 'must-not-replace-%s\n' "$state_file" > "$IMPORT_DIR/$state_file"
+done
 printf '%s\n' 'new-schema' > "$IMPORT_DIR/default.yaml"
 
 mode_of() {
@@ -80,6 +96,14 @@ mode_of() {
         Darwin) stat -f '%Lp' "$1" ;;
         *) stat -c '%a' "$1" ;;
     esac
+}
+
+assert_marine_chrome_state_preserved() {
+    local state_file
+    for state_file in "${MARINE_STATE_FILES[@]}"; do
+        cmp -s "$EXPECTED_MARINE_DIR/$state_file" "$PROFILE_DIR/$state_file"
+        test "$(mode_of "$PROFILE_DIR/$state_file")" = '600'
+    done
 }
 
 CONFIG_MODE_BEFORE="$(mode_of "$PROFILE_DIR/ai/openai-compatible.json")"
@@ -110,6 +134,7 @@ cmp -s "$EXPECTED_PROMPT" "$PROFILE_DIR/my-prompt/library/research.md"
 cmp -s "$EXPECTED_PROMPT_INDEX" "$PROFILE_DIR/my-prompt/prompts.sqlite"
 test "$(cat "$PROFILE_DIR/gateway-token")" = 'gateway-state'
 test "$(cat "$PROFILE_DIR/remote_identity.key")" = 'identity-state'
+assert_marine_chrome_state_preserved
 test "$(cat "$PROFILE_DIR/default.yaml")" = 'new-schema'
 test ! -e "$PROFILE_DIR/build"
 test ! -e "$PROFILE_DIR/installation.yaml"
@@ -133,6 +158,7 @@ test "$(
 )" = "$PLUGIN_CONFIG_MODE_BEFORE"
 test "$(mode_of "$PROFILE_DIR/plugin-config/builtin.remarkable")" = \
     "$PLUGIN_CONFIG_DIR_MODE_BEFORE"
+assert_marine_chrome_state_preserved
 test ! -e "$PROFILE_DIR/build"
 test ! -e "$PROFILE_DIR/default.yaml"
 

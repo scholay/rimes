@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "marine-chrome",
+  "version": "0.2.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoiknzqEuzNftWlPxTlPbmqNPAmPXTTG5aBXdCQMody5vyguLpFIr6+u4DfZsy5rfDy5zo1otGeO3QD6AZMJ3VL3nfvtWHElyHZntZD8l9hDsxneA8GU/tcabUKaiyEUfSMOQn5dGVGu/pySPiQ5IA3X8XHxC2ryEXZDmuQl+5J1e1W9gLG6TaNP3y62Uo5chLWNu/oTZ2QRVqMTUYEMUpkIzaKvsC+zRgzmud2+AkI+fDfLmk06udZ3AVwFzm2AwfgNKDPO+CawXLvbAQsfHJb4UWKg1PQ9aJGJYTeNgKkaB/EC+qd9oprqWUDG0SSCp0t8xl6Nl3l0tPM18nwQr0wIDAQAB",
+  "description": "把当前网页与 Bilibili 精确评论目标安全交给 RIMES。",
+  "minimum_chrome_version": "114",
+  "incognito": "not_allowed",
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; script-src 'self'; object-src 'none'; connect-src http://127.0.0.1:*; base-uri 'none'; frame-ancestors 'none'"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "https://*.bilibili.com/*",
+    "https://api.bilibili.com/*",
+    "https://*.hdslb.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.js"
+  },
+  "action": {
+    "default_title": "marine-chrome",
+    "default_popup": "popup/popup.html"
+  },
+  "options_page": "options/options.html",
+  "content_scripts": [
+    {
+      "matches": ["https://*.bilibili.com/video/*"],
+      "js": ["src/main/network-capture.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://*.bilibili.com/video/*"],
+      "js": [
+        "src/shared/protocol.js",
+        "src/shared/text.js",
+        "src/content/extract.js",
+        "src/content/bilibili.js",
+        "src/content/context-builder.js",
+        "src/content/target-controller.js",
+        "src/content/entry.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED",
+      "all_frames": false
+    }
+  ]
+}

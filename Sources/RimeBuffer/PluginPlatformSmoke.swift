@@ -50,6 +50,7 @@ func runPluginPlatformSmokeTest() -> Bool {
         BuiltInPluginID.appleTranslation,
         BuiltInPluginID.myPrompt,
         BuiltInPluginID.remarkable,
+        BuiltInPluginID.marineChrome,
         BuiltInPluginID.streamInput,
         BuiltInPluginID.aiText,
     ]) else {
@@ -103,6 +104,15 @@ func runPluginPlatformSmokeTest() -> Bool {
           remarkablePlugins[0].descriptor.capabilities == [.bufferAction],
           remarkablePlugins[0].descriptor.canUninstall == false else {
         return fail("built-in Remarkable plugin")
+    }
+    let marineChromePlugins = BuiltInPlugins.makeAll().filter {
+        $0.descriptor.key.rawID == BuiltInPluginID.marineChrome
+    }
+    guard marineChromePlugins.count == 1,
+          marineChromePlugins[0].descriptor.capabilities == [.bufferAction],
+          marineChromePlugins[0].descriptor.settings == nil,
+          marineChromePlugins[0].descriptor.canUninstall == false else {
+        return fail("built-in Marine Chrome plugin")
     }
     let myPromptPlugins = BuiltInPlugins.makeAll().filter {
         $0.descriptor.key.rawID == BuiltInPluginID.myPrompt

@@ -8,6 +8,7 @@ enum BuiltInPluginID {
     static let appleTranslation = "builtin.apple-translation"
     static let myPrompt = "builtin.my-prompt"
     static let remarkable = "builtin.remarkable"
+    static let marineChrome = "builtin.marine-chrome"
     static let streamInput = "builtin.stream-input"
     static let aiText = AITextBuiltInPluginID.aiText
     // Provider-specific IDs are retained for preference/source compatibility.
@@ -25,9 +26,38 @@ enum BuiltInPlugins {
             AppleTranslationInternalPlugin(),
             MyPromptInternalPlugin(),
             RemarkableInternalPlugin(),
+            MarineChromeInternalPlugin(),
             StreamInputInternalPlugin(),
             AITextInternalPlugin(),
         ]
+    }
+}
+
+private final class MarineChromeInternalPlugin: InternalPlugin {
+    let descriptor = PluginDescriptor(
+        key: PluginKey(domain: .builtIn,
+                       rawID: BuiltInPluginID.marineChrome),
+        wireID: nil,
+        name: "Marine Chrome",
+        symbolName: "network",
+        version: "0.2.0",
+        summary: "由配套 Chrome 扩展读取当前网页和精确回复目标；生成与发送仍由 RIMES 安全处理。",
+        source: .builtIn,
+        capabilities: [.bufferAction],
+        settings: nil,
+        canUninstall: false
+    )
+
+    func start() {
+        MarineChromeWorkspace.shared.start()
+    }
+
+    func stop() {
+        MarineChromeWorkspace.shared.stop()
+    }
+
+    func makeSettingsViewController(subpageID: String) -> NSViewController? {
+        nil
     }
 }
 

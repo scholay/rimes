@@ -341,8 +341,9 @@ final class BufferInlineView: NSView {
     static let translationPreferredHeight: CGFloat = 68
     static let additionalTranslationTargetRowHeight: CGFloat = 31
 
-    static func translationPreferredHeight(targetRows: Int) -> CGFloat {
-        translationPreferredHeight
+    static func translationPreferredHeight(targetRows: Int,
+                                            showsSourceRail: Bool = true) -> CGFloat {
+        (showsSourceRail ? translationPreferredHeight : standardPreferredHeight)
             + CGFloat(min(max(targetRows, 1), 3) - 1)
                 * additionalTranslationTargetRowHeight
     }
@@ -387,6 +388,7 @@ final class BufferInlineView: NSView {
     private var translationSourceChipView: TranslationRailChipView?
     private var translationTargetRails: [Int: TranslationTargetRail] = [:]
     private var renderedTranslationTargetRowKeys: [Int] = []
+    private var renderedShowsSourceRail = true
     private var translationTargetChipViews: [UUID: TranslationRailChipView] = [:]
     private var translationMessageView: TranslationRailMessageView?
     private var translationLoadingActive = false
@@ -414,7 +416,7 @@ final class BufferInlineView: NSView {
             return own + view.subviews.flatMap(collect)
         }
         return collect(chipRow)
-            + collect(translationSourceRow)
+            + (renderedShowsSourceRail ? collect(translationSourceRow) : [])
             + renderedTranslationTargetRowKeys.flatMap {
                 translationTargetRails[$0].map { collect($0.row) } ?? []
             }
@@ -424,14 +426,16 @@ final class BufferInlineView: NSView {
         translationContainer.isHidden
             ? Self.standardPreferredHeight
             : Self.translationPreferredHeight(
-                targetRows: renderedTranslationTargetRowKeys.count
+                targetRows: renderedTranslationTargetRowKeys.count,
+                showsSourceRail: renderedShowsSourceRail
             )
     }
 
     var usesStackedTranslationLayout: Bool { !translationContainer.isHidden }
     var translationRailCount: Int {
         usesStackedTranslationLayout
-            ? 1 + max(renderedTranslationTargetRowKeys.count, 1)
+            ? (renderedShowsSourceRail ? 1 : 0)
+                + max(renderedTranslationTargetRowKeys.count, 1)
             : 0
     }
     var renderedTranslationTargetRowCount: Int {
@@ -463,7 +467,7 @@ final class BufferInlineView: NSView {
         return BufferTranslationRailLayoutProbe(
             boundsHeight: bounds.height,
             containerHeight: translationContainer.bounds.height,
-            rails: [source] + targets
+            rails: (renderedShowsSourceRail ? [source] : []) + targets
         )
     }
 
@@ -854,6 +858,7 @@ final class BufferInlineView: NSView {
     private func renderTranslation(_ snapshot: TranslationRailSnapshot,
                                    active: Bool) {
         renderedBlockIDs.removeAll(keepingCapacity: true)
+        renderedShowsSourceRail = snapshot.showsSourceRail
         let sourceRole = translationSourceRoleView
             ?? translationRoleIcon(snapshot.sourceRole, target: false)
         translationSourceRoleView = sourceRole
@@ -907,7 +912,8 @@ final class BufferInlineView: NSView {
             translationTargetRails[$0]?.scroll
         }
         reconcileArrangedSubviews(
-            [translationSourceScroll] + desiredTargetScrolls,
+            (snapshot.showsSourceRail ? [translationSourceScroll] : [])
+                + desiredTargetScrolls,
             in: translationContainer
         )
 
@@ -1298,6 +1304,7 @@ final class BufferInlineView: NSView {
         translationTargetRoleView = nil
         translationSourceChipView = nil
         translationTargetRails.removeAll()
+        renderedShowsSourceRail = true
         let initialTargetRail = makeTranslationTargetRail(key: 0)
         translationTargetRails[0] = initialTargetRail
         renderedTranslationTargetRowKeys = [0]
@@ -1320,7 +1327,9 @@ final class BufferInlineView: NSView {
     }
 
     private func updateTranslationDocumentSizes() {
-        updateDocumentSize(for: translationSourceRow, in: translationSourceScroll)
+        if renderedShowsSourceRail {
+            updateDocumentSize(for: translationSourceRow, in: translationSourceScroll)
+        }
         for key in renderedTranslationTargetRowKeys {
             guard let rail = translationTargetRails[key] else { continue }
             updateDocumentSize(for: rail.row, in: rail.scroll)
@@ -1337,7 +1346,9 @@ final class BufferInlineView: NSView {
     }
 
     private func scrollTranslationRails(for phase: TranslationRailSnapshot.Phase) {
-        scrollToEnd(row: translationSourceRow, in: translationSourceScroll)
+        if renderedShowsSourceRail {
+            scrollToEnd(row: translationSourceRow, in: translationSourceScroll)
+        }
         for key in renderedTranslationTargetRowKeys {
             guard let rail = translationTargetRails[key] else { continue }
             if phase == .waiting || phase == .translating {

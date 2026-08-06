@@ -16,13 +16,17 @@ enum BufferCandidatePlacement: String, CaseIterable {
 
 enum BufferWorkbenchLayoutMode: Equatable {
     case standard
+    case singleDerived
     case derived(targetRows: Int)
 
     static let translation = BufferWorkbenchLayoutMode.derived(targetRows: 1)
 
     var targetRows: Int? {
-        guard case let .derived(targetRows) = self else { return nil }
-        return min(max(targetRows, 1), 3)
+        switch self {
+        case .standard: return nil
+        case .singleDerived: return 1
+        case let .derived(targetRows): return min(max(targetRows, 1), 3)
+        }
     }
 }
 
@@ -40,7 +44,7 @@ enum BufferWindowGeometry {
     static func height(expanded: Bool,
                        mode: BufferWorkbenchLayoutMode = .standard) -> CGFloat {
         switch mode {
-        case .standard:
+        case .standard, .singleDerived:
             return expanded ? expandedHeight : collapsedHeight
         case let .derived(targetRows):
             let extra = CGFloat(min(max(targetRows, 1), 3) - 1)
@@ -220,10 +224,12 @@ enum BufferWorkbenchMetrics {
     static let translationRailSpacing: CGFloat = 4
 
     static func railHeight(for mode: BufferWorkbenchLayoutMode) -> CGFloat {
-        guard let targetRows = mode.targetRows else {
+        switch mode {
+        case .standard, .singleDerived:
             return BufferInlineView.standardPreferredHeight
+        case let .derived(targetRows):
+            return BufferInlineView.translationPreferredHeight(targetRows: targetRows)
         }
-        return BufferInlineView.translationPreferredHeight(targetRows: targetRows)
     }
 
     static func mainBarHeight(for mode: BufferWorkbenchLayoutMode) -> CGFloat {
@@ -235,9 +241,10 @@ enum BufferWorkbenchMetrics {
     /// not just their artwork, line up with the source and target rows.
     static func mainControlYOffset(row: BufferMainControlRow,
                                    mode: BufferWorkbenchLayoutMode) -> CGFloat {
-        guard let targetRows = mode.targetRows else { return 0 }
+        guard case let .derived(targetRows) = mode else { return 0 }
+        let normalizedTargetRows = min(max(targetRows, 1), 3)
         let offset = BufferInlineView.additionalTranslationTargetRowHeight
-            * CGFloat(targetRows) / 2
+            * CGFloat(normalizedTargetRows) / 2
         // NSStackView lays this main bar out in a flipped view coordinate
         // system: the visually upper source row has the negative constant.
         return row == .source ? -offset : offset
@@ -256,6 +263,7 @@ enum BufferWorkbenchShelfLayout {
                           status: NSView,
                           pluginActions: NSView,
                           flexibleSpace: NSView,
+                          statusIndicators: NSView,
                           refresh: NSView,
                           close: NSView) {
         shelf.orientation = .horizontal
@@ -284,7 +292,7 @@ enum BufferWorkbenchShelfLayout {
         flexibleSpace.setContentCompressionResistancePriority(flexiblePriority,
                                                               for: .horizontal)
 
-        [status, pluginActions, flexibleSpace, refresh, close].forEach {
+        [status, pluginActions, flexibleSpace, statusIndicators, refresh, close].forEach {
             shelf.addArrangedSubview($0)
         }
     }
@@ -572,6 +580,69 @@ private final class BufferMainControlSlot: NSView {
     }
 }
 
+private final class BufferWorkbenchStatusIndicatorView: NSStackView {
+    private let dot = NSView()
+    private let label = NSTextField(labelWithString: "")
+    private var tone: WorkbenchStatusIndicatorTone = .inactive
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        orientation = .horizontal
+        alignment = .centerY
+        distribution = .fill
+        spacing = 3
+        edgeInsets = NSEdgeInsets(top: 1, left: 5, bottom: 1, right: 5)
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        translatesAutoresizingMaskIntoConstraints = false
+
+        dot.wantsLayer = true
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            dot.widthAnchor.constraint(equalToConstant: 5),
+            dot.heightAnchor.constraint(equalToConstant: 5),
+            heightAnchor.constraint(equalToConstant: 20),
+        ])
+        dot.layer?.cornerRadius = 2.5
+        label.font = .systemFont(ofSize: 9, weight: .medium)
+        label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 1
+        label.setContentHuggingPriority(.required, for: .horizontal)
+        label.setContentCompressionResistancePriority(.defaultHigh,
+                                                       for: .horizontal)
+        addArrangedSubview(dot)
+        addArrangedSubview(label)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func update(_ indicator: WorkbenchStatusIndicator) {
+        tone = indicator.tone
+        label.stringValue = indicator.text
+        toolTip = indicator.detail
+        label.toolTip = indicator.detail
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel(indicator.text)
+        setAccessibilityHelp(indicator.detail)
+        applyAppearance()
+    }
+
+    func applyAppearance() {
+        let color: NSColor
+        switch tone {
+        case .healthy: color = .systemGreen
+        case .warning: color = .systemOrange
+        case .inactive: color = RimeUI.textMuted
+        }
+        dot.layer?.backgroundColor = color.cgColor
+        label.textColor = tone == .inactive ? RimeUI.textMuted : RimeUI.textSecondary
+        layer?.backgroundColor = RimeUI.surface2.withAlphaComponent(0.74).cgColor
+        layer?.borderColor = RimeUI.border.cgColor
+        layer?.borderWidth = 1 / max(window?.backingScaleFactor ?? 2, 1)
+    }
+}
+
 /// Keeps an action bound to its declarative identity instead of to a mutable
 /// array index. Status polling may update titles/enabled state every second;
 /// the button itself must remain in place while that happens.
@@ -656,6 +727,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private let statusLabel = NSTextField(labelWithString: "")
     private let pluginActionsControl = NSStackView()
     private let shelfFlexibleSpace = NSView()
+    private let contextualStatusControl = NSStackView()
     private let pluginSelector = FirstMousePopUpButton(frame: .zero, pullsDown: false)
     private let pluginLoadingIndicator = NSProgressIndicator()
     private let pluginButtonRow = NSStackView()
@@ -687,6 +759,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var lastSecureInputState = IsSecureEventInputEnabled()
     private var renderedPluginKeys: [ActionPluginPresentationKey] = []
     private var pluginActionButtons: [ActionPluginPresentationKey: BufferPluginActionButton] = [:]
+    private var contextualStatusViews: [String: BufferWorkbenchStatusIndicatorView] = [:]
     private var renderingTranslationControls = false
     private var renderingAIControls = false
     private var renderingBuiltInActionControls = false
@@ -731,10 +804,13 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private override init() {
-        let initialLayoutMode: BufferWorkbenchLayoutMode =
-            DerivedBufferWorkspaceRouter.selectedWorkspace != nil
-                ? .translation
-                : .standard
+        let initialSnapshot = DerivedBufferWorkspaceRouter.selectedWorkspace?
+            .railSnapshot
+        let initialLayoutMode: BufferWorkbenchLayoutMode = initialSnapshot.map {
+            $0.showsSourceRail
+                ? .derived(targetRows: $0.targetRowCount)
+                : .singleDerived
+        } ?? .standard
         panel = BufferPanel(contentRect: NSRect(x: 0, y: 0, width: 760,
                                                 height: BufferWindowGeometry.height(
                                                     expanded: BufferWorkbenchLayout
@@ -852,12 +928,18 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     func renderForPreview(to path: String,
                           scale: CGFloat = 2,
                           translationSnapshot: TranslationRailSnapshot? = nil,
+                          statusIndicators: [WorkbenchStatusIndicator]? = nil,
                           hoveredControl: BufferWorkbenchControl? = nil) -> Bool {
         let previewMode: BufferWorkbenchLayoutMode = translationSnapshot == nil
-            ? (DerivedBufferWorkspaceRouter.selectedWorkspace != nil
-                ? .translation
-                : .standard)
-            : .derived(targetRows: translationSnapshot?.targetRowCount ?? 1)
+            ? DerivedBufferWorkspaceRouter.selectedWorkspace.map {
+                let snapshot = $0.railSnapshot
+                return snapshot.showsSourceRail
+                    ? .derived(targetRows: snapshot.targetRowCount)
+                    : .singleDerived
+            } ?? .standard
+            : (translationSnapshot?.showsSourceRail == false
+                ? .singleDerived
+                : .derived(targetRows: translationSnapshot?.targetRowCount ?? 1))
         syncLayoutMode(previewMode)
         adjustingFrame = true
         panel.setFrame(NSRect(x: 0, y: 0, width: 760,
@@ -869,11 +951,16 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                        display: false)
         adjustingFrame = false
         if let translationSnapshot {
-            statusLabel.stringValue = "译文可发送"
+            statusLabel.stringValue = translationSnapshot.showsSourceRail
+                ? "译文可发送"
+                : translationSnapshot.targetEmptyText
             _ = bufferRail.renderTranslationForPreview(translationSnapshot)
             applyAppearance()
         } else {
             refresh()
+        }
+        if let statusIndicators {
+            reconcileContextualStatusIndicators(statusIndicators)
         }
         applyPreviewPointerState(hoveredControl)
         guard let contentView = panel.contentView else { return false }
@@ -940,7 +1027,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         // been removed. Otherwise NSScrollView captures a 0pt/old document
         // frame and AppKit permanently breaks the third row's constraints.
         let nextLayoutMode: BufferWorkbenchLayoutMode = derivedWorkspaceSelected
-            ? .derived(targetRows: derivedSnapshot?.targetRowCount ?? 1)
+            ? (derivedSnapshot?.showsSourceRail == false
+                ? .singleDerived
+                : .derived(targetRows: derivedSnapshot?.targetRowCount ?? 1))
             : .standard
         let layoutChanged = layoutMode != nextLayoutMode
         let grows = BufferWorkbenchMetrics.railHeight(for: nextLayoutMode)
@@ -995,6 +1084,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                 canGenerateWithoutFocus: canGenerateWithoutFocus
         )
         statusLabel.textColor = RimeUI.textSecondary
+        refreshContextualStatusIndicators(
+            contentProtected ? nil : derivedWorkspace
+        )
 
         assert(!contentProtected || bufferRail.isHidden,
                "secure input must leave the text-bearing rail hidden")
@@ -1008,6 +1100,41 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             : "当前没有可刷新的缓冲插件"
         refreshPluginActions()
         applyAppearance()
+    }
+
+    private func refreshContextualStatusIndicators(
+        _ workspace: (any DerivedBufferWorkspace)?
+    ) {
+        let indicators = (workspace as? any WorkbenchStatusIndicatorProviding)?
+            .workbenchStatusIndicators ?? []
+        reconcileContextualStatusIndicators(indicators)
+    }
+
+    private func reconcileContextualStatusIndicators(
+        _ indicators: [WorkbenchStatusIndicator]
+    ) {
+        let liveIdentifiers = Set(indicators.map(\.identifier))
+        for identifier in contextualStatusViews.keys
+            where !liveIdentifiers.contains(identifier) {
+            guard let view = contextualStatusViews.removeValue(forKey: identifier) else {
+                continue
+            }
+            contextualStatusControl.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for (index, indicator) in indicators.enumerated() {
+            let view = contextualStatusViews[indicator.identifier]
+                ?? BufferWorkbenchStatusIndicatorView(frame: .zero)
+            contextualStatusViews[indicator.identifier] = view
+            view.update(indicator)
+            if view.superview !== contextualStatusControl {
+                contextualStatusControl.insertArrangedSubview(view, at: index)
+            } else if contextualStatusControl.arrangedSubviews.indices.contains(index),
+                      contextualStatusControl.arrangedSubviews[index] !== view {
+                contextualStatusControl.removeArrangedSubview(view)
+                contextualStatusControl.insertArrangedSubview(view, at: index)
+            }
+        }
     }
 
     /// Every ETInput-owned text field is an internal UI surface, not a draft
@@ -1242,11 +1369,25 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         pluginActionsControl.setContentCompressionResistancePriority(.defaultHigh,
                                                                      for: .horizontal)
 
+        contextualStatusControl.orientation = .horizontal
+        contextualStatusControl.alignment = .centerY
+        contextualStatusControl.distribution = .fill
+        contextualStatusControl.spacing = 2
+        contextualStatusControl.detachesHiddenViews = true
+        contextualStatusControl.userInterfaceLayoutDirection = .leftToRight
+        contextualStatusControl.setContentHuggingPriority(.required,
+                                                          for: .horizontal)
+        contextualStatusControl.setContentCompressionResistancePriority(
+            .defaultHigh,
+            for: .horizontal
+        )
+
         BufferWorkbenchShelfLayout.configure(
             utilityShelf,
             status: statusLabel,
             pluginActions: pluginActionsControl,
             flexibleSpace: shelfFlexibleSpace,
+            statusIndicators: contextualStatusControl,
             refresh: refreshButton,
             close: closeButton
         )
@@ -1358,6 +1499,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         builtInActionOptionPopup.refreshInteractionAppearance()
         translationSourcePopup.refreshInteractionAppearance()
         translationTargetPopup.refreshInteractionAppearance()
+        contextualStatusViews.values.forEach { $0.applyAppearance() }
     }
 
     private func applyPreviewPointerState(_ hoveredControl: BufferWorkbenchControl?) {

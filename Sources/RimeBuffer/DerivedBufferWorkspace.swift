@@ -20,6 +20,25 @@ protocol DerivedBufferWorkspace: BufferDeliveryContentSource {
     func workbenchWillPause()
 }
 
+enum WorkbenchStatusIndicatorTone: Equatable {
+    case healthy
+    case warning
+    case inactive
+}
+
+struct WorkbenchStatusIndicator: Equatable {
+    let identifier: String
+    let text: String
+    let detail: String
+    let tone: WorkbenchStatusIndicatorTone
+}
+
+/// Optional compact diagnostics rendered on the trailing side of the
+/// workbench toolbar. They describe integration health, never document text.
+protocol WorkbenchStatusIndicatorProviding: AnyObject {
+    var workbenchStatusIndicators: [WorkbenchStatusIndicator] { get }
+}
+
 extension DerivedBufferWorkspace {
     func workbenchWillPause() {}
 }
@@ -144,6 +163,7 @@ enum DerivedBufferWorkspaceRouter {
         [
             AppleTranslationWorkspace.shared,
             AITextPluginRuntimeRegistry.shared.workspace,
+            MarineChromeWorkspace.shared,
             StreamInputWorkspace.shared,
             MyPromptWorkspace.shared,
         ]

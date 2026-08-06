@@ -12,6 +12,63 @@ if let status = RemarkableSSHAskPassHandler.handleIfRequested() {
     exit(status)
 }
 
+// Recovery seam for the unpacked companion extension. Credentials remain
+// internal: reset rotates them and reports only a non-secret completion line.
+if CommandLine.arguments.contains("marine-chrome-reset-pairing") {
+    do {
+        // Advance the credential generation under the same cross-process lock
+        // used by interactive issuance. A pre-reset approval can therefore no
+        // longer race this helper and publish a usable credential afterwards.
+        _ = try MarineChromeCredentialTransaction.reset()
+        DistributedNotificationCenter.default().postNotificationName(
+            .marineChromeCredentialsDidReset,
+            object: nil,
+            userInfo: nil,
+            deliverImmediately: true
+        )
+        print("marine-chrome pairing reset")
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(Data(
+            "cannot reset marine-chrome pairing\n".utf8
+        ))
+        exit(1)
+    }
+}
+
+private var marineChromeCredentialsResetObserver: NSObjectProtocol?
+
+private func installMarineChromePairingApprovalHandler() {
+    MarineChromePairingBroker.shared.setApprovalHandler { request, respond in
+        MarineChromePairingPromptController.shared.present(
+            request,
+            respond: respond
+        )
+    }
+    MarineChromePairingBroker.shared.setCancellationHandler { requestID in
+        DispatchQueue.main.async {
+            MarineChromePairingPromptController.shared.cancel(
+                requestID: requestID
+            )
+        }
+    }
+    guard marineChromeCredentialsResetObserver == nil else { return }
+    marineChromeCredentialsResetObserver = DistributedNotificationCenter
+        .default().addObserver(
+            forName: .marineChromeCredentialsDidReset,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MarineChromePairingBroker.shared.cancelAll()
+            MarineChromePairingPromptController.shared.cancel()
+            MarineChromeContextStore.shared.clear()
+            NotificationCenter.default.post(
+                name: .marineChromePairingDidChange,
+                object: nil
+            )
+        }
+}
+
 // Safe maintenance seam used by installers and support diagnostics. Loading
 // applies narrowly scoped, atomic configuration migrations without printing
 // Base URLs, model names, or API keys.
@@ -44,6 +101,9 @@ if CommandLine.arguments.contains("schema-smoke") {
 }
 if CommandLine.arguments.contains("marine-bridge-smoke") {
     exit(runMarineBridgeSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("marine-chrome-smoke") {
+    exit(runMarineChromeSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("plugin-stream-smoke") {
     exit(runActionPluginStreamSmokeTest() ? 0 : 1)
@@ -175,7 +235,7 @@ if let i = CommandLine.arguments.firstIndex(of: "settings-render"),
         : "failed to render one or more settings routes")
     exit(rendered ? 0 : 1)
 }
-// Dev-only: `ETInput panel-render <path> [translation]
+// Dev-only: `ETInput panel-render <path> [translation|marine]
 // [hover=<control>]` renders the actual compact workbench.
 if let i = CommandLine.arguments.firstIndex(of: "panel-render"),
    i + 1 < CommandLine.arguments.count {
@@ -190,30 +250,56 @@ if let i = CommandLine.arguments.firstIndex(of: "panel-render"),
     model.append("缓冲工作台", origin: .remotePeer(deviceID: "preview"))
     let options = Array(CommandLine.arguments.dropFirst(i + 2))
     let translation = options.contains("translation")
+    let marine = options.contains("marine")
+    if marine { model.discardForPrivacy() }
     let scaleValue = options.first { Double($0) != nil }.flatMap { Double($0) }
     let scale = CGFloat(scaleValue ?? 2)
     let hoveredControl = options.compactMap { option -> BufferWorkbenchControl? in
         guard option.hasPrefix("hover=") else { return nil }
         return BufferWorkbenchControl(rawValue: String(option.dropFirst("hover=".count)))
     }.first
-    let translationSnapshot = translation ? TranslationRailSnapshot(
-        sourceText: "今天终于把翻译缓冲区分成上下两个区域了。",
-        outputBlocks: [
-            TranslationOutputBlock(id: UUID(),
-                                   text: "Today the translation buffer is finally split"),
-            TranslationOutputBlock(id: UUID(),
-                                   text: "into two vertically stacked areas."),
-        ],
-        phase: .ready
-    ) : nil
+    let translationSnapshot: TranslationRailSnapshot?
+    if marine {
+        translationSnapshot = TranslationRailSnapshot(
+            sourceText: "",
+            showsSourceRail: false,
+            outputBlocks: [],
+            phase: .idle,
+            targetRole: "答",
+            targetEmptyText: "等待网页上下文"
+        )
+    } else if translation {
+        translationSnapshot = TranslationRailSnapshot(
+            sourceText: "今天终于把翻译缓冲区分成上下两个区域了。",
+            outputBlocks: [
+                TranslationOutputBlock(id: UUID(),
+                                       text: "Today the translation buffer is finally split"),
+                TranslationOutputBlock(id: UUID(),
+                                       text: "into two vertically stacked areas."),
+            ],
+            phase: .ready
+        )
+    } else {
+        translationSnapshot = nil
+    }
+    let previewStatuses: [WorkbenchStatusIndicator]? = marine
+        ? MarineChromeStatusSnapshot(
+            paired: true,
+            contextOnline: false,
+            platform: nil,
+            sourceKind: nil,
+            aiAvailability: .ready
+        ).indicators
+        : nil
     let rendered = BufferWindowController.shared.renderForPreview(
         to: CommandLine.arguments[i + 1],
         scale: scale,
         translationSnapshot: translationSnapshot,
+        statusIndicators: previewStatuses,
         hoveredControl: hoveredControl
     )
     print(rendered
-        ? "rendered \(translation ? "translation " : "")expanded workbench @\(scale)x"
+        ? "rendered \(marine ? "marine " : (translation ? "translation " : ""))expanded workbench @\(scale)x"
         : "failed to render workbench")
     exit(rendered ? 0 : 1)
 }
@@ -229,6 +315,7 @@ if CommandLine.arguments.contains("gateway-serve") {
         print("[inbound] pending=\(p.count) latest=\(p.last.map { "\($0.origin.tag):\($0.text.count)chars streaming=\($0.streaming)" } ?? "-")")
         fflush(stdout)
     }
+    installMarineChromePairingApprovalHandler()
     LocalGateway.shared.start()
     print("gateway-serve on 127.0.0.1:\(LocalGateway.shared.port) token=\(GatewayToken.current())")
     fflush(stdout)
@@ -317,6 +404,7 @@ BufferModel.shared.onChange = {
 InputFocusCoordinator.shared.onChange = {
     ActionPluginHost.shared.focusDidChange()
     StreamInputWorkspace.shared.focusDidChange()
+    MarineChromeWorkspace.shared.focusDidChange()
     BufferWindowController.shared.refresh()
 }
 InputFocusCoordinator.shared.onInvalidated = { owner in
@@ -324,6 +412,7 @@ InputFocusCoordinator.shared.onInvalidated = { owner in
     candidateWindow.hide(owner: owner)
     ActionPluginHost.shared.focusInvalidated(owner)
     StreamInputWorkspace.shared.focusInvalidated(owner)
+    MarineChromeWorkspace.shared.focusDidChange()
 }
 ActionPluginHost.shared.onChange = {
     BufferWindowController.shared.refresh()
@@ -337,6 +426,7 @@ InboundBus.shared.onChange = {
     InboundToast.shared.update(pendingCount: InboundBus.shared.pendingCount,
                                trayVisible: InboundTrayWindow.isVisible)
 }
+installMarineChromePairingApprovalHandler()
 LocalGateway.shared.startIfEnabled()
 
 // No standalone NSStatusItem: ETInput's commands are supplied by
@@ -4606,6 +4696,7 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
     pluginActions.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
 
     let flexibleSpace = NSView()
+    let statusIndicators = NSStackView()
     let refresh = NSView()
     let close = NSView()
     for control in [refresh, close] {
@@ -4618,6 +4709,7 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
         status: status,
         pluginActions: pluginActions,
         flexibleSpace: flexibleSpace,
+        statusIndicators: statusIndicators,
         refresh: refresh,
         close: close
     )
@@ -4756,6 +4848,9 @@ func runBufferWindowSmokeTest() -> Bool {
     let translationTargetOffset = BufferWorkbenchMetrics.mainControlYOffset(
         row: .target, mode: .translation
     )
+    let compactDerivedTargetOffset = BufferWorkbenchMetrics.mainControlYOffset(
+        row: .target, mode: .singleDerived
+    )
     let streamSourceOffset = BufferWorkbenchMetrics.mainControlYOffset(
         row: .source, mode: .derived(targetRows: 3)
     )
@@ -4815,6 +4910,7 @@ func runBufferWindowSmokeTest() -> Bool {
           ) == 46,
           standardSourceOffset == 0,
           standardTargetOffset == 0,
+          compactDerivedTargetOffset == 0,
           translationSourceOffset == -15.5,
           translationTargetOffset == 15.5,
           translationSourceOffset < 0,
@@ -5924,6 +6020,34 @@ func runBufferWindowSmokeTest() -> Bool {
         )
     )
     translationRail.layoutSubtreeIfNeeded()
+    let compactMarinePreview = TranslationRailSnapshot(
+        sourceText: "",
+        showsSourceRail: false,
+        outputBlocks: [],
+        phase: .idle,
+        targetRole: "答",
+        targetEmptyText: "等待网页上下文"
+    )
+    translationRail.setFrameSize(NSSize(
+        width: 760,
+        height: BufferInlineView.translationPreferredHeight(
+            targetRows: 1,
+            showsSourceRail: false
+        )
+    ))
+    _ = translationRail.renderTranslationForPreview(compactMarinePreview)
+    translationRail.reconcileTranslationDocumentGeometry()
+    let compactMarineProbe = translationRail.translationLayoutProbe
+    let renderedCompactMarine = translationRail.translationRailCount == 1
+        && translationRail.renderedTranslationTargetRowCount == 1
+        && translationRail.preferredHeight == BufferInlineView.standardPreferredHeight
+        && compactMarineProbe.rails.count == 1
+        && translationRail.renderedTextFragments.contains("等待网页上下文")
+        && !translationRail.renderedTextFragments.contains("等待原文")
+    translationRail.setFrameSize(NSSize(
+        width: 760,
+        height: BufferInlineView.translationPreferredHeight(targetRows: 1)
+    ))
     let sourcePreview = "上方原文缓冲"
     let targetPreviewA = "下方译文"
     let targetPreviewB = "第二块"
@@ -6139,6 +6263,7 @@ func runBufferWindowSmokeTest() -> Bool {
             == .init(name: "text.bubble", accessibilityLabel: "原始内容"),
           TranslationRailRoleSymbolRules.resolve("答", target: true)
             == .init(name: "sparkles", accessibilityLabel: "AI 回答"),
+          renderedCompactMarine,
           reusedTargetViews,
           renderedMultiCandidateRows,
           renderedThreeRowGeometry,
@@ -6147,6 +6272,7 @@ func runBufferWindowSmokeTest() -> Bool {
           translationShielded else {
         print("FAILED: translation rail must render two stacked, independently shielded buffers",
               "stacked=\(renderedStackedTranslation)",
+              "compactMarine=\(renderedCompactMarine)",
               "reused=\(reusedTargetViews)",
               "multi=\(renderedMultiCandidateRows)",
               "threeGeometry=\(renderedThreeRowGeometry)",
@@ -6221,6 +6347,13 @@ func runBufferWindowSmokeTest() -> Bool {
         visibleFrames: [primary],
         fallback: primary
     )
+    let compactDerivedExpanded = BufferWindowGeometry.clampedFrame(
+        translationExpanded,
+        expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
+        mode: .singleDerived,
+        visibleFrames: [primary],
+        fallback: primary
+    )
     let streamCandidatesTwoExpanded = BufferWindowGeometry.clampedFrame(
         translationExpanded,
         expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
@@ -6262,6 +6395,8 @@ func runBufferWindowSmokeTest() -> Bool {
           legacyCollapsed.minY == migratedOldCompact.minY,
           translationExpanded.height == BufferWindowGeometry.translationExpandedHeight,
           translationExpanded.minY == migratedOldCompact.minY,
+          compactDerivedExpanded.height == BufferWindowGeometry.expandedHeight,
+          compactDerivedExpanded.minY == translationExpanded.minY,
           streamCandidatesTwoExpanded.height
             == BufferWindowGeometry.translationExpandedHeight
                 + BufferInlineView.additionalTranslationTargetRowHeight,
@@ -6533,6 +6668,83 @@ func runCandidateMetricsSmokeTest() -> Bool {
           "preview and live candidate separators should occupy the same width")
     check(CandidateLayout.bufferActionMinWidth == 38,
           "preview and live buffer actions should share the same minimum width")
+
+    // Exercise the real AppKit/CoreText hierarchy at normal, selected, maximum
+    // font and extra-tall button sizes. The title view occupies a symmetric
+    // content rect and the painted ink must stay centred within the button.
+    let rendererCases: [(
+        button: CGFloat,
+        glyph: CGFloat,
+        label: CGFloat,
+        highlighted: Bool
+    )] = [
+        (24, 17, 10, false),
+        (24, 17, 10, true),
+        (30, 24, 18, true),
+        (44, 24, 18, false),
+    ]
+    for rendererCase in rendererCases {
+        let snapshot = CandidateWindow.textRendererSnapshotForSmoke(
+            buttonHeight: rendererCase.button,
+            candidateFontSize: rendererCase.glyph,
+            labelFontSize: rendererCase.label,
+            highlighted: rendererCase.highlighted
+        )
+        let prefix = "renderer \(Int(rendererCase.glyph))pt/\(Int(rendererCase.button))px"
+        check(snapshot.nativeButtonTitleIsEmpty && snapshot.nativeAttributedTitleIsEmpty,
+              "\(prefix) should not use NSButtonCell for text")
+        let inset = CandidateLayout.compactCandidateHorizontalPadding / 2
+        check(abs(snapshot.titleViewFrame.minX - inset) < 0.01
+                && abs(snapshot.titleViewFrame.maxX
+                    - (snapshot.buttonBounds.maxX - inset)) < 0.01
+                && abs(snapshot.titleViewFrame.minY - snapshot.buttonBounds.minY) < 0.01
+                && abs(snapshot.titleViewFrame.height - snapshot.buttonBounds.height) < 0.01,
+              "\(prefix) title view should fill a symmetric button content rect")
+        check(snapshot.buttonBounds.height + 0.01 >= ceil(snapshot.requiredLineHeight),
+              "\(prefix) button \(snapshot.buttonBounds.height) should contain line box \(snapshot.requiredLineHeight)")
+        check(snapshot.baselineCenterDelta < 0.01,
+              "\(prefix) label and candidate visual centres should align")
+        check(snapshot.titleViewHitTestIsNil,
+              "\(prefix) title view should leave clicks to the button")
+        check(snapshot.candidateGlyphPixelCount > 0,
+              "\(prefix) should paint candidate glyphs")
+        check(snapshot.horizontalInkCenterDelta <= 1.25,
+              "\(prefix) horizontal ink delta \(snapshot.horizontalInkCenterDelta) should be centred")
+        check(snapshot.verticalInkCenterDelta <= 1.25,
+              "\(prefix) vertical ink delta \(snapshot.verticalInkCenterDelta) should be centred")
+    }
+
+    // Reproduce the live strip's tightest titles at the user's current sizing.
+    // Rasterizing the real CoreText hierarchy catches both a missing lone CJK
+    // glyph and an off-centre title that the roomy 180px case could conceal.
+    let tightSingleGlyphCases: [(
+        label: String,
+        text: String,
+        highlighted: Bool
+    )] = [
+        ("6", "现", false),
+        ("", "现", true),
+    ]
+    for rendererCase in tightSingleGlyphCases {
+        let snapshot = CandidateWindow.textRendererSnapshotForSmoke(
+            buttonHeight: 24,
+            candidateFontSize: 17,
+            labelFontSize: 10,
+            candidateText: rendererCase.text,
+            label: rendererCase.label,
+            usesTightWidth: true,
+            highlighted: rendererCase.highlighted
+        )
+        let prefix = rendererCase.label.isEmpty
+            ? "tight single glyph"
+            : "tight labeled single glyph"
+        check(snapshot.candidateGlyphPixelCount > 0,
+              "\(prefix) should render candidate ink at its natural width")
+        check(snapshot.horizontalInkCenterDelta <= 1.25,
+              "\(prefix) should remain horizontally centred")
+        check(snapshot.verticalInkCenterDelta <= 1.25,
+              "\(prefix) should remain vertically centred")
+    }
 
     // Index-label ceiling tracks the candidate glyph.
     check(CandidateWindowMetric.labelFontSize

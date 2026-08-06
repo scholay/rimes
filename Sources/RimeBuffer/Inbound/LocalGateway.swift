@@ -5,9 +5,10 @@ import Network
 /// feeding InboundBus. The hand-written HTTP/1.1 parsing was validated by the
 /// M2 spike (real Claude Code connected, SSE streamed, keep-alive held).
 ///
-/// Security: binds 127.0.0.1 only; every endpoint except /health requires the
-/// bearer token; strict line/size limits on the parser. Runs on a background
-/// queue; all InboundBus/BufferModel calls hop to the main thread.
+/// Security: binds 127.0.0.1 only; inbox and browser-context mutations require
+/// scoped bearer tokens. Public health/proof/interactive-claim routes are inert
+/// or fixed-extension-origin constrained. Parsing has strict line/size limits.
+/// All InboundBus/BufferModel calls hop to the main thread.
 final class LocalGateway {
     static let shared = LocalGateway()
 
@@ -57,10 +58,23 @@ final class LocalGateway {
         return origin.lowercased() == "\(scheme)://\(serializedHost)\(portSuffix)"
     }
 
-    private var listener: NWListener?
     private let queue = DispatchQueue(label: "etinput.gateway")
+    private let lifecycleLock = NSLock()
+    private var lifecycleEpoch: UInt64 = 0
+    private var wantsRunning = false
+    private var runningSnapshot = false
+
+    // Queue-confined. NWListener/NWConnection callbacks are also delivered on
+    // `queue`, so no other thread may read or mutate these collections.
+    private var listener: NWListener?
+    private var listenerEpoch: UInt64?
     private var connections: [ObjectIdentifier: Connection] = [:]
-    private(set) var running = false
+
+    var running: Bool {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        return runningSnapshot
+    }
 
     var enabled: Bool {
         get { UserDefaults.standard.object(forKey: "gatewayEnabled") as? Bool ?? true }
@@ -74,70 +88,254 @@ final class LocalGateway {
     func startIfEnabled() { if enabled { start() } }
 
     func start() {
-        guard listener == nil else { return }
-        let params = NWParameters.tcp
-        // Bind loopback only — never reachable off-box.
-        params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!)
-        params.allowLocalEndpointReuse = true
-        guard let l = try? NWListener(using: params) else {
-            IMELog.write("gateway: cannot bind 127.0.0.1:\(port)")
-            return
+        guard let epoch = requestStart() else { return }
+        let requestedPort = port
+        queue.async { [weak self] in
+            self?.startOnQueue(epoch: epoch, port: requestedPort)
         }
-        l.newConnectionHandler = { [weak self] nw in
-            guard let self else { nw.cancel(); return }
-            let c = Connection(nw) { [weak self] in self?.drop($0) }
-            self.connections[ObjectIdentifier(c)] = c   // retain (spike caught this bug)
-            c.start(on: self.queue)
-        }
-        l.stateUpdateHandler = { [weak self] st in
-            switch st {
-            case .ready: self?.running = true; IMELog.write("gateway ready on 127.0.0.1:\(self?.port ?? 0)")
-            case .failed(let e): IMELog.write("gateway listener failed: \(e)"); self?.stop()
-            default: break
-            }
-        }
-        listener = l
-        l.start(queue: queue)
     }
 
     func stop() {
-        listener?.cancel(); listener = nil
-        connections.values.forEach { $0.cancel() }
-        connections.removeAll()
-        running = false
+        let epoch = requestStop()
+
+        // Invalidate browser authority before waiting for queue-confined socket
+        // teardown. A stale receive or main-thread mutation will now fail its
+        // epoch guard even if its NWConnection callback was already enqueued.
+        cancelPairingAndClearBrowserContext()
+
+        queue.async { [weak self] in
+            self?.stopOnQueue(epoch: epoch)
+        }
     }
 
-    private func drop(_ c: Connection) { queue.async { self.connections[ObjectIdentifier(c)] = nil } }
+    private func startOnQueue(epoch: UInt64, port: UInt16) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard isLifecycleCurrent(epoch) else { return }
+
+        // A newer start may overtake an older stop while their callers enqueue
+        // work from different threads. Replacing all queue-owned resources here
+        // makes the newest epoch authoritative regardless of enqueue order.
+        tearDownQueueResources()
+        MarineChromePairingBroker.shared.cancelAll()
+
+        let params = NWParameters.tcp
+        // Bind loopback only — never reachable off-box.
+        params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!)
+        guard let l = try? NWListener(using: params) else {
+            IMELog.write("gateway: cannot bind 127.0.0.1:\(port)")
+            failLifecycleOnQueue(epoch: epoch)
+            return
+        }
+        l.newConnectionHandler = { [weak self, weak l] nw in
+            guard let self, let l,
+                  self.listener === l,
+                  self.isLifecycleCurrent(epoch) else {
+                nw.cancel()
+                return
+            }
+            let c = Connection(
+                nw,
+                queue: self.queue,
+                isGatewayCurrent: { [weak self] in
+                    self?.isLifecycleCurrent(epoch) == true
+                },
+                onClose: { [weak self] in self?.dropOnQueue($0) }
+            )
+            self.connections[ObjectIdentifier(c)] = c   // retain (spike caught this bug)
+            c.start()
+        }
+        l.stateUpdateHandler = { [weak self, weak l] state in
+            guard let self, let l else { return }
+            self.handleListenerState(
+                state,
+                listener: l,
+                epoch: epoch,
+                port: port
+            )
+        }
+        listener = l
+        listenerEpoch = epoch
+        l.start(queue: queue)
+    }
+
+    private func stopOnQueue(epoch: UInt64) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        // If a subsequent start already became authoritative, this stale stop
+        // must not tear down its listener or cancel its fresh pairing prompt.
+        guard isLifecycleStopped(epoch) else { return }
+        tearDownQueueResources()
+        MarineChromePairingBroker.shared.cancelAll()
+    }
+
+    private func tearDownQueueResources() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        listener?.cancel()
+        listener = nil
+        listenerEpoch = nil
+        connections.values.forEach { $0.cancel() }
+        connections.removeAll()
+    }
+
+    private func handleListenerState(_ state: NWListener.State,
+                                     listener expectedListener: NWListener,
+                                     epoch: UInt64,
+                                     port: UInt16) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard listener === expectedListener else { return }
+        switch state {
+        case .ready:
+            guard markReady(epoch: epoch) else {
+                expectedListener.cancel()
+                return
+            }
+            IMELog.write("gateway ready on 127.0.0.1:\(port)")
+        case .failed(let error):
+            IMELog.write("gateway listener failed: \(error)")
+            failLifecycleOnQueue(epoch: epoch)
+        case .cancelled:
+            // Explicit teardown clears `listener` first, so reaching this branch
+            // means the current listener was cancelled independently.
+            failLifecycleOnQueue(epoch: epoch)
+        default:
+            break
+        }
+    }
+
+    private func failLifecycleOnQueue(epoch: UInt64) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard let stoppedEpoch = invalidateLifecycleIfCurrent(epoch) else {
+            if listenerEpoch == epoch {
+                tearDownQueueResources()
+            }
+            return
+        }
+        cancelPairingAndClearBrowserContext()
+        stopOnQueue(epoch: stoppedEpoch)
+    }
+
+    private func requestStart() -> UInt64? {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        guard !wantsRunning else { return nil }
+        lifecycleEpoch &+= 1
+        wantsRunning = true
+        runningSnapshot = false
+        return lifecycleEpoch
+    }
+
+    private func requestStop() -> UInt64 {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        lifecycleEpoch &+= 1
+        wantsRunning = false
+        runningSnapshot = false
+        return lifecycleEpoch
+    }
+
+    private func invalidateLifecycleIfCurrent(_ epoch: UInt64) -> UInt64? {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        guard wantsRunning, lifecycleEpoch == epoch else { return nil }
+        lifecycleEpoch &+= 1
+        wantsRunning = false
+        runningSnapshot = false
+        return lifecycleEpoch
+    }
+
+    private func markReady(epoch: UInt64) -> Bool {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        guard wantsRunning, lifecycleEpoch == epoch else { return false }
+        runningSnapshot = true
+        return true
+    }
+
+    private func isLifecycleCurrent(_ epoch: UInt64) -> Bool {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        return wantsRunning && lifecycleEpoch == epoch
+    }
+
+    private func isLifecycleStopped(_ epoch: UInt64) -> Bool {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        return !wantsRunning && lifecycleEpoch == epoch
+    }
+
+    private func cancelPairingAndClearBrowserContext() {
+        MarineChromePairingBroker.shared.cancelAll()
+        if Thread.isMainThread {
+            MarineChromeContextStore.shared.clear()
+        } else {
+            DispatchQueue.main.sync {
+                MarineChromeContextStore.shared.clear()
+            }
+        }
+    }
+
+    private func dropOnQueue(_ connection: Connection) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        connections[ObjectIdentifier(connection)] = nil
+    }
 
     // MARK: - one connection
 
     private final class Connection {
         private let conn: NWConnection
+        private let gatewayQueue: DispatchQueue
+        private let isGatewayCurrent: () -> Bool
         private let onClose: (Connection) -> Void
         private var buffer = Data()
         // Stateless MCP has no server-side session. Keep only a connection-local,
         // unverified client name as a best-effort source label.
         private var mcpClientName = "MCP"
 
-        init(_ c: NWConnection, onClose: @escaping (Connection) -> Void) {
-            conn = c; self.onClose = onClose
+        init(_ connection: NWConnection,
+             queue: DispatchQueue,
+             isGatewayCurrent: @escaping () -> Bool,
+             onClose: @escaping (Connection) -> Void) {
+            conn = connection
+            gatewayQueue = queue
+            self.isGatewayCurrent = isGatewayCurrent
+            self.onClose = onClose
         }
 
-        func start(on queue: DispatchQueue) {
+        func start() {
+            dispatchPrecondition(condition: .onQueue(gatewayQueue))
+            guard isGatewayCurrent() else {
+                conn.cancel()
+                return
+            }
             conn.stateUpdateHandler = { [weak self] st in
                 if case .failed = st { self?.close() }
                 if case .cancelled = st { self.map { $0.onClose($0) } }
             }
-            conn.start(queue: queue)
+            conn.start(queue: gatewayQueue)
             receive()
         }
 
-        func cancel() { conn.cancel() }
-        private func close() { conn.cancel() }
+        func cancel() {
+            dispatchPrecondition(condition: .onQueue(gatewayQueue))
+            conn.cancel()
+        }
+
+        private func close() {
+            dispatchPrecondition(condition: .onQueue(gatewayQueue))
+            conn.cancel()
+        }
 
         private func receive() {
+            dispatchPrecondition(condition: .onQueue(gatewayQueue))
+            guard isGatewayCurrent() else {
+                close()
+                return
+            }
             conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isDone, err in
                 guard let self else { return }
+                guard self.isGatewayCurrent() else {
+                    self.close()
+                    return
+                }
                 if let data, !data.isEmpty {
                     self.buffer.append(data)
                     self.drain()
@@ -148,7 +346,12 @@ final class LocalGateway {
         }
 
         private func drain() {
+            dispatchPrecondition(condition: .onQueue(gatewayQueue))
             while true {
+                guard isGatewayCurrent() else {
+                    close()
+                    return
+                }
                 let req: Req
                 let consumed: Int
                 switch parse(buffer) {
@@ -217,6 +420,8 @@ final class LocalGateway {
         // MARK: responses
 
         private func send(_ status: String, headers: [String: String] = [:], body: Data = Data()) {
+            dispatchPrecondition(condition: .onQueue(gatewayQueue))
+            guard isGatewayCurrent() else { return }
             var h = headers
             h["Content-Length"] = "\(body.count)"; h["Connection"] = "keep-alive"
             var head = "HTTP/1.1 \(status)\r\n"
@@ -226,16 +431,52 @@ final class LocalGateway {
             conn.send(content: out, completion: .contentProcessed { _ in })
         }
 
+        private func onGatewayIfCurrent(
+            _ operation: @escaping (Connection) -> Void
+        ) {
+            gatewayQueue.async { [weak self] in
+                guard let self, self.isGatewayCurrent() else { return }
+                operation(self)
+            }
+        }
+
         private func json(_ obj: Any, status: String = "200 OK") {
             let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
             send(status, headers: ["Content-Type": "application/json"], body: data)
         }
 
+        private func marineChromeHeaders(origin: String) -> [String: String] {
+            [
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Headers": "Authorization, Content-Type",
+                "Access-Control-Allow-Methods": "GET, PUT, DELETE, OPTIONS",
+                "Access-Control-Max-Age": "600",
+                "Cache-Control": "no-store",
+                "Vary": "Origin",
+            ]
+        }
+
+        private func marineChromeJSON(_ obj: Any,
+                                      origin: String,
+                                      status: String = "200 OK") {
+            let data = (try? JSONSerialization.data(withJSONObject: obj))
+                ?? Data("{}".utf8)
+            var headers = marineChromeHeaders(origin: origin)
+            headers["Content-Type"] = "application/json"
+            send(status, headers: headers, body: data)
+        }
+
         // MARK: routing
 
         private func handle(_ req: Req) {
+            dispatchPrecondition(condition: .onQueue(gatewayQueue))
+            guard isGatewayCurrent() else { return }
             let path = req.path.split(separator: "?").first.map(String.init) ?? req.path
             if req.method == "GET", path == "/v1/health" { json(["ok": true]); return }
+            if path.hasPrefix("/v1/marine-chrome/") {
+                handleMarineChrome(req, path: path)
+                return
+            }
             // Spec MUST: reject cross-origin browsers (DNS-rebinding defence). Real
             // MCP agents are not browsers and omit Origin, so they pass through.
             guard LocalGateway.isAllowedOrigin(req.headers["origin"]) else {
@@ -256,6 +497,404 @@ final class LocalGateway {
             }
         }
 
+        private func handleMarineChrome(_ req: Req, path: String) {
+            // MV3 service-worker GET requests made under an exact loopback host
+            // permission can omit Origin. Keep this probe public and inert; it
+            // never authenticates or pins an extension identity.
+            if req.method == "GET", path == "/v1/marine-chrome/health" {
+                let data = (try? JSONSerialization.data(withJSONObject: [
+                    "ok": true,
+                    "protocolVersion": MarineChromeProtocol.version,
+                    "pairingMode": "interactive-claim-v1",
+                    "extensionId": MarineChromeExtensionIdentity.identifier,
+                ])) ?? Data("{}".utf8)
+                send("200 OK", headers: [
+                    "Cache-Control": "no-store",
+                    "Content-Type": "application/json",
+                ], body: data)
+                return
+            }
+
+            guard MarineChromeGatewayRoutePolicy.allowedMethods(for: path)
+                    != nil else {
+                json(["error": "not found"], status: "404 Not Found")
+                return
+            }
+
+            guard let origin = MarineChromeExtensionOrigin.normalized(
+                req.headers["origin"]
+            ) else {
+                json(["error": "forbidden extension origin"],
+                     status: "403 Forbidden")
+                return
+            }
+            if req.method == "OPTIONS" {
+                let requestedMethod = req.headers[
+                    "access-control-request-method"
+                ]?.uppercased()
+                let requestedHeaders = Set(
+                    (req.headers["access-control-request-headers"] ?? "")
+                        .split(separator: ",")
+                        .map {
+                            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                                .lowercased()
+                        }
+                )
+                guard MarineChromeGatewayRoutePolicy.allowsPreflight(
+                    path: path,
+                    requestedMethod: requestedMethod,
+                    requestedHeaders: requestedHeaders
+                ) else {
+                    marineChromeJSON(
+                        ["error": "invalid CORS preflight"],
+                        origin: origin,
+                        status: "403 Forbidden"
+                    )
+                    return
+                }
+                guard MarineChromePairingOrigin.permitsPreflight(
+                    origin,
+                    path: path
+                ) else {
+                    marineChromeJSON(
+                        ["error": "extension origin is not paired"],
+                        origin: origin,
+                        status: "403 Forbidden"
+                    )
+                    return
+                }
+                send("204 No Content",
+                     headers: marineChromeHeaders(origin: origin))
+                return
+            }
+            guard MarineChromeGatewayRoutePolicy.allows(method: req.method,
+                                                         path: path) else {
+                marineChromeJSON(["error": "method not allowed"],
+                                 origin: origin,
+                                 status: "405 Method Not Allowed")
+                return
+            }
+            if MarineChromeGatewayRoutePolicy.requiresJSON(method: req.method) {
+                let contentType = req.headers["content-type"]?
+                    .split(separator: ";", maxSplits: 1)
+                    .first?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                guard contentType == "application/json" else {
+                    marineChromeJSON(
+                        ["error": "content type must be application/json"],
+                        origin: origin,
+                        status: "415 Unsupported Media Type"
+                    )
+                    return
+                }
+            }
+            if path == "/v1/marine-chrome/prove" {
+                guard MarineChromeExtensionIdentity.matches(origin: origin) else {
+                    marineChromeJSON(
+                        ["error": "unexpected extension identity"],
+                        origin: origin,
+                        status: "403 Forbidden"
+                    )
+                    return
+                }
+                let nonce: String
+                do {
+                    nonce = try MarineChromeServerProof.decodeRequest(req.body)
+                } catch {
+                    marineChromeJSON(
+                        ["error": "invalid server proof request"],
+                        origin: origin,
+                        status: "400 Bad Request"
+                    )
+                    return
+                }
+                guard let proof = try? MarineChromeServerProof.make(
+                    nonce: nonce
+                ) else {
+                    marineChromeJSON(
+                        ["error": "server proof unavailable"],
+                        origin: origin,
+                        status: "500 Internal Server Error"
+                    )
+                    return
+                }
+                marineChromeJSON([
+                    "protocolVersion": MarineChromeProtocol.version,
+                    "proof": proof,
+                ], origin: origin)
+                return
+            }
+            if path == "/v1/marine-chrome/pair" {
+                guard let object = try? JSONSerialization.jsonObject(
+                    with: req.body
+                ) as? [String: Any],
+                      object["protocolVersion"] as? Int
+                        == MarineChromeProtocol.version else {
+                    marineChromeJSON(["error": "invalid pairing request"],
+                                     origin: origin,
+                                     status: "400 Bad Request")
+                    return
+                }
+            }
+            if path == "/v1/marine-chrome/pair/request" {
+                guard MarineChromeExtensionIdentity.matches(origin: origin) else {
+                    marineChromeJSON(
+                        ["error": "unexpected extension identity"],
+                        origin: origin,
+                        status: "403 Forbidden"
+                    )
+                    return
+                }
+                let claim: MarineChromePairingClaim
+                do {
+                    claim = try MarineChromePairingClaim.decode(
+                        req.body,
+                        origin: origin
+                    )
+                } catch {
+                    marineChromeJSON(
+                        ["error": "invalid interactive pairing claim"],
+                        origin: origin,
+                        status: "400 Bad Request"
+                    )
+                    return
+                }
+                switch MarineChromePairingBroker.shared.submit(claim) {
+                case .pending(let expiresAt):
+                    marineChromeJSON([
+                        "state": "pending",
+                        "protocolVersion": MarineChromeProtocol.version,
+                        "expiresAt": expiresAt,
+                    ], origin: origin, status: "202 Accepted")
+                case .issued(let token, let expiresAt):
+                    marineChromeJSON([
+                        "state": "paired",
+                        "paired": true,
+                        "protocolVersion": MarineChromeProtocol.version,
+                        "token": token,
+                        "expiresAt": expiresAt,
+                    ], origin: origin)
+                case .denied:
+                    marineChromeJSON([
+                        "state": "denied",
+                        "error": "pairing request denied",
+                    ], origin: origin, status: "403 Forbidden")
+                case .expired:
+                    marineChromeJSON([
+                        "state": "expired",
+                        "error": "pairing request expired",
+                    ], origin: origin, status: "410 Gone")
+                case .busy(let retryAfter):
+                    marineChromeJSON([
+                        "state": "busy",
+                        "error": "another pairing request is active",
+                        "retryAfter": retryAfter,
+                    ], origin: origin,
+                       status: "429 Too Many Requests")
+                case .failed:
+                    marineChromeJSON([
+                        "state": "failed",
+                        "error": "pairing credential could not be issued",
+                    ], origin: origin,
+                       status: "500 Internal Server Error")
+                }
+                return
+            }
+            guard let authorization = req.headers["authorization"],
+                  authorization.hasPrefix("Bearer ") else {
+                marineChromeJSON(["error": "unauthorized extension"],
+                                 origin: origin,
+                                 status: "401 Unauthorized")
+                return
+            }
+            let bearerToken = String(authorization.dropFirst(7))
+            guard MarineChromePairingOrigin.authenticateAndPair(
+                origin: origin,
+                bearerToken: bearerToken
+            ) else {
+                marineChromeJSON(["error": "unauthorized extension"],
+                                 origin: origin,
+                                 status: "401 Unauthorized")
+                return
+            }
+
+            switch (req.method, path) {
+            case ("PUT", "/v1/marine-chrome/pair"):
+                marineChromeJSON([
+                    "paired": true,
+                    "protocolVersion": MarineChromeProtocol.version,
+                ], origin: origin)
+            case ("PUT", "/v1/marine-chrome/context"):
+                let context: MarineChromeContext
+                do {
+                    context = try MarineChromeProtocol.decodeContext(req.body)
+                } catch {
+                    marineChromeProtocolError(error, origin: origin)
+                    return
+                }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isGatewayCurrent() else { return }
+                    let authenticated = MarineChromeGatewayToken.matches(
+                        bearerToken
+                    )
+                    let enabled = MarineChromeWorkspace.shared
+                        .acceptsBrowserContext
+                    let accepted = authenticated && enabled
+                        && MarineChromeContextStore.shared.accept(context)
+                    guard authenticated else {
+                        self.onGatewayIfCurrent { connection in
+                            connection.marineChromeJSON(
+                                ["error": "extension token was rotated"],
+                                origin: origin,
+                                status: "401 Unauthorized"
+                            )
+                        }
+                        return
+                    }
+                    guard enabled else {
+                        self.onGatewayIfCurrent { connection in
+                            connection.marineChromeJSON(
+                                ["error": "marine-chrome is not active"],
+                                origin: origin,
+                                status: "503 Service Unavailable"
+                            )
+                        }
+                        return
+                    }
+                    guard accepted else {
+                        self.onGatewayIfCurrent { connection in
+                            connection.marineChromeJSON(
+                                ["error": "stale browser context"],
+                                origin: origin,
+                                status: "409 Conflict"
+                            )
+                        }
+                        return
+                    }
+                    self.onGatewayIfCurrent { connection in
+                        connection.marineChromeJSON([
+                            "accepted": true,
+                            "contextId": context.contextId,
+                        ], origin: origin)
+                    }
+                }
+            case ("PUT", "/v1/marine-chrome/heartbeat"):
+                let heartbeat: MarineChromeHeartbeat
+                do {
+                    heartbeat = try MarineChromeProtocol.decodeHeartbeat(req.body)
+                } catch {
+                    marineChromeProtocolError(error, origin: origin)
+                    return
+                }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isGatewayCurrent() else { return }
+                    let authenticated = MarineChromeGatewayToken.matches(
+                        bearerToken
+                    )
+                    let enabled = MarineChromeWorkspace.shared
+                        .acceptsBrowserContext
+                    let accepted = authenticated && enabled
+                        && MarineChromeContextStore.shared.heartbeat(heartbeat)
+                    guard authenticated else {
+                        self.onGatewayIfCurrent { connection in
+                            connection.marineChromeJSON(
+                                ["error": "extension token was rotated"],
+                                origin: origin,
+                                status: "401 Unauthorized"
+                            )
+                        }
+                        return
+                    }
+                    guard enabled else {
+                        self.onGatewayIfCurrent { connection in
+                            connection.marineChromeJSON(
+                                ["error": "marine-chrome is not active"],
+                                origin: origin,
+                                status: "503 Service Unavailable"
+                            )
+                        }
+                        return
+                    }
+                    guard accepted else {
+                        self.onGatewayIfCurrent { connection in
+                            connection.marineChromeJSON(
+                                ["error": "browser context is no longer current"],
+                                origin: origin,
+                                status: "409 Conflict"
+                            )
+                        }
+                        return
+                    }
+                    self.onGatewayIfCurrent { connection in
+                        connection.marineChromeJSON(
+                            ["accepted": true],
+                            origin: origin
+                        )
+                    }
+                }
+            case ("DELETE", "/v1/marine-chrome/context"):
+                let revocation: MarineChromeRevocation
+                do {
+                    revocation = try MarineChromeProtocol.decodeRevocation(req.body)
+                } catch {
+                    marineChromeProtocolError(error, origin: origin)
+                    return
+                }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isGatewayCurrent() else { return }
+                    let authenticated = MarineChromeGatewayToken.matches(
+                        bearerToken
+                    )
+                    let revoked = authenticated
+                        && MarineChromeContextStore.shared.revoke(revocation)
+                    guard authenticated else {
+                        self.onGatewayIfCurrent { connection in
+                            connection.marineChromeJSON(
+                                ["error": "extension token was rotated"],
+                                origin: origin,
+                                status: "401 Unauthorized"
+                            )
+                        }
+                        return
+                    }
+                    guard revoked else {
+                        self.onGatewayIfCurrent { connection in
+                            connection.marineChromeJSON(
+                                ["error": "stale browser revocation"],
+                                origin: origin,
+                                status: "409 Conflict"
+                            )
+                        }
+                        return
+                    }
+                    self.onGatewayIfCurrent { connection in
+                        connection.marineChromeJSON(
+                            ["revoked": true],
+                            origin: origin
+                        )
+                    }
+                }
+            default:
+                marineChromeJSON(["error": "not found"],
+                                 origin: origin,
+                                 status: "404 Not Found")
+            }
+        }
+
+        private func marineChromeProtocolError(_ error: Error,
+                                               origin: String) {
+            let status: String
+            if error as? MarineChromeContextError == .oversized {
+                status = "413 Content Too Large"
+            } else {
+                status = "400 Bad Request"
+            }
+            marineChromeJSON(["error": "invalid browser context"],
+                             origin: origin,
+                             status: status)
+        }
+
         private func handleInbound(_ req: Req) {
             guard let obj = try? JSONSerialization.jsonObject(with: req.body) as? [String: Any],
                   let text = obj["text"] as? String else {
@@ -263,7 +902,8 @@ final class LocalGateway {
             }
             let source = obj["source"] as? String ?? "http"
             let title = obj["title"] as? String
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isGatewayCurrent() else { return }
                 InboundBus.shared.submit(origin: .http(source: source), text: text, title: title)
             }
             json(["accepted": true])
@@ -340,14 +980,16 @@ final class LocalGateway {
             case "buffer_push":
                 let text = args["text"] as? String ?? ""
                 let title = args["title"] as? String ?? args["kind"] as? String
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isGatewayCurrent() else { return }
                     InboundBus.shared.submit(origin: .mcp(client: client), text: text, title: title)
                 }
                 ok("queued \(text.count) chars into the buffer inbox")
             case "buffer_stream_begin":
                 let sid = "st-" + UUID().uuidString.prefix(8)
                 let title = args["title"] as? String
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isGatewayCurrent() else { return }
                     InboundBus.shared.beginStream(origin: .mcp(client: client), streamID: sid, title: title)
                 }
                 json(["jsonrpc": "2.0", "id": id, "result": [
@@ -355,12 +997,18 @@ final class LocalGateway {
                     "structuredContent": ["stream_id": sid]]])
             case "buffer_stream_append":
                 if let sid = args["stream_id"] as? String, let delta = args["delta"] as? String {
-                    DispatchQueue.main.async { InboundBus.shared.appendStream(streamID: sid, delta: delta) }
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.isGatewayCurrent() else { return }
+                        InboundBus.shared.appendStream(streamID: sid, delta: delta)
+                    }
                 }
                 ok("appended")
             case "buffer_stream_end":
                 if let sid = args["stream_id"] as? String {
-                    DispatchQueue.main.async { InboundBus.shared.endStream(streamID: sid) }
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.isGatewayCurrent() else { return }
+                        InboundBus.shared.endStream(streamID: sid)
+                    }
                 }
                 ok("stream closed")
             default:

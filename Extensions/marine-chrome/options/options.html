@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>marine-chrome 设置</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">RIMES 网页上下文</p>
+      <h1>连接 marine-chrome</h1>
+      <p class="lede">无需复制任何密钥。先在 RIMES 中允许，再回到本页确认一次即可。</p>
+    </header>
+
+    <section class="connect-card">
+      <div>
+        <h2>自动连接</h2>
+        <p>若 Chrome 询问“本地网络访问”，请选择允许；随后按页面提示完成双重确认。</p>
+      </div>
+      <div class="connect-actions">
+        <button id="connect" class="primary" type="button">连接 RIMES</button>
+        <button id="confirm" class="primary" type="button" hidden>确认连接</button>
+      </div>
+    </section>
+
+    <section class="status-card" aria-live="polite">
+      <span id="status-dot" class="dot"></span>
+      <div>
+        <strong id="status-title">正在查找 RIMES…</strong>
+        <p id="status-detail">首次连接会要求你在 RIMES 和本页各确认一次。</p>
+      </div>
+    </section>
+
+    <details class="advanced">
+      <summary>地址诊断</summary>
+      <div class="config-fields">
+        <label for="api-base">RIMES 地址</label>
+        <input id="api-base" type="url" inputmode="url" spellcheck="false"
+               value="http://127.0.0.1:47700" required>
+        <p class="help">通常无需修改，只接受 <code>http://127.0.0.1:端口</code>。</p>
+
+        <div class="actions compact">
+          <button id="use-address" type="button">使用此地址自动连接</button>
+          <button id="reset-address" type="button">恢复默认地址</button>
+          <button id="reauthorize" type="button">重新授权</button>
+        </div>
+
+      </div>
+      <p class="diagnostic-id">扩展 ID：<code id="extension-id"></code></p>
+    </details>
+
+    <p class="privacy">扩展只向本机 RIMES 发送当前前台页面的短期上下文，不会替你输入、点击或发布。内部凭据由扩展自动保管，不会显示在日常界面中。</p>
+  </main>
+  <script src="../src/shared/protocol.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
