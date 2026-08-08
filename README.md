@@ -84,4 +84,4 @@ tail -f ~/rimebuffer.log          # 行为日志
 
 ## 许可证与第三方
 
-见仓库内许可证说明与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+本项目采用 [MIT License](LICENSE)。第三方依赖见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

@@ -84,4 +84,4 @@ Installed builds check GitHub Releases on [`scholay/rimes`](https://github.com/s
 
 ## License & third parties
 
-See the repository license notes and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+RIMES is released under the [MIT License](LICENSE). Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
