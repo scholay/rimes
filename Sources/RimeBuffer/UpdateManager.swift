@@ -66,8 +66,8 @@ final class UpdateManager {
     static let shared = UpdateManager()
 
     // Source of truth for the repo; matches .github/workflows and README.
-    private let githubOwner = "young-bo-i"
-    private let githubRepo = "rime-buffer"
+    private let githubOwner = "scholay"
+    private let githubRepo = "rimes"
 
     private(set) var status: UpdateStatus = .idle
     /// Invoked on the main thread whenever `status` changes, so the status-bar

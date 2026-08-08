@@ -54,7 +54,7 @@ macOS 会把这些 id 写入受保护的 TIS 偏好，因此后续不要随意�
 
 已安装并运行的 RIMES：
 
-- **启动时 + 每小时** 静默查询 `young-bo-i/rime-buffer` 的最新 Release；
+- **启动时 + 每小时** 静默查询 `scholay/rimes` 的最新 Release；
 - 版本更新（按 semver 逐段比较 `CFBundleShortVersionString`）时**后台静默下载** zip；
 - 下载完成后，状态栏图标变色，菜单顶部出现「🎉 有新版本 vX — 立即更新」；
 - 用户确认后：等待旧进程退出 → `pkill -x ETInput` 兜底 → 暂存新 bundle → 原子交换
