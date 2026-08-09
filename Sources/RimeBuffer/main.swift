@@ -1267,6 +1267,53 @@ func runEngineSmokeTest() -> Bool {
                   singletonEnglish.context.candidates.map(\.text))
             return false
         }
+
+        // rime_ice historically reserved lowercase v as a symbols prefix.
+        // FlyYao must override that inherited route so a physical singleton v
+        // can begin a normal English word in either product keying mode.
+        let vPrefix = typeFlyChordStrokes(
+            ["v", "a"],
+            policy: policy
+        )
+        let vPrefixCandidateTexts = vPrefix.context.candidates.map(\.text)
+        let inheritedVSymbols: Set<String> = ["ā", "á", "ǎ", "à"]
+        guard vPrefix.allPressesHandled,
+              vPrefix.context.input == "va",
+              vPrefix.context.preedit == "va",
+              vPrefixCandidateTexts.contains(where: {
+                  ["van", "vain"].contains($0.lowercased())
+              }),
+              inheritedVSymbols.isDisjoint(with: vPrefixCandidateTexts) else {
+            print("FAILED: FlyYao lowercase v entered inherited symbols mode",
+                  policy,
+                  vPrefix.context.input,
+                  vPrefix.context.preedit,
+                  vPrefixCandidateTexts)
+            return false
+        }
+
+        let vEnglish = typeFlyChordStrokes(
+            ["v", "i", "d", "e", "o"],
+            policy: policy
+        )
+        let vCandidateTexts = vEnglish.context.candidates.map(\.text)
+        let vReturnHandled = engine.processKey(RimeKey.return, session: session)
+        let vRawCommit = engine.takeCommit(session: session)
+        guard vEnglish.allPressesHandled,
+              vEnglish.context.input == "video",
+              vEnglish.context.preedit == "video",
+              vCandidateTexts.contains(where: { $0.lowercased() == "video" }),
+              vReturnHandled,
+              vRawCommit == "video" else {
+            print("FAILED: FlyYao lowercase v must stay literal",
+                  policy,
+                  vEnglish.context.input,
+                  vEnglish.context.preedit,
+                  vCandidateTexts,
+                  vReturnHandled,
+                  vRawCommit ?? "<nil>")
+            return false
+        }
     }
 
     let ambiguousSyllableBoundaries: [(combined: [String], expected: String)] = [
@@ -5374,9 +5421,25 @@ func runBufferWindowSmokeTest() -> Bool {
         frontmostProcessIdentifier: 101,
         trustedOverlayProcessIdentifier: 202
     )
+    let savePanelBundleID = "com.apple.appkit.xpc.openAndSavePanelService"
+    let savePanelPath =
+        "/System/Library/Frameworks/AppKit.framework/Versions/C/XPCServices/com.apple.appkit.xpc.openAndSavePanelService.xpc"
+    let savePanelHost = FocusHostRules.resolveKnownFrontmost(
+        incomingBundleID: savePanelBundleID,
+        frontmostBundleID: "app.a",
+        frontmostProcessIdentifier: 101,
+        trustedOverlayProcessIdentifier: nil,
+        trustedSystemPanelAvailable: true
+    )
     let spotlightLease = FocusHostResolution(
         kind: .nonactivatingSystemOverlay,
         clientProcessIdentifier: 202,
+        foregroundAnchorBundleID: "app.a",
+        foregroundAnchorProcessIdentifier: 101
+    )
+    let savePanelLease = FocusHostResolution(
+        kind: .appKitOpenSavePanel,
+        clientProcessIdentifier: 101,
         foregroundAnchorBundleID: "app.a",
         foregroundAnchorProcessIdentifier: 101
     )
@@ -5389,7 +5452,7 @@ func runBufferWindowSmokeTest() -> Bool {
         currentFrontmostBundleID: "app.a",
         currentFrontmostProcessIdentifier: 101,
         currentTrustedOverlayProcessIdentifier: nil,
-        trustedOverlayVisible: false
+        trustedSurfaceAuthority: false
     )
     let ordinaryNilBundleAuthority = FocusHostRules.applicationAuthorityMatches(
         kind: .frontmostApplication,
@@ -5400,7 +5463,7 @@ func runBufferWindowSmokeTest() -> Bool {
         currentFrontmostBundleID: nil,
         currentFrontmostProcessIdentifier: 101,
         currentTrustedOverlayProcessIdentifier: nil,
-        trustedOverlayVisible: false
+        trustedSurfaceAuthority: false
     )
     let ordinaryBundleMismatchAuthority = FocusHostRules.applicationAuthorityMatches(
         kind: .frontmostApplication,
@@ -5411,7 +5474,7 @@ func runBufferWindowSmokeTest() -> Bool {
         currentFrontmostBundleID: "app.b",
         currentFrontmostProcessIdentifier: 101,
         currentTrustedOverlayProcessIdentifier: nil,
-        trustedOverlayVisible: false
+        trustedSurfaceAuthority: false
     )
     let ordinaryPIDMismatchAuthority = FocusHostRules.applicationAuthorityMatches(
         kind: .frontmostApplication,
@@ -5422,7 +5485,7 @@ func runBufferWindowSmokeTest() -> Bool {
         currentFrontmostBundleID: "app.a",
         currentFrontmostProcessIdentifier: 303,
         currentTrustedOverlayProcessIdentifier: nil,
-        trustedOverlayVisible: false
+        trustedSurfaceAuthority: false
     )
     let spotlightAuthority = FocusHostRules.applicationAuthorityMatches(
         kind: .nonactivatingSystemOverlay,
@@ -5433,7 +5496,7 @@ func runBufferWindowSmokeTest() -> Bool {
         currentFrontmostBundleID: "app.a",
         currentFrontmostProcessIdentifier: 101,
         currentTrustedOverlayProcessIdentifier: 202,
-        trustedOverlayVisible: true
+        trustedSurfaceAuthority: true
     )
     let nilAnchorBundleAuthority = FocusHostRules.applicationAuthorityMatches(
         kind: .nonactivatingSystemOverlay,
@@ -5444,7 +5507,7 @@ func runBufferWindowSmokeTest() -> Bool {
         currentFrontmostBundleID: nil,
         currentFrontmostProcessIdentifier: 101,
         currentTrustedOverlayProcessIdentifier: 202,
-        trustedOverlayVisible: true
+        trustedSurfaceAuthority: true
     )
     let changedAnchorBundleAuthority = FocusHostRules.applicationAuthorityMatches(
         kind: .nonactivatingSystemOverlay,
@@ -5455,7 +5518,7 @@ func runBufferWindowSmokeTest() -> Bool {
         currentFrontmostBundleID: "app.b",
         currentFrontmostProcessIdentifier: 101,
         currentTrustedOverlayProcessIdentifier: 202,
-        trustedOverlayVisible: true
+        trustedSurfaceAuthority: true
     )
     let changedAnchorPIDAuthority = FocusHostRules.applicationAuthorityMatches(
         kind: .nonactivatingSystemOverlay,
@@ -5466,7 +5529,7 @@ func runBufferWindowSmokeTest() -> Bool {
         currentFrontmostBundleID: "app.a",
         currentFrontmostProcessIdentifier: 303,
         currentTrustedOverlayProcessIdentifier: 202,
-        trustedOverlayVisible: true
+        trustedSurfaceAuthority: true
     )
     let deadOverlayAuthority = FocusHostRules.applicationAuthorityMatches(
         kind: .nonactivatingSystemOverlay,
@@ -5477,7 +5540,7 @@ func runBufferWindowSmokeTest() -> Bool {
         currentFrontmostBundleID: "app.a",
         currentFrontmostProcessIdentifier: 101,
         currentTrustedOverlayProcessIdentifier: nil,
-        trustedOverlayVisible: true
+        trustedSurfaceAuthority: true
     )
     let restartedOverlayAuthority = FocusHostRules.applicationAuthorityMatches(
         kind: .nonactivatingSystemOverlay,
@@ -5488,7 +5551,7 @@ func runBufferWindowSmokeTest() -> Bool {
         currentFrontmostBundleID: "app.a",
         currentFrontmostProcessIdentifier: 101,
         currentTrustedOverlayProcessIdentifier: 203,
-        trustedOverlayVisible: true
+        trustedSurfaceAuthority: true
     )
     let hiddenOverlayAuthority = FocusHostRules.applicationAuthorityMatches(
         kind: .nonactivatingSystemOverlay,
@@ -5499,8 +5562,380 @@ func runBufferWindowSmokeTest() -> Bool {
         currentFrontmostBundleID: "app.a",
         currentFrontmostProcessIdentifier: 101,
         currentTrustedOverlayProcessIdentifier: 202,
-        trustedOverlayVisible: false
+        trustedSurfaceAuthority: false
     )
+    let savePanelAuthority = FocusHostRules.applicationAuthorityMatches(
+        kind: .appKitOpenSavePanel,
+        leaseBundleID: savePanelBundleID,
+        leaseProcessIdentifier: 101,
+        foregroundAnchorBundleID: "app.a",
+        foregroundAnchorProcessIdentifier: 101,
+        currentFrontmostBundleID: "app.a",
+        currentFrontmostProcessIdentifier: 101,
+        currentTrustedOverlayProcessIdentifier: nil,
+        trustedSurfaceAuthority: true
+    )
+    let savePanelChangedBundleAuthority =
+        FocusHostRules.applicationAuthorityMatches(
+            kind: .appKitOpenSavePanel,
+            leaseBundleID: savePanelBundleID,
+            leaseProcessIdentifier: 101,
+            foregroundAnchorBundleID: "app.a",
+            foregroundAnchorProcessIdentifier: 101,
+            currentFrontmostBundleID: "app.b",
+            currentFrontmostProcessIdentifier: 101,
+            currentTrustedOverlayProcessIdentifier: nil,
+            trustedSurfaceAuthority: true
+        )
+    let savePanelChangedPIDAuthority =
+        FocusHostRules.applicationAuthorityMatches(
+            kind: .appKitOpenSavePanel,
+            leaseBundleID: savePanelBundleID,
+            leaseProcessIdentifier: 101,
+            foregroundAnchorBundleID: "app.a",
+            foregroundAnchorProcessIdentifier: 101,
+            currentFrontmostBundleID: "app.a",
+            currentFrontmostProcessIdentifier: 303,
+            currentTrustedOverlayProcessIdentifier: nil,
+            trustedSurfaceAuthority: true
+        )
+    let savePanelMissingSurfaceAuthority =
+        FocusHostRules.applicationAuthorityMatches(
+            kind: .appKitOpenSavePanel,
+            leaseBundleID: savePanelBundleID,
+            leaseProcessIdentifier: 101,
+            foregroundAnchorBundleID: "app.a",
+            foregroundAnchorProcessIdentifier: 101,
+            currentFrontmostBundleID: "app.a",
+            currentFrontmostProcessIdentifier: 101,
+            currentTrustedOverlayProcessIdentifier: nil,
+            trustedSurfaceAuthority: false
+        )
+    let orderedPanelWindows = [
+        FocusWindowSnapshot(
+            windowNumber: 900,
+            ownerProcessIdentifier: 303,
+            layer: 0,
+            alpha: 1
+        ),
+        FocusWindowSnapshot(
+            windowNumber: 42,
+            ownerProcessIdentifier: 101,
+            layer: 0,
+            alpha: 1
+        ),
+        FocusWindowSnapshot(
+            windowNumber: 41,
+            ownerProcessIdentifier: 101,
+            layer: 0,
+            alpha: 1
+        ),
+    ]
+    let frozenPanelWindow = FocusSystemPanelWindowRules.frontmostWindowNumber(
+        anchorProcessIdentifier: 101,
+        orderedWindows: orderedPanelWindows
+    )
+    let initialPanelWindowAuthority =
+        FocusSystemPanelWindowRules.authorityForExistingLease(
+            frozenWindowNumber: nil,
+            frozenWindowRemainsTrusted: false,
+            deliverySuspended: true,
+            eventCanEstablishTransientSurface: true,
+            candidateWindowNumber: 42
+        )
+    let retainedPanelWindowAuthority =
+        FocusSystemPanelWindowRules.authorityForExistingLease(
+            frozenWindowNumber: 42,
+            frozenWindowRemainsTrusted: true,
+            deliverySuspended: true,
+            eventCanEstablishTransientSurface: true,
+            candidateWindowNumber: 43
+        )
+    let vanishedPanelWindowAuthority =
+        FocusSystemPanelWindowRules.authorityForExistingLease(
+            frozenWindowNumber: 42,
+            frozenWindowRemainsTrusted: false,
+            deliverySuspended: true,
+            eventCanEstablishTransientSurface: true,
+            candidateWindowNumber: 43
+        )
+    let continuingPanelWindowAuthority =
+        FocusSystemPanelWindowRules.authorityForExistingLease(
+            frozenWindowNumber: 42,
+            frozenWindowRemainsTrusted: true,
+            deliverySuspended: false,
+            eventCanEstablishTransientSurface: false,
+            candidateWindowNumber: 43
+        )
+    let freshEpochPanelWindowAuthority =
+        FocusSystemPanelWindowRules.authorityForExistingLease(
+            frozenWindowNumber: 42,
+            frozenWindowRemainsTrusted: true,
+            deliverySuspended: false,
+            eventCanEstablishTransientSurface: true,
+            candidateWindowNumber: 43
+        )
+    let nonKeyPanelWindowAuthority =
+        FocusSystemPanelWindowRules.authorityForExistingLease(
+            frozenWindowNumber: nil,
+            frozenWindowRemainsTrusted: false,
+            deliverySuspended: true,
+            eventCanEstablishTransientSurface: false,
+            candidateWindowNumber: 42
+        )
+    let unsuspendedPanelWindowAuthority =
+        FocusSystemPanelWindowRules.authorityForExistingLease(
+            frozenWindowNumber: nil,
+            frozenWindowRemainsTrusted: false,
+            deliverySuspended: false,
+            eventCanEstablishTransientSurface: true,
+            candidateWindowNumber: 42
+        )
+    guard FocusHostRules.isAppKitOpenSavePanelBundle(savePanelBundleID),
+          FocusHostRules.isTransientSystemSurfaceBundle(savePanelBundleID),
+          FocusHostRules.isTransientSystemSurfaceBundle("com.apple.Spotlight"),
+          !FocusHostRules.isTransientSystemSurfaceBundle("app.a"),
+          FocusHostRules.mayUseOrdinaryProcessBoundFallback("app.a"),
+          !FocusHostRules.mayUseOrdinaryProcessBoundFallback(
+            savePanelBundleID
+          ),
+          !FocusHostRules.mayUseOrdinaryProcessBoundFallback(
+            "com.apple.Spotlight"
+          ),
+          savePanelHost == savePanelLease,
+          FocusHostRules.resolveKnownFrontmost(
+            incomingBundleID: savePanelBundleID,
+            frontmostBundleID: "app.a",
+            frontmostProcessIdentifier: 101,
+            trustedOverlayProcessIdentifier: nil,
+            trustedSystemPanelAvailable: false
+          ) == nil,
+          FocusHostRules.resolveKnownFrontmost(
+            incomingBundleID: savePanelBundleID,
+            frontmostBundleID: savePanelBundleID,
+            frontmostProcessIdentifier: 204,
+            trustedOverlayProcessIdentifier: nil,
+            trustedSystemPanelAvailable: true
+          ) == nil,
+          FocusHostRules.resolveKnownFrontmost(
+            incomingBundleID: "com.apple.Spotlight",
+            frontmostBundleID: "com.apple.Spotlight",
+            frontmostProcessIdentifier: 202,
+            trustedOverlayProcessIdentifier: 202
+          ) == nil,
+          FocusHostRules.resolutionMatchesLease(
+            savePanelLease,
+            hostKind: .appKitOpenSavePanel,
+            clientProcessIdentifier: 101,
+            foregroundAnchorBundleID: "app.a",
+            foregroundAnchorProcessIdentifier: 101
+          ),
+          savePanelAuthority.bundle,
+          savePanelAuthority.process,
+          !savePanelChangedBundleAuthority.bundle,
+          savePanelChangedBundleAuthority.process,
+          savePanelChangedPIDAuthority.bundle,
+          !savePanelChangedPIDAuthority.process,
+          !savePanelMissingSurfaceAuthority.bundle,
+          !savePanelMissingSurfaceAuthority.process,
+          frozenPanelWindow == 42,
+          FocusSystemPanelWindowRules.windowRemainsTrusted(
+            42,
+            anchorProcessIdentifier: 101,
+            onScreenWindows: orderedPanelWindows
+          ),
+          !FocusSystemPanelWindowRules.windowRemainsTrusted(
+            42,
+            anchorProcessIdentifier: 101,
+            onScreenWindows: [orderedPanelWindows[2]]
+          ),
+          !FocusSystemPanelWindowRules.windowRemainsTrusted(
+            42,
+            anchorProcessIdentifier: 101,
+            onScreenWindows: [
+                FocusWindowSnapshot(
+                    windowNumber: 43,
+                    ownerProcessIdentifier: 101,
+                    layer: 0,
+                    alpha: 1
+                ),
+                orderedPanelWindows[2],
+            ]
+          ),
+          !FocusSystemPanelWindowRules.windowRemainsTrusted(
+            42,
+            anchorProcessIdentifier: 101,
+            onScreenWindows: [
+                FocusWindowSnapshot(
+                    windowNumber: 42,
+                    ownerProcessIdentifier: 303,
+                    layer: 0,
+                    alpha: 1
+                ),
+            ]
+          ),
+          !FocusSystemPanelWindowRules.windowRemainsTrusted(
+            42,
+            anchorProcessIdentifier: 101,
+            onScreenWindows: [
+                FocusWindowSnapshot(
+                    windowNumber: 42,
+                    ownerProcessIdentifier: 101,
+                    layer: 1,
+                    alpha: 1
+                ),
+            ]
+          ),
+          !FocusSystemPanelWindowRules.windowRemainsTrusted(
+            42,
+            anchorProcessIdentifier: 101,
+            onScreenWindows: [
+                FocusWindowSnapshot(
+                    windowNumber: 42,
+                    ownerProcessIdentifier: 101,
+                    layer: 0,
+                    alpha: 0
+                ),
+            ]
+          ),
+          FocusHostRules.callbackMayUseResolution(
+            kind: .appKitOpenSavePanel,
+            explicitActivation: true,
+            eventCanEstablishTransientSurface: false,
+            continuesExactLease: false,
+            trustedSurfaceAuthority: false
+          ),
+          FocusHostRules.callbackMayUseResolution(
+            kind: .appKitOpenSavePanel,
+            explicitActivation: false,
+            eventCanEstablishTransientSurface: true,
+            continuesExactLease: false,
+            trustedSurfaceAuthority: true
+          ),
+          !FocusHostRules.callbackMayUseResolution(
+            kind: .appKitOpenSavePanel,
+            explicitActivation: false,
+            eventCanEstablishTransientSurface: false,
+            continuesExactLease: false,
+            trustedSurfaceAuthority: true
+          ),
+          FocusHostRules.callbackMayUseResolution(
+            kind: .appKitOpenSavePanel,
+            explicitActivation: false,
+            eventCanEstablishTransientSurface: false,
+            continuesExactLease: true,
+            trustedSurfaceAuthority: true
+          ),
+          !FocusHostRules.callbackMayUseResolution(
+            kind: .appKitOpenSavePanel,
+            explicitActivation: false,
+            eventCanEstablishTransientSurface: true,
+            continuesExactLease: true,
+            trustedSurfaceAuthority: false
+          ),
+          !FocusHostRules.shouldSuspendNewLease(
+            kind: .frontmostApplication,
+            explicitActivation: true
+          ),
+          FocusHostRules.shouldSuspendNewLease(
+            kind: .nonactivatingSystemOverlay,
+            explicitActivation: true
+          ),
+          FocusHostRules.shouldSuspendNewLease(
+            kind: .appKitOpenSavePanel,
+            explicitActivation: true
+          ),
+          !FocusHostRules.shouldSuspendNewLease(
+            kind: .appKitOpenSavePanel,
+            explicitActivation: false
+          ),
+          FocusHostRules.shouldPreservePendingPreheatAfterRejectedCallback(
+            kind: .appKitOpenSavePanel,
+            reusesExactOwner: true,
+            resolutionMatchesOwner: true,
+            deliverySuspended: true,
+            awaitingKeyDown: true
+          ),
+          FocusHostRules.shouldPreservePendingPreheatAfterRejectedCallback(
+            kind: .nonactivatingSystemOverlay,
+            reusesExactOwner: true,
+            resolutionMatchesOwner: true,
+            deliverySuspended: true,
+            awaitingKeyDown: true
+          ),
+          !FocusHostRules.shouldPreservePendingPreheatAfterRejectedCallback(
+            kind: .frontmostApplication,
+            reusesExactOwner: true,
+            resolutionMatchesOwner: true,
+            deliverySuspended: true,
+            awaitingKeyDown: true
+          ),
+          !FocusHostRules.shouldPreservePendingPreheatAfterRejectedCallback(
+            kind: .appKitOpenSavePanel,
+            reusesExactOwner: true,
+            resolutionMatchesOwner: false,
+            deliverySuspended: true,
+            awaitingKeyDown: true
+          ),
+          !FocusHostRules.shouldPreservePendingPreheatAfterRejectedCallback(
+            kind: .appKitOpenSavePanel,
+            reusesExactOwner: true,
+            resolutionMatchesOwner: true,
+            deliverySuspended: true,
+            awaitingKeyDown: false
+          ),
+          initialPanelWindowAuthority == FocusSystemPanelWindowAuthority(
+            trusted: true,
+            pendingWindowNumber: 42
+          ),
+          retainedPanelWindowAuthority == FocusSystemPanelWindowAuthority(
+            trusted: true,
+            pendingWindowNumber: 42
+          ),
+          vanishedPanelWindowAuthority == FocusSystemPanelWindowAuthority(
+            trusted: false,
+            pendingWindowNumber: nil
+          ),
+          continuingPanelWindowAuthority == FocusSystemPanelWindowAuthority(
+            trusted: true,
+            pendingWindowNumber: nil
+          ),
+          freshEpochPanelWindowAuthority == FocusSystemPanelWindowAuthority(
+            trusted: true,
+            pendingWindowNumber: 42
+          ),
+          nonKeyPanelWindowAuthority == FocusSystemPanelWindowAuthority(
+            trusted: false,
+            pendingWindowNumber: nil
+          ),
+          unsuspendedPanelWindowAuthority == FocusSystemPanelWindowAuthority(
+            trusted: false,
+            pendingWindowNumber: nil
+          ),
+          !FocusHostKind.frontmostApplication.requiresTransientSurfaceAuthority,
+          FocusHostKind.nonactivatingSystemOverlay.requiresTransientSurfaceAuthority,
+          FocusHostKind.appKitOpenSavePanel.requiresTransientSurfaceAuthority,
+          FocusHostKind.nonactivatingSystemOverlay.permitsPendingModifierBaselineSync,
+          !FocusHostKind.appKitOpenSavePanel.permitsPendingModifierBaselineSync,
+          FocusHostRules.frontmostChangeInvalidatesLease(
+            hostKind: .appKitOpenSavePanel,
+            leaseBundleID: savePanelBundleID,
+            leaseProcessIdentifier: 101,
+            foregroundAnchorBundleID: "app.a",
+            foregroundAnchorProcessIdentifier: 101,
+            activatedBundleID: "app.a",
+            activatedProcessIdentifier: 101
+          ),
+          FocusHostRules.displacedLeaseRequiresNoClientCleanup(
+            hostKind: .appKitOpenSavePanel
+          ),
+          targetAllowed(
+            frontmostApplicationMatches: savePanelAuthority.bundle,
+            frontmostProcessMatches: savePanelAuthority.process
+          ) else {
+        print("FAILED: trusted AppKit open/save panel focus gate")
+        return false
+    }
     let ordinaryUnknownAnchorMatches = ordinaryHost.map {
         FocusHostRules.resolutionMatchesLease(
             $0,
@@ -5517,13 +5952,22 @@ func runBufferWindowSmokeTest() -> Bool {
             foregroundAnchorProcessIdentifier: 101
           ),
           spotlightHost == spotlightLease,
+          savePanelHost == savePanelLease,
           FocusHostRules.isTrustedNonactivatingSystemOverlay(
             bundleID: "com.apple.Spotlight",
             bundlePath: "/System/Library/CoreServices/Spotlight.app"
           ),
+          FocusHostRules.isTrustedAppKitOpenSavePanel(
+            bundleID: savePanelBundleID,
+            bundlePath: savePanelPath
+          ),
           !FocusHostRules.isTrustedNonactivatingSystemOverlay(
             bundleID: "com.apple.Spotlight",
             bundlePath: "/Applications/FakeSpotlight.app"
+          ),
+          !FocusHostRules.isTrustedAppKitOpenSavePanel(
+            bundleID: savePanelBundleID,
+            bundlePath: "/Applications/FakeSavePanel.xpc"
           ),
           !FocusHostRules.isNonactivatingSystemOverlayBundle("com.apple.SearchUI"),
           FocusHostRules.uniqueTrustedOverlayProcessIdentifier(
@@ -5539,6 +5983,30 @@ func runBufferWindowSmokeTest() -> Bool {
                 (203, "/Applications/FakeSpotlight.app"),
             ]
           ) == nil,
+          FocusHostRules.allSystemPanelProcessesAreTrusted(
+            bundleID: savePanelBundleID,
+            runningCandidates: [
+                (204, savePanelPath),
+            ]
+          ),
+          FocusHostRules.allSystemPanelProcessesAreTrusted(
+            bundleID: savePanelBundleID,
+            runningCandidates: [
+                (204, savePanelPath),
+                (205, savePanelPath),
+            ]
+          ),
+          !FocusHostRules.allSystemPanelProcessesAreTrusted(
+            bundleID: savePanelBundleID,
+            runningCandidates: []
+          ),
+          !FocusHostRules.allSystemPanelProcessesAreTrusted(
+            bundleID: savePanelBundleID,
+            runningCandidates: [
+                (204, savePanelPath),
+                (205, "/Applications/FakeSavePanel.xpc"),
+            ]
+          ),
           FocusHostRules.resolveKnownFrontmost(
             incomingBundleID: "com.apple.Spotlight",
             frontmostBundleID: "app.a",
@@ -5605,37 +6073,37 @@ func runBufferWindowSmokeTest() -> Bool {
           FocusHostRules.callbackMayUseResolution(
             kind: .nonactivatingSystemOverlay,
             explicitActivation: true,
-            eventCanEstablishOverlay: false,
+            eventCanEstablishTransientSurface: false,
             continuesExactLease: false,
-            trustedOverlayVisible: false
+            trustedSurfaceAuthority: false
           ),
           FocusHostRules.callbackMayUseResolution(
             kind: .nonactivatingSystemOverlay,
             explicitActivation: false,
-            eventCanEstablishOverlay: true,
+            eventCanEstablishTransientSurface: true,
             continuesExactLease: false,
-            trustedOverlayVisible: true
+            trustedSurfaceAuthority: true
           ),
           !FocusHostRules.callbackMayUseResolution(
             kind: .nonactivatingSystemOverlay,
             explicitActivation: false,
-            eventCanEstablishOverlay: false,
+            eventCanEstablishTransientSurface: false,
             continuesExactLease: false,
-            trustedOverlayVisible: true
+            trustedSurfaceAuthority: true
           ),
           FocusHostRules.callbackMayUseResolution(
             kind: .nonactivatingSystemOverlay,
             explicitActivation: false,
-            eventCanEstablishOverlay: false,
+            eventCanEstablishTransientSurface: false,
             continuesExactLease: true,
-            trustedOverlayVisible: true
+            trustedSurfaceAuthority: true
           ),
           !FocusHostRules.callbackMayUseResolution(
             kind: .nonactivatingSystemOverlay,
             explicitActivation: false,
-            eventCanEstablishOverlay: true,
+            eventCanEstablishTransientSurface: true,
             continuesExactLease: true,
-            trustedOverlayVisible: false
+            trustedSurfaceAuthority: false
           ),
           !FocusHostRules.frontmostChangeInvalidatesLease(
             hostKind: .frontmostApplication,
@@ -5720,6 +6188,12 @@ func runBufferWindowSmokeTest() -> Bool {
             frontmostBundleID: "app.a",
             incomingHostKind: .nonactivatingSystemOverlay
           ),
+          FocusEventRules.mayTakeOwnership(
+            incomingBundleID: savePanelBundleID,
+            currentOwnerBundleID: "app.a",
+            frontmostBundleID: "app.a",
+            incomingHostKind: .appKitOpenSavePanel
+          ),
           FocusEventRules.mayEstablishProcessBoundLease(
             ownerExists: false,
             frontmostProcessIdentifier: 101,
@@ -5759,6 +6233,18 @@ func runBufferWindowSmokeTest() -> Bool {
             sameControllerAndClient: true,
             age: 2.10,
             hostKind: .nonactivatingSystemOverlay
+          ),
+          FocusActivationRules.shouldConfirmProvisional(
+            isProvisional: true,
+            sameControllerAndClient: true,
+            age: 0.75,
+            hostKind: .appKitOpenSavePanel
+          ),
+          !FocusActivationRules.shouldConfirmProvisional(
+            isProvisional: true,
+            sameControllerAndClient: true,
+            age: 2.10,
+            hostKind: .appKitOpenSavePanel
           ),
           !FocusActivationRules.lifecycleCallbackMayApply(
             now: 10.05,

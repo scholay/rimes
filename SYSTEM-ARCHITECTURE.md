@@ -97,6 +97,7 @@ Marine Chrome 的上下文不进 `InboundBus`，也不进外部 Action Plugin ru
                      BufferDeliveryCoordinator
                     ┌──── 普通 App：FocusToken/client 与前台 bundle/PID 精确匹配
                     │     Spotlight：系统 PID + 可见窗口 + 下层前台 bundle/PID 锚点
+                    │     打开/保存面板：系统 XPC 来源集合 + 冻结窗口 ID + 发起 App bundle/PID
                     ├──── 组字未决 / secure input → 拒绝或先显式收束
                     ├──── 每个块投递前再次校验，焦点变化立即停
                     ▼
@@ -107,7 +108,7 @@ Marine Chrome 的上下文不进 `InboundBus`，也不进外部 Action Plugin ru
 1. **非配对外部文字永不自动上屏**——MCP/HTTP 先进收件箱待决；用户主动调用且仍匹配原 request/context/focus 的插件结果可直接进缓冲，失效或迟到结果退回收件箱。
 2. **插件/处理器结果永不直接上屏**——无论直接进缓冲还是退回收件箱，都只能由用户随后明确投递。
 3. **secure input（密码框）激活时，Return 在动作边界同步 fail-closed**：只吞下按键，不收束组字、不重建 U+200B guard、不请求 AI，也不投递；工作台正文与派生 workspace 同步进入保护态。
-4. **缓冲投递不保存“最近输入框”兜底**：只有当前 `FocusToken` 的外部文本框能接收。普通 App 的 bundle/PID 必须同时匹配当前前台应用；系统 Spotlight 因不成为 frontmost，改为同时匹配其绑定 PID、真实可见窗口与下层前台 bundle/PID 锚点。切 app、切文本框、窗口隐藏或进程重启都会令旧目标失效。
+4. **缓冲投递不保存“最近输入框”兜底**：只有当前 `FocusToken` 的外部文本框能接收。普通 App 的 bundle/PID 必须同时匹配当前前台应用。Spotlight 需匹配精确系统路径中的唯一 PID、自有可见窗口与下层前台锚点；AppKit 打开/保存面板则要求所有同 bundle 活服务都来自固定系统 XPC 路径，并匹配发起 App bundle/PID 与冻结的面板窗口 ID，不绑定任一可能残留的 service PID。切 app、切文本框、窗口隐藏或服务来源异常都会令旧目标失效。
 5. **手动投递不等于目标已确认收到**：当前产品在 `Delivery.insert` 成功返回后立即消费 live block，不保留明文发送历史；失败的块和后续尚未发送的块原位保留。
 6. **配对设备是来源侧唯一直通例外**：收到的文字沿既有实时传字路径直接上屏，不进入缓冲工作台。
 7. **缓冲按键与宿主隔离**：缓冲模式下普通/Shift+Return 与 Backspace 总是被输入法消费。有未决 Rime/并击组字或尚未 ready 的意识流 raw 时，本次 Return 只收束/强制生成并抑制同一物理按键余下事件；意识流 final 已 ready 时，keyDown 先确认所选候选并淘汰其余项，同一次按键继续进入轻按/长按投递。其他没有未决组字的内容也在 Return keyDown 中定点重建不可见 marked-text guard。普通/ready 内容仍是轻按发送下一块、按住约 1.2 秒发送全部；AI request 状态则在 keyDown 就吞下整次物理按键并请求生成，running/disabled 只吞键，不进入长按计时。`didCommand` 与 repeat 只有消费权。Backspace 只在精确焦点下编辑 Rime/并击状态或删除缓冲块。焦点不可信时始终吞键且不投递；宿主绝不会收到换行或删除。
@@ -173,11 +174,12 @@ MarineChromeWorkspace.Job ── 一次显式网页评论/回复生成
 
 - **RimeEngine / CRimeBridge**：手写声明整个 `RimeApi` 结构体，`dlopen` 优先加载自带 librime，失败回退系统 Squirrel。首启 `start_maintenance` 自部署，自包含无需装 Squirrel。
 - **`my_combo` AI 去耦**：旧 `ai_mode`、`ai_box`/剪贴板 processor、状态 translator、AI translator/filter、快捷键与 `python_bin` 配置已从 schema 下线；Rime schema 不再启动 Lua/Python AI 链路。普通输入依赖的 librime Lua 模块继续保留，AI 只由原生工作台插件和 Rime 侧连接器执行。
+- **`my_combo` 字面 `v`**：飞耀继续把 `v` 用作物理和弦键，但单键结算必须保留英文原码；该 schema 显式关闭从 `rime_ice` 继承的 lowercase-`v` 符号前缀与 `v_filter`，因此 `video` 等英文输入不会进入符号模式。多键中包含 `v` 的既有飞耀映射不变。
 - **RimeBufferController 按键隔离与 Return 手势**：缓冲模式在最外层吞掉普通/Shift+Return 与 Backspace。精确外部租约持有缓冲控制期间，`CompositionSession` 会常驻一次不可见 U+200B marked-text guard（包括 Rime 空闲和引擎不可用阶段），防止 Chromium/ProseMirror 在 IMK handled 结果之外观察 raw Return 并提交；guard 生命周期与真实组字状态分离，空闲 guard 不会把 `composition.composing` / lease `compositionActive` 置真，且 marked range 标为不可靠。Return keyDown 绑定当时的 `FocusToken`；有未决 Rime/并击组字或未 ready 意识流 raw 时只收束/强制生成并抑制到物理抬起。ready 意识流则在该 keyDown 先执行同一个 `prepareForDelivery()` 确认，删除其他候选后继续当前轻按/长按手势；其他可投递内容也在 keyDown 定点重建 guard，再由 keyUp/物理轮询判定轻按 `sendNext` 或持续 1.2 秒的长按 `sendAll`。每次被接管的物理按键持有 sticky keyUp / `didCommand(insertNewline:)` suppression，发送最后一个 transient block 令 buffer inactive、动作 reset 或失焦都不能把迟到/重复回调放给宿主；旧字段的 stale callback 不改变当前按压状态，下一次确认的 non-repeat keyDown 才退休旧代并立即按新状态路由。`didCommand` 只防御性消费，不形成第二条发送路径。Backspace 仅在精确租约下改 Rime/缓冲。隔离分支先于 raw fallback，故引擎失败和不可信焦点也不会把这两个键交给宿主。
 - **RimeBufferController 全选/粘贴路由**：`BufferClipboardShortcutRules` 只识别单一 Control 或 Command 修饰的 A/V；额外 Shift/Option 或 Control+Command 保持宿主快捷键。精确外部租约下，普通/插件 source 先收束 Rime 或 chord 组字再对 `BufferModel` 全选/粘贴，意识流则只操作 raw source。NSEvent 主路与 `didCommand(selectAll:/paste:)` 共用防重和物理 keyDown 所有权；对 Notes 等先套用 Cocoa 标准键位的宿主，只有在对应物理 Control+A/V 仍按下时，才把 `moveToBeginningOfParagraph:` / `pageDown:` command-only 回调还原为工作台动作，并从严格 live lease 恢复缺失的 callback client。真实 preedit 收束后，每次精确 A/V 都重装 U+200B host guard，避免 Chromium/Electron 在 IMK handled 周边再次执行宿主快捷键；`setMarkedText` 同步返回后必须重验同一租约。正在计时的 Return 发送会在 source 编辑前取消，但仍吞掉它的迟到 keyUp，防止新文本被误发。`NSPasteboard.general` 只在 secure input 为 false 且精确租约校验之间读取；延迟 pasteboard provider 返回后再重验，任一门控失配都不修改 source。
 - **ShiftModifierGesture**：在所有 keyDown 早退之前记录 Shift 已被作为修饰键，并保存起始左/右 Shift keysym、session 与 schema。物理 press 不立即进入 `ascii_composer`；release 只为同 session/schema 的独立短按补发匹配的一对事件，其余手势不发。候选 Option 选择、预先按住的 Option/Control/Command、双 Shift 和失焦因此都不会留下 Rime modifier 债务，也不会先执行 `commit_code` 再尝试回滚。
 - **CandidateWindow**：Rime 组字候选交互与显示的唯一状态机。普通模式锚定 caret；缓冲模式把同一个 `nonactivatingPanel` 锚定在工作台真实外沿：手动/无目标布局默认在下方，匹配焦点唤出 token 的上下文布局则严格沿远离输入框的一侧。因此主题、尺寸、翻页、单字选择和 token 化点击行为与常规候选完全一致。三行矩阵先把 panel、scroll viewport 与 frame-driven document stack 准备到最终 78pt，再挂 3×24pt row（3pt 间隔）；document stack 禁止生成旧 compact frame 的 autoresizing-mask 约束。工作台不再维护 Rime `CandidateProjection` 或第二份 Rime 候选视图；意识流的 1–3 个 target rows 是派生文本解释，不使用 Rime 候选状态机。
-- **InputFocusCoordinator**：把 controller、租约 `IMKTextInput`、`controller.client()` 当前对象身份、bundle id、宿主进程/前台锚点与单调 token 绑定；普通 App 的 `liveTarget` 重验全部身份及 frontmost bundle/PID。唯一浮层例外是系统路径下唯一运行的 `com.apple.Spotlight`：activation 只创建 suspended 预热租约，真实可见 Spotlight 窗口中的新鲜 keyDown 才建立可投递 epoch；租约分别冻结 Spotlight PID 与下层前台 bundle/PID，后续 target/event 全部重验，keyUp/flagsChanged 不能建立或解锁它，任一 workspace activation 都撤销它。事件时间戳必须晚于 activation floor/最近已接受事件；先于 activate 的首键只建立短期 provisional 租约。explicit/implicit lifecycle callback 都必须与当前 client 一致；同一 proxy 跨字段或跨 controller 复用、异步 chord 回放失配、弱 client 过期时，旧 session 只在 Rime 内回收/丢弃，不调用已移动或释放的 proxy。
+- **InputFocusCoordinator**：把 controller、租约 `IMKTextInput`、`controller.client()` 当前对象身份、bundle id、宿主进程/前台锚点与单调 token 绑定；普通 App 的 `liveTarget` 重验全部身份及 frontmost bundle/PID。只有系统路径精确 allowlist 中的 `com.apple.Spotlight` 与 `com.apple.appkit.xpc.openAndSavePanelService` 可走瞬态系统界面路径：activation 只创建 suspended 预热租约，新鲜 keyDown 才建立可投递 epoch。Spotlight 冻结唯一 service PID、自有可见窗口和下层前台锚点；打开/保存面板接受多个 genuine 系统 service PID，但不选择其中任何一个，而是冻结发起 App bundle/PID 与其最前 layer-0 面板窗口 ID。后续 target/event/commit 都重验同一权限组合；keyUp/flagsChanged 不能建立或解锁，任一 workspace activation 都撤销。事件时间戳必须晚于 activation floor/最近已接受事件；先于 activate 的首键只建立短期 provisional 租约。explicit/implicit lifecycle callback 都必须与当前 client 一致；同一 proxy 跨字段或跨 controller 复用、异步 chord 回放失配、弱 client 过期时，旧 session 只在 Rime 内回收/丢弃，不调用已移动或释放的 proxy。
 - **ChordController + ChordSettings**：常规 Rime 路径负责 FlyYao release-replay；时长是 UI 可配置项（`ChordSettings`，默认 0.10s，UserDefaults + 通知）。意识流 `.chord`/`.mutual` 路径不把批次送入 Rime，而是复用同一时长、`FlyChordBatchState` 和有效 schema parser，在焦点绑定的 workspace 内分别执行同批映射或跨左右批精确重组。
 - **StatusMenu**：不建独立 NSStatusItem，命令挂在系统输入法菜单里（设置 / 收件箱 / 显示或关闭工作台 / 常显 / 移到当前屏幕 / 更新 / 部署 / 重装 / 重启）。
 
@@ -392,7 +394,7 @@ Delivery.insert(_ text, into: client)
 |---|---|---|
 | 密码框保护 | `IsSecureEventInputEnabled()` 在投递动作时刻同步查；命中拒发 | ✅ M0（Delivery 唯一咽喉） |
 | 切换应用重置 | 默认跨应用保留；启用后，仅当整个缓冲不含外部来源块时不可撤销地丢弃 blocks；只要含外部块就全部保留 | ✅ |
-| 焦点租约 | 单调 FocusToken + controller/client 对象身份 + client bundle + 前台 bundle/PID + 事件/生命周期归因；Spotlight 另需唯一系统 PID、可见窗口、前台锚点及 keyDown 建权；无 recent/last client 回退 | ✅ |
+| 焦点租约 | 单调 FocusToken + controller/client 对象身份 + client bundle + 前台 bundle/PID + 事件/生命周期归因；Spotlight 另需唯一系统 PID/自有窗口，打开/保存面板另需全体服务来源可信/冻结发起 App 窗口，二者均由 keyDown 建权；无 recent/last client 回退 | ✅ |
 | 工作台隐私 | secure-input 自动遮蔽正文并禁用发送/插件动作；锁屏/睡眠/会话切出撤销租约且不回写旧 client；自身设置窗口不成为缓冲捕获源 | ✅ |
 | 日志脱敏 | 用户文本走 `IMELog.redact()` 只记长度；日志 0600；CI 断言禁 `'\(…)'` 明文 | ✅ M0 |
 | 本地端口鉴权 | 只绑 127.0.0.1 + Bearer token（0600）+ 常数时间比较 + 严格解析上限 | ✅ M2 |
@@ -527,7 +529,7 @@ Sources/RimeBuffer/
 
 1. **身份三元组永不再改**——10 天换 5 代身份造成过 10+ 重复注册鬼影，CI 断言已钉死。
 2. **Delivery.insert 是唯一上屏咽喉**——任何新上屏路径都必须走它，安全护栏才生效。
-3. **FocusToken 是候选与缓冲投递的共同所有权**——迟到回调只能处理自己的 token；普通 App 的前台 bundle/PID 必须匹配；Spotlight 只能走精确系统 allowlist + 绑定 PID + 可见窗口 + 前台锚点的专用路径，禁止把 accessory app 泛化放行；禁止恢复 `active ?? recent`、`lastClient` 或 bundle-only 投递兜底。
+3. **FocusToken 是候选与缓冲投递的共同所有权**——迟到回调只能处理自己的 token；普通 App 的前台 bundle/PID 必须匹配；Spotlight 只能走精确系统路径 + 唯一 PID/自有窗口路径，AppKit 打开/保存面板只能走精确系统 XPC 集合 + 发起 App/冻结窗口路径，禁止把 accessory app 或任意 XPC 服务泛化放行；禁止恢复 `active ?? recent`、`lastClient` 或 bundle-only 投递兜底。
 4. **NWListener 连接对象必须持有**——不持有会立刻释放，`weak self` 变 nil，连接静默失效（spike 抓到过）。
 5. **异步事件不许拉起候选面板或工作台**——外部待决项可更新专用 nonactivating toast/收件箱提示；工作台显隐只由用户与持久化偏好决定。
 6. **处理器必须在入缓冲侧跑**——结果先落块，投递路径保持同步、可逐块重验目标。

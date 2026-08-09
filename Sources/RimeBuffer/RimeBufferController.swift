@@ -600,20 +600,19 @@ final class RimeBufferController: IMKInputController {
 
     private func clearCompositionPresentation(client: IMKTextInput) {
         let frozenLease = currentLease(matching: client)
-        let requiresOverlayGate = frozenLease?.hostKind
-            == .nonactivatingSystemOverlay
-            || (frozenLease == nil
-                && FocusHostRules.isNonactivatingSystemOverlayBundle(
-                    bundleId(of: client)
-                ))
-        if requiresOverlayGate {
+        let requiresTransientSurfaceGate = frozenLease.map {
+            $0.hostKind.requiresTransientSurfaceAuthority
+        } ?? FocusHostRules.isTransientSystemSurfaceBundle(
+            bundleId(of: client)
+        )
+        if requiresTransientSurfaceGate {
             guard let lease = frozenLease,
                   InputFocusCoordinator.shared.interactionTarget(
                     expected: lease.token,
                     forceOverlayVisibilityRefresh: true
                   ) === lease else {
-                // Keep local composition bookkeeping correct without invoking a
-                // Spotlight proxy whose search window is no longer on screen.
+                // Keep local composition bookkeeping correct without invoking
+                // a system-surface proxy whose exact window disappeared.
                 composition.markCleared()
                 return
             }
@@ -626,21 +625,20 @@ final class RimeBufferController: IMKInputController {
                                    client: IMKTextInput,
                                    externalTarget: Bool? = nil) -> Bool {
         let frozenLease = currentLease(matching: client)
-        let requiresOverlayGate = frozenLease?.hostKind
-            == .nonactivatingSystemOverlay
-            || (frozenLease == nil
-                && FocusHostRules.isNonactivatingSystemOverlayBundle(
-                    bundleId(of: client)
-                ))
-        if requiresOverlayGate {
+        let requiresTransientSurfaceGate = frozenLease.map {
+            $0.hostKind.requiresTransientSurfaceAuthority
+        } ?? FocusHostRules.isTransientSystemSurfaceBundle(
+            bundleId(of: client)
+        )
+        if requiresTransientSurfaceGate {
             guard let lease = frozenLease,
-                  InputFocusCoordinator.shared.liveTarget(
+                  InputFocusCoordinator.shared.interactionTarget(
                     expected: lease.token,
                     forceOverlayVisibilityRefresh: true
                   ) === lease else {
-                // Do not call clearMarkedText on a hidden Spotlight proxy.
+                // Do not call clearMarkedText on a hidden system-surface proxy.
                 composition.markCleared()
-                IMELog.write("direct insert blocked; Spotlight window authority unavailable")
+                IMELog.write("direct insert blocked; transient surface window authority unavailable")
                 return false
             }
         }
@@ -751,11 +749,10 @@ final class RimeBufferController: IMKInputController {
                                        reason: "\(operation) lifecycle attribution")
             return nil
         }
-        // Spotlight can hide without becoming/notifying a new frontmost app.
-        // Revalidate its real window here; a failed check suspends delivery but
-        // deliberately returns the lease so the caller can clean up in Rime
-        // without inserting through the stale proxy.
-        InputFocusCoordinator.shared.refreshOverlayLifecycleTrust(lease)
+        // A system surface can hide without notifying a new frontmost app.
+        // Revalidate its exact authority here; a failed check suspends delivery
+        // but still returns the lease for no-client Rime cleanup.
+        InputFocusCoordinator.shared.refreshTransientSurfaceLifecycleTrust(lease)
         return lease
     }
 
@@ -1259,16 +1256,15 @@ final class RimeBufferController: IMKInputController {
                                     isolateChordClientRouting: Bool = false) {
         if let client {
             let frozenLease = currentLease(matching: client)
-            let requiresOverlayGate = frozenLease?.hostKind
-                == .nonactivatingSystemOverlay
-                || (frozenLease == nil
-                    && FocusHostRules.isNonactivatingSystemOverlayBundle(
-                        bundleId(of: client)
-                    ))
-            guard !requiresOverlayGate || (
+            let requiresTransientSurfaceGate = frozenLease.map {
+                $0.hostKind.requiresTransientSurfaceAuthority
+            } ?? FocusHostRules.isTransientSystemSurfaceBundle(
+                bundleId(of: client)
+            )
+            guard !requiresTransientSurfaceGate || (
                 frozenLease.map { lease in
                     owner == lease.token
-                        && InputFocusCoordinator.shared.liveTarget(
+                        && InputFocusCoordinator.shared.interactionTarget(
                             expected: lease.token,
                             forceOverlayVisibilityRefresh: true
                         ) === lease
@@ -1277,11 +1273,11 @@ final class RimeBufferController: IMKInputController {
                 if let lease = frozenLease {
                     suspendUntrustedFocusLease(
                         lease,
-                        reason: "Spotlight composition target validation"
+                        reason: "transient surface composition target validation"
                     )
                     abandonCompositionWithoutClient(
                         lease,
-                        reason: "Spotlight window unavailable"
+                        reason: "transient surface window unavailable"
                     )
                 } else {
                     chordClientRoutingGate.withIsolatedClientRouting {

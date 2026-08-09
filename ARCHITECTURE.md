@@ -208,6 +208,7 @@
 - **门控**：仅 `schemaId == "my_combo"`。串击/双拼绝不注入合成 release（会扰乱 speller 时序）。
 - **并击/互击区别**：两者都结算当前计时批，多键单侧批次不丢弃；单个物理字母保持英文原码且不添加 `'`。只有互击会在至少一侧为多键和弦时，把相邻的左侧声母批与右侧韵母批回滚重组为同一音节。无映射批保留可由 Return 提交的原码；`,`/`.` 保留为和弦双角色键，单键结算后落到 Rime punctuator。
 - **候选能力**：`my_combo` 只维护物理和弦到规范拼音的映射，speller、主/英文翻译器和候选过滤链直接继承 `rime_ice`；多音节输入必须同时保留整词、前缀单字和后续候选页。
+- **字面 `v`**：`v` 继续参与多键飞耀映射，但单键批次必须保留普通英文原码；`my_combo` 显式覆盖 `rime_ice` 的 lowercase-`v` 符号 recognizer 并移除 `v_filter`，因此以 `v` 开头的英文不再进入符号模式。
 - **duration 的唯一来源**：`ChordSettings.duration`（UserDefaults `chord.duration`），默认 0.10s、范围 0.02–0.50s；设置变化通过通知实时更新所有 controller。
 - flush 时机：非 chord 键按下前 / `deactivateServer` / `commitComposition` 前 / FocusObserver 触发。flush 期间**强持有** client 引用。
 
@@ -226,7 +227,7 @@ macOS 版本不可靠。`Info.plist` 的 `etinput-menu.pdf` 继续负责系统�
 
 ### 5.8 InputFocusCoordinator — 状态：✅ 已实现
 
-为当前 controller/client 建立单调 `FocusToken` 租约，并同时校验租约 client 与 `controller.client()` 的对象身份、bundle id、前台应用 PID 与事件顺序。普通 App 必须与 `NSWorkspace.frontmostApplication` 精确一致；Spotlight 仅以精确 bundle、唯一运行实例和系统 bundle 路径 allowlist 进入 nonactivating-overlay 策略。其 lifecycle activation 先建立 suspended 预热租约，首个可见窗口中的新鲜 keyDown 建立可投递 epoch；后续交互同时重验 Spotlight 绑定 PID、窗口可见性和下层前台 bundle/PID 锚点，不能把下层 App PID 冒充成 Spotlight host PID。keyUp/flagsChanged 不得建立或恢复 suspended 租约，workspace activation 对 overlay 一律撤销。迟到的 deactivate、command、hide、候选点击或和弦 timer 只操作自己的 token；缓冲投递不存在 recent/last client 回退。NSWorkspace、锁屏/会话与输入源通知负责缺失生命周期回调时的最终撤销。同 proxy 切字段（跨 controller 也算）或旧 marked range 消失时建立新 epoch；旧 session 只在缓冲开启时回收到工作台，否则丢弃，绝不经已经指向新字段的 proxy 提交。弱 client 自然释放时也先清理仍存活 controller 的 chord/session，再移除租约。
+为当前 controller/client 建立单调 `FocusToken` 租约，并同时校验租约 client 与 `controller.client()` 的对象身份、bundle id、前台应用 PID 与事件顺序。普通 App 必须与 `NSWorkspace.frontmostApplication` 精确一致；只有精确系统路径 allowlist 中的 Spotlight 与 AppKit `openAndSavePanelService` 可进入瞬态系统界面策略。Spotlight 冻结唯一系统进程 PID、其自有可见窗口及下层前台 bundle/PID；打开/保存面板允许系统保留多个 genuine ViewService，但要求所有同 bundle 活进程都来自固定 AppKit XPC 路径，不猜测 service PID，而是冻结发起 App bundle/PID 与首个新鲜 keyDown 时最前的 layer-0 面板窗口 ID。后续交互和异步上屏持续重验同一窗口，面板消失后底层文档窗不能替代它。两类界面的 lifecycle activation 都只建立 suspended 预热租约，keyUp/flagsChanged 不得建立或恢复，任一 workspace activation 一律撤销。迟到的 deactivate、command、hide、候选点击或和弦 timer 只操作自己的 token；缓冲投递不存在 recent/last client 回退。NSWorkspace、锁屏/会话与输入源通知负责缺失生命周期回调时的最终撤销。同 proxy 切字段（跨 controller 也算）或旧 marked range 消失时建立新 epoch；旧 session 只在缓冲开启时回收到工作台，否则丢弃，绝不经已经指向新字段的 proxy 提交。弱 client 自然释放时也先清理仍存活 controller 的 chord/session，再移除租约。
 
 ### 5.9 Delivery — 状态：✅ 已实现
 
