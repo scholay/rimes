@@ -1,0 +1,15 @@
+# Cross-platform preview assets are byte-for-byte reconciled between Windows,
+# Linux, and macOS runners. Keep every packaged source file on LF regardless
+# of a contributor's core.autocrlf setting.
+/rime-data/** text eol=lf
+/platforms/windows/** text eol=lf
+/platforms/linux/** text eol=lf
+/scripts/platform-preview/** text eol=lf
+/LICENSE text eol=lf
+/THIRD_PARTY_NOTICES.md text eol=lf
+/README.md text eol=lf
+/README.en.md text eol=lf
+/RELEASE.md text eol=lf
+/CROSS-PLATFORM-PREVIEW.md text eol=lf
+/.github/workflows/platform-preview.yml text eol=lf
+/.github/workflows/platform-preview-release.yml text eol=lf

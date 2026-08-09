@@ -9,7 +9,9 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    # GRDB 7.11.1 declares swift-tools-version 6.1. macOS 15 runners provide
+    # a compatible Xcode toolchain while preserving the existing macOS build.
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4

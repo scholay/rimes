@@ -1,0 +1,204 @@
+{
+  "formatVersion": 1,
+  "sourceRoot": "rime-data",
+  "archiveRoot": "RIMES-platform-preview-data",
+  "productSchemas": [
+    "my_combo",
+    "double_pinyin",
+    "rime_ice",
+    "english"
+  ],
+  "seedFiles": [
+    "default.yaml",
+    "default.custom.yaml",
+    "my_combo.schema.yaml",
+    "double_pinyin.schema.yaml",
+    "rime_ice.schema.yaml",
+    "english.schema.yaml"
+  ],
+  "include": [
+    "cn_dicts/8105.dict.yaml",
+    "cn_dicts/base.dict.yaml",
+    "cn_dicts/ext.dict.yaml",
+    "cn_dicts/others.dict.yaml",
+    "cn_dicts/tencent.dict.yaml",
+    "custom_phrase.txt",
+    "default.custom.yaml",
+    "default.yaml",
+    "double_pinyin.schema.yaml",
+    "easy_en.dict.yaml",
+    "en_dicts/cn_en.txt",
+    "en_dicts/cn_en_double_pinyin.txt",
+    "en_dicts/en.dict.yaml",
+    "en_dicts/en_ext.dict.yaml",
+    "english.schema.yaml",
+    "licenses/GPL-3.0.txt",
+    "licenses/rime-easy-en-LICENSE",
+    "licenses/rime-easy-en-SOURCE.md",
+    "licenses/rime-ice-SOURCE.md",
+    "lua/autocap_filter.lua",
+    "lua/calc_translator.lua",
+    "lua/corrector.lua",
+    "lua/date_translator.lua",
+    "lua/en_spacer.lua",
+    "lua/force_gc.lua",
+    "lua/long_word_filter.lua",
+    "lua/lunar.lua",
+    "lua/number_translator.lua",
+    "lua/pin_cand_filter.lua",
+    "lua/reduce_english_filter.lua",
+    "lua/search.lua",
+    "lua/select_character.lua",
+    "lua/unicode.lua",
+    "lua/v_filter.lua",
+    "melt_eng.dict.yaml",
+    "melt_eng.schema.yaml",
+    "my_combo.schema.yaml",
+    "opencc/emoji.json",
+    "opencc/emoji.txt",
+    "opencc/others.txt",
+    "radical_pinyin.dict.yaml",
+    "radical_pinyin.schema.yaml",
+    "rime_ice.dict.yaml",
+    "rime_ice.schema.yaml",
+    "symbols_caps_v.yaml",
+    "symbols_v.yaml"
+  ],
+  "supplementalFiles": [
+    "licenses/GPL-3.0.txt",
+    "licenses/rime-easy-en-LICENSE",
+    "licenses/rime-easy-en-SOURCE.md",
+    "licenses/rime-ice-SOURCE.md"
+  ],
+  "exclude": {
+    "legacyAI": [
+      "lua/ai_box_actions.lua",
+      "lua/ai_box_filter.lua",
+      "lua/ai_box_processor.lua",
+      "lua/ai_box_status_translator.lua",
+      "lua/ai_box_trigger_processor.lua",
+      "lua/ai_box_view.lua",
+      "lua/ai_clipboard_processor.lua",
+      "lua/ai_translator.lua",
+      "rime_ai.example.json"
+    ],
+    "optionalOrUnusedData": [
+      "cn_dicts/41448.dict.yaml",
+      "en_dicts/cn_en_abc.txt",
+      "en_dicts/cn_en_flypy.txt",
+      "en_dicts/cn_en_jiajia.txt",
+      "en_dicts/cn_en_mspy.txt",
+      "en_dicts/cn_en_sogou.txt",
+      "en_dicts/cn_en_ziguang.txt"
+    ],
+    "unusedLua": [
+      "lua/cn_en_spacer.lua",
+      "lua/cold_word_drop/drop_words.lua",
+      "lua/cold_word_drop/filter.lua",
+      "lua/cold_word_drop/hide_words.lua",
+      "lua/cold_word_drop/logger.lua",
+      "lua/cold_word_drop/metatable.lua",
+      "lua/cold_word_drop/processor.lua",
+      "lua/cold_word_drop/reduce_freq_words.lua",
+      "lua/cold_word_drop/string.lua",
+      "lua/debuger.lua",
+      "lua/is_in_user_dict.lua",
+      "lua/mode_switch_processor.lua",
+      "lua/t9_preedit.lua"
+    ]
+  },
+  "staticUserDictionaries": {
+    "custom_phrase": "custom_phrase.txt",
+    "en_dicts/cn_en": "en_dicts/cn_en.txt",
+    "en_dicts/cn_en_double_pinyin": "en_dicts/cn_en_double_pinyin.txt"
+  },
+  "optionalUserDictionaries": [
+    "custom_phrase_double",
+    "english"
+  ],
+  "externalRuntimeFiles": [
+    "opencc/s2t.json"
+  ],
+  "provenanceGroups": {
+    "rimes-authored": {
+      "license": "MIT",
+      "source": "https://github.com/scholay/rimes",
+      "files": [
+        "default.custom.yaml",
+        "english.schema.yaml",
+        "licenses/rime-easy-en-SOURCE.md",
+        "licenses/rime-ice-SOURCE.md",
+        "my_combo.schema.yaml"
+      ]
+    },
+    "rime-ice-derived": {
+      "license": "GPL-3.0-only",
+      "source": "https://github.com/iDvel/rime-ice (RIMES import d6d9f9cea97da478540b8a5e9a5c102216e2cf1d)",
+      "files": [
+        "cn_dicts/8105.dict.yaml",
+        "cn_dicts/base.dict.yaml",
+        "cn_dicts/ext.dict.yaml",
+        "cn_dicts/others.dict.yaml",
+        "cn_dicts/tencent.dict.yaml",
+        "custom_phrase.txt",
+        "default.yaml",
+        "double_pinyin.schema.yaml",
+        "en_dicts/cn_en.txt",
+        "en_dicts/cn_en_double_pinyin.txt",
+        "en_dicts/en.dict.yaml",
+        "en_dicts/en_ext.dict.yaml",
+        "lua/autocap_filter.lua",
+        "lua/calc_translator.lua",
+        "lua/corrector.lua",
+        "lua/date_translator.lua",
+        "lua/en_spacer.lua",
+        "lua/force_gc.lua",
+        "lua/long_word_filter.lua",
+        "lua/lunar.lua",
+        "lua/number_translator.lua",
+        "lua/pin_cand_filter.lua",
+        "lua/reduce_english_filter.lua",
+        "lua/select_character.lua",
+        "lua/unicode.lua",
+        "lua/v_filter.lua",
+        "melt_eng.dict.yaml",
+        "melt_eng.schema.yaml",
+        "opencc/emoji.json",
+        "opencc/emoji.txt",
+        "opencc/others.txt",
+        "radical_pinyin.dict.yaml",
+        "radical_pinyin.schema.yaml",
+        "rime_ice.dict.yaml",
+        "rime_ice.schema.yaml",
+        "symbols_caps_v.yaml",
+        "symbols_v.yaml"
+      ]
+    },
+    "rime-easy-en": {
+      "license": "LGPL-3.0-only",
+      "source": "https://github.com/BlindingDark/rime-easy-en/tree/54a4a07289412efc54134092c0d945f895a71ed3",
+      "files": [
+        "easy_en.dict.yaml",
+        "licenses/rime-easy-en-LICENSE"
+      ]
+    },
+    "rime-radical-search": {
+      "license": "CC-BY-SA-4.0",
+      "source": "https://github.com/mirtlecn/rime-radical-pinyin/blob/master/search.lua.md",
+      "files": [
+        "lua/search.lua"
+      ]
+    },
+    "gnu-license-text": {
+      "license": "GPL-3.0-only license text (verbatim redistribution permitted)",
+      "source": "https://www.gnu.org/licenses/gpl-3.0.txt",
+      "files": [
+        "licenses/GPL-3.0.txt"
+      ]
+    }
+  },
+  "runtimeRequirements": [
+    "A compatible librime runtime with the librime-lua plugin",
+    "The runtime's stock OpenCC opencc/s2t.json configuration and its dictionaries"
+  ]
+}

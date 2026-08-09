@@ -1,0 +1,102 @@
+name: Platform Preview Data
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-preview-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-and-package-data:
+    name: Verify data (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            label: linux
+          - runner: windows-latest
+            label: windows
+          - runner: macos-15
+            label: macos
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12"
+
+      - name: Preview and release-verifier self-tests
+        run: python -m unittest discover -s scripts/platform-preview -p "test*.py" -v
+
+      - name: Verify and stage the exact SharedSupport closure
+        run: >-
+          python scripts/platform-preview/preview.py stage
+          --repo-root "${{ github.workspace }}"
+          --output-dir platform-preview-stage
+
+      - name: Build data-only preview asset
+        run: >-
+          python scripts/platform-preview/preview.py package
+          --repo-root "${{ github.workspace }}"
+          --output-dir platform-preview-out
+          --label "${{ matrix.label }}"
+
+      - name: Inspect packaged asset
+        run: >-
+          python scripts/platform-preview/preview.py inspect
+          --archive "platform-preview-out/RIMES-platform-preview-data-${{ matrix.label }}.zip"
+
+      - name: Upload preview data asset
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: RIMES-platform-preview-data-${{ matrix.label }}-${{ github.sha }}
+          path: platform-preview-out/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  windows-transactions:
+    name: Exercise Windows package transactions
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12"
+
+      - name: Run isolated install, verify, and uninstall smoke
+        shell: pwsh
+        run: platforms/windows/tests/Smoke-RimesDataPreview.ps1
+
+  linux-transactions:
+    name: Exercise Linux package transactions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12"
+
+      - name: Run isolated install, verify, and uninstall smoke
+        run: platforms/linux/tests/smoke.sh

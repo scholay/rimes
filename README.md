@@ -51,6 +51,20 @@ tail -f ~/rimebuffer.log          # 行为日志
 
 更多 smoke 命令与发布流程见 [RELEASE.md](RELEASE.md)。
 
+### Windows / Linux 输入方案预览
+
+Windows 与 Linux 目前提供独立的 **Data / Input-Schemes Preview**。它复用 RIMES 的四套
+Rime 方案、词库、Lua 与同批并击配置，但需要用户先安装 Windows
+[小狼毫 Weasel](https://github.com/rime/weasel)、Linux
+[Fcitx5 Rime](https://github.com/fcitx/fcitx5-rime) 或
+[IBus Rime](https://github.com/rime/ibus-rime)。
+
+预览包不包含 macOS 版的缓冲工作台、AI/翻译/OCR、原生设置窗口，也不包含 RIMES
+自己的 Windows TSF 或 Linux Fcitx5/IBus 前端。跨批互击是当前 macOS 前端能力，不能
+由数据包单独提供。请从 Releases 中标记为 **Pre-release** 的
+`RIMES-Windows-Data-Preview-*` / `RIMES-Linux-Data-Preview-*` 资产安装；完整边界、
+安全策略和验证方式见 [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)。
+
 ### Marine Chrome（可选）
 
 当前仅支持 Stable Chrome。扩展源码在 [`Extensions/marine-chrome`](Extensions/marine-chrome)：
@@ -68,6 +82,7 @@ tail -f ~/rimebuffer.log          # 行为日志
 | [SYSTEM-ARCHITECTURE.md](SYSTEM-ARCHITECTURE.md) | 当前权威全局架构（接手开发请先读） |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | P1/P2 历史契约与踩坑 |
 | [PLUGIN-CONFIGURATION.md](PLUGIN-CONFIGURATION.md) | 插件声明式配置 |
+| [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) | Windows / Linux 输入方案预览边界与验证 |
 | [RELEASE.md](RELEASE.md) | CI、通用二进制、应用内更新 |
 
 ## 自动更新
@@ -88,4 +103,6 @@ tail -f ~/rimebuffer.log          # 行为日志
 
 ## 许可证与第三方
 
-本项目采用 [MIT License](LICENSE)。第三方依赖见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+RIMES 自有代码采用 [MIT License](LICENSE)。随包 Rime 方案、词库和 Lua/OpenCC 数据
+保留各自的 GPL/LGPL/CC 许可与署名；完整边界见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 `rime-data/licenses/`。

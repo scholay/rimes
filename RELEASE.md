@@ -70,3 +70,25 @@ macOS 会把这些 id 写入受保护的 TIS 偏好，因此后续不要随意�
 - `Info.plist` 的 `CFBundleShortVersionString` 用 `x.y.z`；tag 为 `vX.Y.Z`。
 - CI 会用 tag 覆盖 plist 版本，用 `github.run_number` 作为 `CFBundleVersion`。
 - 只有 tag 版本 **严格大于** 当前运行版本时，客户端才会提示更新。
+
+## 六、Windows / Linux 输入方案预览
+
+跨平台 Data / Input-Schemes Preview 使用独立的 `platform-preview-vX.Y.Z` 标签和
+`.github/workflows/platform-preview-release.yml`。日常数据验证另由只读的
+`.github/workflows/platform-preview.yml` 负责。该标签不会匹配 macOS 正式发布所用的 `v*`
+规则；生成的 GitHub Release 必须标记为 **Pre-release**，因此也不会进入 macOS 客户端
+查询的 `/releases/latest` 自动更新通道。
+
+预览工作流在 Windows、Linux 与 macOS runner 上共同校验审核过的 Rime 数据闭包，并在
+原生 Windows/Linux runner 上执行安装、校验、卸载文件事务。发布资产只是面向
+Weasel、Fcitx5 Rime 与 IBus Rime 的数据/脚本包，不得描述为完整原生 RIMES 应用。
+
+发布首个预览版：
+
+```bash
+git tag platform-preview-v0.1.0
+git push origin platform-preview-v0.1.0
+```
+
+精确能力边界、被排除的数据和本地验证命令见
+[CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)。

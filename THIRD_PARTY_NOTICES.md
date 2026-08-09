@@ -1,5 +1,35 @@
 # Third-party notices
 
+## Rime Ice configuration and dictionaries
+
+The Rime schemas, dictionaries, Lua modules, OpenCC data, symbol tables, and
+supporting files under `rime-data/` include material derived from
+[`iDvel/rime-ice`](https://github.com/iDvel/rime-ice), distributed under the
+GNU General Public License version 3 only. The original import is identified by
+RIMES commit `d6d9f9cea97da478540b8a5e9a5c102216e2cf1d`; subsequent modifications
+are available in this repository's history. The corresponding source is the
+plain-text data shipped in this repository and in the preview packages.
+
+The GPL text and a detailed source notice are included as
+`rime-data/licenses/GPL-3.0.txt` and
+`rime-data/licenses/rime-ice-SOURCE.md`.
+
+`rime-data/lua/search.lua` retains its embedded attribution to Mirtle and is
+licensed separately under
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/); its source URL
+is recorded both in the file header and the Rime Ice source notice.
+
+## rime-easy-en dictionary
+
+`rime-data/easy_en.dict.yaml` is imported from
+[`BlindingDark/rime-easy-en`](https://github.com/BlindingDark/rime-easy-en) at
+revision `54a4a07289412efc54134092c0d945f895a71ed3` and is distributed under
+the GNU Lesser General Public License version 3. The license and source notice
+are included under `rime-data/licenses/`.
+
+RIMES-authored application and packaging code remains MIT-licensed. Those MIT
+terms do not replace the licenses above for third-party data.
+
 ## GRDB.swift
 
 The My Prompt local search index uses

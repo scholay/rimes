@@ -51,6 +51,21 @@ tail -f ~/rimebuffer.log          # behavior log
 
 More smoke targets and the release pipeline are documented in [RELEASE.md](RELEASE.md).
 
+### Windows / Linux input-schemes preview
+
+Windows and Linux currently receive a separate **Data / Input-Schemes Preview**. It reuses
+RIMES's four Rime schemas, dictionaries, Lua modules, and same-batch chord configuration, but
+requires an existing installation of [Weasel](https://github.com/rime/weasel) on Windows or
+[Fcitx5 Rime](https://github.com/fcitx/fcitx5-rime) / [IBus Rime](https://github.com/rime/ibus-rime)
+on Linux.
+
+The preview does not include the macOS buffer workbench, AI/translation/OCR, native settings,
+or a RIMES-owned Windows TSF or Linux Fcitx5/IBus frontend. Cross-batch mutual typing is a
+current macOS frontend feature and cannot be supplied by a data package alone. Use the
+**Pre-release** assets named `RIMES-Windows-Data-Preview-*` or
+`RIMES-Linux-Data-Preview-*`; see [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)
+for the exact boundary, safety model, and validation commands.
+
 ### Marine Chrome (optional)
 
 Stable Chrome only today. Extension sources live in [`Extensions/marine-chrome`](Extensions/marine-chrome):
@@ -68,6 +83,7 @@ The extension is a page sensor only: it does not run a model, auto-fill fields, 
 | [SYSTEM-ARCHITECTURE.md](SYSTEM-ARCHITECTURE.md) | Authoritative system architecture (start here if hacking) |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | P1/P2 historical contracts and footguns |
 | [PLUGIN-CONFIGURATION.md](PLUGIN-CONFIGURATION.md) | Declarative plugin configuration |
+| [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) | Windows / Linux input-schemes preview boundary and validation |
 | [RELEASE.md](RELEASE.md) | CI, universal binaries, in-app updates |
 
 ## Auto-update
@@ -84,4 +100,7 @@ Installed builds check GitHub Releases on [`scholay/rimes`](https://github.com/s
 
 ## License & third parties
 
-RIMES is released under the [MIT License](LICENSE). Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+RIMES-authored code is released under the [MIT License](LICENSE). Bundled Rime
+schemas, dictionaries, and Lua/OpenCC data retain their GPL/LGPL/CC licenses
+and attribution; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and
+`rime-data/licenses/` for the exact boundary.
