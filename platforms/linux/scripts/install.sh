@@ -174,7 +174,10 @@ rollback_install() {
     local status=$?
     local relative_path
     local active_relative
-    local active_destination
+    # Bash 5 treats an uninitialized local as unset under `set -u`.  The
+    # destination deliberately remains empty when a concurrent symlink makes
+    # the commit path unsafe, so initialize it before the cleanup predicates.
+    local active_destination=""
     local state_name
     local state_source
     local state_destination

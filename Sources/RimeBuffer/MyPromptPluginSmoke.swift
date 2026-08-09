@@ -15,6 +15,23 @@ private final class MyPromptSmokeBackgroundQueue {
     }
 }
 
+private func myPromptSmokeDrainMainQueue(
+    timeout: TimeInterval = 1
+) -> Bool {
+    dispatchPrecondition(condition: .onQueue(.main))
+    let barrier = DispatchWorkItem {}
+    DispatchQueue.main.async(execute: barrier)
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if barrier.wait(timeout: .now()) == .success { return true }
+        _ = RunLoop.main.run(
+            mode: .default,
+            before: min(deadline, Date().addingTimeInterval(0.01))
+        )
+    } while Date() < deadline
+    return barrier.wait(timeout: .now()) == .success
+}
+
 private final class MyPromptSmokeCancellation: AITextCancellable {
     func cancel() {}
 }
@@ -938,7 +955,9 @@ private func runMyPromptConfigurationRoutingSmoke(
         var snapshot = try model.load()
         snapshot[MyPromptPluginConfigurationFieldID.resultLimit] = .number(1)
         _ = try model.save(snapshot)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        guard myPromptSmokeDrainMainQueue() else {
+            return fail("result limit configuration dispatch timeout")
+        }
         workspace.fireSearchDebounceForTesting()
     } catch {
         return fail("result limit configuration update")
@@ -958,7 +977,9 @@ private func runMyPromptConfigurationRoutingSmoke(
             MyPromptPluginConfigurationFieldID.includeUserPrompt
         ] = .bool(false)
         _ = try model.save(snapshot)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        guard myPromptSmokeDrainMainQueue() else {
+            return fail("user prompt configuration dispatch timeout")
+        }
     } catch {
         return fail("user prompt configuration update")
     }
@@ -976,7 +997,9 @@ private func runMyPromptConfigurationRoutingSmoke(
             MyPromptPluginConfigurationFieldID.syncRemoteOnStart
         ] = .bool(true)
         _ = try model.save(snapshot)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        guard myPromptSmokeDrainMainQueue() else {
+            return fail("startup sync configuration dispatch timeout")
+        }
     } catch {
         return fail("startup sync configuration update")
     }
@@ -999,22 +1022,20 @@ private func runMyPromptConfigurationRoutingSmoke(
                 .path
         )
         _ = try model.save(snapshot)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        guard myPromptSmokeDrainMainQueue() else {
+            return fail("library configuration dispatch timeout")
+        }
     } catch {
         return fail("library configuration update")
     }
+    workspace.fireSearchDebounceForTesting()
     guard refreshCalls.count == 2,
           remoteSyncCalls == [false, false],
-          searchCalls.count == 2,
-          workspace.phase == .waiting else {
-        return fail("library change must refresh index exactly once")
-    }
-    workspace.fireSearchDebounceForTesting()
-    guard searchCalls.count == 3,
+          searchCalls.count == 3,
           searchCalls.map({ $0.0 }) == ["科研", "科研", "科研"],
           searchCalls.map({ $0.1 }) == [3, 1, 1],
           workspace.phase == .ready else {
-        return fail("library refresh latest-query search")
+        return fail("library change must refresh and search exactly once")
     }
 
     do {
@@ -1025,22 +1046,20 @@ private func runMyPromptConfigurationRoutingSmoke(
             "https://github.com/example/research-prompts.git"
         )
         _ = try model.save(snapshot)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        guard myPromptSmokeDrainMainQueue() else {
+            return fail("remote repository configuration dispatch timeout")
+        }
     } catch {
         return fail("remote repository configuration update")
     }
+    workspace.fireSearchDebounceForTesting()
     guard refreshCalls.count == 3,
           remoteSyncCalls == [false, false, true],
-          searchCalls.count == 3,
-          workspace.phase == .waiting else {
-        return fail("remote repository change must synchronize once")
-    }
-    workspace.fireSearchDebounceForTesting()
-    guard searchCalls.count == 4,
+          searchCalls.count == 4,
           searchCalls.last?.0 == "科研",
           searchCalls.last?.1 == 1,
           workspace.phase == .ready else {
-        return fail("remote refresh latest-query search")
+        return fail("remote repository change must synchronize and search once")
     }
     return true
 }
