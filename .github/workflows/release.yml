@@ -261,7 +261,7 @@ jobs:
           extracted_bin="$extracted_app/Contents/MacOS/ETInput"
           [[ -x "$extracted_bin" ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$extracted_app/Contents/Info.plist")" == "$VERSION" ]]
-          lipo -verify_arch arm64 x86_64 "$extracted_bin"
+          lipo "$extracted_bin" -verify_arch arm64 x86_64
           codesign --verify --deep --strict --verbose=2 "$extracted_app"
 
           xar -tf "$PKG" | grep -x 'Distribution' >/dev/null
