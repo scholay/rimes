@@ -91,8 +91,12 @@ The extension is a page sensor only: it does not run a model, auto-fill fields, 
 Installed builds check GitHub Releases on [`scholay/rimes`](https://github.com/scholay/rimes). To ship:
 
 ```bash
-./scripts/release.sh minor
+./scripts/release.sh patch         # stable macOS release
+./scripts/release.sh preview 0.2.0 # Windows/Linux data preview
 ```
+
+Both release channels are published in the new repository: macOS `vX.Y.Z`
+is stable, while Windows/Linux `platform-preview-vX.Y.Z` is always a pre-release.
 
 ## Known issues
 

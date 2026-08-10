@@ -3,14 +3,20 @@ name: Release Windows and Linux Input-Schemes Preview
 on:
   push:
     tags:
+      # The jobs below validate the exact platform-preview-vX.Y.Z shape.
       - 'platform-preview-v*'
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   windows-package:
     name: Build and test Windows preview
+    if: github.repository == 'scholay/rimes'
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -24,10 +30,12 @@ jobs:
       - name: Resolve preview version
         shell: pwsh
         run: |
-          $version = $env:GITHUB_REF_NAME -replace '^platform-preview-v', ''
-          if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:[-.][0-9A-Za-z.-]+)?$') {
-            throw "Invalid platform preview tag: $env:GITHUB_REF_NAME"
+          if ($env:GITHUB_REPOSITORY -ne 'scholay/rimes' -or $env:GITHUB_REF_TYPE -ne 'tag') {
+            throw "Platform previews may only come from a scholay/rimes tag"
           }
+          $match = [regex]::Match($env:GITHUB_REF_NAME, '^platform-preview-v(?<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$')
+          if (-not $match.Success) { throw "Invalid platform preview tag: $env:GITHUB_REF_NAME" }
+          $version = $match.Groups['version'].Value
           "PREVIEW_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Verify shared data policy
@@ -63,6 +71,7 @@ jobs:
 
   linux-package:
     name: Build and test Linux preview
+    if: github.repository == 'scholay/rimes'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -76,8 +85,13 @@ jobs:
       - name: Resolve preview version
         shell: bash
         run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "scholay/rimes" && "$GITHUB_REF_TYPE" == "tag" ]] || {
+            echo "Platform previews may only come from a scholay/rimes tag" >&2
+            exit 1
+          }
           version="${GITHUB_REF_NAME#platform-preview-v}"
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || {
+          [[ "$GITHUB_REF_NAME" =~ ^platform-preview-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
             echo "Invalid platform preview tag: $GITHUB_REF_NAME" >&2
             exit 1
           }
@@ -113,6 +127,7 @@ jobs:
 
   macos-regression:
     name: Keep the macOS target healthy
+    if: github.repository == 'scholay/rimes'
     # macOS 15 currently defaults to Xcode 16.4 / Swift 6.1, which is required
     # by the pinned GRDB 7.11.1 dependency. This remains an unmodified build of
     # the existing macOS target; the preview contributes no AppKit/IMK source.
@@ -138,7 +153,7 @@ jobs:
 
   release:
     name: Publish prerelease
-    if: startsWith(github.ref, 'refs/tags/platform-preview-v')
+    if: github.repository == 'scholay/rimes' && startsWith(github.ref, 'refs/tags/platform-preview-v')
     needs: [windows-package, linux-package, macos-regression]
     runs-on: ubuntu-latest
     permissions:
@@ -168,15 +183,22 @@ jobs:
       - name: Create GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: scholay/rimes
         shell: bash
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#platform-preview-v}"
+          [[ "$GITHUB_REF_NAME" =~ ^platform-preview-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          remote_sha="$(gh api "repos/$GH_REPO/commits/$GITHUB_REF_NAME" --jq .sha)"
+          [[ "$remote_sha" == "$GITHUB_SHA" ]] || {
+            echo "Remote tag moved: event=$GITHUB_SHA remote=$remote_sha" >&2
+            exit 1
+          }
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "Release already exists; refusing to replace assets: $GITHUB_REF_NAME" >&2
             exit 1
           fi
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$GITHUB_REF_NAME" --repo "$GH_REPO" \
             "release-assets/RIMES-Windows-Data-Preview-$version.zip" \
             "release-assets/RIMES-Windows-Data-Preview-$version.zip.sha256" \
             "release-assets/RIMES-Linux-Data-Preview-$version.tar.gz" \

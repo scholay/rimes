@@ -4,16 +4,29 @@ RIMES 通过 **GitHub Actions + GitHub Releases + 应用内自动更新** 分发
 终端用户优先使用 Release 里的 `.pkg` 安装器；产物是**自包含** app，librime 引擎与 Rime
 词库都打包在 `ETInput.app` 内，无需单独安装 Squirrel。
 
+唯一发布中心是 [`scholay/rimes`](https://github.com/scholay/rimes/releases)：
+
+- `vX.Y.Z`：macOS 正式版，进入 `/releases/latest` 和应用内更新通道；
+- `platform-preview-vX.Y.Z`：Windows/Linux 数据与输入方案预览版，始终标记为 Pre-release。
+
+两个通道使用独立版本号，但都只能由新仓库的 tag 触发。旧仓库
+`young-bo-i/rime-buffer` 只保留历史版本和一次性升级桥，不再发布新功能版本。
+
 > 仓库/内部代号是 RimeBuffer（SPM target、源码目录、控制器类）；`ETInput.app` / `MacOS/ETInput`
 > 是冻结的升级兼容路径；对外产品名是 RIMES。三者刻意分离，品牌变化不迁移 TIS 身份。
 
 ## 一、发布新版本
 
 ```bash
-./scripts/release.sh minor     # 0.1.0 -> 0.2.0，或 patch / major / 指定 x.y.z
+./scripts/release.sh patch       # 正式版 patch +1；也支持 minor / major
+./scripts/release.sh 0.4.2       # 迁仓首版或需要显式锁定版本时
+./scripts/release.sh --dry-run 0.4.2
 ```
 
-脚本会：同步/提交改动 → 更新 `Info.plist` 版本号 → 打 `vX.Y.Z` tag → 推到 GitHub（`origin`）。
+脚本只允许 `origin` 的 fetch/push URL 同时指向 `scholay/rimes`。它会从远端正式 tag 与
+`Info.plist` 的较新者计算版本基线，拒绝脏工作区、分叉的 `main`、已有/回退 tag 和错误仓库；
+需要更新版本时只提交 `Info.plist`，最后原子推送 `main` 与 `vX.Y.Z`。它不会
+`git add -A`，也不会删除或重建远端 tag。
 
 推送 tag 会触发 [`.github/workflows/release.yml`](.github/workflows/release.yml)：
 
@@ -23,6 +36,9 @@ RIMES 通过 **GitHub Actions + GitHub Releases + 应用内自动更新** 分发
    词库拷进 `Contents/Frameworks` 与 `Contents/SharedSupport`；`--deep` ad-hoc 签名
 4. 同时产出 `RIMES-X.Y.Z.pkg`（新用户安装器）和兼容旧客户端的 `ETInput-X.Y.Z.zip`（应用内更新），创建
    GitHub Release，附带 SHA256
+
+也可在 GitHub Actions 手动运行 `Release macOS` 做发布前演练。手动运行只上传短期
+Artifact，不创建 Release；正式 Release 仍必须来自严格的 `vX.Y.Z` tag。
 
 ## 二、自包含 librime（[`scripts/fetch-rime.sh`](scripts/fetch-rime.sh)）
 
@@ -62,6 +78,9 @@ macOS 会把这些 id 写入受保护的 TIS 偏好，因此后续不要随意�
   **`lsregister -f` 重新注册** → `open` 重启。
 - 也可从菜单「检查更新…」手动触发。
 
+更新器只接受与版本精确匹配的 `ETInput-X.Y.Z.zip`。同一正式 Release 中的 Marine Chrome
+扩展或其他平台 ZIP 不会被误当作 macOS 应用更新。
+
 安装过程日志：`~/rimebuffer-update.log`。自动检查默认开启（`UserDefaults` 键
 `updateAutoCheckEnabled`）。
 
@@ -83,12 +102,25 @@ macOS 会把这些 id 写入受保护的 TIS 偏好，因此后续不要随意�
 原生 Windows/Linux runner 上执行安装、校验、卸载文件事务。发布资产只是面向
 Weasel、Fcitx5 Rime 与 IBus Rime 的数据/脚本包，不得描述为完整原生 RIMES 应用。
 
-发布首个预览版：
+发布预览版：
 
 ```bash
-git tag platform-preview-v0.1.0
-git push origin platform-preview-v0.1.0
+./scripts/release.sh preview 0.2.0
 ```
 
 精确能力边界、被排除的数据和本地验证命令见
 [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)。
+
+## 七、旧仓库客户端迁移
+
+`v0.4.1` 及更早的已安装包把更新地址编译为 `young-bo-i/rime-buffer`，因此仅在新仓创建
+Release 无法主动触达这些客户端。迁仓版本需按下面顺序做一次桥接：
+
+1. 先在 `scholay/rimes` 完成正式 Release，并验证其中精确存在 `ETInput-X.Y.Z.zip`；
+2. 下载该 ZIP 并核对 SHA256；
+3. 由旧仓库写权限持有者创建同版本 `vX.Y.Z` Release，只镜像这一份 ZIP，并在说明中指向
+   新仓库源码与正式下载页；
+4. 从旧版本升级后，新 bundle 内的更新地址已经是 `scholay/rimes`，后续版本只需发布到新仓。
+
+桥接资产必须与新仓字节完全一致，不能在旧仓重新构建。没有旧仓写权限时，主发布可以继续，
+但无法让旧安装自动发现迁仓版本，只能请用户从新仓手动安装一次。

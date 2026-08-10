@@ -150,3 +150,7 @@ and also rebuilds the unchanged macOS target before creating a GitHub
 **Pre-release**. The tag deliberately does not match the macOS stable `v*`
 release workflow, and a prerelease is excluded from the macOS updater's
 `/releases/latest` channel.
+
+Create the tag through `./scripts/release.sh preview X.Y.Z`; the script refuses
+dirty or diverged worktrees and verifies that both `origin` URLs resolve to the
+canonical `scholay/rimes` repository before pushing.

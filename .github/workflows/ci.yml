@@ -75,6 +75,7 @@ jobs:
           bash -n scripts/lib/rime-user-state.sh
           bash -n scripts/test-rime-user-state.sh
           bash -n scripts/make-pkg.sh
+          bash -n scripts/release.sh
           bash -n scripts/pkg/scripts/postinstall
 
       - name: Preserve durable user state across reseed

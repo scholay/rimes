@@ -1,9 +1,11 @@
-name: Build and Release
+name: Release macOS
 
 on:
   push:
     tags:
-      - 'v*'            # push a v-prefixed tag (e.g. v0.2.0) to cut a release
+      # GitHub tag filters are globs, so the job validates the exact vX.Y.Z
+      # shape again before it is allowed to publish.
+      - 'v*'
   workflow_dispatch:    # manual builds (produces an artifact, no release)
     inputs:
       version:
@@ -12,11 +14,22 @@ on:
         default: '0.0.0-dev'
 
 permissions:
-  contents: write       # needed to create the GitHub Release
+  contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
+    name: Build, verify, and publish macOS
+    # Releases are canonical only in the post-migration repository. Keeping
+    # this guard in the workflow also makes an accidentally pushed tag in the
+    # retired repository harmless.
+    if: github.repository == 'scholay/rimes'
     runs-on: macos-15   # ARM64 runner; the app is built universal below
+    permissions:
+      contents: write   # create and then inspect the GitHub Release
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,21 +83,37 @@ jobs:
             exit 1
           fi
           bash -n build_install.sh
+          bash -n scripts/release.sh
           bash -n scripts/pkg/scripts/postinstall
           python3 scripts/lint-log-privacy.py
           node Extensions/marine-chrome/tests/smoke.mjs
 
       - name: Resolve version
         id: version
+        env:
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
-            VERSION="${{ github.event.inputs.version }}"
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            if [[ ! "$GITHUB_REF_NAME" =~ ^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]; then
+              echo "Stable release tags must be exactly vX.Y.Z: $GITHUB_REF_NAME" >&2
+              exit 1
+            fi
+            VERSION="${BASH_REMATCH[1]}"
+            IS_RELEASE=true
+          elif [[ -n "$DISPATCH_VERSION" ]]; then
+            VERSION="$DISPATCH_VERSION"
+            IS_RELEASE=false
           else
             VERSION="0.0.0-dev"
+            IS_RELEASE=false
+          fi
+          if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "Invalid build version: $VERSION" >&2
+            exit 1
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "IS_RELEASE=$IS_RELEASE" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
 
       - name: Stamp version into Info.plist
@@ -199,10 +228,76 @@ jobs:
           echo "PKG_SHA256=$PKG_SHA256" >> "$GITHUB_OUTPUT"
           echo "PKG: $PKG  SHA256: $PKG_SHA256"
 
+      - name: Reopen and verify the exact macOS release assets
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          PKG: ${{ steps.pkg.outputs.PKG }}
+          PKG_SHA256: ${{ steps.pkg.outputs.PKG_SHA256 }}
+          APP_ZIP: ${{ steps.package.outputs.ZIP }}
+          APP_ZIP_SHA256: ${{ steps.package.outputs.SHA256 }}
+          MARINE_ZIP: ${{ steps.marine_chrome.outputs.ZIP }}
+          MARINE_ZIP_SHA256: ${{ steps.marine_chrome.outputs.SHA256 }}
+        run: |
+          set -euo pipefail
+          [[ "$(basename "$PKG")" == "RIMES-${VERSION}.pkg" ]]
+          [[ "$(basename "$APP_ZIP")" == "ETInput-${VERSION}.zip" ]]
+          [[ "$(basename "$MARINE_ZIP")" == marine-chrome-*.zip ]]
+
+          for asset in "$PKG" "$APP_ZIP" "$MARINE_ZIP"; do
+            [[ -f "$asset" && ! -L "$asset" && -s "$asset" ]] || {
+              echo "Release asset is missing, empty, or a symlink: $asset" >&2
+              exit 1
+            }
+          done
+          [[ "$(shasum -a 256 "$PKG" | awk '{print $1}')" == "$PKG_SHA256" ]]
+          [[ "$(shasum -a 256 "$APP_ZIP" | awk '{print $1}')" == "$APP_ZIP_SHA256" ]]
+          [[ "$(shasum -a 256 "$MARINE_ZIP" | awk '{print $1}')" == "$MARINE_ZIP_SHA256" ]]
+
+          unzip -tq "$APP_ZIP"
+          verify_root="$(mktemp -d "$RUNNER_TEMP/rimes-macos-release.XXXXXX")"
+          trap 'rm -rf "$verify_root"' EXIT
+          ditto -x -k "$APP_ZIP" "$verify_root/app"
+          extracted_app="$verify_root/app/ETInput.app"
+          extracted_bin="$extracted_app/Contents/MacOS/ETInput"
+          [[ -x "$extracted_bin" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$extracted_app/Contents/Info.plist")" == "$VERSION" ]]
+          lipo -verify_arch arm64 x86_64 "$extracted_bin"
+          codesign --verify --deep --strict --verbose=2 "$extracted_app"
+
+          xar -tf "$PKG" | grep -x 'Distribution' >/dev/null
+          pkgutil --payload-files "$PKG" \
+            | grep -E '(^|/)ETInput\.app/Contents/MacOS/ETInput$' >/dev/null
+
+          unzip -tq "$MARINE_ZIP"
+          unzip -p "$MARINE_ZIP" marine-chrome/manifest.json \
+            | cmp - Extensions/marine-chrome/manifest.json
+
+      - name: Validate canonical tag and vacant Release
+        if: steps.version.outputs.IS_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: scholay/rimes
+        run: |
+          set -euo pipefail
+          remote_sha="$(gh api "repos/$GH_REPO/commits/$GITHUB_REF_NAME" --jq .sha)"
+          [[ "$remote_sha" == "$GITHUB_SHA" ]] || {
+            echo "Remote tag moved: event=$GITHUB_SHA remote=$remote_sha" >&2
+            exit 1
+          }
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to replace assets: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
       - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.version.outputs.IS_RELEASE == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          repository: scholay/rimes
+          tag_name: ${{ github.ref_name }}
+          name: RIMES v${{ steps.version.outputs.VERSION }}
+          fail_on_unmatched_files: true
+          make_latest: true
           files: |
             ${{ steps.pkg.outputs.PKG }}
             ${{ steps.package.outputs.ZIP }}
@@ -241,7 +336,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload artifacts (manual builds)
-        if: "!startsWith(github.ref, 'refs/tags/')"
+        if: steps.version.outputs.IS_RELEASE != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: RIMES-${{ steps.version.outputs.VERSION }}

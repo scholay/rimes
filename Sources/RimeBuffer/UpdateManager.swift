@@ -201,8 +201,12 @@ final class UpdateManager {
                     guard self.isNewerVersion(latest, than: self.currentVersion) else {
                         self.setStatus(.noUpdate); return
                     }
-                    guard let asset = release.assets.first(where: { $0.name.hasSuffix(".zip") }) else {
-                        self.setStatus(.error("最新 Release 未附带可安装的 .zip")); return
+                    // A stable release may also contain ZIP assets for browser
+                    // extensions or other platforms. Only the frozen ETInput
+                    // bundle name is a valid in-app update payload.
+                    let expectedAssetName = "ETInput-\(latest).zip"
+                    guard let asset = release.assets.first(where: { $0.name == expectedAssetName }) else {
+                        self.setStatus(.error("最新 Release 未附带 \(expectedAssetName)")); return
                     }
                     IMELog.write("update: \(self.currentVersion) -> \(latest) available")
                     self.setStatus(.available(version: latest,

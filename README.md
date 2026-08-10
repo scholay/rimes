@@ -90,8 +90,12 @@ Rime 方案、词库、Lua 与同批并击配置，但需要用户先安装 Wind
 已安装的 RIMES 会检查 [`scholay/rimes`](https://github.com/scholay/rimes) 的 GitHub Release。发布：
 
 ```bash
-./scripts/release.sh minor
+./scripts/release.sh patch         # macOS 正式版
+./scripts/release.sh preview 0.2.0 # Windows/Linux 数据预览版
 ```
+
+两类 Release 都发布在新仓库：macOS `vX.Y.Z` 是稳定版，Windows/Linux
+`platform-preview-vX.Y.Z` 始终是 Pre-release。
 
 ## 友链
 
