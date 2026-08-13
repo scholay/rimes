@@ -4,8 +4,8 @@
 状态：长期路线图；缓冲窗口部分已实现
 
 > **2026-07-19 缓冲插件决策（覆盖本文旧 Processor/MarineBridge 描述）**：外部缓冲插件由通用 HTTP Action Plugin 宿主从 `~/Library/RimeBuffer/plugins/*/manifest.json` 动态加载；Marine 是首个实现。苹果本地翻译不伪装成 HTTP 插件，而是内置 `.bufferAction`，但与 Marine 在同一缓冲插件列表和唯一 owner 下互斥。用户调用外部动作时冻结 request/context/focus，匹配结果直接进缓冲，失效结果进收件箱，两者都不自动上屏。旧 `MarineBridge` 源码暂留但已从 focus 主路径解除。
-上游输入：`new-rime.pen` 七张探索稿（wBwdM/XKzFo/e9aJFL/FBS3A/rulod/BMbRV/S0d7w）+ 产品负责人 2026-07-16 口头需求收敛
-关系：本文档记录工作台路线与历史裁决；`new-rime.pen` 是视觉参考；`ARCHITECTURE.md` 是 P1 时代交接文档。运行时事实与本文冲突时以 `SYSTEM-ARCHITECTURE.md` 为准。
+上游输入：七张早期视觉探索稿（已退役）+ 产品负责人 2026-07-16 口头需求收敛
+关系：本文档记录工作台路线与历史裁决；`ARCHITECTURE.md` 是 P1 时代交接文档。运行时事实与本文冲突时以 `SYSTEM-ARCHITECTURE.md` 为准。
 
 > 2026-07-17 早期决策（已被下一条覆盖）：缓冲区从候选 panel 拆成独立工作台，曾采用内嵌候选投影、全文预览与发送后留块方案。
 >

@@ -12,6 +12,9 @@ Vendor/
 *.xcuserstate
 *.swp
 
+# Retired root-level Pencil exploration; keep it out after removal.
+/new-rime.pen
+
 *.log
 
 # Local installer builds (CI produces the released pkg)
