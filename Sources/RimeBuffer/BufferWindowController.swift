@@ -642,7 +642,7 @@ func runBufferWorkbenchToolbarHitTestProbe() -> Bool {
     BufferWorkbenchToolbarView.runHitTestProbe()
 }
 
-private final class FirstMousePopUpButton: NSPopUpButton {
+private final class FirstMousePopUpButton: RimeFixedAccentPopUpButton {
     private var pointerTrackingArea: NSTrackingArea?
     private var pointerHovered = false
     private var pointerPressed = false

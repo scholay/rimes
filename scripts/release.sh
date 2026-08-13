@@ -115,6 +115,10 @@ EXPECTED_REPO="scholay/rimes"
 cd "$(dirname "$0")/.."
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "当前目录不是 Git 仓库。"
 
+# Plugin versions, GitHub pins and both README tables share one catalog.
+python3 -B scripts/sync-buffer-plugin-catalog.py --check \
+    || die "预置缓冲插件 catalog / README / 下载 manifest 未同步。"
+
 git remote get-url "$REMOTE" >/dev/null 2>&1 || die "缺少发布远端 ${REMOTE}。"
 fetch_url="$(git remote get-url "$REMOTE")"
 push_url="$(git remote get-url --push "$REMOTE")"

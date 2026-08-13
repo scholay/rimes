@@ -402,6 +402,10 @@ private var marineChromeCredentialsResetObserver: NSObjectProtocol?
 
 private func installMarineChromePairingApprovalHandler() {
     MarineChromePairingBroker.shared.setApprovalHandler { request, respond in
+        guard MarineChromeGatewayAvailability.shared.isAvailable else {
+            respond(false)
+            return
+        }
         MarineChromePairingPromptController.shared.present(
             request,
             respond: respond
@@ -448,6 +452,43 @@ if CommandLine.arguments.contains("openai-config-migrate") {
     }
 }
 
+/// Main-thread integration boundary between Registry lifecycle and the gateway
+/// queue's availability snapshot. Revoking the optional plug-in also revokes
+/// every in-memory browser authority; persisted pairing credentials remain
+/// available for a later explicit re-enable.
+private func reconcileMarineChromeGatewayAvailability(
+    registry: PluginRegistry
+) {
+    dispatchPrecondition(condition: .onQueue(.main))
+    let key = PluginKey(
+        domain: .builtIn,
+        rawID: BuiltInPluginID.marineChrome
+    )
+    let available = registry.isEnabled(key)
+    MarineChromeGatewayAvailabilityLifecycle.reconcile(
+        available,
+        cancelPairing: { MarineChromePairingBroker.shared.cancelAll() },
+        cancelPrompt: { MarineChromePairingPromptController.shared.cancel() },
+        clearContext: { MarineChromeContextStore.shared.clear() }
+    )
+}
+
+private var marineChromePluginAvailabilityObserver: NSObjectProtocol?
+
+private func installMarineChromeGatewayAvailabilityObserver(
+    registry: PluginRegistry
+) {
+    reconcileMarineChromeGatewayAvailability(registry: registry)
+    guard marineChromePluginAvailabilityObserver == nil else { return }
+    marineChromePluginAvailabilityObserver = NotificationCenter.default.addObserver(
+        forName: .pluginRegistryDidChange,
+        object: registry,
+        queue: .main
+    ) { _ in
+        reconcileMarineChromeGatewayAvailability(registry: registry)
+    }
+}
+
 // `swift run RimeBuffer smoke` validates the engine end-to-end without IMK.
 if CommandLine.arguments.contains("stats-smoke") {
     exit(runStatsSmokeTest() ? 0 : 1)
@@ -475,6 +516,9 @@ if CommandLine.arguments.contains("plugin-smoke") {
 }
 if CommandLine.arguments.contains("plugin-platform-smoke") {
     exit(runPluginPlatformSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("plugin-distribution-smoke") {
+    exit(runPluginDistributionSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("plugin-configuration-smoke") {
     exit(runPluginConfigurationSmokeTest() ? 0 : 1)
@@ -535,6 +579,9 @@ if CommandLine.arguments.contains("activation-cache-smoke") {
 }
 if CommandLine.arguments.contains("theme-smoke") {
     exit(runThemeSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("theme-appkit-smoke") {
+    exit(runThemeAppKitSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("smoke") {
     exit(runEngineSmokeTest() ? 0 : 1)
@@ -673,6 +720,9 @@ if CommandLine.arguments.contains("gateway-serve") {
         print("[inbound] pending=\(p.count) latest=\(p.last.map { "\($0.origin.tag):\($0.text.count)chars streaming=\($0.streaming)" } ?? "-")")
         fflush(stdout)
     }
+    installMarineChromeGatewayAvailabilityObserver(
+        registry: PluginRegistry.shared
+    )
     installMarineChromePairingApprovalHandler()
     LocalGateway.shared.start()
     print("gateway-serve on 127.0.0.1:\(LocalGateway.shared.port) token=\(GatewayToken.current())")
@@ -686,6 +736,7 @@ if CommandLine.arguments.contains("gateway-serve") {
 // key. The registry is discovery/enablement only; external Action Plugin
 // execution and revocation remain owned by ActionPluginHost/Manager.
 let pluginRegistry = PluginRegistry.shared
+installMarineChromeGatewayAvailabilityObserver(registry: pluginRegistry)
 BufferPluginSelectionStore.shared.migrateDefaultIfNeeded(
     from: pluginRegistry.plugins(capability: .bufferAction)
 )
@@ -819,6 +870,7 @@ RemoteTypingService.shared.onPairRequest = { peerName, sas, respond in
     alert.informativeText = "同意后，对方打的字会即时出现在你这里，你打的字也会发给对方。\n验证码：\(sas)（两台显示一致即代表安全，无中间人）"
     alert.addButton(withTitle: "同意")
     alert.addButton(withTitle: "拒绝")
+    alert.window.appearance = RimeUI.appKitAppearance
     NSApp.activate(ignoringOtherApps: true)
     respond(alert.runModal() == .alertFirstButtonReturn)
 }
@@ -829,6 +881,7 @@ RemoteTypingService.shared.onPairConfirm = { peerName, sas, proceed in
     alert.informativeText = "请核对两台 Mac 显示的验证码一致：\(sas)\n一致后点「配对」，再请对方点「同意」。"
     alert.addButton(withTitle: "配对")
     alert.addButton(withTitle: "取消")
+    alert.window.appearance = RimeUI.appKitAppearance
     NSApp.activate(ignoringOtherApps: true)
     proceed(alert.runModal() == .alertFirstButtonReturn)
 }
@@ -8235,8 +8288,8 @@ func runCandidateMetricsSmokeTest() -> Bool {
     return ok
 }
 
-/// Guards the fixed day palette against regressions to dynamic semantic colors
-/// or foregrounds that disappear on the small candidate/workbench typography.
+/// Guards the fixed 墨竹 / 翡翠 palettes against regressions to a system-owned
+/// accent or foregrounds that disappear on small candidate/workbench text.
 func runThemeSmokeTest() -> Bool {
     print("== \(ProductIdentity.displayName) theme contrast smoke test ==")
     var ok = true
@@ -8247,7 +8300,41 @@ func runThemeSmokeTest() -> Bool {
         }
     }
 
+    check(RimeAppearanceMode.night.rawValue == "night",
+          "墨竹 must preserve the persisted night raw value")
+    check(RimeAppearanceMode.day.rawValue == "day",
+          "翡翠 must preserve the persisted day raw value")
+    check(RimeAppearanceMode(rawValue: "night") == .night,
+          "the legacy night preference must still load as 墨竹")
+    check(RimeAppearanceMode(rawValue: "day") == .day,
+          "the legacy day preference must still load as 翡翠")
+    check(RimeAppearanceMode.night.title == "墨竹",
+          "night's visible theme name should be 墨竹")
+    check(RimeAppearanceMode.day.title == "翡翠",
+          "day's visible theme name should be 翡翠")
+
     let day = RimeThemePalettes.day
+    let night = RimeThemePalettes.night
+    let productGreen = RimeThemePalettes.productGreen
+    check(productGreen == 0x22C55E,
+          "the product accent should remain the approved fixed green")
+    check(day.accentBlue == productGreen && day.accentGreen == productGreen,
+          "翡翠 should use the fixed product green for every accent alias")
+    check(night.accentBlue == productGreen && night.accentGreen == productGreen,
+          "墨竹 should use the fixed product green for every accent alias")
+    check(day.accentBlue == night.accentBlue,
+          "theme changes must not change the product accent")
+    check(KeyboardHeatmapColorRules.sRGBHex(
+            red: 34.0 / 255.0,
+            green: 197.0 / 255.0,
+            blue: 94.0 / 255.0
+          ) == productGreen,
+          "heatmap sRGB conversion should preserve the product green")
+    check(ProcessInfo.processInfo.environment["RIMEBUFFER_APPEARANCE_MODE"] == nil
+            || RimeUI.appearance.rawValue
+                == ProcessInfo.processInfo.environment["RIMEBUFFER_APPEARANCE_MODE"],
+          "the preview-only theme override should select the requested palette")
+
     let textColors: [(String, UInt32)] = [
         ("primary", day.textPrimary),
         ("secondary", day.textSecondary),
@@ -8267,6 +8354,11 @@ func runThemeSmokeTest() -> Bool {
     )
     check(daySelectedTextRatio >= 4.5,
           "day selected text contrast \(daySelectedTextRatio) should be >= 4.5")
+    check(day.selectedCandidateText
+            == RimeColorContrast.preferredForeground(
+                background: day.selectedCandidateBackground
+            ),
+          "day selected text should use the safest monochrome foreground")
     let daySelectionRatio = RimeColorContrast.ratio(
         foreground: day.selectedCandidateBackground,
         background: day.candidateBackground
@@ -8288,7 +8380,52 @@ func runThemeSmokeTest() -> Bool {
     check(borderRatio >= 3,
           "day strong border contrast \(borderRatio) should be >= 3")
 
-    let night = RimeThemePalettes.night
+    let heatmapBackgrounds: [(String, UInt32)] = [
+        ("day surface", day.surfaceSecondary),
+        ("day accent", day.accentGreen),
+        ("night surface", night.surfaceSecondary),
+        ("night accent", night.accentGreen),
+    ]
+    for (name, background) in heatmapBackgrounds {
+        let foreground = KeyboardHeatmapColorRules.preferredForeground(
+            background: background
+        )
+        check(foreground == RimeColorContrast.preferredForeground(
+                background: background
+              ),
+              "\(name) heatmap foreground should use the contrast rule")
+        let ratio = RimeColorContrast.ratio(
+            foreground: foreground,
+            background: background
+        )
+        check(ratio >= 4.5,
+              "\(name) heatmap text contrast \(ratio) should be >= 4.5")
+    }
+
+    let dayFlyChordSuccess = FlyChordSettingsThemeRules.successTextHex(
+        for: .day
+    )
+    check(dayFlyChordSuccess == day.selectedCandidateBackground,
+          "翡翠 FlyChord success text should use the deep product green")
+    let dayFlyChordRatio = RimeColorContrast.ratio(
+        foreground: dayFlyChordSuccess,
+        background: day.surfaceSecondary
+    )
+    check(dayFlyChordRatio >= 4.5,
+          "翡翠 FlyChord success contrast \(dayFlyChordRatio) should be >= 4.5")
+
+    let nightFlyChordSuccess = FlyChordSettingsThemeRules.successTextHex(
+        for: .night
+    )
+    check(nightFlyChordSuccess == productGreen,
+          "墨竹 FlyChord success text should use the product green")
+    let nightFlyChordRatio = RimeColorContrast.ratio(
+        foreground: nightFlyChordSuccess,
+        background: night.surfaceSecondary
+    )
+    check(nightFlyChordRatio >= 4.5,
+          "墨竹 FlyChord success contrast \(nightFlyChordRatio) should be >= 4.5")
+
     let nightTextColors: [(String, UInt32)] = [
         ("primary", night.textPrimary),
         ("secondary", night.textSecondary),
@@ -8308,8 +8445,11 @@ func runThemeSmokeTest() -> Bool {
     )
     check(nightSelectedTextRatio >= 4.5,
           "night selected text contrast \(nightSelectedTextRatio) should be >= 4.5")
-    check(night.selectedCandidateText == 0xFFFFFF,
-          "night selected candidate text should stay white")
+    check(night.selectedCandidateText
+            == RimeColorContrast.preferredForeground(
+                background: night.selectedCandidateBackground
+            ),
+          "night selected text should use the safest monochrome foreground")
     let nightSelectionRatio = RimeColorContrast.ratio(
         foreground: night.selectedCandidateBackground,
         background: night.candidateBackground

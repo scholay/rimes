@@ -1,6 +1,17 @@
 import AppKit
 import Foundation
 
+enum FlyChordSettingsThemeRules {
+    static func successTextHex(for appearance: RimeAppearanceMode) -> UInt32 {
+        switch appearance {
+        case .night:
+            return RimeThemePalettes.productGreen
+        case .day:
+            return RimeThemePalettes.day.selectedCandidateBackground
+        }
+    }
+}
+
 final class FlyChordLearningSettingsViewController: NSViewController {
     private let subpageID: String
     private let schemaResult: Result<FlyChordSchema, Error>
@@ -68,17 +79,19 @@ private enum FlyChordPageStyle {
     static func title(_ value: String) -> NSTextField {
         let label = NSTextField(labelWithString: value)
         label.font = .systemFont(ofSize: 20, weight: .semibold)
+        label.textColor = RimeUI.textPrimary
         return label
     }
 
     static func section(_ value: String) -> NSTextField {
         let label = NSTextField(labelWithString: value)
         label.font = .systemFont(ofSize: 13, weight: .semibold)
+        label.textColor = RimeUI.textPrimary
         return label
     }
 
     static func caption(_ value: String,
-                        color: NSColor = .secondaryLabelColor) -> NSTextField {
+                        color: NSColor = RimeUI.textSecondary) -> NSTextField {
         let label = NSTextField(wrappingLabelWithString: value)
         label.font = .systemFont(ofSize: 11)
         label.textColor = color
@@ -86,19 +99,46 @@ private enum FlyChordPageStyle {
     }
 
     static func card(_ views: [NSView]) -> NSStackView {
-        let stack = NSStackView(views: views)
+        let stack = FlyChordCardStackView(arrangedViews: views)
         stack.orientation = .vertical
         stack.alignment = .width
         stack.spacing = 6
         stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
-        stack.wantsLayer = true
-        stack.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.68).cgColor
-        stack.layer?.borderColor = NSColor.separatorColor.cgColor
-        stack.layer?.borderWidth = 0.5
-        stack.layer?.cornerRadius = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.widthAnchor.constraint(equalToConstant: 650).isActive = true
         return stack
+    }
+}
+
+/// Layer-backed card colors are refreshed when the settings window switches
+/// between 墨竹 and 翡翠. This avoids freezing an AppKit dynamic color's
+/// one-time `cgColor` resolution into a layer.
+private final class FlyChordCardStackView: NSStackView {
+    init(arrangedViews: [NSView]) {
+        super.init(frame: .zero)
+        arrangedViews.forEach(addArrangedSubview)
+        wantsLayer = true
+        layer?.borderWidth = 0.5
+        layer?.cornerRadius = 8
+        updateThemeColors()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+        layer?.borderWidth = 0.5
+        layer?.cornerRadius = 8
+        updateThemeColors()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateThemeColors()
+    }
+
+    private func updateThemeColors() {
+        layer?.backgroundColor = RimeUI.surface2.cgColor
+        layer?.borderColor = RimeUI.border.cgColor
     }
 }
 
@@ -116,9 +156,10 @@ private final class FlyChordLessonsPageView: NSView {
             let progress = snapshot.progress(for: course)
             let name = NSTextField(labelWithString: course.title)
             name.font = .systemFont(ofSize: 13, weight: .semibold)
+            name.textColor = RimeUI.textPrimary
             let count = NSTextField(labelWithString: "\(course.mappings.count) 项")
             count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-            count.textColor = .tertiaryLabelColor
+            count.textColor = RimeUI.textMuted
             let header = NSStackView(views: [name, flexibleSpacer(), count])
             header.orientation = .horizontal
             let detail = FlyChordPageStyle.caption(
@@ -175,6 +216,7 @@ private final class FlyChordProgressPageView: NSView {
                 : 0
             let name = NSTextField(labelWithString: course.title)
             name.font = .systemFont(ofSize: 13, weight: .semibold)
+            name.textColor = RimeUI.textPrimary
             let detail = FlyChordPageStyle.caption(
                 "掌握 \(progress.masteredItems)/\(progress.totalItems) · 尝试 \(progress.attempts) 次 · 正确率 \(String(format: "%.0f", accuracy))%"
             )
@@ -191,6 +233,7 @@ private final class FlyChordProgressPageView: NSView {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "清空")
         alert.addButton(withTitle: "取消")
+        alert.window.appearance = RimeUI.appKitAppearance
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
             _ = try progressStore.clear()
@@ -204,7 +247,7 @@ private final class FlyChordProgressPageView: NSView {
 private final class FlyChordPracticePageView: NSView {
     private let curriculum: FlyChordCurriculum
     private let progressStore: FlyChordProgressStore
-    private let coursePopUp = NSPopUpButton()
+    private let coursePopUp = RimeFixedAccentPopUpButton()
     private let targetLabel = NSTextField(labelWithString: "")
     private let chordHint = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
@@ -232,13 +275,14 @@ private final class FlyChordPracticePageView: NSView {
     private func build() {
         targetLabel.font = .systemFont(ofSize: 38, weight: .semibold)
         targetLabel.alignment = .center
+        targetLabel.textColor = RimeUI.textPrimary
         targetLabel.translatesAutoresizingMaskIntoConstraints = false
         targetLabel.widthAnchor.constraint(equalToConstant: 620).isActive = true
         chordHint.font = .monospacedSystemFont(ofSize: 14, weight: .medium)
-        chordHint.textColor = .secondaryLabelColor
+        chordHint.textColor = RimeUI.textSecondary
         statusLabel.font = .systemFont(ofSize: 12, weight: .medium)
         progressLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        progressLabel.textColor = .tertiaryLabelColor
+        progressLabel.textColor = RimeUI.textMuted
 
         coursePopUp.target = self
         coursePopUp.action = #selector(courseChanged)
@@ -328,7 +372,7 @@ private final class FlyChordPracticePageView: NSView {
         targetLabel.stringValue = exercise.expectedOutput
         chordHint.stringValue = "按下对应并击"
         statusLabel.stringValue = "等待输入"
-        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.textColor = RimeUI.textSecondary
         progressLabel.stringValue = "\(exerciseIndex + 1)/\(exercises.count) · 连对 \(streak)"
     }
 
@@ -369,7 +413,9 @@ private final class FlyChordPracticePageView: NSView {
             let scheduledGeneration = feedbackGeneration
             streak += 1
             statusLabel.stringValue = "正确 · \(exercise.chord.uppercased())"
-            statusLabel.textColor = .systemGreen
+            statusLabel.textColor = RimeUI.color(
+                FlyChordSettingsThemeRules.successTextHex(for: RimeUI.appearance)
+            )
             chordHint.stringValue = "键位 \(exercise.chord.uppercased())"
             exerciseIndex += 1
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
@@ -488,16 +534,21 @@ private final class FlyChordPracticeCaptureView: NSView {
         return super.resignFirstResponder()
     }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let rect = bounds.insetBy(dx: 2, dy: 4)
         let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
         let fill = isCapturing
-            ? NSColor.controlAccentColor.withAlphaComponent(0.11)
-            : NSColor.controlBackgroundColor.withAlphaComponent(0.6)
+            ? RimeUI.accentGreen.withAlphaComponent(0.11)
+            : RimeUI.surface3
         fill.setFill()
         path.fill()
-        (isCapturing ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
+        (isCapturing ? RimeUI.accentGreen : RimeUI.border).setStroke()
         path.lineWidth = isCapturing ? 1.5 : 1
         path.stroke()
 
@@ -510,7 +561,7 @@ private final class FlyChordPracticeCaptureView: NSView {
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: chordKeys.isEmpty ? 13 : 24,
                                      weight: chordKeys.isEmpty ? .medium : .semibold),
-            .foregroundColor: chordKeys.isEmpty ? NSColor.secondaryLabelColor : NSColor.labelColor,
+            .foregroundColor: chordKeys.isEmpty ? RimeUI.textSecondary : RimeUI.textPrimary,
         ]
         let size = (value as NSString).size(withAttributes: attrs)
         (value as NSString).draw(at: CGPoint(x: bounds.midX - size.width / 2,
@@ -540,6 +591,9 @@ private extension NSView {
     func showErrorAlert(_ error: Error) {
         let alert = NSAlert(error: error)
         if let window { alert.beginSheetModal(for: window) }
-        else { alert.runModal() }
+        else {
+            alert.window.appearance = RimeUI.appKitAppearance
+            alert.runModal()
+        }
     }
 }

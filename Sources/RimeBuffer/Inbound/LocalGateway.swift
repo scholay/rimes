@@ -69,6 +69,13 @@ final class LocalGateway {
     private var listener: NWListener?
     private var listenerEpoch: UInt64?
     private var connections: [ObjectIdentifier: Connection] = [:]
+    private let marineChromeAvailable: () -> Bool
+
+    init(marineChromeAvailable: @escaping () -> Bool = {
+        MarineChromeGatewayAvailability.shared.isAvailable
+    }) {
+        self.marineChromeAvailable = marineChromeAvailable
+    }
 
     var running: Bool {
         lifecycleLock.lock()
@@ -139,6 +146,7 @@ final class LocalGateway {
                 isGatewayCurrent: { [weak self] in
                     self?.isLifecycleCurrent(epoch) == true
                 },
+                marineChromeAvailable: self.marineChromeAvailable,
                 onClose: { [weak self] in self?.dropOnQueue($0) }
             )
             self.connections[ObjectIdentifier(c)] = c   // retain (spike caught this bug)
@@ -284,6 +292,7 @@ final class LocalGateway {
         private let conn: NWConnection
         private let gatewayQueue: DispatchQueue
         private let isGatewayCurrent: () -> Bool
+        private let marineChromeAvailable: () -> Bool
         private let onClose: (Connection) -> Void
         private var buffer = Data()
         // Stateless MCP has no server-side session. Keep only a connection-local,
@@ -293,10 +302,12 @@ final class LocalGateway {
         init(_ connection: NWConnection,
              queue: DispatchQueue,
              isGatewayCurrent: @escaping () -> Bool,
+             marineChromeAvailable: @escaping () -> Bool,
              onClose: @escaping (Connection) -> Void) {
             conn = connection
             gatewayQueue = queue
             self.isGatewayCurrent = isGatewayCurrent
+            self.marineChromeAvailable = marineChromeAvailable
             self.onClose = onClose
         }
 
@@ -520,6 +531,16 @@ final class LocalGateway {
                 json(["error": "not found"], status: "404 Not Found")
                 return
             }
+            guard MarineChromeGatewayRoutePolicy.permitsPluginAvailability(
+                path: path,
+                isAvailable: marineChromeAvailable()
+            ) else {
+                json(
+                    ["error": "marine-chrome is not available"],
+                    status: "503 Service Unavailable"
+                )
+                return
+            }
 
             guard let origin = MarineChromeExtensionOrigin.normalized(
                 req.headers["origin"]
@@ -555,7 +576,7 @@ final class LocalGateway {
                 guard MarineChromePairingOrigin.permitsPreflight(
                     origin,
                     path: path
-                ) else {
+                ), marineChromeAvailable() else {
                     marineChromeJSON(
                         ["error": "extension origin is not paired"],
                         origin: origin,
@@ -590,7 +611,8 @@ final class LocalGateway {
                 }
             }
             if path == "/v1/marine-chrome/prove" {
-                guard MarineChromeExtensionIdentity.matches(origin: origin) else {
+                guard marineChromeAvailable(),
+                      MarineChromeExtensionIdentity.matches(origin: origin) else {
                     marineChromeJSON(
                         ["error": "unexpected extension identity"],
                         origin: origin,
@@ -609,9 +631,10 @@ final class LocalGateway {
                     )
                     return
                 }
-                guard let proof = try? MarineChromeServerProof.make(
-                    nonce: nonce
-                ) else {
+                guard let proof = try? MarineChromeGatewayAvailability.shared
+                    .valueIfAvailable({
+                        try MarineChromeServerProof.make(nonce: nonce)
+                    }) else {
                     marineChromeJSON(
                         ["error": "server proof unavailable"],
                         origin: origin,
@@ -638,7 +661,8 @@ final class LocalGateway {
                 }
             }
             if path == "/v1/marine-chrome/pair/request" {
-                guard MarineChromeExtensionIdentity.matches(origin: origin) else {
+                guard marineChromeAvailable(),
+                      MarineChromeExtensionIdentity.matches(origin: origin) else {
                     marineChromeJSON(
                         ["error": "unexpected extension identity"],
                         origin: origin,
@@ -657,6 +681,14 @@ final class LocalGateway {
                         ["error": "invalid interactive pairing claim"],
                         origin: origin,
                         status: "400 Bad Request"
+                    )
+                    return
+                }
+                guard marineChromeAvailable() else {
+                    marineChromeJSON(
+                        ["error": "marine-chrome is not available"],
+                        origin: origin,
+                        status: "503 Service Unavailable"
                     )
                     return
                 }
@@ -701,6 +733,14 @@ final class LocalGateway {
                 }
                 return
             }
+            guard marineChromeAvailable() else {
+                marineChromeJSON(
+                    ["error": "marine-chrome is not available"],
+                    origin: origin,
+                    status: "503 Service Unavailable"
+                )
+                return
+            }
             guard let authorization = req.headers["authorization"],
                   authorization.hasPrefix("Bearer ") else {
                 marineChromeJSON(["error": "unauthorized extension"],
@@ -709,10 +749,14 @@ final class LocalGateway {
                 return
             }
             let bearerToken = String(authorization.dropFirst(7))
-            guard MarineChromePairingOrigin.authenticateAndPair(
-                origin: origin,
-                bearerToken: bearerToken
-            ) else {
+            let authenticated = MarineChromeGatewayAvailability.shared
+                .valueIfAvailable {
+                    MarineChromePairingOrigin.authenticateAndPair(
+                        origin: origin,
+                        bearerToken: bearerToken
+                    )
+                } ?? false
+            guard authenticated else {
                 marineChromeJSON(["error": "unauthorized extension"],
                                  origin: origin,
                                  status: "401 Unauthorized")

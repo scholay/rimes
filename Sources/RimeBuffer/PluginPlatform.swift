@@ -107,8 +107,17 @@ protocol InternalPlugin: AnyObject {
 struct RegisteredPlugin: Identifiable, Equatable {
     let descriptor: PluginDescriptor
     let isEnabled: Bool
+    let isInstalled: Bool
 
     var id: PluginKey { descriptor.key }
+
+    init(descriptor: PluginDescriptor,
+         isEnabled: Bool,
+         isInstalled: Bool = true) {
+        self.descriptor = descriptor
+        self.isEnabled = isEnabled
+        self.isInstalled = isInstalled
+    }
 }
 
 enum PluginVisualIdentity {
@@ -160,7 +169,8 @@ enum BufferPluginMenuCatalog {
     /// owner from that set, plus the explicit Default (no-plugin) state.
     static func entries(from plugins: [RegisteredPlugin]) -> [BufferPluginMenuEntry] {
         let enabled = plugins.compactMap { plugin -> BufferPluginMenuEntry? in
-            guard plugin.isEnabled,
+            guard plugin.isInstalled,
+                  plugin.isEnabled,
                   plugin.descriptor.capabilities.contains(.bufferAction) else {
                 return nil
             }
@@ -197,12 +207,15 @@ enum BufferPluginMenuCatalog {
 
 enum BufferPluginActivationError: LocalizedError, Equatable {
     case unavailable(PluginKey)
+    case notInstalled(PluginKey)
     case stateChanged(PluginKey)
 
     var errorDescription: String? {
         switch self {
         case let .unavailable(key):
             return "缓冲插件不可用：\(key)"
+        case let .notInstalled(key):
+            return "请先下载并安装缓冲插件：\(key)"
         case let .stateChanged(key):
             return "缓冲插件状态已经变化，请重试：\(key)"
         }
@@ -331,25 +344,35 @@ final class BufferPluginSelectionStore {
 }
 
 final class PluginRegistry {
-    static let shared = PluginRegistry(internalPlugins: BuiltInPlugins.makeAll())
+    static let shared = PluginRegistry(
+        internalPlugins: BuiltInPlugins.makeAll(),
+        presetInstallationStore: .shared
+    )
 
     static let disabledInternalPluginIDsKey = "plugins.internal.disabledIDs"
 
     private let defaults: UserDefaults
     private let externalManager: ActionPluginManager
     private let bufferPluginSelection: BufferPluginSelectionStore
+    private let presetInstallationStore: PresetBufferPluginInstallationStore?
     private var internalPlugins: [String: any InternalPlugin] = [:]
     private var disabledInternalIDs: Set<String>
     private var actionPluginObserver: NSObjectProtocol?
     private var manifestSetObserver: NSObjectProtocol?
+    private var presetInstallationObserver: NSObjectProtocol?
 
     init(internalPlugins plugins: [any InternalPlugin],
          defaults: UserDefaults = .standard,
          externalManager: ActionPluginManager = .shared,
-         bufferPluginSelection: BufferPluginSelectionStore = .shared) {
+         bufferPluginSelection: BufferPluginSelectionStore = .shared,
+         presetInstallationStore: PresetBufferPluginInstallationStore? = nil) {
         self.defaults = defaults
         self.externalManager = externalManager
         self.bufferPluginSelection = bufferPluginSelection
+        self.presetInstallationStore = presetInstallationStore
+        let hadLegacyEnablement = defaults.object(
+            forKey: Self.disabledInternalPluginIDsKey
+        ) != nil
         disabledInternalIDs = Set(
             defaults.stringArray(forKey: Self.disabledInternalPluginIDsKey) ?? []
         )
@@ -365,11 +388,30 @@ final class PluginRegistry {
                          "Duplicate internal plugin ID: \(descriptor.key.rawID)")
             internalPlugins[descriptor.key.rawID] = plugin
         }
+        presetInstallationStore?.bootstrap(
+            hadLegacyEnablement: hadLegacyEnablement,
+            legacyDisabledIDs: disabledInternalIDs
+        )
+        // A clean first run has no legacy preference. Catalog defaults are
+        // the sole authority: the four bundled presets start enabled, while
+        // optional presets remain absent and disabled until downloaded.
+        if !hadLegacyEnablement, let presetInstallationStore {
+            let managedIDs = Set(internalPlugins.keys).intersection(
+                presetInstallationStore.defaultInstalledIDs
+                    .union(presetInstallationStore.optionalIDs)
+            )
+            disabledInternalIDs.subtract(
+                managedIDs.intersection(presetInstallationStore.defaultEnabledIDs)
+            )
+            disabledInternalIDs.formUnion(
+                managedIDs.subtracting(presetInstallationStore.defaultEnabledIDs)
+            )
+        }
         // Drop stale IDs so renamed/removed built-ins do not accumulate in
         // preferences forever.
         disabledInternalIDs.formIntersection(internalPlugins.keys)
         persistInternalEnablement()
-        for plugin in internalPlugins.values where !disabledInternalIDs.contains(plugin.descriptor.key.rawID) {
+        for plugin in internalPlugins.values where isInternalPluginEnabled(plugin.descriptor.key.rawID) {
             plugin.start()
         }
         actionPluginObserver = NotificationCenter.default.addObserver(
@@ -402,6 +444,26 @@ final class PluginRegistry {
                     == self.externalManager.rootURL.path else { return }
             self.notifyChange()
         }
+        if let presetInstallationStore {
+            presetInstallationObserver = NotificationCenter.default.addObserver(
+                forName: PresetBufferPluginInstallationStore.didChangeNotification,
+                object: presetInstallationStore,
+                queue: .main
+            ) { [weak self] notification in
+                guard let self,
+                      notification.userInfo?[PresetBufferPluginInstallationStore.rootPathUserInfoKey]
+                        as? String == presetInstallationStore.rootURL.path else { return }
+                // Downloads are intentionally installed off. Runtime start is
+                // reserved for the user's subsequent enable action.
+                if let rawID = notification.userInfo?[
+                    PresetBufferPluginInstallationStore.changedPluginIDUserInfoKey
+                ] as? String {
+                    self.disabledInternalIDs.insert(rawID)
+                    self.persistInternalEnablement()
+                }
+                self.notifyChange()
+            }
+        }
     }
 
     deinit {
@@ -411,14 +473,20 @@ final class PluginRegistry {
         if let manifestSetObserver {
             NotificationCenter.default.removeObserver(manifestSetObserver)
         }
+        if let presetInstallationObserver {
+            NotificationCenter.default.removeObserver(presetInstallationObserver)
+        }
         for plugin in internalPlugins.values { plugin.stop() }
     }
 
     func allPlugins() -> [RegisteredPlugin] {
         let builtIns = internalPlugins.values.map { plugin in
-            RegisteredPlugin(
+            let installed = isInternalPluginInstalled(plugin.descriptor.key.rawID)
+            return RegisteredPlugin(
                 descriptor: plugin.descriptor,
-                isEnabled: !disabledInternalIDs.contains(plugin.descriptor.key.rawID)
+                isEnabled: installed
+                    && isInternalPluginEnabled(plugin.descriptor.key.rawID),
+                isInstalled: installed
             )
         }
         let external = externalManager.listInstalledPlugins().map { managed in
@@ -469,7 +537,7 @@ final class PluginRegistry {
             // Buffer plugins are configured from the core plugin/workbench
             // surfaces. They must never masquerade as dynamic extensions,
             // even if a future descriptor accidentally carries page metadata.
-            guard !disabledInternalIDs.contains(plugin.descriptor.key.rawID),
+            guard isInternalPluginEnabled(plugin.descriptor.key.rawID),
                   !plugin.descriptor.capabilities.contains(.bufferAction),
                   let settings = plugin.descriptor.settings else { return nil }
             return (plugin.descriptor.key, settings)
@@ -482,7 +550,7 @@ final class PluginRegistry {
         switch key.domain {
         case .builtIn:
             return internalPlugins[key.rawID] != nil
-                && !disabledInternalIDs.contains(key.rawID)
+                && isInternalPluginEnabled(key.rawID)
         case .externalActionV1:
             return externalManager.isEnabled(pluginID: key.rawID)
         }
@@ -490,17 +558,39 @@ final class PluginRegistry {
 
     func setEnabled(_ enabled: Bool, for key: PluginKey) throws {
         if key.domain == .builtIn, let plugin = internalPlugins[key.rawID] {
-            let changed: Bool
-            if enabled {
-                changed = disabledInternalIDs.remove(key.rawID) != nil
-                if changed { plugin.start() }
-            } else {
-                changed = disabledInternalIDs.insert(key.rawID).inserted
-                if changed { plugin.stop() }
+            guard !enabled || isInternalPluginInstalled(key.rawID) else {
+                throw BufferPluginActivationError.notInstalled(key)
             }
-            guard changed else { return }
+            let wasEnabled = isInternalPluginEnabled(key.rawID)
+            let disabledMembershipChanged: Bool
+            if enabled {
+                disabledMembershipChanged =
+                    disabledInternalIDs.remove(key.rawID) != nil
+                if let presetInstallationStore,
+                   presetInstallationStore.isOptional(id: key.rawID) {
+                    _ = presetInstallationStore.setOptionalEnabled(true, id: key.rawID)
+                }
+            } else {
+                disabledMembershipChanged =
+                    disabledInternalIDs.insert(key.rawID).inserted
+                if let presetInstallationStore,
+                   presetInstallationStore.isOptional(id: key.rawID) {
+                    _ = presetInstallationStore.setOptionalEnabled(false, id: key.rawID)
+                }
+            }
+            if disabledMembershipChanged { persistInternalEnablement() }
+
+            // Optional receipt authority is independent from the legacy
+            // disabled-ID set. Compare the effective state so granting a
+            // receipt whose ID was already absent still starts/notifies.
+            let isEnabledNow = isInternalPluginEnabled(key.rawID)
+            guard wasEnabled != isEnabledNow else { return }
+            if isEnabledNow {
+                plugin.start()
+            } else {
+                plugin.stop()
+            }
             if !enabled { bufferPluginSelection.clearIfSelected(key) }
-            persistInternalEnablement()
             notifyChange()
             return
         }
@@ -536,7 +626,7 @@ final class PluginRegistry {
     func makeSettingsViewController(pluginKey: PluginKey,
                                     subpageID: String) -> NSViewController? {
         guard pluginKey.domain == .builtIn,
-              !disabledInternalIDs.contains(pluginKey.rawID) else { return nil }
+              isInternalPluginEnabled(pluginKey.rawID) else { return nil }
         return internalPlugins[pluginKey.rawID]?.makeSettingsViewController(subpageID: subpageID)
     }
 
@@ -546,6 +636,7 @@ final class PluginRegistry {
     /// only host-owned catalog entries (currently Marine) are eligible.
     func hasConfiguration(for pluginKey: PluginKey) -> Bool {
         if pluginKey.domain == .builtIn,
+           isInternalPluginInstalled(pluginKey.rawID),
            internalPlugins[pluginKey.rawID]
             is any PluginConfigurationProviding {
             return true
@@ -563,6 +654,7 @@ final class PluginRegistry {
         pluginKey: PluginKey
     ) throws -> NSViewController? {
         if pluginKey.domain == .builtIn,
+           isInternalPluginInstalled(pluginKey.rawID),
            let provider = internalPlugins[pluginKey.rawID]
             as? any PluginConfigurationProviding {
             return try provider.makePluginConfigurationViewController()
@@ -576,8 +668,28 @@ final class PluginRegistry {
     }
 
     func internalPlugin(pluginKey: PluginKey) -> (any InternalPlugin)? {
-        guard pluginKey.domain == .builtIn else { return nil }
+        guard pluginKey.domain == .builtIn,
+              isInternalPluginInstalled(pluginKey.rawID) else { return nil }
         return internalPlugins[pluginKey.rawID]
+    }
+
+    private func isInternalPluginInstalled(_ rawID: String) -> Bool {
+        guard internalPlugins[rawID] != nil else { return false }
+        guard let presetInstallationStore,
+              presetInstallationStore.isManagedPreset(id: rawID) else {
+            return true
+        }
+        return presetInstallationStore.isInstalled(id: rawID)
+    }
+
+    private func isInternalPluginEnabled(_ rawID: String) -> Bool {
+        guard isInternalPluginInstalled(rawID),
+              !disabledInternalIDs.contains(rawID) else { return false }
+        guard let presetInstallationStore,
+              presetInstallationStore.isOptional(id: rawID) else {
+            return true
+        }
+        return presetInstallationStore.isOptionalEnabled(id: rawID)
     }
 
     private func persistInternalEnablement() {

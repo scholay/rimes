@@ -81,6 +81,9 @@ jobs:
       - name: Preserve durable user state across reseed
         run: scripts/test-rime-user-state.sh
 
+      - name: Verify preset buffer plug-in catalog and README
+        run: python3 -B scripts/sync-buffer-plugin-catalog.py --check
+
       # Privacy: the log must never carry user-entered/committed text. The
       # scanner follows multiline/raw strings and nested interpolation, while
       # allowing only explicitly redacted values and known-safe metadata.
@@ -115,12 +118,14 @@ jobs:
             candidate-metrics-smoke
             activation-cache-smoke
             theme-smoke
+            theme-appkit-smoke
             origin-smoke
             inbound-smoke
             marine-chrome-smoke
             plugin-smoke
             plugin-stream-smoke
             plugin-platform-smoke
+            plugin-distribution-smoke
             plugin-configuration-smoke
             translation-smoke
             ai-text-smoke
@@ -154,12 +159,17 @@ jobs:
         run: |
           BIN="$(swift build --show-bin-path)/RimeBuffer"
           ROOT="$RUNNER_TEMP/rimebuffer-settings-render"
-          OUTPUT="$ROOT/output"
-          mkdir -p "$OUTPUT" "$ROOT/profile" "$ROOT/local" "$ROOT/plugins"
-          RIMEBUFFER_USER_DIR="$ROOT/profile" \
-          RIMEBUFFER_LOCAL_DATA_ROOT="$ROOT/local" \
-          RIMEBUFFER_PLUGIN_ROOT="$ROOT/plugins" \
-            "$BIN" settings-render "$OUTPUT"
-          test "$(find "$OUTPUT" -maxdepth 1 -type f -name '*.png' | wc -l | tr -d ' ')" = '22'
-          python3 -m json.tool "$OUTPUT/manifest.json" >/dev/null
-          ! rg -q 'extension\.apple-translation' "$OUTPUT/manifest.json"
+          for MODE in night day; do
+            OUTPUT="$ROOT/$MODE/output"
+            mkdir -p "$OUTPUT" "$ROOT/$MODE/profile" "$ROOT/$MODE/local" "$ROOT/$MODE/plugins"
+            RIMEBUFFER_APPEARANCE_MODE="$MODE" \
+            RIMEBUFFER_USER_DIR="$ROOT/$MODE/profile" \
+            RIMEBUFFER_LOCAL_DATA_ROOT="$ROOT/$MODE/local" \
+            RIMEBUFFER_PLUGIN_ROOT="$ROOT/$MODE/plugins" \
+              "$BIN" settings-render "$OUTPUT"
+            test "$(find "$OUTPUT" -maxdepth 1 -type f -name '*.png' | wc -l | tr -d ' ')" = '22'
+            python3 -m json.tool "$OUTPUT/manifest.json" >/dev/null
+            ! rg -q 'extension\.apple-translation' "$OUTPUT/manifest.json"
+            test "$(sips -g pixelWidth -g pixelHeight "$OUTPUT"/*.png | \
+              awk '/pixelWidth:/{w=$2}/pixelHeight:/{print w"x"$2}' | sort -u)" = '1960x1360'
+          done

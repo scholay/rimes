@@ -4,6 +4,14 @@ RIMES 通过 **GitHub Actions + GitHub Releases + 应用内自动更新** 分发
 终端用户优先使用 Release 里的 `.pkg` 安装器；产物是**自包含** app，librime 引擎与 Rime
 词库都打包在 `ETInput.app` 内，无需单独安装 Squirrel。
 
+预置缓冲插件名称、版本与默认安装策略统一维护在
+`Catalog/buffer-plugins.json`。每次插件更新先运行
+`python3 -B scripts/sync-buffer-plugin-catalog.py`，它会同步可选插件的
+Release manifest 资产名、SHA-256、运行时 Swift catalog 以及中英文 README 表；CI
+和 `scripts/release.sh` 都会用 `--check` 阻止版本或文档漂移。
+正式版 workflow 会把这些 manifest 作为当前 `vX.Y.Z` Release 的不可变资产上传；
+客户端只按自身 bundle 版本访问对应 Release，不读取可变的 `main` 分支文件。
+
 唯一发布中心是 [`scholay/rimes`](https://github.com/scholay/rimes/releases)：
 
 - `vX.Y.Z`：macOS 正式版，进入 `/releases/latest` 和应用内更新通道；

@@ -1,5 +1,21 @@
 import Cocoa
 
+/// Pure conversion used by the view and the theme smoke test. Keeping the
+/// foreground decision in integer sRGB makes it independent of the current
+/// macOS appearance and user accent preference.
+enum KeyboardHeatmapColorRules {
+    static func sRGBHex(red: Double, green: Double, blue: Double) -> UInt32 {
+        func byte(_ value: Double) -> UInt32 {
+            UInt32((min(1, max(0, value)) * 255).rounded())
+        }
+        return byte(red) << 16 | byte(green) << 8 | byte(blue)
+    }
+
+    static func preferredForeground(background: UInt32) -> UInt32 {
+        RimeColorContrast.preferredForeground(background: background)
+    }
+}
+
 final class KeyboardHeatmapView: NSView {
     var snapshot: KeyFrequencySnapshot = .empty {
         didSet {
@@ -14,7 +30,10 @@ final class KeyboardHeatmapView: NSView {
     private var lastMousePoint: NSPoint?
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: 820, height: 330)
+        // The keyboard scales to whatever width its settings page provides.
+        // Advertising the old 820pt width made Auto Layout enlarge the whole
+        // settings window instead of fitting the heatmap into the content area.
+        NSSize(width: NSView.noIntrinsicMetric, height: 330)
     }
 
     override func updateTrackingAreas() {
@@ -41,6 +60,11 @@ final class KeyboardHeatmapView: NSView {
         needsDisplay = true
     }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         NSColor.clear.setFill()
@@ -49,10 +73,6 @@ final class KeyboardHeatmapView: NSView {
         let metrics = layoutMetrics()
         for key in layout.keys {
             drawKey(key, rect: keyRect(for: key, metrics: metrics))
-        }
-
-        if snapshot.total == 0 {
-            drawEmptyState()
         }
     }
 
@@ -64,6 +84,7 @@ final class KeyboardHeatmapView: NSView {
         let fill = keyFill(fraction: fraction, highlighted: hoveredKeyId == key.keyId)
         fill.setFill()
         path.fill()
+        let foreground = labelColor(background: fill)
 
         RimeUI.border.withAlphaComponent(RimeUI.isNight ? 0.75 : 0.55).setStroke()
         path.lineWidth = hoveredKeyId == key.keyId ? 1.6 : 1
@@ -72,14 +93,14 @@ final class KeyboardHeatmapView: NSView {
         let labelFontSize: CGFloat = rect.height < 24 ? 9 : 11
         let labelAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: labelFontSize, weight: .semibold),
-            .foregroundColor: labelColor(fraction: fraction)
+            .foregroundColor: foreground
         ]
         drawCentered(key.label, in: rect.insetBy(dx: 2, dy: rect.height * 0.28), attributes: labelAttrs)
 
         if count > 0, rect.width >= 28, rect.height >= 26 {
             let countAttrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .regular),
-                .foregroundColor: labelColor(fraction: fraction).withAlphaComponent(0.72)
+                .foregroundColor: foreground
             ]
             let value = "\(count)" as NSString
             let size = value.size(withAttributes: countAttrs)
@@ -91,19 +112,6 @@ final class KeyboardHeatmapView: NSView {
             )
             value.draw(in: countRect, withAttributes: countAttrs)
         }
-    }
-
-    private func drawEmptyState() {
-        let text = "暂无按键统计" as NSString
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 15, weight: .medium),
-            .foregroundColor: RimeUI.textMuted
-        ]
-        let size = text.size(withAttributes: attrs)
-        text.draw(
-            in: NSRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2, width: size.width, height: size.height),
-            withAttributes: attrs
-        )
     }
 
     private func drawCentered(_ text: String, in rect: NSRect, attributes: [NSAttributedString.Key: Any]) {
@@ -164,20 +172,32 @@ final class KeyboardHeatmapView: NSView {
     }
 
     private func keyFill(fraction: CGFloat, highlighted: Bool) -> NSColor {
-        let base = RimeUI.isNight
-            ? RimeUI.surface2.withAlphaComponent(0.88)
-            : NSColor.controlBackgroundColor.withAlphaComponent(0.92)
+        let base = RimeUI.surface2
         guard fraction > 0 else {
-            return highlighted ? base.blended(withFraction: 0.20, of: RimeUI.accentBlue) ?? base : base
+            return highlighted
+                ? base.blended(withFraction: 0.20, of: RimeUI.accentGreen) ?? base
+                : base
         }
         let eased = min(1, max(0.16, sqrt(fraction)))
-        let heat = RimeUI.isNight ? RimeUI.accentGreen : RimeUI.accentBlue
-        let mixed = base.blended(withFraction: eased * 0.86, of: heat) ?? heat
+        let mixed = base.blended(withFraction: eased * 0.86,
+                                 of: RimeUI.accentGreen) ?? RimeUI.accentGreen
         return highlighted ? mixed.highlight(withLevel: 0.12) ?? mixed : mixed
     }
 
-    private func labelColor(fraction: CGFloat) -> NSColor {
-        if fraction > 0.58 { return .white }
-        return RimeUI.textPrimary
+    private func labelColor(background: NSColor) -> NSColor {
+        guard let sRGB = background.usingColorSpace(.sRGB) else {
+            let fallback = KeyboardHeatmapColorRules.preferredForeground(
+                background: RimeUI.palette.surfaceSecondary
+            )
+            return RimeUI.color(fallback)
+        }
+        let backgroundHex = KeyboardHeatmapColorRules.sRGBHex(
+            red: Double(sRGB.redComponent),
+            green: Double(sRGB.greenComponent),
+            blue: Double(sRGB.blueComponent)
+        )
+        return RimeUI.color(
+            KeyboardHeatmapColorRules.preferredForeground(background: backgroundHex)
+        )
     }
 }

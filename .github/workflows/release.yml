@@ -85,6 +85,7 @@ jobs:
           bash -n build_install.sh
           bash -n scripts/release.sh
           bash -n scripts/pkg/scripts/postinstall
+          python3 -B scripts/sync-buffer-plugin-catalog.py --check
           python3 scripts/lint-log-privacy.py
           node Extensions/marine-chrome/tests/smoke.mjs
 
@@ -123,6 +124,11 @@ jobs:
           echo "----- Info.plist versions -----"
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist
           /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" Info.plist
+
+      - name: Stage immutable preset plug-in manifests
+        run: |
+          python3 -B scripts/sync-buffer-plugin-catalog.py \
+            --stage-release-assets release-assets/preset-plugins
 
       # Universal (arm64 + x86_64) so the same .app runs on Apple Silicon and
       # Intel. librime is dlopen'd at runtime, so nothing extra is needed here.
@@ -271,6 +277,8 @@ jobs:
           unzip -tq "$MARINE_ZIP"
           unzip -p "$MARINE_ZIP" marine-chrome/manifest.json \
             | cmp - Extensions/marine-chrome/manifest.json
+          python3 -B scripts/sync-buffer-plugin-catalog.py \
+            --check-release-assets release-assets/preset-plugins
 
       - name: Validate canonical tag and vacant Release
         if: steps.version.outputs.IS_RELEASE == 'true'
@@ -302,6 +310,7 @@ jobs:
             ${{ steps.pkg.outputs.PKG }}
             ${{ steps.package.outputs.ZIP }}
             ${{ steps.marine_chrome.outputs.ZIP }}
+            release-assets/preset-plugins/preset-plugin-*.json
           body: |
             ## RIMES v${{ steps.version.outputs.VERSION }}
 
@@ -344,3 +353,4 @@ jobs:
             ${{ steps.pkg.outputs.PKG }}
             ${{ steps.package.outputs.ZIP }}
             ${{ steps.marine_chrome.outputs.ZIP }}
+            release-assets/preset-plugins/preset-plugin-*.json

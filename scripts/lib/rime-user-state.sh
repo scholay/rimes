@@ -55,6 +55,7 @@ reset_rime_user_dir_preserving_product_state() {
     # durable state and must survive schema/userdb reseeding byte-for-byte.
     find "$user_dir" -mindepth 1 -maxdepth 1 \
         ! -name plugins \
+        ! -name preset-plugins \
         ! -name plugin-config \
         ! -name ai \
         ! -name stats \
@@ -112,6 +113,7 @@ import_rime_user_dir_preserving_product_state() {
         --exclude '*.log'
         --exclude installation.yaml
         --exclude plugins
+        --exclude preset-plugins
         --exclude plugin-config
         --exclude ai
         --exclude stats

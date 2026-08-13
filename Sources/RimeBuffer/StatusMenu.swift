@@ -172,6 +172,7 @@ final class StatusMenu {
         alert.informativeText = "将从 \(script.deletingLastPathComponent().path) 运行 build_install.sh。构建完成后当前输入法进程会被重启。"
         alert.addButton(withTitle: "重新安装")
         alert.addButton(withTitle: "取消")
+        alert.window.appearance = RimeUI.appKitAppearance
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
@@ -218,6 +219,7 @@ final class StatusMenu {
     private func showInfo(_ message: String) {
         let alert = NSAlert()
         alert.messageText = message
+        alert.window.appearance = RimeUI.appKitAppearance
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
     }

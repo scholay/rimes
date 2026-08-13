@@ -37,6 +37,23 @@
 | Remarkable | USB + 本地 OCR，把当前页识别进缓冲 |
 | 隔空传字 | Mac ↔ Mac 加密直连，无需同一 Wi‑Fi / Apple ID |
 
+<!-- BEGIN PRESET BUFFER PLUGINS -->
+## 预置缓冲插件
+
+下表由 [`Catalog/buffer-plugins.json`](Catalog/buffer-plugins.json) 自动生成。更新插件时必须同步更新其版本，并运行 `python3 scripts/sync-buffer-plugin-catalog.py --check`。
+
+| 插件 | ID | 版本 | 默认安装 | 默认状态 |
+|---|---|---:|---|---|
+| AI 生成 | `builtin.ai-text` | 2.0 | 随 RIMES 预装 | 启用 |
+| My Prompt | `builtin.my-prompt` | 1.0 | 随 RIMES 预装 | 启用 |
+| 实时翻译 | `builtin.apple-translation` | 2.0 | 随 RIMES 预装 | 启用 |
+| 意识流输入 | `builtin.stream-input` | 1.1 | 随 RIMES 预装 | 启用 |
+| Remarkable | `builtin.remarkable` | 2.0 | 设置中按需下载 | 禁用 |
+| Marine Chrome | `builtin.marine-chrome` | 0.2.3 | 设置中按需下载 | 禁用 |
+
+预装的四个插件在全新安装后已安装并启用；其他插件不会自动下载，安装后仍默认禁用。
+<!-- END PRESET BUFFER PLUGINS -->
+
 ## 安装
 
 普通用户：从 [GitHub Releases](https://github.com/scholay/rimes/releases) 下载 `RIMES-版本号.pkg`，双击安装。安装器会把内部兼容路径 `ETInput.app` 放进 `/Library/Input Methods`，并尝试注册、启用并切换到「RIMES」。

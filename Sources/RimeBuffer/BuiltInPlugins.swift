@@ -34,14 +34,17 @@ enum BuiltInPlugins {
 }
 
 private final class MarineChromeInternalPlugin: InternalPlugin {
+    private static let catalog = PresetBufferPluginCatalog.entry(
+        id: BuiltInPluginID.marineChrome
+    )!
     let descriptor = PluginDescriptor(
         key: PluginKey(domain: .builtIn,
                        rawID: BuiltInPluginID.marineChrome),
         wireID: nil,
-        name: "Marine Chrome",
+        name: catalog.nameZH,
         symbolName: "network",
-        version: "0.2.3",
-        summary: "由配套 Chrome 扩展读取当前网页和精确回复目标；生成与发送仍由 RIMES 安全处理。",
+        version: catalog.version,
+        summary: catalog.summaryZH,
         source: .builtIn,
         capabilities: [.bufferAction],
         settings: nil,
@@ -192,13 +195,16 @@ private final class FlyChordLearningInternalPlugin: InternalPlugin {
 
 private final class AppleTranslationInternalPlugin:
     InternalPlugin, PluginConfigurationProviding {
+    private static let catalog = PresetBufferPluginCatalog.entry(
+        id: BuiltInPluginID.appleTranslation
+    )!
     let descriptor = PluginDescriptor(
         key: PluginKey(domain: .builtIn, rawID: BuiltInPluginID.appleTranslation),
         wireID: nil,
-        name: "实时翻译",
+        name: catalog.nameZH,
         symbolName: "character.book.closed",
-        version: "2.0",
-        summary: "把源缓冲区实时翻译到独立目标缓冲区；默认使用 Apple 本地翻译，也可选择当前 AI 渠道。",
+        version: catalog.version,
+        summary: catalog.summaryZH,
         source: .builtIn,
         capabilities: [.bufferAction],
         settings: nil,
@@ -225,13 +231,16 @@ private final class AppleTranslationInternalPlugin:
 
 private final class RemarkableInternalPlugin:
     InternalPlugin, PluginConfigurationProviding {
+    private static let catalog = PresetBufferPluginCatalog.entry(
+        id: BuiltInPluginID.remarkable
+    )!
     let descriptor = PluginDescriptor(
         key: PluginKey(domain: .builtIn, rawID: BuiltInPluginID.remarkable),
         wireID: nil,
-        name: "Remarkable",
+        name: catalog.nameZH,
         symbolName: "rectangle.and.hand.point.up.left",
-        version: "2.0",
-        summary: "只读导出 reMarkable 当前页，并用 Apple Vision 在 Mac 本地识别；结果先进入缓冲区供核对。",
+        version: catalog.version,
+        summary: catalog.summaryZH,
         source: .builtIn,
         capabilities: [.bufferAction],
         settings: nil,
@@ -336,13 +345,16 @@ private final class RemarkableInternalPlugin:
 
 private final class MyPromptInternalPlugin:
     InternalPlugin, PluginConfigurationProviding {
+    private static let catalog = PresetBufferPluginCatalog.entry(
+        id: BuiltInPluginID.myPrompt
+    )!
     let descriptor = PluginDescriptor(
         key: MyPromptWorkspace.pluginKey,
         wireID: nil,
-        name: "My Prompt",
+        name: catalog.nameZH,
         symbolName: "doc.text.magnifyingglass",
-        version: "1.0",
-        summary: "从本地 Markdown、Obsidian 或 Fabric 风格提示词库实时检索；远程 Git 仓库先同步到本地索引。",
+        version: catalog.version,
+        summary: catalog.summaryZH,
         source: .builtIn,
         capabilities: [.bufferAction, .localStorage],
         settings: nil,
@@ -369,13 +381,16 @@ private final class MyPromptInternalPlugin:
 
 private final class AITextInternalPlugin:
     InternalPlugin, PluginConfigurationProviding {
+    private static let catalog = PresetBufferPluginCatalog.entry(
+        id: BuiltInPluginID.aiText
+    )!
     let descriptor = PluginDescriptor(
         key: AITextBuiltInPluginID.key,
         wireID: nil,
-        name: "AI 生成",
+        name: catalog.nameZH,
         symbolName: "sparkles",
-        version: "2.0",
-        summary: "使用设置中选定的 Codex、Claude Code 或通用 Open API（OpenAI 兼容）连接器生成独立目标缓冲区。",
+        version: catalog.version,
+        summary: catalog.summaryZH,
         source: .builtIn,
         capabilities: [.bufferAction],
         settings: nil,
@@ -415,13 +430,16 @@ private final class AITextInternalPlugin:
 
 private final class StreamInputInternalPlugin:
     InternalPlugin, PluginConfigurationProviding {
+    private static let catalog = PresetBufferPluginCatalog.entry(
+        id: BuiltInPluginID.streamInput
+    )!
     let descriptor = PluginDescriptor(
         key: StreamInputWorkspace.pluginKey,
         wireID: nil,
-        name: "意识流输入",
+        name: catalog.nameZH,
         symbolName: "waveform",
-        version: "1.1",
-        summary: "连续输入不分词的全拼，按单独配置的 AI 渠道和响应节奏实时给出 1–3 个完整猜测。",
+        version: catalog.version,
+        summary: catalog.summaryZH,
         source: .builtIn,
         capabilities: [.bufferAction],
         settings: nil,

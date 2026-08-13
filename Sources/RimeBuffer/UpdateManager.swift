@@ -268,6 +268,7 @@ final class UpdateManager {
         alert.informativeText = "输入法进程会关闭并以新版本重启。若正在输入，请先完成再更新。"
         alert.addButton(withTitle: "立即更新")
         alert.addButton(withTitle: "稍后")
+        alert.window.appearance = RimeUI.appKitAppearance
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         installStagedUpdate(version: version, zip: zip)
@@ -465,6 +466,7 @@ final class UpdateManager {
         alert.informativeText = message
         alert.alertStyle = warning ? .warning : .informational
         alert.addButton(withTitle: "好的")
+        alert.window.appearance = RimeUI.appKitAppearance
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
     }

@@ -37,6 +37,23 @@ Nothing auto-posts, and nothing silently edits the web page. Built for writing, 
 | Remarkable | USB + on-device OCR of the current page into the buffer |
 | Remote typing | Encrypted Mac ↔ Mac delivery; no shared Wi‑Fi or Apple ID required |
 
+<!-- BEGIN PRESET BUFFER PLUGINS -->
+## Preset buffer plug-ins
+
+This table is generated from [`Catalog/buffer-plugins.json`](Catalog/buffer-plugins.json). Every plug-in update must also update its catalog version and pass `python3 scripts/sync-buffer-plugin-catalog.py --check`.
+
+| Plug-in | ID | Version | Default installation | Default state |
+|---|---|---:|---|---|
+| AI Generation | `builtin.ai-text` | 2.0 | Bundled with RIMES | Enabled |
+| My Prompt | `builtin.my-prompt` | 1.0 | Bundled with RIMES | Enabled |
+| Real-time Translation | `builtin.apple-translation` | 2.0 | Bundled with RIMES | Enabled |
+| Stream of Consciousness Input | `builtin.stream-input` | 1.1 | Bundled with RIMES | Enabled |
+| Remarkable | `builtin.remarkable` | 2.0 | On demand in Settings | Disabled |
+| Marine Chrome | `builtin.marine-chrome` | 0.2.3 | On demand in Settings | Disabled |
+
+The four bundled plug-ins are installed and enabled on a clean first run. Other plug-ins are never downloaded automatically and remain disabled after installation.
+<!-- END PRESET BUFFER PLUGINS -->
+
 ## Install
 
 End users: download `RIMES-<version>.pkg` from [GitHub Releases](https://github.com/scholay/rimes/releases) and run the installer. It places the compatibility bundle `ETInput.app` in `/Library/Input Methods`, then registers, enables, and tries to switch to “RIMES”.

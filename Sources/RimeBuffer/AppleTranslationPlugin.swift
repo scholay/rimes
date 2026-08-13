@@ -1277,8 +1277,8 @@ private struct AppleTranslationTaskView: View {
 }
 
 final class AppleTranslationSettingsViewController: NSViewController {
-    private let sourcePopup = NSPopUpButton()
-    private let targetPopup = NSPopUpButton()
+    private let sourcePopup = RimeFixedAccentPopUpButton()
+    private let targetPopup = RimeFixedAccentPopUpButton()
     private let swapButton = NSButton(title: "交换", target: nil, action: nil)
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private var observer: NSObjectProtocol?

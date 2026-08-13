@@ -517,7 +517,10 @@ private func pluginConfigurationLayoutIsSafe(
             if let textField = $0 as? NSTextField {
                 return textField.isEditable
             }
-            return $0 is NSButton || $0 is NSStepper || $0 is NSSwitch
+            return $0 is NSButton
+                || $0 is NSStepper
+                || $0 is NSSwitch
+                || $0 is RimeFixedAccentSwitch
         }
         guard interactiveViews.count >= model.schema.fields.count + 3 else {
             return rejectLayout(

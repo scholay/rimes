@@ -479,6 +479,7 @@ final class TypingSpeedSettingsViewController: NSViewController {
         alert.informativeText = "每日统计和最近会话都会从本机删除，此操作无法撤销。"
         alert.addButton(withTitle: "清空全部")
         alert.addButton(withTitle: "取消")
+        alert.window.appearance = RimeUI.appKitAppearance
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         store.clearAll()
         scheduledRefresh?.cancel()
@@ -510,6 +511,7 @@ final class TypingSpeedSettingsViewController: NSViewController {
                 completion(response == .alertFirstButtonReturn)
             }
         } else {
+            alert.window.appearance = RimeUI.appKitAppearance
             completion(alert.runModal() == .alertFirstButtonReturn)
         }
     }
@@ -529,6 +531,7 @@ final class TypingSpeedSettingsViewController: NSViewController {
         if let window = view.window {
             alert.beginSheetModal(for: window)
         } else {
+            alert.window.appearance = RimeUI.appKitAppearance
             alert.runModal()
         }
     }
