@@ -3,6 +3,7 @@ import InputMethodKit
 import Network
 import CryptoKit
 import Carbon
+import Darwin
 
 // OpenSSH invokes this same executable as a narrowly scoped SSH_ASKPASS
 // helper. Handle that request before any smoke, installer, AppKit, or IMK
@@ -10,6 +11,367 @@ import Carbon
 // creating a second input-method process.
 if let status = RemarkableSSHAskPassHandler.handleIfRequested() {
     exit(status)
+}
+
+/// Standalone commands share the shipped executable with the live IMK server,
+/// but must never share its LevelDB-backed Rime user directory. Keep this rule
+/// above every smoke/subcommand dispatch so even a newly added smoke that starts
+/// `rimeEngine` inherits isolation before the lazy global is initialized.
+private enum StandaloneRimeCommandRules {
+    private static let engineHostingCommands: Set<String> = [
+        "settings-preview",
+        "settings-render",
+    ]
+
+    static func requiresIsolatedUserDir(arguments: [String]) -> Bool {
+        arguments.dropFirst().contains { argument in
+            argument == "smoke"
+                || argument.hasSuffix("-smoke")
+                || engineHostingCommands.contains(argument)
+        }
+    }
+
+    static func isLiveUserDir(_ path: String,
+                              homeDirectory: String = NSHomeDirectory()) -> Bool {
+        let candidateURL = URL(fileURLWithPath: path)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let liveURL = URL(fileURLWithPath: homeDirectory, isDirectory: true)
+            .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+
+        // macOS user volumes are commonly case-insensitive, and firmlinks or
+        // symlinks can spell the same directory with a different path. Compare
+        // every existing candidate ancestor by filesystem identity so a child
+        // of the live profile is rejected even when its final leaf does not yet
+        // exist. The string fallback is deliberately case-insensitive/fail-
+        // closed for test homes or a profile that has not been created yet.
+        func identity(_ url: URL) -> (device: UInt64, inode: UInt64)? {
+            var metadata = stat()
+            guard url.path.withCString({ stat($0, &metadata) }) == 0 else {
+                return nil
+            }
+            return (UInt64(metadata.st_dev), UInt64(metadata.st_ino))
+        }
+        if let liveIdentity = identity(liveURL) {
+            var ancestor = candidateURL
+            // Bound traversal by the syntactic depth as well as checking `/`.
+            // Foundation may represent deleting the parent of root as `/..` on
+            // some SDKs, so parent equality alone is not a termination proof.
+            for _ in 0...candidateURL.pathComponents.count {
+                if let candidateIdentity = identity(ancestor),
+                   candidateIdentity.device == liveIdentity.device,
+                   candidateIdentity.inode == liveIdentity.inode {
+                    return true
+                }
+                if ancestor.path == "/" { break }
+                let parent = ancestor.deletingLastPathComponent()
+                if parent.path == ancestor.path { break }
+                ancestor = parent
+            }
+        }
+
+        let candidate = candidateURL.path
+        let live = liveURL.path
+        return candidate.compare(live, options: [.caseInsensitive]) == .orderedSame
+            || candidate.range(
+                of: live + "/",
+                options: [.anchored, .caseInsensitive]
+            ) != nil
+    }
+}
+
+private var automaticallyCreatedStandaloneUserDir: String?
+
+private func removeAutomaticallyCreatedStandaloneUserDir() {
+    guard let path = automaticallyCreatedStandaloneUserDir else { return }
+    automaticallyCreatedStandaloneUserDir = nil
+    let root = URL(fileURLWithPath: path, isDirectory: true)
+        .standardizedFileURL
+        .resolvingSymlinksInPath()
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .standardizedFileURL
+        .resolvingSymlinksInPath()
+    guard root.deletingLastPathComponent().path == temporaryRoot.path,
+          root.lastPathComponent.hasPrefix("rimebuffer-standalone-") else {
+        return
+    }
+    try? FileManager.default.removeItem(at: root)
+}
+
+/// Finds the source trees used by `build_install.sh` when the smoke binary is
+/// run directly from a SwiftPM checkout. A packaged ETInput.app already has a
+/// complete SharedSupport directory and never takes this path.
+private func engineSmokeRepositoryRoot() -> URL? {
+    let fileManager = FileManager.default
+    var startingPoints = [
+        URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true),
+    ]
+    if let executable = CommandLine.arguments.first, !executable.isEmpty {
+        let executableURL = URL(fileURLWithPath: executable)
+        startingPoints.append(
+            executableURL.isFileURL
+                ? executableURL.deletingLastPathComponent()
+                : executableURL
+        )
+    }
+
+    for startingPoint in startingPoints {
+        var candidate = startingPoint.standardizedFileURL
+        for _ in 0..<8 {
+            let productData = candidate.appendingPathComponent(
+                "rime-data/default.custom.yaml"
+            )
+            let vendorData = candidate.appendingPathComponent(
+                "Vendor/rime/SharedSupport/default.yaml"
+            )
+            let vendorRuntime = candidate.appendingPathComponent(
+                "Vendor/rime/Frameworks/librime.1.dylib"
+            )
+            if fileManager.fileExists(atPath: productData.path),
+               fileManager.fileExists(atPath: vendorData.path),
+               fileManager.fileExists(atPath: vendorRuntime.path) {
+                return candidate
+            }
+            let parent = candidate.deletingLastPathComponent()
+            if parent.path == candidate.path { break }
+            candidate = parent
+        }
+    }
+    return nil
+}
+
+/// Merge a reviewed fixture tree without following symlinks. The destination
+/// is always a fresh child of the isolated smoke directory, so replacements
+/// can only affect disposable test data.
+private func mergeEngineSmokeFixtureTree(from source: URL,
+                                         into destination: URL) throws {
+    let fileManager = FileManager.default
+    try fileManager.createDirectory(
+        at: destination,
+        withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700]
+    )
+    guard let enumerator = fileManager.enumerator(
+        at: source,
+        includingPropertiesForKeys: [
+            .isDirectoryKey,
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+        ],
+        options: [.skipsHiddenFiles]
+    ) else {
+        throw CocoaError(.fileReadUnknown)
+    }
+
+    let sourcePrefix = source.standardizedFileURL.path + "/"
+    for case let item as URL in enumerator {
+        let values = try item.resourceValues(forKeys: [
+            .isDirectoryKey,
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+        ])
+        guard values.isSymbolicLink != true,
+              item.standardizedFileURL.path.hasPrefix(sourcePrefix) else {
+            throw CocoaError(.fileReadInvalidFileName)
+        }
+        let relativePath = String(
+            item.standardizedFileURL.path.dropFirst(sourcePrefix.count)
+        )
+        guard !relativePath.isEmpty else { continue }
+        let target = destination.appendingPathComponent(
+            relativePath,
+            isDirectory: values.isDirectory == true
+        )
+        if values.isDirectory == true {
+            try fileManager.createDirectory(
+                at: target,
+                withIntermediateDirectories: true
+            )
+        } else if values.isRegularFile == true {
+            if fileManager.fileExists(atPath: target.path) {
+                try fileManager.removeItem(at: target)
+            }
+            try fileManager.copyItem(at: item, to: target)
+        } else {
+            throw CocoaError(.fileReadUnsupportedScheme)
+        }
+    }
+}
+
+/// A checkout build has no app-bundle SharedSupport. Recreate the same
+/// Vendor+rime-data overlay as `build_install.sh`, but only inside the isolated
+/// smoke directory. This avoids both Squirrel's schemas and the live RIMES
+/// userdb while exercising the current checkout's product data.
+private func configureEngineSmokeRuntime(isolatedUserDir: String) -> Bool {
+    let environment = ProcessInfo.processInfo.environment
+    if let explicit = environment["RIMEBUFFER_SHARED_DIR"], !explicit.isEmpty {
+        return true
+    }
+    if let bundled = Bundle.main.sharedSupportURL,
+       FileManager.default.fileExists(
+           atPath: bundled.appendingPathComponent("default.custom.yaml").path
+       ),
+       FileManager.default.fileExists(
+           atPath: bundled.appendingPathComponent("my_combo.schema.yaml").path
+       ) {
+        return true
+    }
+    guard let repositoryRoot = engineSmokeRepositoryRoot() else {
+        FileHandle.standardError.write(Data(
+            "cannot locate product Rime data for engine smoke\n".utf8
+        ))
+        return false
+    }
+
+    let isolatedRoot = URL(fileURLWithPath: isolatedUserDir, isDirectory: true)
+    let sharedSupport = isolatedRoot.appendingPathComponent(
+        ".engine-smoke-shared-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    do {
+        try mergeEngineSmokeFixtureTree(
+            from: repositoryRoot.appendingPathComponent(
+                "Vendor/rime/SharedSupport",
+                isDirectory: true
+            ),
+            into: sharedSupport
+        )
+        try mergeEngineSmokeFixtureTree(
+            from: repositoryRoot.appendingPathComponent(
+                "rime-data",
+                isDirectory: true
+            ),
+            into: sharedSupport
+        )
+    } catch {
+        FileHandle.standardError.write(Data(
+            "cannot stage product Rime data for engine smoke\n".utf8
+        ))
+        return false
+    }
+
+    guard setenv("RIMEBUFFER_SHARED_DIR", sharedSupport.path, 1) == 0 else {
+        FileHandle.standardError.write(Data(
+            "cannot activate product Rime data for engine smoke\n".utf8
+        ))
+        return false
+    }
+    if environment["RIMEBUFFER_FRAMEWORKS_DIR"]
+        .flatMap({ $0.isEmpty ? nil : $0 }) == nil {
+        let frameworks = repositoryRoot.appendingPathComponent(
+            "Vendor/rime/Frameworks",
+            isDirectory: true
+        )
+        guard setenv("RIMEBUFFER_FRAMEWORKS_DIR", frameworks.path, 1) == 0 else {
+            FileHandle.standardError.write(Data(
+                "cannot activate isolated Rime runtime for engine smoke\n".utf8
+            ))
+            return false
+        }
+    }
+    return true
+}
+
+private func standaloneIsolationAliasProbe(isolatedUserDir: String) -> Bool {
+    let fileManager = FileManager.default
+    let fixture = URL(fileURLWithPath: isolatedUserDir, isDirectory: true)
+        .appendingPathComponent(
+            ".isolation-alias-probe-\(UUID().uuidString)",
+            isDirectory: true
+        )
+    defer { try? fileManager.removeItem(at: fixture) }
+    let fakeHome = fixture.appendingPathComponent("home", isDirectory: true)
+    let live = fakeHome.appendingPathComponent(
+        "Library/RimeBuffer",
+        isDirectory: true
+    )
+    let alias = fixture.appendingPathComponent("profile-alias", isDirectory: true)
+    do {
+        try fileManager.createDirectory(
+            at: live,
+            withIntermediateDirectories: true
+        )
+        try fileManager.createSymbolicLink(at: alias, withDestinationURL: live)
+    } catch {
+        return false
+    }
+    return StandaloneRimeCommandRules.isLiveUserDir(
+            alias.appendingPathComponent("future-child").path,
+            homeDirectory: fakeHome.path
+        )
+        && !StandaloneRimeCommandRules.isLiveUserDir(
+            fixture.appendingPathComponent("unrelated/profile").path,
+            homeDirectory: fakeHome.path
+        )
+}
+
+/// Returns the isolated directory in force, respecting an explicit non-live
+/// override. An override that resolves to the installed IME's user directory is
+/// replaced rather than trusted: smoke tooling is never authorized to open the
+/// live userdb, even when invoked accidentally with that path in its environment.
+@discardableResult
+private func isolateStandaloneRimeUserDir() -> String? {
+    let environment = ProcessInfo.processInfo.environment
+    let configured = environment["RIMEBUFFER_USER_DIR"]
+        .flatMap { $0.isEmpty ? nil : $0 }
+    let directory: String
+    let createdAutomatically: Bool
+    if let configured,
+       !StandaloneRimeCommandRules.isLiveUserDir(configured) {
+        directory = configured
+        createdAutomatically = false
+    } else {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "rimebuffer-standalone-\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString)",
+                isDirectory: true
+            ).path
+        createdAutomatically = true
+        if configured != nil {
+            FileHandle.standardError.write(Data(
+                "refusing live RIMEBUFFER_USER_DIR for standalone command; using an isolated directory\n".utf8
+            ))
+        }
+    }
+
+    do {
+        try FileManager.default.createDirectory(
+            atPath: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+    } catch {
+        FileHandle.standardError.write(Data(
+            "cannot create isolated Rime user directory\n".utf8
+        ))
+        return nil
+    }
+    guard setenv("RIMEBUFFER_USER_DIR", directory, 1) == 0 else {
+        FileHandle.standardError.write(Data(
+            "cannot activate isolated Rime user directory\n".utf8
+        ))
+        return nil
+    }
+    if createdAutomatically,
+       automaticallyCreatedStandaloneUserDir == nil {
+        automaticallyCreatedStandaloneUserDir = directory
+        atexit(removeAutomaticallyCreatedStandaloneUserDir)
+    }
+    return directory
+}
+
+if StandaloneRimeCommandRules.requiresIsolatedUserDir(
+    arguments: CommandLine.arguments
+) {
+    guard let isolatedUserDir = isolateStandaloneRimeUserDir() else {
+        exit(1)
+    }
+    if CommandLine.arguments.contains("smoke"),
+       !configureEngineSmokeRuntime(isolatedUserDir: isolatedUserDir) {
+        exit(1)
+    }
 }
 
 // Recovery seam for the unpacked companion extension. Credentials remain
@@ -168,6 +530,9 @@ if CommandLine.arguments.contains("inbound-smoke") {
 if CommandLine.arguments.contains("candidate-metrics-smoke") {
     exit(runCandidateMetricsSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("activation-cache-smoke") {
+    exit(runRimeActivationMetadataCacheSmokeTest() ? 0 : 1)
+}
 if CommandLine.arguments.contains("theme-smoke") {
     exit(runThemeSmokeTest() ? 0 : 1)
 }
@@ -193,15 +558,8 @@ if CommandLine.arguments.contains("--prepare-update") {
 // the user's live typing. So the dev GUI tools redirect to an isolated userdb
 // (unless the caller already pinned RIMEBUFFER_USER_DIR).
 func isolatePreviewUserDir() {
+    guard let dir = isolateStandaloneRimeUserDir() else { return }
     let environment = ProcessInfo.processInfo.environment
-    let dir = environment["RIMEBUFFER_USER_DIR"] ?? (
-        NSTemporaryDirectory()
-            + "rimebuffer-preview-\(ProcessInfo.processInfo.processIdentifier)"
-    )
-    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-    if environment["RIMEBUFFER_USER_DIR"] == nil {
-        setenv("RIMEBUFFER_USER_DIR", dir, 1)
-    }
     if environment["RIMEBUFFER_LOCAL_DATA_ROOT"] == nil {
         setenv("RIMEBUFFER_LOCAL_DATA_ROOT", dir, 1)
     }
@@ -479,24 +837,63 @@ RemoteTypingService.shared.onStatusChange = {
 }
 RemoteTypingService.shared.restart()   // starts only if enabled
 
+private enum InputSourceChangeDiagnosticRules {
+    static func elapsedMilliseconds(previousUptime: TimeInterval?,
+                                    now: TimeInterval) -> Int? {
+        guard let previousUptime,
+              previousUptime.isFinite,
+              now.isFinite,
+              now >= previousUptime else { return nil }
+        let milliseconds = (now - previousUptime) * 1_000
+        guard milliseconds <= Double(Int.max) else { return Int.max }
+        return Int(milliseconds.rounded())
+    }
+
+    static func controlIsDown(_ modifierFlags: NSEvent.ModifierFlags) -> Bool {
+        modifierFlags.contains(.control)
+    }
+}
+
 // macOS 26 can omit deactivateServer when another process switches input
 // sources through TISSelectInputSource. The distributed TIS notification still
 // arrives, so finish the live controller before its client becomes stranded.
+var lastObservedInputSourceID: String? = {
+    guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue()
+        else { return nil }
+    return tisStringProperty(current, kTISPropertyInputSourceID)
+}()
+var lastObservedInputSourceUptime: TimeInterval? =
+    ProcessInfo.processInfo.systemUptime
 let inputSourceChangedObserver = DistributedNotificationCenter.default().addObserver(
     forName: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
     object: nil,
     queue: .main
 ) { _ in
+    let now = ProcessInfo.processInfo.systemUptime
+    let modifierFlags = NSEvent.modifierFlags
+        .intersection(.deviceIndependentFlagsMask)
+    let elapsed = InputSourceChangeDiagnosticRules.elapsedMilliseconds(
+        previousUptime: lastObservedInputSourceUptime,
+        now: now
+    ).map(String.init) ?? "unknown"
+    let previousID = lastObservedInputSourceID ?? "unknown"
+    let controlDown = InputSourceChangeDiagnosticRules.controlIsDown(
+        modifierFlags
+    )
     guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
           let currentID = tisStringProperty(current, kTISPropertyInputSourceID) else {
-        IMELog.write("TIS source changed: current source unavailable")
+        IMELog.write("TIS source changed: previous=\(previousID) current=unavailable deltaMs=\(elapsed) controlDown=\(controlDown) modifiers=\(modifierFlags.rawValue)")
+        lastObservedInputSourceID = nil
+        lastObservedInputSourceUptime = now
         return
     }
     let frontmostID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
-    IMELog.write("TIS source changed: current=\(currentID) frontmost=\(frontmostID)")
+    IMELog.write("TIS source changed: previous=\(previousID) current=\(currentID) deltaMs=\(elapsed) controlDown=\(controlDown) modifiers=\(modifierFlags.rawValue) frontmost=\(frontmostID)")
+    lastObservedInputSourceID = currentID
+    lastObservedInputSourceUptime = now
     let ownID = Bundle.main.bundleIdentifier ?? "com.isaac.inputmethod.RimeBuffer"
     guard currentID != ownID, !currentID.hasPrefix(ownID + ".") else { return }
-    IMELog.write("input source changed away programmatically -> \(currentID); finalizing active controller")
+    IMELog.write("input source changed away -> \(currentID); finalizing active controller")
     if let lease = InputFocusCoordinator.shared.invalidateAll(reason: "input source changed") {
         lease.controller?.finalizeDisplacedFocus(lease)
         candidateWindow.hide(owner: lease.token)
@@ -793,6 +1190,44 @@ func installInputSource() -> Bool {
 // MARK: - Engine smoke harness (bring-up only)
 
 func runEngineSmokeTest() -> Bool {
+    let environment = ProcessInfo.processInfo.environment
+    guard let isolatedUserDir = environment["RIMEBUFFER_USER_DIR"],
+          !isolatedUserDir.isEmpty,
+          !StandaloneRimeCommandRules.isLiveUserDir(isolatedUserDir),
+          StandaloneRimeCommandRules.requiresIsolatedUserDir(
+            arguments: ["ETInput", "smoke"]
+          ),
+          StandaloneRimeCommandRules.requiresIsolatedUserDir(
+            arguments: ["ETInput", "user-lexicon-bridge-smoke"]
+          ),
+          StandaloneRimeCommandRules.requiresIsolatedUserDir(
+            arguments: ["ETInput", "settings-preview"]
+          ),
+          !StandaloneRimeCommandRules.requiresIsolatedUserDir(
+            arguments: ["ETInput", "--install"]
+          ),
+          StandaloneRimeCommandRules.isLiveUserDir(
+            "/Users/smoke/Library/RimeBuffer/../RimeBuffer",
+            homeDirectory: "/Users/smoke"
+          ),
+          StandaloneRimeCommandRules.isLiveUserDir(
+            "/Users/smoke/Library/RimeBuffer/smoke-child",
+            homeDirectory: "/Users/smoke"
+          ),
+          StandaloneRimeCommandRules.isLiveUserDir(
+            "/users/smoke/library/rimebuffer",
+            homeDirectory: "/Users/smoke"
+          ),
+          standaloneIsolationAliasProbe(
+            isolatedUserDir: isolatedUserDir
+          ),
+          !StandaloneRimeCommandRules.isLiveUserDir(
+            "/tmp/rimebuffer-smoke",
+            homeDirectory: "/Users/smoke"
+          ) else {
+        print("FAILED: standalone Rime userdir isolation")
+        return false
+    }
     let engine = RimeEngine()
     print("== \(ProductIdentity.displayName) engine smoke test ==")
     let ok = engine.start()
@@ -4806,6 +5241,24 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
 func runBufferWindowSmokeTest() -> Bool {
     print("== \(ProductIdentity.displayName) buffer window smoke test ==")
 
+    guard InputSourceChangeDiagnosticRules.elapsedMilliseconds(
+            previousUptime: 10.0,
+            now: 10.025
+          ) == 25,
+          InputSourceChangeDiagnosticRules.elapsedMilliseconds(
+            previousUptime: nil,
+            now: 10.0
+          ) == nil,
+          InputSourceChangeDiagnosticRules.elapsedMilliseconds(
+            previousUptime: 10.1,
+            now: 10.0
+          ) == nil,
+          InputSourceChangeDiagnosticRules.controlIsDown([.control, .shift]),
+          !InputSourceChangeDiagnosticRules.controlIsDown([.option]) else {
+        print("FAILED: input-source transition diagnostics")
+        return false
+    }
+
     // Physical flagsChanged events close stream mutual pairing even when the
     // aggregate modifier bitset has no delta (for example, pressing the second
     // Shift/Command/Option/Control key). Ordinary key events are not boundaries.
@@ -5327,6 +5780,130 @@ func runBufferWindowSmokeTest() -> Bool {
         print("FAILED: workbench visibility must be scoped to the active Space")
         return false
     }
+    guard BufferWindowFocusFollowRules.shouldRelocate(
+            bufferEnabled: true,
+            presentationProtected: false,
+            secureInput: false,
+            hasTrustedExternalFocus: true,
+            panelVisibleOnActiveSpace: false,
+            targetScreenMatchesPanel: true
+          ),
+          BufferWindowFocusFollowRules.shouldRelocate(
+            bufferEnabled: true,
+            presentationProtected: false,
+            secureInput: false,
+            hasTrustedExternalFocus: true,
+            panelVisibleOnActiveSpace: true,
+            targetScreenMatchesPanel: false
+          ),
+          !BufferWindowFocusFollowRules.shouldRelocate(
+            bufferEnabled: true,
+            presentationProtected: false,
+            secureInput: false,
+            hasTrustedExternalFocus: true,
+            panelVisibleOnActiveSpace: true,
+            targetScreenMatchesPanel: true
+          ),
+          !BufferWindowFocusFollowRules.shouldRelocate(
+            bufferEnabled: false,
+            presentationProtected: false,
+            secureInput: false,
+            hasTrustedExternalFocus: true,
+            panelVisibleOnActiveSpace: false,
+            targetScreenMatchesPanel: true
+          ),
+          !BufferWindowFocusFollowRules.shouldRelocate(
+            bufferEnabled: true,
+            presentationProtected: true,
+            secureInput: false,
+            hasTrustedExternalFocus: true,
+            panelVisibleOnActiveSpace: false,
+            targetScreenMatchesPanel: true
+          ),
+          !BufferWindowFocusFollowRules.shouldRelocate(
+            bufferEnabled: true,
+            presentationProtected: false,
+            secureInput: true,
+            hasTrustedExternalFocus: true,
+            panelVisibleOnActiveSpace: false,
+            targetScreenMatchesPanel: true
+          ),
+          !BufferWindowFocusFollowRules.shouldRelocate(
+            bufferEnabled: true,
+            presentationProtected: false,
+            secureInput: false,
+            hasTrustedExternalFocus: false,
+            panelVisibleOnActiveSpace: false,
+            targetScreenMatchesPanel: true
+          ) else {
+        print("FAILED: workbench focus-follow visibility policy")
+        return false
+    }
+    let unpinnedBehavior = BufferWindowCollectionBehaviorRules.behavior(
+        pinned: false
+    )
+    let pinnedBehavior = BufferWindowCollectionBehaviorRules.behavior(
+        pinned: true
+    )
+    guard unpinnedBehavior.contains(.moveToActiveSpace),
+          unpinnedBehavior.contains(.fullScreenAuxiliary),
+          !unpinnedBehavior.contains(.canJoinAllSpaces),
+          pinnedBehavior.contains(.canJoinAllSpaces),
+          pinnedBehavior.contains(.fullScreenAuxiliary),
+          !pinnedBehavior.contains(.moveToActiveSpace) else {
+        print("FAILED: workbench Space/full-screen collection behavior")
+        return false
+    }
+    guard BufferWindowOrderingRules.shouldOrderOutBeforeMoving(
+            isOrdered: true,
+            isOnActiveSpace: false,
+            pinned: false
+          ),
+          !BufferWindowOrderingRules.shouldOrderOutBeforeMoving(
+            isOrdered: true,
+            isOnActiveSpace: true,
+            pinned: false
+          ),
+          !BufferWindowOrderingRules.shouldOrderOutBeforeMoving(
+            isOrdered: false,
+            isOnActiveSpace: false,
+            pinned: false
+          ),
+          !BufferWindowOrderingRules.shouldOrderOutBeforeMoving(
+            isOrdered: true,
+            isOnActiveSpace: false,
+            pinned: true
+          ) else {
+        print("FAILED: workbench old-Space reordering policy")
+        return false
+    }
+    guard CandidatePanelInteractionRules.mayInteract(
+            hasLogicalCandidates: true,
+            hasInteractionTarget: true,
+            panelIsVisible: true,
+            panelIsOnActiveSpace: true
+          ),
+          !CandidatePanelInteractionRules.mayInteract(
+            hasLogicalCandidates: true,
+            hasInteractionTarget: true,
+            panelIsVisible: false,
+            panelIsOnActiveSpace: true
+          ),
+          !CandidatePanelInteractionRules.mayInteract(
+            hasLogicalCandidates: true,
+            hasInteractionTarget: true,
+            panelIsVisible: true,
+            panelIsOnActiveSpace: false
+          ),
+          !CandidatePanelInteractionRules.mayInteract(
+            hasLogicalCandidates: true,
+            hasInteractionTarget: false,
+            panelIsVisible: true,
+            panelIsOnActiveSpace: true
+          ) else {
+        print("FAILED: hidden candidate panel must not capture local interaction")
+        return false
+    }
 
     var epochs = FocusEpochState()
     let tokenA = epochs.activate()
@@ -5420,6 +5997,20 @@ func runBufferWindowSmokeTest() -> Bool {
         frontmostBundleID: "app.a",
         frontmostProcessIdentifier: 101,
         trustedOverlayProcessIdentifier: 202
+    )
+    let pasteBundleID = "com.wiheads.paste"
+    let pastePath = "/Applications/Paste.app"
+    let pasteHost = FocusHostRules.resolveKnownFrontmost(
+        incomingBundleID: pasteBundleID,
+        frontmostBundleID: "app.a",
+        frontmostProcessIdentifier: 101,
+        trustedOverlayProcessIdentifier: 303
+    )
+    let pasteLease = FocusHostResolution(
+        kind: .nonactivatingSystemOverlay,
+        clientProcessIdentifier: 303,
+        foregroundAnchorBundleID: "app.a",
+        foregroundAnchorProcessIdentifier: 101
     )
     let savePanelBundleID = "com.apple.appkit.xpc.openAndSavePanelService"
     let savePanelPath =
@@ -5694,6 +6285,7 @@ func runBufferWindowSmokeTest() -> Bool {
     guard FocusHostRules.isAppKitOpenSavePanelBundle(savePanelBundleID),
           FocusHostRules.isTransientSystemSurfaceBundle(savePanelBundleID),
           FocusHostRules.isTransientSystemSurfaceBundle("com.apple.Spotlight"),
+          FocusHostRules.isTransientSystemSurfaceBundle(pasteBundleID),
           !FocusHostRules.isTransientSystemSurfaceBundle("app.a"),
           FocusHostRules.mayUseOrdinaryProcessBoundFallback("app.a"),
           !FocusHostRules.mayUseOrdinaryProcessBoundFallback(
@@ -5702,6 +6294,7 @@ func runBufferWindowSmokeTest() -> Bool {
           !FocusHostRules.mayUseOrdinaryProcessBoundFallback(
             "com.apple.Spotlight"
           ),
+          !FocusHostRules.mayUseOrdinaryProcessBoundFallback(pasteBundleID),
           savePanelHost == savePanelLease,
           FocusHostRules.resolveKnownFrontmost(
             incomingBundleID: savePanelBundleID,
@@ -5952,10 +6545,21 @@ func runBufferWindowSmokeTest() -> Bool {
             foregroundAnchorProcessIdentifier: 101
           ),
           spotlightHost == spotlightLease,
+          pasteHost == pasteLease,
+          FocusHostRules.resolveKnownFrontmost(
+            incomingBundleID: pasteBundleID,
+            frontmostBundleID: pasteBundleID,
+            frontmostProcessIdentifier: 303,
+            trustedOverlayProcessIdentifier: 303
+          ) == nil,
           savePanelHost == savePanelLease,
           FocusHostRules.isTrustedNonactivatingSystemOverlay(
             bundleID: "com.apple.Spotlight",
             bundlePath: "/System/Library/CoreServices/Spotlight.app"
+          ),
+          FocusHostRules.isTrustedNonactivatingSystemOverlay(
+            bundleID: pasteBundleID,
+            bundlePath: pastePath
           ),
           FocusHostRules.isTrustedAppKitOpenSavePanel(
             bundleID: savePanelBundleID,
@@ -5964,6 +6568,10 @@ func runBufferWindowSmokeTest() -> Bool {
           !FocusHostRules.isTrustedNonactivatingSystemOverlay(
             bundleID: "com.apple.Spotlight",
             bundlePath: "/Applications/FakeSpotlight.app"
+          ),
+          !FocusHostRules.isTrustedNonactivatingSystemOverlay(
+            bundleID: pasteBundleID,
+            bundlePath: "/Applications/FakePaste.app"
           ),
           !FocusHostRules.isTrustedAppKitOpenSavePanel(
             bundleID: savePanelBundleID,
@@ -5983,6 +6591,30 @@ func runBufferWindowSmokeTest() -> Bool {
                 (203, "/Applications/FakeSpotlight.app"),
             ]
           ) == nil,
+          FocusHostRules.uniqueTrustedOverlayProcessIdentifier(
+            bundleID: pasteBundleID,
+            runningCandidates: [(303, pastePath)]
+          ) == 303,
+          FocusHostRules.uniqueTrustedOverlayProcessIdentifier(
+            bundleID: pasteBundleID,
+            runningCandidates: [
+                (303, pastePath),
+                (304, pastePath),
+            ]
+          ) == nil,
+          FocusHostRules.resolveKnownFrontmost(
+            incomingBundleID: pasteBundleID,
+            frontmostBundleID: "app.a",
+            frontmostProcessIdentifier: 101,
+            trustedOverlayProcessIdentifier: nil
+          ) == nil,
+          FocusHostRules.resolutionMatchesLease(
+            pasteLease,
+            hostKind: .nonactivatingSystemOverlay,
+            clientProcessIdentifier: 303,
+            foregroundAnchorBundleID: "app.a",
+            foregroundAnchorProcessIdentifier: 101
+          ),
           FocusHostRules.allSystemPanelProcessesAreTrusted(
             bundleID: savePanelBundleID,
             runningCandidates: [
@@ -6194,20 +6826,78 @@ func runBufferWindowSmokeTest() -> Bool {
             frontmostBundleID: "app.a",
             incomingHostKind: .appKitOpenSavePanel
           ),
-          FocusEventRules.mayEstablishProcessBoundLease(
-            ownerExists: false,
-            frontmostProcessIdentifier: 101,
-            knownClientProcessIdentifier: nil
-          ),
-          !FocusEventRules.mayEstablishProcessBoundLease(
+          FocusEventRules.mayUseOrdinaryProcessBoundResolution(
             ownerExists: true,
+            reusesExactOwner: true,
+            frontmostProcessIdentifier: nil,
+            knownClientProcessIdentifier: nil
+          ),
+          FocusEventRules.mayUseOrdinaryProcessBoundResolution(
+            ownerExists: false,
+            reusesExactOwner: false,
             frontmostProcessIdentifier: 101,
             knownClientProcessIdentifier: nil
           ),
-          !FocusEventRules.mayEstablishProcessBoundLease(
+          FocusEventRules.mayUseOrdinaryProcessBoundResolution(
             ownerExists: false,
+            reusesExactOwner: false,
+            frontmostProcessIdentifier: 101,
+            knownClientProcessIdentifier: 101
+          ),
+          !FocusEventRules.mayUseOrdinaryProcessBoundResolution(
+            ownerExists: true,
+            reusesExactOwner: false,
+            frontmostProcessIdentifier: 101,
+            knownClientProcessIdentifier: nil
+          ),
+          !FocusEventRules.mayUseOrdinaryProcessBoundResolution(
+            ownerExists: false,
+            reusesExactOwner: false,
             frontmostProcessIdentifier: 101,
             knownClientProcessIdentifier: 202
+          ),
+          FocusEventRules.mayCacheClientProcess(
+            hostKind: .frontmostApplication,
+            resolvedIdentityWasVerified: true
+          ),
+          !FocusEventRules.mayCacheClientProcess(
+            hostKind: .frontmostApplication,
+            resolvedIdentityWasVerified: false
+          ),
+          FocusEventRules.mayCacheClientProcess(
+            hostKind: .nonactivatingSystemOverlay,
+            resolvedIdentityWasVerified: true
+          ),
+          !FocusEventRules.mayCacheClientProcess(
+            hostKind: .appKitOpenSavePanel,
+            resolvedIdentityWasVerified: true
+          ),
+          FocusEventRules.verifiedIdentityRequiresFreshEpoch(
+            reusesExactOwner: true,
+            ownerProcessIdentityWasVerified: false,
+            resolvedIdentityWasVerified: true
+          ),
+          !FocusEventRules.verifiedIdentityRequiresFreshEpoch(
+            reusesExactOwner: true,
+            ownerProcessIdentityWasVerified: false,
+            resolvedIdentityWasVerified: false
+          ),
+          !FocusEventRules.verifiedIdentityRequiresFreshEpoch(
+            reusesExactOwner: true,
+            ownerProcessIdentityWasVerified: true,
+            resolvedIdentityWasVerified: true
+          ),
+          FocusEventRules.mayRebindKnownClientProcess(
+            hostKind: .frontmostApplication,
+            resolvedIdentityWasVerified: true
+          ),
+          !FocusEventRules.mayRebindKnownClientProcess(
+            hostKind: .frontmostApplication,
+            resolvedIdentityWasVerified: false
+          ),
+          !FocusEventRules.mayRebindKnownClientProcess(
+            hostKind: .nonactivatingSystemOverlay,
+            resolvedIdentityWasVerified: true
           ) else {
         print("FAILED: focus event ordering/background callback gate")
         return false
@@ -6280,6 +6970,37 @@ func runBufferWindowSmokeTest() -> Bool {
             leaseAge: 89.00,
             senderIsExplicit: true,
             clientIdentityWasReused: true
+          ),
+          FocusActivationRules.acceptedEventConfirmsReusedClientLifecycle(
+            eventType: .keyDown
+          ),
+          !FocusActivationRules.acceptedEventConfirmsReusedClientLifecycle(
+            eventType: .keyUp
+          ),
+          !FocusActivationRules.acceptedEventConfirmsReusedClientLifecycle(
+            eventType: .flagsChanged
+          ),
+          abs(FocusActivationRules.suppressionDeadlineAfterConfirmedKeyDown(
+            current: 10.25,
+            confirmationUptime: 10.05
+          ) - 10.55) < 0.000_001,
+          FocusActivationRules.suppressionDeadlineAfterConfirmedKeyDown(
+            current: 11.0,
+            confirmationUptime: 10.05
+          ) == 11.0,
+          !FocusActivationRules.lifecycleCallbackMayApply(
+            now: 10.31,
+            suppressionUntil: 10.55,
+            leaseAge: 0.31,
+            senderIsExplicit: true,
+            clientIdentityWasReused: false
+          ),
+          FocusActivationRules.lifecycleCallbackMayApply(
+            now: 99.00,
+            suppressionUntil: 10.00,
+            leaseAge: 89.00,
+            senderIsExplicit: true,
+            clientIdentityWasReused: false
           ),
           FocusActivationRules.currentControllerClientMayApply(
             clientExists: true,

@@ -185,9 +185,13 @@ enum PluginConfigurationCatalog {
     static func makeRealtimeTranslationModel(
         defaults: UserDefaults = .standard,
         selectionStore: AITextConnectorSelectionStore = .shared,
-        notificationCenter: NotificationCenter = .default
+        notificationCenter: NotificationCenter = .default,
+        additionalLanguageIDs: [String] = []
     ) throws -> PluginConfigurationModel {
-        let languageChoices = translationLanguageChoices(defaults: defaults)
+        let languageChoices = translationLanguageChoices(
+            defaults: defaults,
+            additionalLanguageIDs: additionalLanguageIDs
+        )
         let schema = PluginConfigurationSchema(
             pluginID: BuiltInPluginID.appleTranslation,
             title: "实时翻译",
@@ -563,7 +567,8 @@ enum PluginConfigurationCatalog {
     }
 
     private static func translationLanguageChoices(
-        defaults: UserDefaults
+        defaults: UserDefaults,
+        additionalLanguageIDs: [String] = []
     ) -> [PluginConfigurationChoice] {
         var identifiers = [
             "zh-Hans", "zh-Hant", "en", "ja", "ko",
@@ -594,6 +599,10 @@ enum PluginConfigurationCatalog {
                !identifiers.contains(value) {
                 identifiers.append(value)
             }
+        }
+        for value in additionalLanguageIDs where
+            validLanguageIdentifier(value) && !identifiers.contains(value) {
+            identifiers.append(value)
         }
         return identifiers.map {
             let title = Locale.current.localizedString(forIdentifier: $0)

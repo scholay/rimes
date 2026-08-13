@@ -2552,6 +2552,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         DispatchQueue.global(qos: .userInitiated).async {
             _ = rimeEngine.start()
             let ok = BBRimeDeploy()
+            if ok {
+                rimeEngine.invalidateSchemaListCacheAfterDeployment()
+            }
             IMELog.write("settings: deploy=\(ok)")
             DispatchQueue.main.async {
                 guard ok else {

@@ -6,6 +6,8 @@
 > "永不 setMarkedText" 的假设，组字协议全面改为 **marked-text 会话常驻**（§4）。
 > 修改本文档时保持"先说做什么、再说为什么"的写法。
 >
+> **2026-08-13 工作台跨屏恢复覆盖（覆盖下一条“只在显式 hidden→visible 定位”）**：缓冲捕获开启时，新建立或重新确认的可信外部文本焦点会检查工作台是否仍在当前 macOS Space、以及合法 caret 是否落在另一物理显示器。只有发生这两类可见性断裂时，才把 nonactivating 工作台一次性带到当前 Space/目标显示器；同屏字段切换、输入与流式刷新仍不追踪 caret。自动恢复继续以精确 `FocusToken`、前台身份、secure input 与会话保护作前后门控，真正置前前再次复验；无合法 caret 时只在当前 Space 重排并保留已有 frame，禁止借鼠标屏 fallback 猜测显示器。未固定窗口使用 `.moveToActiveSpace + .fullScreenAuxiliary`，固定窗口使用 `.canJoinAllSpaces + .fullScreenAuxiliary`。关闭工作台仍会暂停捕获，因此 `BufferModel.enabled` 是恢复可见性的权威意图；自动位置保持 transient，不覆盖用户保存的 origin。
+>
 > **2026-08-06 工作台焦点定位覆盖**：用户显式从隐藏态唤出缓冲工作台时，先为当前精确外部 `FocusToken` 同步恢复 marked-text guard，再以 `liveTarget` 的 controller/client、前台 PID 和 secure-input 门控前后夹住一次 caret 查询。`attributes(forCharacterIndex:)` 的下标按 InputMethodKit 契约相对于 inline session，必须沿用稳定的相对下标 `0`；宿主的 `selectedRange`/`markedRange` 是文档级坐标，禁止直接混入，否则普通候选与工作台会一起漂移。合法零宽 caret 所在屏幕有空间时工作台优先位于输入框下方，否则翻到上方；174pt 最大布局只用于预判稳定方向，真实 78/112/143/174pt frame 均贴输入行 10pt。高度变化沿远离输入框的方向展开，候选窗贴真实外沿继续向外，不能用虚拟最大高度制造空隙。无精确目标、矩形非法或离屏时，才在鼠标所在屏幕居中靠下。定位只发生在显式 hidden→visible 转换，显示期间不会跟随焦点或流式刷新跳动；被动启动/锁屏恢复仍保留持久化 frame，自动开窗位置不覆盖用户保存的 origin。
 >
 > **2026-08-06 Marine Chrome 0.2.3 覆盖**：`builtin.marine-chrome` 是内置派生 workspace，配套 MV3 扩展使用固定 ID、RIMES 原生允许 + 扩展页确认的双确认流程自动领取内部凭据，日常不复制、不显示 token。没有网页上下文或用户备注时工作台隐藏空 source rail，以 78pt 单 target rail 显示“等待网页上下文”；真实 source 到达后恢复 112pt 双轨。工具栏右侧分别显示“Chrome 已配对/未配对”“上下文 在线/未挂载”“字幕来源”和“AI 就绪/未就绪”，其中“已配对”只表达本机信任关系，不能冒充扩展在线。抓取复用旧 Marine 的宿主标签绑定语义：popup 独立窗口造成的 `WINDOW_ID_NONE` 与父窗口 `focused=false` 不撤销同一 selected tab；worker 仍要求 main frame/document、tab/window/URL/epoch 与 `lastFocusedWindow` 的 active tab 全部一致，并在 PUT 前后重验。可恢复的前台 409、回环网络中断、正文未就绪和 503 必须保留不含正文的 suspended 读取意图；手动读取与无精确目标的 B 站直评可用只含 protocolVersion/URL 的前台探针恢复，精确回复仍要求真实 deep active editor 并重新解析评论 ID。Bilibili 的标题/URL 只是未就绪元数据，只有字幕、已捕获评论或明确视频简介可发布；空字幕按 2/5/10/30 秒退避重试，成功按 BV/分 P 缓存，隐藏页停发，导航 generation 拒绝迟到结果。popup 占焦期间到达的数据必须保留 dirty 标记并在页面恢复后用新 revision 重建；心跳必须单飞，不能在慢回环上排队。`dom` 权限只用于穿透 Bilibili 开放/闭合 Shadow DOM。状态轮询必须与 PUT/心跳串行，并且只把当前标签与 content identity 同时匹配的租约报为在线。切标签、跳转、关闭、Escape 或评论框失焦立即取消。AI capability/auth 探测完成后必须刷新被缓存的 unavailable phase；生成日志只记录 request ID、provider、来源枚举、结果分类与 block 数，不记录 URL、标题、网页正文、提示词、结果或凭据。
@@ -178,7 +180,7 @@
   8. **缓冲按键隔离**：普通/Shift+Return 与 Backspace 在最外层被无条件消费。有未决 Rime/并击组字或尚未 ready 的意识流 raw 时，本次 Return 只收束/强制生成并吞掉同一物理按键的 repeat/keyUp；意识流 final 已 ready 时，keyDown 先原子确认高亮候选并删除其他候选，同一次按键继续进入轻按/长按投递手势。其他无未决组字的内容也在 keyDown 定点重建不可见 marked-text guard，轻按请求 `sendNext`、按住 1.2 秒请求 `sendAll`。被接管的 keyDown 独立持有 sticky keyUp / `didCommand(insertNewline:)` suppression；发送最后一个 transient block、失焦或动作 reset 都不能撤销它们，迟到或重复回调也不消耗当前代的保护，直到下一次确认的新物理按压才退休。`handle(_:client:)` 是 Return 唯一动作入口，`didCommand` 只做防御性消费，不得形成第二条发送路径。Backspace 仅在精确焦点下编辑 Rime/并击状态或删除缓冲块。焦点不可信时始终吞键且不投递；引擎不可用时，无法安全收束的未决组字只吞不发，但没有未决组字的已有块仍可发送。任何分支都不得把换行/删除交给宿主。
   9. **工作台全选/粘贴**：精确 Control/Command+A/V 在 Rime 处理之前分流，但只有单一 Control 或 Command 修饰才是工作台命令。普通与插件模式会先安全收束未决 Rime/并击组字，使全选覆盖完整 `BufferModel` source；意识流只选中 raw source，不选中派生候选。选择本身只改变展示态，不使已 ready 的派生 generation 失效；粘贴才是一次 source 变更。读取 pasteboard 前后必须各重验 secure input 与同一精确租约；secure input 下直接放行宿主命令且绝不读取，失效外部焦点则只吞键。NSEvent 和 `didCommand(selectAll:/paste:)` 只能共同表示一次动作，repeat/keyUp/迟到 command 不得重复编辑。
 - `commitComposition(_:)`（IMK 回调）：flush chord → `commit_composition` → drain → 清 marked。
-- **焦点所有权**：每次 `activateServer` 建立新的单调 `FocusToken`；键事件只复用当前精确租约。controller/client 对象身份、`controller.client()` 当前身份、bundle、前台 app PID 与事件顺序共同拒绝迟到回调；生命周期回调不得用 `lastClient` 兜底。唯一已验证的例外是系统路径中的唯一 `com.apple.Spotlight` 进程：它是不会成为 `NSWorkspace.frontmostApplication` 的 LSUIElement。Spotlight activation 只建立不可投递的预热租约；只有 Spotlight 自身确有可见窗口时，新鲜有序的 keyDown 才能建立可投递 epoch，并同时绑定 Spotlight PID 与下层前台 app 的 bundle/PID 锚点。keyUp/flagsChanged 只能延续完全相同且已可信的租约，不能解锁或复活租约；窗口隐藏、进程/锚点变化或任一新的 workspace activation 都 fail-closed。未知 accessory app 仍拒绝。explicit、nil 或 non-client sender 都必须与当前隐式 client 一致；同一 proxy（包括跨 controller）被新 epoch 复用后，旧 session 只在 Rime 内回收到缓冲或丢弃。异步和弦回放、弱 client 过期、锁屏/睡眠也走同一 no-client 清理，不靠超时猜测归属。
+- **焦点所有权**：每次 `activateServer` 建立新的单调 `FocusToken`；键事件只复用当前精确租约。controller/client 对象身份、`controller.client()` 当前身份、bundle、前台 app PID 与事件顺序共同拒绝迟到回调；生命周期回调不得用 `lastClient` 兜底。已验证的非激活例外只有精确 bundle/path allowlist 中的 Spotlight 与 Paste：前者必须来自系统路径，后者必须来自 `/Applications/Paste.app`。两者都要求唯一 live PID、自有可见窗口、新鲜有序的 keyDown，并同时绑定下层前台 app 的 bundle/PID 锚点；activation 只建立不可投递的预热租约。keyUp/flagsChanged 不能解锁或复活租约；窗口隐藏、进程/锚点变化或任一新的 workspace activation 都 fail-closed，未知 accessory app 仍拒绝。explicit、nil 或 non-client sender 都必须与当前隐式 client 一致；同一 proxy（包括跨 controller）被新 epoch 复用后，生命周期回调保持锁闭，直到一枚通过全部身份、前台与顺序门控的 keyDown 证明新字段所有权。旧 session 只在 Rime 内回收到缓冲或丢弃。异步和弦回放、弱 client 过期、锁屏/睡眠也走同一 no-client 清理，不靠超时猜测归属。
 
 ### 5.4 CompositionSession ★v2 核心— 状态：✅ 已实现
 
@@ -201,6 +203,7 @@
 - 交互：鼠标点候选 → `select_candidate_on_current_page` → 正常 commit drain（**不许**直接 insertText 绕过控制器）。数字/减号/等号/空格/回车**一律进 Rime**，让用户 has_menu 翻页与选重绑定生效。
 - 方案选单（switcher）就是一页候选——本窗即渲染载体，无需特殊逻辑。
 - 缓冲模式把同一个带 `FocusToken` 的 Rime 候选 panel 锚定在工作台外沿；普通工作台固定 78pt，单 target 固定 112pt，意识流多 target 固定 143/174pt。手动或无目标布局保持底边并默认把候选放在下方；焦点锚定布局保持靠输入框的一边，增高时向外展开，匹配原 `FocusToken` 的候选也严格贴外沿，外侧空间不足则暂时隐藏而不穿过输入行。用户可在设置中切回 caret。两种位置共享完全相同的 Rime 候选视觉、矩阵翻页、单字选择与提交状态，过期点击无效；工作台不再维护 Rime 候选投影，意识流 target rows 是独立派生结果。
+- `isVisible` 同时要求逻辑 owner/context、仍可投递的 `interactionTarget`、非空内容、`panel.isVisible` 与 `panel.isOnActiveSpace`；所有 show/hide 经过统一状态机。焦点权限失效会物理隐藏并清空逻辑 presentation，避免 panel 已 `orderOut` 但控制器仍误判“可见”而不再重建。候选专属的鼠标、方向键、Return/Space、分页和 Option 单字选择还必须满足同一真实可见/active-Space 门控；临时隐藏时可保留组字语义，但不得在不可见 UI 上隐式选择或劫持宿主按键。
 
 ### 5.6 ChordController（并击）— 状态：✅ 已实现
 
@@ -227,7 +230,7 @@ macOS 版本不可靠。`Info.plist` 的 `etinput-menu.pdf` 继续负责系统�
 
 ### 5.8 InputFocusCoordinator — 状态：✅ 已实现
 
-为当前 controller/client 建立单调 `FocusToken` 租约，并同时校验租约 client 与 `controller.client()` 的对象身份、bundle id、前台应用 PID 与事件顺序。普通 App 必须与 `NSWorkspace.frontmostApplication` 精确一致；只有精确系统路径 allowlist 中的 Spotlight 与 AppKit `openAndSavePanelService` 可进入瞬态系统界面策略。Spotlight 冻结唯一系统进程 PID、其自有可见窗口及下层前台 bundle/PID；打开/保存面板允许系统保留多个 genuine ViewService，但要求所有同 bundle 活进程都来自固定 AppKit XPC 路径，不猜测 service PID，而是冻结发起 App bundle/PID 与首个新鲜 keyDown 时最前的 layer-0 面板窗口 ID。后续交互和异步上屏持续重验同一窗口，面板消失后底层文档窗不能替代它。两类界面的 lifecycle activation 都只建立 suspended 预热租约，keyUp/flagsChanged 不得建立或恢复，任一 workspace activation 一律撤销。迟到的 deactivate、command、hide、候选点击或和弦 timer 只操作自己的 token；缓冲投递不存在 recent/last client 回退。NSWorkspace、锁屏/会话与输入源通知负责缺失生命周期回调时的最终撤销。同 proxy 切字段（跨 controller 也算）或旧 marked range 消失时建立新 epoch；旧 session 只在缓冲开启时回收到工作台，否则丢弃，绝不经已经指向新字段的 proxy 提交。弱 client 自然释放时也先清理仍存活 controller 的 chord/session，再移除租约。
+为当前 controller/client 建立单调 `FocusToken` 租约，并同时校验租约 client 与 `controller.client()` 的对象身份、bundle id、前台应用 PID 与事件顺序。普通 App 必须与 `NSWorkspace.frontmostApplication` 精确一致；只有精确 bundle/path allowlist 中的 Spotlight、Paste 与 AppKit `openAndSavePanelService` 可进入瞬态界面策略。Spotlight/Paste 冻结唯一进程 PID、其自有可见窗口及下层前台 bundle/PID。打开/保存面板允许系统保留多个 genuine ViewService，但要求所有同 bundle 活进程都来自固定 AppKit XPC 路径，不猜测 service PID，而是冻结发起 App bundle/PID 与首个新鲜 keyDown 时最前的 layer-0 面板窗口 ID。后续交互和异步上屏持续重验同一权限组合，窗口消失后底层文档窗不能替代它。两类界面的 lifecycle activation 都只建立 suspended 预热租约，keyUp/flagsChanged 不得建立或恢复，任一 workspace activation 一律撤销。迟到的 deactivate、command、hide、候选点击或和弦 timer 只操作自己的 token；缓冲投递不存在 recent/last client 回退。NSWorkspace、锁屏/会话与输入源通知负责缺失生命周期回调时的最终撤销。同 proxy 切字段（跨 controller 也算）或旧 marked range 消失时建立新 epoch；临时只有前台 PID 而没有 bundle 时可处理当前首键，但不得把推测 PID 写进 proxy 缓存，后续经过 bundle/path 验证的身份必须刷新 epoch。复用 proxy 由可信 keyDown 确认后仍保留短期 lifecycle grace，覆盖已观测到的迟到旧字段 deactivate。旧 session 只在缓冲开启时回收到工作台，否则丢弃，绝不经已经指向新字段的 proxy 提交。弱 client 自然释放时也先清理仍存活 controller 的 chord/session，再移除租约。
 
 ### 5.9 Delivery — 状态：✅ 已实现
 
@@ -256,6 +259,7 @@ macOS 版本不可靠。`Info.plist` 的 `etinput-menu.pdf` 继续负责系统�
 ### 5.12 Deploy / userdb（P4）— 状态：✅ 自包含部署已实现；学习词同步仍是路线图
 
 - **现状**：app 自带 librime、插件和 Rime shared data，启动时在独立的 `~/Library/RimeBuffer` 执行 maintenance/deploy；正式安装不依赖 Squirrel。`build_install.sh` 默认可从 `~/Library/Rime` 重新播种用户配置与 userdb，也可在没有 Squirrel 用户目录时从 bundled schemas 独立部署。
+- 激活热路径只对 `build/default.yaml`、已部署 schema 与 `squirrel.yaml` 做轻量文件指纹检查；schema 列表和键盘布局解析按文件内容/原子替换自动失效，进程内部署成功后显式清缓存。任何 standalone smoke/preview 都在初始化 librime 前强制改用临时 userdir；engine smoke 在该目录中复刻正式包的 `Vendor + rime-data` SharedSupport，不打开 live LevelDB。
 - **隔离不变量**：两个活跃 Rime 实例不能共享同一 userdb LevelDB，因此运行时继续使用 `~/Library/RimeBuffer`，不直接打开 Squirrel 的 `~/Library/Rime`。
 - **[P4 路线图]** 决定使用 librime sync 还是显式迁移来同步学习词，并完成 Developer ID 签名/公证；不得为了同步而恢复两个进程直接共用一个 userdb。
 

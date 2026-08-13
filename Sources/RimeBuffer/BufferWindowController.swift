@@ -292,6 +292,44 @@ enum BufferWindowVisibilityRules {
     }
 }
 
+/// Keep enabled capture discoverable without turning the passive workbench
+/// into a caret-following window. A newly trusted text focus may relocate it
+/// only when the panel was stranded on another Space or physical display.
+enum BufferWindowFocusFollowRules {
+    static func shouldRelocate(
+        bufferEnabled: Bool,
+        presentationProtected: Bool,
+        secureInput: Bool,
+        hasTrustedExternalFocus: Bool,
+        panelVisibleOnActiveSpace: Bool,
+        targetScreenMatchesPanel: Bool
+    ) -> Bool {
+        bufferEnabled
+            && !presentationProtected
+            && !secureInput
+            && hasTrustedExternalFocus
+            && (!panelVisibleOnActiveSpace || !targetScreenMatchesPanel)
+    }
+}
+
+enum BufferWindowCollectionBehaviorRules {
+    static func behavior(pinned: Bool) -> NSWindow.CollectionBehavior {
+        pinned
+            ? [.canJoinAllSpaces, .fullScreenAuxiliary]
+            : [.moveToActiveSpace, .fullScreenAuxiliary]
+    }
+}
+
+enum BufferWindowOrderingRules {
+    static func shouldOrderOutBeforeMoving(
+        isOrdered: Bool,
+        isOnActiveSpace: Bool,
+        pinned: Bool
+    ) -> Bool {
+        isOrdered && !isOnActiveSpace && !pinned
+    }
+}
+
 enum BufferWorkbenchControl: String, Equatable {
     case bufferRail
     case send
@@ -937,6 +975,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var openingFocusToken: FocusToken?
     private var transientOpeningOrigin = false
     private var persistedFrameOrigin: NSPoint?
+    private var lastFocusFollowToken: FocusToken?
+    private var scheduledFocusFollowToken: FocusToken?
+    private var activeSpaceFocusFollowPending = false
 
     func preferredCandidatePanelSide(for owner: FocusToken?) -> CandidatePanelPreferredSide {
         BufferCandidateSideRules.preferredSide(
@@ -1047,7 +1088,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         // on another Space. `.moveToActiveSpace` applies when it is ordered
         // again; simply calling orderFront on the old ordered window may leave
         // it attached to the old Space.
-        if panel.isVisible, !panel.isOnActiveSpace, !pinned {
+        if BufferWindowOrderingRules.shouldOrderOutBeforeMoving(
+            isOrdered: panel.isVisible,
+            isOnActiveSpace: panel.isOnActiveSpace,
+            pinned: pinned
+        ) {
             panel.orderOut(nil)
         }
         panel.orderFrontRegardless()
@@ -1064,6 +1109,37 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         // while no marked session exists.
         RimeBufferController.refreshActiveUI()
         show()
+    }
+
+    /// Evaluate a newly trusted text focus on the next main-loop turn, after
+    /// the controller has installed its marked-text guard. Repeated key events
+    /// for the same focus are no-ops unless an intervening Space transition
+    /// made the previous evaluation stale.
+    func focusedInputDidActivate(expected token: FocusToken) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard lastFocusFollowToken != token || activeSpaceFocusFollowPending else {
+            return
+        }
+        guard scheduledFocusFollowToken != token else { return }
+        scheduledFocusFollowToken = token
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.scheduledFocusFollowToken == token else { return }
+            self.scheduledFocusFollowToken = nil
+            switch self.evaluateFocusedInputFollow(expected: token) {
+            case .deferred:
+                // A provisional/suspended lease can become trusted on the next
+                // exact key event. Leave the token eligible for one retry.
+                return
+            case .unchanged:
+                self.lastFocusFollowToken = token
+                self.activeSpaceFocusFollowPending = false
+            case .relocated:
+                self.lastFocusFollowToken = token
+                self.activeSpaceFocusFollowPending = false
+                RimeBufferController.refreshActiveUI()
+            }
+        }
     }
 
     func hideWithoutPausing() {
@@ -2129,9 +2205,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func applyCollectionBehavior() {
-        panel.collectionBehavior = pinned
-            ? [.canJoinAllSpaces, .fullScreenAuxiliary]
-            : [.moveToActiveSpace]
+        panel.collectionBehavior = BufferWindowCollectionBehaviorRules.behavior(
+            pinned: pinned
+        )
     }
 
     private func installObservers() {
@@ -2202,6 +2278,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         observers.append(workspace.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification,
                                                object: nil,
                                                queue: .main) { [weak self] _ in
+            self?.activeSpaceFocusFollowPending = true
             self?.refresh()
             RimeBufferController.refreshActiveUI()
         })
@@ -2338,14 +2415,112 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         openingFocusToken = nil
     }
 
+    private enum FocusFollowEvaluation {
+        case deferred
+        case unchanged
+        case relocated
+    }
+
+    private func evaluateFocusedInputFollow(
+        expected token: FocusToken
+    ) -> FocusFollowEvaluation {
+        let protected = sessionProtectionActive || hiddenForSession
+        let secureInput = IsSecureEventInputEnabled()
+        guard BufferModel.shared.enabled else {
+            return .unchanged
+        }
+        guard !protected, !secureInput else { return .deferred }
+        guard InputFocusCoordinator.shared.liveTarget(
+            expected: token,
+            forceOverlayVisibilityRefresh: true
+        ) != nil else {
+            return .deferred
+        }
+
+        let focusedAnchor = freshFocusedInputAnchor(expected: token)
+        let targetScreen = focusedAnchor.flatMap { anchor in
+            NSScreen.screens.first {
+                BufferWindowGeometry.isPlausibleInputAnchor(
+                    anchor.rect,
+                    visibleFrames: [$0.visibleFrame]
+                )
+            }
+        }
+        let targetScreenMatchesPanel = targetScreen.map { target in
+            panel.screen?.frame == target.frame
+        } ?? true
+        let wasVisibleOnActiveSpace = isVisible
+        guard BufferWindowFocusFollowRules.shouldRelocate(
+            bufferEnabled: BufferModel.shared.enabled,
+            presentationProtected: protected,
+            secureInput: secureInput,
+            hasTrustedExternalFocus: true,
+            panelVisibleOnActiveSpace: wasVisibleOnActiveSpace,
+            targetScreenMatchesPanel: targetScreenMatchesPanel
+        ) else {
+            return .unchanged
+        }
+
+        // Closing the workbench pauses capture, so enabled capture is the
+        // authoritative visibility intent. Repair a stale false preference
+        // left by an older build or interrupted UI transition.
+        UserDefaults.standard.set(true, forKey: Key.visible)
+        refresh()
+        guard !sessionProtectionActive,
+              !hiddenForSession,
+              !IsSecureEventInputEnabled(),
+              InputFocusCoordinator.shared.liveTarget(
+                expected: token,
+                forceOverlayVisibilityRefresh: true
+              ) != nil else {
+            return .deferred
+        }
+        if let focusedAnchor {
+            positionForOpening(focusedAnchor: focusedAnchor)
+        } else {
+            // A trusted lease can still come from a host that withholds caret
+            // geometry. Bring an old-Space panel forward without guessing a
+            // physical display from the mouse or moving a manually placed UI.
+            openingSide = .bottomFallback
+            openingFocusToken = nil
+            clampFrameToScreens()
+        }
+        guard !sessionProtectionActive,
+              !hiddenForSession,
+              !IsSecureEventInputEnabled(),
+              InputFocusCoordinator.shared.liveTarget(
+                expected: token,
+                forceOverlayVisibilityRefresh: true
+              ) != nil else {
+            return .deferred
+        }
+        if BufferWindowOrderingRules.shouldOrderOutBeforeMoving(
+            isOrdered: panel.isVisible,
+            isOnActiveSpace: panel.isOnActiveSpace,
+            pinned: pinned
+        ) {
+            panel.orderOut(nil)
+        }
+        panel.orderFrontRegardless()
+        candidateWindow.syncWorkbenchAnchor(candidateAnchorRect)
+        let reason = wasVisibleOnActiveSpace ? "display" : "space"
+        IMELog.write("workbench followed focused input token=\(token) reason=\(reason)")
+        return .relocated
+    }
+
     private func positionForExplicitOpening() {
+        positionForOpening(focusedAnchor: freshFocusedInputAnchor())
+    }
+
+    private func positionForOpening(
+        focusedAnchor: (rect: NSRect, token: FocusToken)?
+    ) {
         let screens = NSScreen.screens
         let visibleFrames = screens.map(\.visibleFrame)
         let mouse = NSEvent.mouseLocation
         let fallback = screens.first { $0.frame.contains(mouse) }?.visibleFrame
             ?? NSScreen.main?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let focusedAnchor = freshFocusedInputAnchor()
         let placement = BufferWindowGeometry.openingPlacement(
             currentFrame: panel.frame,
             targetRect: focusedAnchor?.rect,
@@ -2363,9 +2538,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         transientOpeningOrigin = true
     }
 
-    private func freshFocusedInputAnchor() -> (rect: NSRect, token: FocusToken)? {
+    private func freshFocusedInputAnchor(
+        expected token: FocusToken? = nil
+    ) -> (rect: NSRect, token: FocusToken)? {
         guard !IsSecureEventInputEnabled(),
               let lease = InputFocusCoordinator.shared.liveTarget(
+                expected: token,
                 forceOverlayVisibilityRefresh: true
               ),
               let controller = lease.controller else { return nil }

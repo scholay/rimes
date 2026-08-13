@@ -12,9 +12,9 @@ struct FocusToken: Hashable, CustomStringConvertible {
 
 /// Most IMK clients are ordinary activating applications, so their client
 /// bundle/PID must exactly match `NSWorkspace.frontmostApplication`. A small
-/// number of Apple-owned system surfaces are hosted out of process and leave
-/// the application underneath them frontmost. Keep those exceptions explicit
-/// and path-verified instead of weakening the foreground gate for every
+/// number of explicitly trusted nonactivating surfaces are hosted out of process
+/// and leave the application underneath them frontmost. Keep those exceptions
+/// bundle/path verified instead of weakening the foreground gate for every
 /// accessory application or XPC service.
 enum FocusHostKind: Equatable {
     case frontmostApplication
@@ -42,6 +42,12 @@ struct FocusHostResolution: Equatable {
 enum FocusHostRules {
     private static let trustedNonactivatingSystemOverlayPaths = [
         "com.apple.Spotlight": "/System/Library/CoreServices/Spotlight.app",
+        // Paste is an LSUIElement app whose search field owns the IMK client
+        // without becoming NSWorkspace's frontmost application. It has no stable
+        // TeamIdentifier on the observed release, so its narrow trust identity is
+        // exact bundle + canonical install path + unique live PID + visible
+        // WindowServer surface; the latter gates remain enforced at runtime.
+        "com.wiheads.paste": "/Applications/Paste.app",
     ]
     private static let trustedAppKitOpenSavePanelPaths = [
         "com.apple.appkit.xpc.openAndSavePanelService":
@@ -137,8 +143,8 @@ enum FocusHostRules {
     static func resolveKnownFrontmost(incomingBundleID: String,
                                       frontmostBundleID: String,
                                       frontmostProcessIdentifier: pid_t,
-                                      trustedOverlayProcessIdentifier: pid_t?,
-                                      trustedSystemPanelAvailable: Bool = false) -> FocusHostResolution? {
+        trustedOverlayProcessIdentifier: pid_t?,
+        trustedSystemPanelAvailable: Bool = false) -> FocusHostResolution? {
         if isNonactivatingSystemOverlayBundle(incomingBundleID) {
             guard incomingBundleID != frontmostBundleID,
                   let trustedOverlayProcessIdentifier else { return nil }
@@ -494,12 +500,51 @@ enum FocusEventRules {
         return incomingBundleID == frontmostBundleID
     }
 
-    static func mayEstablishProcessBoundLease(ownerExists: Bool,
-                                              frontmostProcessIdentifier: pid_t?,
-                                              knownClientProcessIdentifier: pid_t?) -> Bool {
-        !ownerExists
-            && frontmostProcessIdentifier != nil
-            && knownClientProcessIdentifier == nil
+    /// A missing frontmost bundle may continue an exact lease or use a client
+    /// proxy whose PID was frozen by an earlier bundle-verified callback. The
+    /// frontmost PID alone is not provenance: binding an unknown proxy to it can
+    /// poison every later callback from that proxy.
+    static func mayUseOrdinaryProcessBoundResolution(
+        ownerExists: Bool,
+        reusesExactOwner: Bool,
+        frontmostProcessIdentifier: pid_t?,
+        knownClientProcessIdentifier: pid_t?
+    ) -> Bool {
+        if reusesExactOwner { return true }
+        guard let frontmostProcessIdentifier else { return false }
+        // Preserve first-key compatibility while NSWorkspace is between app
+        // records, but treat this as provisional authority: the caller must not
+        // cache this inferred binding until a later exact bundle/PID match.
+        if !ownerExists && knownClientProcessIdentifier == nil { return true }
+        guard let knownClientProcessIdentifier else { return false }
+        return knownClientProcessIdentifier == frontmostProcessIdentifier
+    }
+
+    /// Persist only identities established by a positive bundle/path check.
+    /// AppKit open/save proxies are deliberately never process-cached because
+    /// their frozen authority PID belongs to the initiating app, not the proxy.
+    static func mayCacheClientProcess(
+        hostKind: FocusHostKind,
+        resolvedIdentityWasVerified: Bool
+    ) -> Bool {
+        resolvedIdentityWasVerified && hostKind != .appKitOpenSavePanel
+    }
+
+    static func verifiedIdentityRequiresFreshEpoch(
+        reusesExactOwner: Bool,
+        ownerProcessIdentityWasVerified: Bool,
+        resolvedIdentityWasVerified: Bool
+    ) -> Bool {
+        reusesExactOwner
+            && !ownerProcessIdentityWasVerified
+            && resolvedIdentityWasVerified
+    }
+
+    static func mayRebindKnownClientProcess(
+        hostKind: FocusHostKind,
+        resolvedIdentityWasVerified: Bool
+    ) -> Bool {
+        hostKind == .frontmostApplication && resolvedIdentityWasVerified
     }
 }
 
@@ -507,6 +552,7 @@ enum FocusActivationRules {
     static let provisionalConfirmationWindow: TimeInterval = 0.25
     static let nonactivatingOverlayProvisionalConfirmationWindow: TimeInterval = 2.0
     static let reusedClientLifecycleSuppressionWindow: TimeInterval = 0.25
+    static let reusedClientPostKeyDownSuppressionWindow: TimeInterval = 0.5
     static let ambiguousLifecycleMinimumAge: TimeInterval = 0.08
 
     static func shouldConfirmProvisional(isProvisional: Bool,
@@ -527,9 +573,31 @@ enum FocusActivationRules {
                                           leaseAge: TimeInterval,
                                           senderIsExplicit: Bool,
                                           clientIdentityWasReused: Bool) -> Bool {
+        // A reused identity remains ambiguous until a fully validated keyDown
+        // clears the lease's latch. Time alone must never make an old field's
+        // delayed deactivate authoritative.
         guard !clientIdentityWasReused else { return false }
         guard now >= suppressionUntil else { return false }
         return senderIsExplicit || leaseAge >= ambiguousLifecycleMinimumAge
+    }
+
+    /// Called only after the coordinator has accepted the event through its
+    /// controller/client, app/PID, host authority and monotonic timestamp gates.
+    /// keyUp/flagsChanged cannot prove which field owns a reused IMK proxy.
+    static func acceptedEventConfirmsReusedClientLifecycle(
+        eventType: NSEvent.EventType?
+    ) -> Bool {
+        eventType == .keyDown
+    }
+
+    static func suppressionDeadlineAfterConfirmedKeyDown(
+        current: TimeInterval,
+        confirmationUptime: TimeInterval
+    ) -> TimeInterval {
+        max(
+            current,
+            confirmationUptime + reusedClientPostKeyDownSuppressionWindow
+        )
     }
 
     static func currentControllerClientMayApply(clientExists: Bool,
@@ -575,8 +643,15 @@ final class FocusLease {
     var lastAcceptedEventTimestamp: TimeInterval?
     var provisionalFromEvent: Bool
     let createdAtUptime: TimeInterval
-    let lifecycleSuppressionUntilUptime: TimeInterval
-    let clientIdentityWasReused: Bool
+    var lifecycleSuppressionUntilUptime: TimeInterval
+    /// Safety latch, not merely history. It starts true when IMK reuses a proxy
+    /// across epochs and is cleared only by a fully accepted keyDown. Until then
+    /// lifecycle callbacks with that identity remain unattributable.
+    var clientIdentityWasReused: Bool
+    /// False only for a compatibility lease created while NSWorkspace exposed a
+    /// frontmost PID but no bundle. It can handle the current key without being
+    /// persisted as proxy/PID truth; exact bundle evidence replaces its epoch.
+    let processIdentityWasVerified: Bool
     var deliverySuspended = false
     var awaitingSystemSurfaceKeyDown = false
     var systemPanelWindowNumber: CGWindowID? = nil
@@ -598,7 +673,8 @@ final class FocusLease {
          provisionalFromEvent: Bool,
          createdAtUptime: TimeInterval,
          lifecycleSuppressionUntilUptime: TimeInterval,
-         clientIdentityWasReused: Bool) {
+         clientIdentityWasReused: Bool,
+         processIdentityWasVerified: Bool) {
         self.token = token
         self.controller = controller
         self.client = client
@@ -615,6 +691,7 @@ final class FocusLease {
         self.createdAtUptime = createdAtUptime
         self.lifecycleSuppressionUntilUptime = lifecycleSuppressionUntilUptime
         self.clientIdentityWasReused = clientIdentityWasReused
+        self.processIdentityWasVerified = processIdentityWasVerified
     }
 }
 
@@ -648,9 +725,10 @@ final class InputFocusCoordinator {
 
     private init() {}
 
-    /// Resolve only explicitly allowlisted Apple-owned, system-path surfaces.
-    /// New bindings reject duplicate processes; an established lease is
-    /// revalidated cheaply by its frozen PID.
+    /// Resolve only explicitly allowlisted bundle/path surfaces. Established
+    /// leases re-run the same unique-process + canonical-path check: a second
+    /// instance, PID reuse, or path replacement must revoke rather than inherit
+    /// authority (especially for the third-party Paste overlay).
     private func trustedNonactivatingSystemOverlayProcessIdentifier(
         for bundleID: String,
         boundProcessIdentifier: pid_t? = nil
@@ -658,24 +736,21 @@ final class InputFocusCoordinator {
         guard FocusHostRules.isNonactivatingSystemOverlayBundle(bundleID) else {
             return nil
         }
-        if let boundProcessIdentifier {
-            guard let application = NSRunningApplication(
-                    processIdentifier: boundProcessIdentifier
-                  ),
-                  !application.isTerminated,
-                  application.bundleIdentifier == bundleID else { return nil }
-            return boundProcessIdentifier
-        }
         let candidates = NSRunningApplication.runningApplications(
             withBundleIdentifier: bundleID
         ).filter { !$0.isTerminated }.map {
             (processIdentifier: $0.processIdentifier,
              bundlePath: $0.bundleURL?.path)
         }
-        return FocusHostRules.uniqueTrustedOverlayProcessIdentifier(
+        guard let resolved = FocusHostRules.uniqueTrustedOverlayProcessIdentifier(
             bundleID: bundleID,
             runningCandidates: candidates
-        )
+        ) else { return nil }
+        if let boundProcessIdentifier,
+           resolved != boundProcessIdentifier {
+            return nil
+        }
+        return resolved
     }
 
     /// AppKit may retain more than one genuine open/save ViewService. We do not
@@ -768,6 +843,24 @@ final class InputFocusCoordinator {
               let owner,
               owner.hostKind.requiresTransientSurfaceAuthority else { return }
         suspendDelivery(token: owner.token, reason: reason)
+    }
+
+    private func confirmReusedClientLifecycleIfNeeded(
+        _ lease: FocusLease,
+        eventType: NSEvent.EventType?
+    ) {
+        guard lease.clientIdentityWasReused,
+              FocusActivationRules.acceptedEventConfirmsReusedClientLifecycle(
+                eventType: eventType
+              ) else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        lease.lifecycleSuppressionUntilUptime = FocusActivationRules
+            .suppressionDeadlineAfterConfirmedKeyDown(
+                current: lease.lifecycleSuppressionUntilUptime,
+                confirmationUptime: now
+            )
+        lease.clientIdentityWasReused = false
+        IMELog.write("focus reused-client lifecycle confirmed token=\(lease.token)")
     }
 
     @discardableResult
@@ -885,6 +978,7 @@ final class InputFocusCoordinator {
         }()
         var trustedSurfaceAuthority = false
         var pendingSystemPanelWindowNumber: CGWindowID?
+        var resolvedClientProcessIdentityWasVerified = false
         let hostResolution: FocusHostResolution
 
         if let frontmostBundleID, let frontmostProcessIdentifier {
@@ -921,6 +1015,11 @@ final class InputFocusCoordinator {
                 return nil
             }
             hostResolution = resolved
+            // `resolveKnownFrontmost` accepts ordinary apps only on an exact
+            // bundle match, and overlays only with their trusted system-path
+            // process. The open/save anchor PID is intentionally not cacheable.
+            resolvedClientProcessIdentityWasVerified =
+                resolved.kind != .appKitOpenSavePanel
             if resolved.kind == .appKitOpenSavePanel {
                 let windows = onScreenWindowSnapshots()
                 if let owner,
@@ -998,6 +1097,7 @@ final class InputFocusCoordinator {
                 foregroundAnchorBundleID: foregroundAnchorBundleID,
                 foregroundAnchorProcessIdentifier: foregroundAnchorProcessIdentifier
             )
+            resolvedClientProcessIdentityWasVerified = true
         } else if openSavePanelBundle {
             // A temporarily missing foreground bundle must never downgrade an
             // AppKit service callback into the ordinary PID fallback. Continue
@@ -1060,22 +1160,16 @@ final class InputFocusCoordinator {
                 )
                 return nil
             }
-            // NSWorkspace can briefly omit a bundle. Continue an exact lease;
-            // when there is no owner yet, the frontmost PID plus the current
-            // IMK client is enough to establish a process-bound lease. A known
-            // client may also resume only in its recorded process.
-            let knownProcessMatches = frontmostProcessIdentifier.map {
-                knownProcess?.int32Value == $0
-            } ?? false
-            let mayEstablishProcessBoundLease = FocusEventRules
-                .mayEstablishProcessBoundLease(
-                    ownerExists: owner != nil,
-                    frontmostProcessIdentifier: frontmostProcessIdentifier,
-                    knownClientProcessIdentifier: knownProcess?.int32Value
-                )
-            guard reusesExactOwner
-                    || knownProcessMatches
-                    || mayEstablishProcessBoundLease else {
+            // NSWorkspace can briefly omit a bundle. Continue an exact/frozen
+            // binding, or create a provisional first lease for the current key.
+            // That provisional PID is deliberately not written to the durable
+            // proxy cache; later exact bundle evidence replaces its epoch.
+            guard FocusEventRules.mayUseOrdinaryProcessBoundResolution(
+                ownerExists: owner != nil,
+                reusesExactOwner: reusesExactOwner,
+                frontmostProcessIdentifier: frontmostProcessIdentifier,
+                knownClientProcessIdentifier: knownProcess?.int32Value
+            ) else {
                 IMELog.write("focus callback rejected; unverifiable frontmost bundle=\(bundleID)")
                 return nil
             }
@@ -1151,7 +1245,12 @@ final class InputFocusCoordinator {
         // map when AppKit later reuses that proxy for another application.
         if hostResolution.kind != .appKitOpenSavePanel,
            let knownProcess,
-           knownProcess.int32Value != hostResolution.clientProcessIdentifier {
+           knownProcess.int32Value != hostResolution.clientProcessIdentifier,
+           !FocusEventRules.mayRebindKnownClientProcess(
+            hostKind: hostResolution.kind,
+            resolvedIdentityWasVerified:
+                resolvedClientProcessIdentityWasVerified
+           ) {
             suspendReusedTransientSurfaceOwnerIfNeeded(
                 reusesExactOwner: reusesExactOwner,
                 reason: "client process authority changed"
@@ -1159,13 +1258,6 @@ final class InputFocusCoordinator {
             IMELog.write("focus client process mismatch rejected bundle=\(bundleID) known=\(knownProcess.int32Value) resolved=\(hostResolution.clientProcessIdentifier)")
             return nil
         }
-        if hostResolution.kind != .appKitOpenSavePanel {
-            knownClientProcesses.setObject(
-                NSNumber(value: hostResolution.clientProcessIdentifier),
-                forKey: clientObject
-            )
-        }
-
         if let owner, epochs.isCurrent(owner.token) {
             if let eventTimestamp,
                !FocusEventRules.isOrdered(eventTimestamp,
@@ -1180,6 +1272,25 @@ final class InputFocusCoordinator {
                 frontmostBundleID: frontmostBundleID,
                 incomingHostKind: hostResolution.kind
             ) else { return nil }
+        }
+
+        // Cache only after event ordering and ownership gates have accepted the
+        // callback. A rejected stale event must not leave a durable proxy/PID
+        // association behind.
+        if FocusEventRules.mayCacheClientProcess(
+            hostKind: hostResolution.kind,
+            resolvedIdentityWasVerified:
+                resolvedClientProcessIdentityWasVerified
+        ) {
+            if let knownProcess,
+               knownProcess.int32Value
+                != hostResolution.clientProcessIdentifier {
+                IMELog.write("focus client process rebound bundle=\(bundleID) old=\(knownProcess.int32Value) new=\(hostResolution.clientProcessIdentifier)")
+            }
+            knownClientProcesses.setObject(
+                NSNumber(value: hostResolution.clientProcessIdentifier),
+                forKey: clientObject
+            )
         }
 
         if eventType == .keyDown,
@@ -1206,6 +1317,7 @@ final class InputFocusCoordinator {
             owner.awaitingSystemSurfaceKeyDown = false
             owner.deliverySuspended = false
             owner.lastAcceptedEventTimestamp = eventTimestamp
+            confirmReusedClientLifecycleIfNeeded(owner, eventType: eventType)
             let windowDescription = owner.systemPanelWindowNumber.map {
                 String($0)
             } ?? "service-owned"
@@ -1223,6 +1335,13 @@ final class InputFocusCoordinator {
                     sameControllerAndClient: reusesExactOwner,
                     age: activationNow - $0.createdAtUptime,
                     hostKind: $0.hostKind
+                )
+                && !FocusEventRules.verifiedIdentityRequiresFreshEpoch(
+                    reusesExactOwner: reusesExactOwner,
+                    ownerProcessIdentityWasVerified:
+                        $0.processIdentityWasVerified,
+                    resolvedIdentityWasVerified:
+                        resolvedClientProcessIdentityWasVerified
                 )
                 && !$0.deliverySuspended
                 && epochs.isCurrent($0.token)
@@ -1247,7 +1366,17 @@ final class InputFocusCoordinator {
             markedRangeWasObservable: owner?.markedRangeWasObservable == true,
             markedRangeIsMissing: markedRangeIsMissing
         )
+        let verifiedIdentityRequiresFreshEpoch = owner.map {
+            FocusEventRules.verifiedIdentityRequiresFreshEpoch(
+                reusesExactOwner: reusesExactOwner,
+                ownerProcessIdentityWasVerified:
+                    $0.processIdentityWasVerified,
+                resolvedIdentityWasVerified:
+                    resolvedClientProcessIdentityWasVerified
+            )
+        } ?? false
         let eventRequiresFreshEpoch = eventRevealsFieldChange
+            || verifiedIdentityRequiresFreshEpoch
             || (eventTimestamp != nil
                 && reusesExactOwner
                 && (owner?.deliverySuspended == true
@@ -1275,6 +1404,7 @@ final class InputFocusCoordinator {
             if let eventTimestamp {
                 owner.lastAcceptedEventTimestamp = eventTimestamp
             }
+            confirmReusedClientLifecycleIfNeeded(owner, eventType: eventType)
             return Activation(token: owner.token, displaced: nil)
         }
 
@@ -1301,6 +1431,20 @@ final class InputFocusCoordinator {
         // fields within one controller. Identity reuse alone makes the old
         // destination unsafe.
         let reusesDisplacedIdentity = displaced?.clientIdentity == identity
+        let eventConfirmsReusedIdentity = reusesDisplacedIdentity
+            && FocusActivationRules.acceptedEventConfirmsReusedClientLifecycle(
+                eventType: eventType
+            )
+        let initialLifecycleSuppression = reusesDisplacedIdentity
+            ? activationNow
+                + FocusActivationRules.reusedClientLifecycleSuppressionWindow
+            : activationNow
+        let lifecycleSuppressionUntil = eventConfirmsReusedIdentity
+            ? FocusActivationRules.suppressionDeadlineAfterConfirmedKeyDown(
+                current: initialLifecycleSuppression,
+                confirmationUptime: activationNow
+            )
+            : initialLifecycleSuppression
         let newOwner = FocusLease(
             token: token,
             controller: controller,
@@ -1316,11 +1460,11 @@ final class InputFocusCoordinator {
             lastAcceptedEventTimestamp: eventTimestamp,
             provisionalFromEvent: !forceNewEpoch,
             createdAtUptime: activationNow,
-            lifecycleSuppressionUntilUptime: reusesDisplacedIdentity
-                ? activationNow
-                    + FocusActivationRules.reusedClientLifecycleSuppressionWindow
-                : activationNow,
+            lifecycleSuppressionUntilUptime: lifecycleSuppressionUntil,
             clientIdentityWasReused: reusesDisplacedIdentity
+                && !eventConfirmsReusedIdentity,
+            processIdentityWasVerified:
+                resolvedClientProcessIdentityWasVerified
         )
         // System-surface activation may precede its window becoming visible.
         // Preheat the engine under a fresh token, but the first fresh keyDown

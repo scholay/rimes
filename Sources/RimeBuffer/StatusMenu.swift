@@ -150,6 +150,9 @@ final class StatusMenu {
         DispatchQueue.global(qos: .userInitiated).async {
             _ = rimeEngine.start()
             let ok = BBRimeDeploy()
+            if ok {
+                rimeEngine.invalidateSchemaListCacheAfterDeployment()
+            }
             IMELog.write("input menu: deploy=\(ok), restarting")
             DispatchQueue.main.async {
                 InputMetricsPersistence.saveNow()

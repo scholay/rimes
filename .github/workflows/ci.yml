@@ -113,6 +113,7 @@ jobs:
             stats-smoke
             matrix-smoke
             candidate-metrics-smoke
+            activation-cache-smoke
             theme-smoke
             origin-smoke
             inbound-smoke
