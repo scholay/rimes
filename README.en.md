@@ -56,7 +56,37 @@ The four bundled plug-ins are installed and enabled on a clean first run. Other 
 
 ## Install
 
-End users: download `RIMES-<version>.pkg` from [GitHub Releases](https://github.com/scholay/rimes/releases) and run the installer. It places the compatibility bundle `ETInput.app` in `/Library/Input Methods`, then registers, enables, and tries to switch to “RIMES”.
+### Temporary free preview (v0.4.3)
+
+Until the project can join the Apple Developer Program, community testers may download
+`RIMES-0.4.3.pkg` from the official
+[GitHub Pre-release v0.4.3](https://github.com/scholay/rimes/releases/tag/v0.4.3).
+This package is **unsigned, not notarized, and not verified by Apple**; it is not a formal
+release. Download only from `scholay/rimes`, then compare the package's locally calculated
+SHA-256 with the value published on that Release page.
+
+Double-click the package once to trigger the macOS warning, then choose **Open Anyway** under
+**System Settings → Privacy & Security** and continue in Installer. If RIMES does not appear as
+an input source, log out and back in. Never disable Gatekeeper globally or remove quarantine
+attributes with `xattr`. Stop if macOS says the package is “damaged” or “will damage your
+computer”. An organization-managed Mac may block this exception through MDM. See
+[the detailed preview guide](UNSIGNED-PREVIEW.md) and
+[Apple's official guidance](https://support.apple.com/zh-cn/102445).
+
+The v0.4.3 preview cannot use in-app updates. When a higher Developer ID-signed and
+Apple-notarized release becomes available, preview users must download and install it manually
+once from the official Release page.
+
+### Formal releases
+
+After Developer ID becomes available, formal releases will continue to provide only
+Developer ID-signed and Apple-notarized `RIMES-<version>.pkg` files through
+[GitHub Releases](https://github.com/scholay/rimes/releases). The installer fixes the
+compatibility bundle `ETInput.app` at `/Library/Input Methods`, then registers and enables the
+parent/child input sources in order and makes one best-effort switch to “RIMES”. If a recent
+macOS release does not refresh the input menu immediately, installation still succeeds; log
+out and back in, then confirm RIMES in System Settings. Do not terminate
+`TextInputMenuAgent` or `imklaunchagent`.
 
 Developers:
 
@@ -100,20 +130,24 @@ The extension is a page sensor only: it does not run a model, auto-fill fields, 
 | [SYSTEM-ARCHITECTURE.md](SYSTEM-ARCHITECTURE.md) | Authoritative system architecture (start here if hacking) |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | P1/P2 historical contracts and footguns |
 | [PLUGIN-CONFIGURATION.md](PLUGIN-CONFIGURATION.md) | Declarative plugin configuration |
+| [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) | Download, verification, and safe-install steps for the unsigned v0.4.3 preview |
 | [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) | Windows / Linux input-schemes preview boundary and validation |
 | [RELEASE.md](RELEASE.md) | CI, universal binaries, in-app updates |
 
 ## Auto-update
 
-Installed builds check GitHub Releases on [`scholay/rimes`](https://github.com/scholay/rimes). To ship:
+Formally signed builds check GitHub Releases on
+[`scholay/rimes`](https://github.com/scholay/rimes); the unsigned v0.4.3 preview is excluded
+from that channel. To ship:
 
 ```bash
 ./scripts/release.sh patch         # stable macOS release
 ./scripts/release.sh preview 0.2.0 # Windows/Linux data preview
 ```
 
-Both release channels are published in the new repository: macOS `vX.Y.Z`
-is stable, while Windows/Linux `platform-preview-vX.Y.Z` is always a pre-release.
+Both release channels are published in the new repository: macOS `vX.Y.Z` is normally stable;
+`v0.4.3` is a one-time unsigned pre-release exception and is excluded from auto-update.
+Windows/Linux `platform-preview-vX.Y.Z` is always a pre-release.
 
 ## Known issues
 

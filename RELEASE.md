@@ -14,7 +14,8 @@ Release manifest 资产名、SHA-256、运行时 Swift catalog 以及中英文 R
 
 唯一发布中心是 [`scholay/rimes`](https://github.com/scholay/rimes/releases)：
 
-- `vX.Y.Z`：macOS 正式版，进入 `/releases/latest` 和应用内更新通道；
+- `vX.Y.Z`：macOS 正式版，进入 `/releases/latest` 和应用内更新通道；唯一例外是一次性的
+  `v0.4.3` 未签名 Pre-release，它不进入 latest 或自动更新；
 - `platform-preview-vX.Y.Z`：Windows/Linux 数据与输入方案预览版，始终标记为 Pre-release。
 
 两个通道使用独立版本号，但都只能由新仓库的 tag 触发。旧仓库
@@ -38,21 +39,101 @@ Release manifest 资产名、SHA-256、运行时 Swift catalog 以及中英文 R
 
 推送 tag 会触发 [`.github/workflows/release.yml`](.github/workflows/release.yml)：
 
+workflow 使用两台彼此隔离的 runner。第一台 `build_and_smoke` 不绑定受保护 Environment、也不
+读取任何发布 Secret：它构建并实际执行 ad-hoc app 的 runtime smoke，再把 app、manifest、
+上下文和校验和作为短期 handoff Artifact 传出。第二台全新的 `sign_and_publish` runner 才进入
+受保护的 `macos-release` Environment；它先按严格成员/路径/权限/大小规则解包 app，并只做
+结构、架构和 ad-hoc 签名等被动校验。只有正式 tag 通过这些校验后才导入签名与公证凭据，且
+凭据所在 runner 不执行 handoff 中的 ETInput。
+
 1. `swift build -c release --arch arm64 --arch x86_64`（**通用二进制**，Intel/Apple Silicon 通用）
 2. `scripts/fetch-rime.sh` 下载 librime 运行时（从 Squirrel 官方 pkg 提取，见下）
 3. 组装 `ETInput.app`：二进制 → `MacOS/ETInput`，`Info.plist`，并把 librime + 插件 + Rime
-   词库拷进 `Contents/Frameworks` 与 `Contents/SharedSupport`；`--deep` ad-hoc 签名
-4. 同时产出 `RIMES-X.Y.Z.pkg`（新用户安装器）和兼容旧客户端的 `ETInput-X.Y.Z.zip`（应用内更新），创建
-   GitHub Release，附带 SHA256
+   词库拷进 `Contents/Frameworks` 与 `Contents/SharedSupport`；用 ad-hoc 签名执行 runtime smoke，
+   再通过上述受校验的 handoff 交给 fresh signing runner
+4. 被动校验通过后，用同一张 Developer ID Application 证书逐个重签所有 bundled Mach-O，
+   再以 hardened runtime 签 app；凭据所在 runner 不执行该 app
+5. 把 app 提交 Apple 公证、等待 `Accepted` 并 staple；随后才创建仅供
+   v0.4.2 及更早客户端迁移的 `ETInput-X.Y.Z.zip`
+6. 以 Developer ID Installer 签署 `RIMES-X.Y.Z.pkg`，再次提交公证并 staple
+7. 对最终资产执行 `codesign`、`pkgutil`、`stapler` 与 `spctl` 校验，通过后才创建
+   GitHub Release 并计算/发布 SHA256；发布前先销毁临时 keychain/P8，发布使用受控的
+   `gh` CLI，所有外部 Actions 都固定到完整 commit SHA
 
 也可在 GitHub Actions 手动运行 `Release macOS` 做发布前演练。手动运行只上传短期
-Artifact，不创建 Release；正式 Release 仍必须来自严格的 `vX.Y.Z` tag。
+Artifact，不创建 Release；这条非正式路径使用 ad-hoc app 和 unsigned pkg，通常不能对外
+分发。唯一例外是下面定义的一次性 `v0.4.3` 未签名预览通道。正式 Release 仍必须来自严格的
+`vX.Y.Z` tag，且签名或公证凭据缺失时 fail-closed，绝不回退为未签名产物。
+
+### 一次性未签名预览通道（仅 v0.4.3）
+
+在尚未取得 Apple Developer Program 资格期间，可以人工发布一次 `v0.4.3` GitHub
+**Pre-release**，让明确接受风险的社区用户验证安装修复。这个例外不改变、放宽或旁路上面的
+Developer ID 正式发布流程，并且只允许如下操作：
+
+1. 在待发布的已审核、已合并 `main` commit 上手动运行 `Release macOS`：版本输入 `0.4.3`，并
+   勾选 `publish_unsigned_preview`。工作流会再次确认事件 commit 等于当时的 `origin/main`；不要
+   从分支、旧 commit 或本地重打包后发布。
+2. 无 secrets 的临时构建机先生成 ad-hoc app 与 unsigned PKG，真实执行一次
+   `sudo installer -pkg RIMES-0.4.3.pkg -target /`，并验证安装回执、固定路径、输入法 metadata、
+   universal 架构和 ad-hoc 签名。任何安装失败（包括 Code 112）都必须中止发布。
+3. 独立的无 secrets 发布机下载不可变 handoff，只做被动结构、签名状态、版本、成员集、大小和
+   SHA-256 复核，不执行 ETInput。验证通过后由工作流创建 `v0.4.3` GitHub Pre-release；不得手工
+   上传或替换资产。
+4. 公开资产固定包含 `RIMES-0.4.3.pkg`、`SHA256SUMS` 以及同次构建的可选插件资产，不包含内部
+   `ETInput-handoff.zip`。`SHA256SUMS` 必须覆盖全部公开二进制/manifest 资产；发布机上传前后都
+   要按它复核字节。
+5. GitHub Release 的版本固定为 `v0.4.3`，必须是 **Pre-release** 且不得设为 `latest`；标题和
+   首段必须写明“unsigned / not notarized / Apple 未验证”，并链接
+   [`UNSIGNED-PREVIEW.md`](UNSIGNED-PREVIEW.md) 和
+   [Apple 官方安全说明](https://support.apple.com/zh-cn/102445)。只允许从
+   `https://github.com/scholay/rimes/releases/tag/v0.4.3` 下载，不授权任何镜像或二次打包。
+6. 发布后把 tag、PKG、校验文件及 Release 正文中的摘要视为不可变。不得删除后重传同名资产、
+   移动/重建 tag，或把另一份字节覆盖成 `v0.4.3`。发现问题时撤下预览并发布新的更高版本号。
+7. `v0.4.3` 不得进入 `/releases/latest`，不得提供或宣称应用内自动更新。用户安装未来正式版时
+   必须手动下载新的 PKG。
+
+未来首个 Developer ID 签名并经 Apple 公证的正式版必须使用**高于 `0.4.3` 的新版本号**
+（通常为 `v0.4.4`），并完整经过原有 protected Environment、双证书签名、两次公证和
+fail-closed 校验。绝不能在 `v0.4.3` 上补签后覆盖原字节。
+
+### 正式发布环境与 Secrets
+
+先创建受保护的 GitHub Environment `macos-release`：开启 required reviewers，并把 deployment
+branch/tag rule 限制到受保护的 `vX.Y.Z` tag；仓库 ruleset 同时禁止非发布维护者创建或移动
+这类 tag。workflow 还会在导入凭据前要求 tag 精确指向当时的 `origin/main`，手动
+`workflow_dispatch` 即使选择 tag 也只能生成未签名 Artifact，不能进入正式发布分支。
+
+在该 Environment 的 secrets 中配置以下 8 项；P12 必须分别包含
+有效的 Developer ID Application / Developer ID Installer 证书及其私钥：
+
+| Secret | 内容 |
+|---|---|
+| `RIMES_DEVELOPER_ID_APPLICATION_P12_BASE64` | Application `.p12` 文件的单行 Base64 |
+| `RIMES_DEVELOPER_ID_APPLICATION_P12_PASSWORD` | 上述 P12 的导出密码 |
+| `RIMES_DEVELOPER_ID_INSTALLER_P12_BASE64` | Installer `.p12` 文件的单行 Base64 |
+| `RIMES_DEVELOPER_ID_INSTALLER_P12_PASSWORD` | 上述 P12 的导出密码 |
+| `RIMES_DEVELOPER_TEAM_ID` | 两张证书所属的 10 位 Apple Team ID |
+| `RIMES_NOTARY_KEY_P8_BASE64` | App Store Connect API 私钥 `.p8` 的单行 Base64 |
+| `RIMES_NOTARY_KEY_ID` | App Store Connect API Key ID |
+| `RIMES_NOTARY_ISSUER_ID` | App Store Connect Issuer ID（UUID） |
+
+> 可用 `base64 -i certificate.p12 | tr -d '\n'` 生成适合粘贴的单行内容；P8 同理。
+> 不要把证书、私钥或密码提交到仓库。
+
+正式 workflow 只在上述 fresh signing runner 把两张证书导入一次性 keychain，只把证书
+common name、Team ID 和临时路径传给后续步骤；P12 导入后立即删除，公证结束、Release 上传
+前删除临时 keychain 与 P8；失败路径也会无条件清理。导入脚本还会
+拒绝多张同类型 identity、Team ID 不一致或缺少任一凭据的配置。
 
 ## 二、自包含 librime（[`scripts/fetch-rime.sh`](scripts/fetch-rime.sh)）
 
 librime 是**静态链接**的（依赖只有系统 libSystem/libc++），所以自包含只需三样：
 `librime.1.dylib` + 3 个插件 + `SharedSupport`（默认方案/词库）。fetch-rime 从 Squirrel
-官方 `.pkg`（锁定 `SQUIRREL_VERSION`）提取这些到 `Vendor/rime/`。
+官方 `.pkg` 提取这些到 `Vendor/rime/`。1.1.2 的 URL、字节长度、SHA-256、Developer ID
+Installer 身份/Team、公证票据，以及四个 universal dylib 的独立 SHA-256 都固定在脚本中；
+任何一项漂移都会在展开和 RIMES 重签之前 fail-closed。正式 workflow 总是 `--force` 下载，
+不信任 runner 上已有的 `Vendor/` 缓存。升级 Squirrel 必须在 PR 中重新审计并更新 allowlist。
 
 - **`Vendor/` 是 gitignore 的**——二进制不进 git，构建时按锁定版本拉取，可复现。
 - 运行时 `CRimeBridge` 优先 `dlopen` app bundle 内的 librime（找不到才回退系统 Squirrel），
@@ -66,8 +147,20 @@ librime 是**静态链接**的（依赖只有系统 libSystem/libc++），所以
 
 ## 四、新用户安装器（[`scripts/make-pkg.sh`](scripts/make-pkg.sh)）
 
-`.pkg` 会把 `ETInput.app` 安装到 `/Library/Input Methods`，清理同 id 的旧用户级副本，并在当前
-登录用户的 Aqua 会话中运行 `ETInput --install`：注册、启用、选择输入源，然后启动 ETInput。
+`.pkg` 会把 `ETInput.app` 固定安装到 `/Library/Input Methods`，且显式禁用 Installer
+relocation。`BundleHasStrictIdentifier=false` 是刻意的一次性兼容策略：该固定路径还存在
+v0.4.1 的 legacy id `com.isaac.inputmethod.ETInput`；preinstall 会先拒绝任何非
+RIMES 占用者，再允许 legacy/current 两个 id 原地迁移。
+
+替换 payload 前，preinstall 使用包内随新版本构建、签名的最小 universal TIS helper 切到
+ASCII fallback，不再要求 v0.4.1 等旧 binary 理解新参数。所有可能碰到 DirectoryService、
+网络 home、Aqua bootstrap 或 TIS 的命令都由独立进程组 watchdog 约束；TERM/KILL 会覆盖整棵
+命令树，preinstall/postinstall 另有 30/240 秒总预算。payload 落盘后，postinstall 在当前
+GUI 用户的 Aqua 会话中按独立子进程分阶段执行 `register → enable parent →
+enable child → best-effort select`。注册/启用在 90 秒总预算内未收敛时，pkg 仍成功，
+并为当前用户安排一个仅在下次 Aqua 登录执行的 one-shot repair LaunchAgent；
+成功后 marker 与 LaunchAgent 会自删除。无 GUI 用户的安装只安装 payload，下次登录
+后由用户在系统设置中激活。任何路径都不结束 `imklaunchagent`/`TextInputMenuAgent`。
 
 输入法 bundle id 刻意保留 `com.isaac.inputmethod.RimeBuffer`，即使对外产品名已经是 RIMES；
 可选择的输入模式使用独立 id `com.isaac.inputmethod.RimeBuffer.Hans`。父输入法与
@@ -76,20 +169,21 @@ macOS 会把这些 id 写入受保护的 TIS 偏好，因此后续不要随意�
 
 ## 五、应用内自动更新（[`UpdateManager.swift`](Sources/RimeBuffer/UpdateManager.swift)）
 
-已安装并运行的 RIMES：
+从本次修复版本开始，已安装并运行的正式签名 RIMES：
 
 - **启动时 + 每小时** 静默查询 `scholay/rimes` 的最新 Release；
-- 版本更新（按 semver 逐段比较 `CFBundleShortVersionString`）时**后台静默下载** zip；
-- 下载完成后，状态栏图标变色，菜单顶部出现「🎉 有新版本 vX — 立即更新」；
-- 用户确认后：等待旧进程退出 → `pkill -x ETInput` 兜底 → 暂存新 bundle → 原子交换
-  `~/Library/Input Methods/ETInput.app`（失败回滚）→ `xattr` 清除隔离 →
-  **`lsregister -f` 重新注册** → `open` 重启。
+- 只接受严格 `vX.Y.Z` 下唯一的 `RIMES-X.Y.Z.pkg`，并在后台下载；
+- 下载完成后，输入法菜单中的更新项变为「安装 RIMES vX…」；
+- 下载后和用户确认后各验证一次：GitHub HTTPS/精确资产路径、普通文件/大小上限、
+  `pkgutil --check-signature`、`spctl --assess --type install`，以及 Installer 证书与当前 app
+  的 10 位 Team ID 一致；每个系统校验工具都有硬超时，且包内 product/component identifier
+  与版本必须精确等于 Release 的 `X.Y.Z`，不能把历史同-Team pkg 改名重放；
+- 用户确认后只把已验证 `.pkg` 交给 macOS Installer。应用自身不修改
+  `/Library/Input Methods`，不解压任意 app，不清 quarantine，也不结束进程；
 - 也可从菜单「检查更新…」手动触发。
 
-更新器只接受与版本精确匹配的 `ETInput-X.Y.Z.zip`。同一正式 Release 中的 Marine Chrome
-扩展或其他平台 ZIP 不会被误当作 macOS 应用更新。
-
-安装过程日志：`~/rimebuffer-update.log`。自动检查默认开启（`UserDefaults` 键
+旧的 `ETInput-X.Y.Z.zip` 只为已经发布、无法追溯修改的旧客户端保留迁移兼容；
+新更新器不再消费 ZIP。自动检查默认开启（`UserDefaults` 键
 `updateAutoCheckEnabled`）。
 
 ## 版本号约定

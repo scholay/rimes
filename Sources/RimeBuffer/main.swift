@@ -13,6 +13,15 @@ if let status = RemarkableSSHAskPassHandler.handleIfRequested() {
     exit(status)
 }
 
+// Installer reconciliation deliberately runs each TIS mutation/verification
+// in a fresh process. Handle those private phases before any smoke, AppKit,
+// IMK, or librime bootstrap.
+if let status = inputSourceInstallPhaseExitStatus(
+    arguments: CommandLine.arguments
+) {
+    exit(status)
+}
+
 /// Standalone commands share the shipped executable with the live IMK server,
 /// but must never share its LevelDB-backed Rime user directory. Keep this rule
 /// above every smoke/subcommand dispatch so even a newly added smoke that starts
@@ -583,18 +592,26 @@ if CommandLine.arguments.contains("theme-smoke") {
 if CommandLine.arguments.contains("theme-appkit-smoke") {
     exit(runThemeAppKitSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("input-source-install-smoke") {
+    exit(runInputSourceInstallSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("update-package-metadata-smoke") {
+    exit(runUpdatePackageMetadataSmokeTest() ? 0 : 1)
+}
 if CommandLine.arguments.contains("smoke") {
     exit(runEngineSmokeTest() ? 0 : 1)
 }
 
 // Self-install into the input-source list. TIS enable/select only persist when
-// run INSIDE the login (Aqua) session — a detached CLI's writes return success
-// but never land. So the installer / build script launches THIS bundle in the
-// user session (`open -n ETInput.app --args --install`) to register + enable +
-// select itself, exactly like Squirrel's --install. Runs before the IMK server
-// so this short-lived instance never contends for the connection.
+// run INSIDE the login (Aqua) session — a detached CLI's writes can return
+// success without updating that user's roster. The installer/build script runs
+// this command through the user's launchd bootstrap. It then reconciles each
+// parent/child/select boundary in a fresh subprocess before IMK startup.
 if CommandLine.arguments.contains("--install") {
     exit(installInputSource() ? 0 : 1)
+}
+if CommandLine.arguments.contains("--repair-pending-install") {
+    exit(repairPendingInputSourceActivation() ? 0 : 75)
 }
 if CommandLine.arguments.contains("--prepare-update") {
     exit(selectFallbackInputSourceForUpdate() ? 0 : 1)
@@ -729,6 +746,8 @@ if CommandLine.arguments.contains("gateway-serve") {
     fflush(stdout)
     app.run()
 }
+
+retryPendingInputSourceActivationIfNeeded()
 
 // IMK bootstrap. The connection name MUST match Info.plist; IMK finds our
 // controller via InputMethodServerControllerClass = RimeBufferController.
@@ -1095,148 +1114,6 @@ func selectFallbackInputSourceForUpdate() -> Bool {
     }
 
     print("prepare-update: could not select a non-\(ProductIdentity.displayName) ASCII fallback")
-    return false
-}
-
-/// Registers this bundle's path with TIS, then enables + selects our input mode.
-/// Must run inside the login session (see call site). Mirrors Squirrel's
-/// RegisterInputSource + ActivateInputSource.
-func installInputSource() -> Bool {
-    guard let component = Bundle.main.infoDictionary?["ComponentInputModeDict"] as? [String: Any],
-          let visibleModes = component["tsVisibleInputModeOrderedArrayKey"] as? [String],
-          let modeID = visibleModes.first,
-          let bundleID = Bundle.main.bundleIdentifier else {
-        print("install: missing bundle/input-mode metadata")
-        return false
-    }
-
-    // Register THIS bundle's URL so the input-source id resolves to this exact
-    // copy (kills the "duplicate id at multiple paths → blank row" problem).
-    let status = TISRegisterInputSource(Bundle.main.bundleURL as CFURL)
-    print("install: register \(Bundle.main.bundleURL.path) -> \(status)")
-    guard status == noErr else { return false }
-
-    guard let cf = TISCreateInputSourceList(nil, true)?.takeRetainedValue() else {
-        print("install: no input source list")
-        return false
-    }
-    let list = cf as! [TISInputSource]
-    func matchingSources(in sources: [TISInputSource])
-        -> (parent: TISInputSource?, mode: TISInputSource?) {
-        var parent: TISInputSource?
-        var mode: TISInputSource?
-        for source in sources {
-            guard tisStringProperty(source, kTISPropertyBundleID) == bundleID else {
-                continue
-            }
-            let id = tisStringProperty(source, kTISPropertyInputSourceID)
-            if id == bundleID,
-               !tisBoolProperty(source, kTISPropertyInputSourceIsSelectCapable) {
-                parent = source
-            }
-            if id == modeID,
-               tisBoolProperty(source, kTISPropertyInputSourceIsSelectCapable) {
-                mode = source
-            }
-        }
-        return (parent, mode)
-    }
-
-    // TIS exposes a non-selectable parent input method plus one or more
-    // selectable modes. Both must be enabled, but only the child mode may be
-    // passed to TISSelectInputSource. Discover both first because TIS does not
-    // promise list order; enabling the child before its parent can fail.
-    let discovered = matchingSources(in: list)
-    let parentSource = discovered.parent
-    let selectableMode = discovered.mode
-    guard let parentSource, let selectableMode else {
-        print("install: parent or selectable mode \(modeID) not found in TIS list")
-        return false
-    }
-
-    let parentIsASCIICapable = tisBoolProperty(parentSource, kTISPropertyInputSourceIsASCIICapable)
-    let parentType = tisStringProperty(parentSource, kTISPropertyInputSourceType) ?? "(unknown)"
-    let parentCategory = tisStringProperty(parentSource, kTISPropertyInputSourceCategory) ?? "(unknown)"
-    print("install: parent metadata id=\(bundleID) type=\(parentType) category=\(parentCategory) ascii=\(parentIsASCIICapable)")
-
-    let isASCIICapable = tisBoolProperty(selectableMode, kTISPropertyInputSourceIsASCIICapable)
-    let sourceType = tisStringProperty(selectableMode, kTISPropertyInputSourceType) ?? "(unknown)"
-    let category = tisStringProperty(selectableMode, kTISPropertyInputSourceCategory) ?? "(unknown)"
-    print("install: mode metadata id=\(modeID) type=\(sourceType) category=\(category) ascii=\(isASCIICapable)")
-    guard !isASCIICapable else {
-        print("install: refusing ASCII-capable Chinese mode; TIS is serving stale metadata")
-        return false
-    }
-
-    // Reconcile both levels on every install, even when the cached IsEnabled
-    // property already says true. On macOS 26 that property can reflect the
-    // mode's default state while Control-Space's enabled-source roster is still
-    // stale. TISEnableInputSource is idempotent and is the API that makes a
-    // source available for UI/keyboard selection.
-    let parentWasEnabled = tisBoolProperty(parentSource,
-                                           kTISPropertyInputSourceIsEnabled)
-    let parentEnableStatus = TISEnableInputSource(parentSource)
-    print("install: enable parent=\(parentEnableStatus) reportedBefore=\(parentWasEnabled) \(bundleID)")
-    guard parentEnableStatus == noErr else { return false }
-
-    let modeWasEnabled = tisBoolProperty(selectableMode,
-                                         kTISPropertyInputSourceIsEnabled)
-    let modeEnableStatus = TISEnableInputSource(selectableMode)
-    print("install: enable mode=\(modeEnableStatus) reportedBefore=\(modeWasEnabled) \(modeID)")
-    guard modeEnableStatus == noErr else { return false }
-
-    // Re-fetch from the enabled-only list. Re-reading the two discovery
-    // objects above would merely validate the same stale cache that caused the
-    // shortcut bug, and selecting that old child reference would not prove it
-    // participates in the Control-Space roster.
-    var enabledPair: (parent: TISInputSource, mode: TISInputSource)?
-    for _ in 0..<20 {
-        if let enabledCF = TISCreateInputSourceList(nil, false)?.takeRetainedValue() {
-            let enabledList = enabledCF as! [TISInputSource]
-            let refreshed = matchingSources(in: enabledList)
-            if let parent = refreshed.parent,
-               let mode = refreshed.mode,
-               tisBoolProperty(parent, kTISPropertyInputSourceIsEnabled),
-               !tisBoolProperty(parent, kTISPropertyInputSourceIsSelectCapable),
-               tisBoolProperty(parent, kTISPropertyInputSourceIsASCIICapable),
-               tisBoolProperty(mode, kTISPropertyInputSourceIsEnabled),
-               tisBoolProperty(mode, kTISPropertyInputSourceIsSelectCapable),
-               !tisBoolProperty(mode, kTISPropertyInputSourceIsASCIICapable) {
-                enabledPair = (parent, mode)
-                break
-            }
-        }
-        Thread.sleep(forTimeInterval: 0.1)
-    }
-    guard let enabledPair else {
-        print("install: parent/mode missing from enabled-only TIS roster")
-        return false
-    }
-    print("install: enabled roster verified parent=\(bundleID) mode=\(modeID)")
-
-    // The historical WeChat crash is in Apple's input-source HUD before our
-    // controller runs. Never trigger that path automatically while WeChat is
-    // frontmost; registration/enabling still succeeds and ABC remains active.
-    if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.tencent.xinWeChat" {
-        print("install: WeChat is frontmost; skipping automatic selection")
-        return true
-    }
-
-    let selectStatus = TISSelectInputSource(enabledPair.mode)
-    print("install: select=\(selectStatus) \(modeID)")
-
-    // On macOS 26 the first selection after changing input-mode metadata can
-    // return paramErr even though TextInputMenuAgent applies it asynchronously.
-    // Trust the observable TIS state, not only the immediate OSStatus.
-    for _ in 0..<20 {
-        if let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
-           tisStringProperty(current, kTISPropertyInputSourceID) == modeID {
-            print("install: selected mode verified")
-            return true
-        }
-        Thread.sleep(forTimeInterval: 0.1)
-    }
-    print("install: selection verification timed out")
     return false
 }
 

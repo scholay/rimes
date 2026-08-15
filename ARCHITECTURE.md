@@ -263,7 +263,7 @@ macOS 版本不可靠。`Info.plist` 的 `etinput-menu.pdf` 继续负责系统�
 - **现状**：app 自带 librime、插件和 Rime shared data，启动时在独立的 `~/Library/RimeBuffer` 执行 maintenance/deploy；正式安装不依赖 Squirrel。`build_install.sh` 默认可从 `~/Library/Rime` 重新播种用户配置与 userdb，也可在没有 Squirrel 用户目录时从 bundled schemas 独立部署。
 - 激活热路径只对 `build/default.yaml`、已部署 schema 与 `squirrel.yaml` 做轻量文件指纹检查；schema 列表和键盘布局解析按文件内容/原子替换自动失效，进程内部署成功后显式清缓存。任何 standalone smoke/preview 都在初始化 librime 前强制改用临时 userdir；engine smoke 在该目录中复刻正式包的 `Vendor + rime-data` SharedSupport，不打开 live LevelDB。
 - **隔离不变量**：两个活跃 Rime 实例不能共享同一 userdb LevelDB，因此运行时继续使用 `~/Library/RimeBuffer`，不直接打开 Squirrel 的 `~/Library/Rime`。
-- **[P4 路线图]** 决定使用 librime sync 还是显式迁移来同步学习词，并完成 Developer ID 签名/公证；不得为了同步而恢复两个进程直接共用一个 userdb。
+- **[P4 路线图]** 决定使用 librime sync 还是显式迁移来同步学习词；Developer ID/hardened runtime/双重公证的 fail-closed workflow 已落地，首次正式 tag 仍需在仓库配置 8 项受保护凭据并通过 Apple 在线验收。不得为了同步而恢复两个进程直接共用一个 userdb。
 
 ---
 
@@ -272,7 +272,7 @@ macOS 版本不可靠。`Info.plist` 的 `etinput-menu.pdf` 继续负责系统�
 - **vtable 顺序 load-bearing**；`RIME_STRUCT_INIT` 每个 Rime 结构体必做（data_size 版本协商）。
 - keysym：X11/ibus 体系。修饰 mask：shift 1<<0 / lock 1<<1 / ctrl 1<<2 / alt 1<<3 / super 1<<6 / **release 1<<30**。特殊键 0xff08(BS) 0xff09(Tab) 0xff0d(CR) 0xff1b(Esc) 0xff51–54(箭头) 0xff55/56(翻页) 0xffe1–ec(修饰) **0xffbe+n(Fn)**；可打印 0x20–0x7e 原码直传。
 - 线程：IMK 键回调在主线程；P1 全部 librime 调用留主线程 + **watchdog**（单次 process_key/get_context >250ms 记日志定 Lua 嫌疑）。gMutex 不可重入。
-- IMK 注册：bundle id=`com.isaac.inputmethod.RimeBuffer`，可选择 mode id=`com.isaac.inputmethod.RimeBuffer.Hans`（父/子 TIS id 必须不同），`InputMethodConnectionName=RimeBuffer_1_Connection`，`InputMethodServerControllerClass=RimeBufferController`（对应 `@objc(RimeBufferController)`）。父输入法不声明 repertoire，使 TIS 保持标准的 ASCII-capable parent；只有中文 child mode 声明 `Hans/Hant`，且不可含 `Latn`。底层键盘布局遵循 `squirrel.yaml`：`last`/空值不 override，`default` 才映射 ABC。安装时不能因旧 TIS 对象报告 `enabled=true` 就跳过 enable：macOS 26 可能仍未把该 mode 纳入 `Control+Space` 轮换；必须每次按 parent→child 无条件调用 `TISEnableInputSource`，再从 `TISCreateInputSourceList(nil, false)` 的全新 enabled-only 快照验证两者并用新 child 引用执行 select。重装/更新必须先选到 ABC 等 fallback，等旧 controller 正常 deactivate 后才能 kill/swap bundle；macOS 26 程序化切源漏发 deactivate 时，再由 TIS change notification 兜底收尾。IMKServer 引用存顶层变量保活；为 nil 时大声记日志退出，不留僵尸输入源。
+- IMK 注册：bundle id=`com.isaac.inputmethod.RimeBuffer`，可选择 mode id=`com.isaac.inputmethod.RimeBuffer.Hans`（父/子 TIS id 必须不同），`InputMethodConnectionName=RimeBuffer_1_Connection`，`InputMethodServerControllerClass=RimeBufferController`（对应 `@objc(RimeBufferController)`）。父输入法不声明 repertoire，使 TIS 保持标准的 ASCII-capable parent；只有中文 child mode 声明 `Hans/Hant`，且不可含 `Latn`。底层键盘布局遵循 `squirrel.yaml`：`last`/空值不 override，`default` 才映射 ABC。安装不复用旧 TIS ref，而是以短命子进程按 `register → verify installed → enable parent → verify parent → enable child → verify enabled roster → best-effort select` 分阶段收敛；每阶段都用 bundle/source id 精确过滤的新快照，拒绝重复 ref，并把 presence/type/enabled/select/ASCII 分开诊断，ASCII 不再作为启用成功条件。每个子进程有 3 秒硬超时，整个激活有 90 秒总预算；selection 不进入持久重试条件。Installer 不结束 `imklaunchagent`/`TextInputMenuAgent`；当前 GUI 会话未收敛时，写入用户 marker 与 one-shot Aqua LaunchAgent，下次登录重试并在成功后自清理。无 GUI 用户时只安装 payload，下次登录由用户激活。两者都不把已成功落盘的 payload 转成 PackageKit Code 112。只有缺少 executable、bundle id/输入 mode metadata 错误或签名完整性失败才使 pkg 失败。重装/更新的 fallback/deactivate 必须在 preinstall、即 payload 替换前，由包内当前版本的签名最小 helper 在 5 秒边界内执行，不能依赖旧 app 理解新参数。IMKServer 引用存顶层变量保活；为 nil 时大声记日志退出，不留僵尸输入源。
 - 日志 `~/rimebuffer.log`（IMELog）。**每个修复都要先能在日志里看见**（哪个键、哪个 client、走了哪条路径）——这是无 GUI 调试的生命线。
 
 ---
@@ -348,7 +348,7 @@ pkill -x RimeBuffer                # 系统会按需重新拉起
 # 卸载：rm -rf ~/Library/Input\ Methods/RimeBuffer.app && 输入源列表移除
 ```
 
-已踩坑速查：签名用 ad-hoc（后台 shell 取不到自签身份私钥 `errSecInternalComponent`；trusted 身份留到 P4 公证）· 我方 Bash 沙盒里 `open` GUI app 会假失败，装完由系统拉起或用户双击 · smoke 若 0 候选先查四方案是否已部署以及 userdb LOCK。
+已踩坑速查：本地 `build_install.sh` 仍用 ad-hoc；正式 tag 由一次性 keychain 完成 Developer ID + hardened runtime + app/pkg 公证，不可降级回未签名 · 我方 Bash 沙盒里 `open` GUI app 会假失败，装完由系统拉起或用户双击 · smoke 若 0 候选先查四方案是否已部署以及 userdb LOCK。
 
 不要用 `rm -rf ~/Library/RimeBuffer` 触发 reseed：该目录还包含 `ai/openai-compatible.json` 等用户凭据和产品持久状态。`build_install.sh` 自带安全重播种逻辑，会保留这些目录；若只想替换应用且完全跳过 userdb 重播种，使用 `RB_KEEP_USERDB=1 ./build_install.sh`。
 

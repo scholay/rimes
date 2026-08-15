@@ -76,8 +76,16 @@ final class StatusMenu {
         menu.addItem(move)
         menu.addItem(.separator())
 
+        let updateManager = UpdateManager.shared
+        let updateTitle: String
+        if updateManager.isUpdateReady,
+           let pendingVersion = updateManager.pendingVersion {
+            updateTitle = "安装 RIMES v\(pendingVersion)…"
+        } else {
+            updateTitle = "检查更新…"
+        }
         let checkUpdate = NSMenuItem(
-            title: "检查更新…",
+            title: updateTitle,
             action: #selector(RimeBufferController.checkUpdateFromInputMenu(_:)),
             keyEquivalent: "")
         checkUpdate.target = target

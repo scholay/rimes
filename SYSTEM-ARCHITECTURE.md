@@ -425,8 +425,8 @@ Delivery.insert(_ text, into: client)
   - 0600 JSON：按键统计（按日 + 全历史）、打字测速聚合、飞耀互击学习进度；测速中的“成文字符”按 Rime commit 计数（直输或进入缓冲均计入），只保存数量、不保存正文；损坏、超限或非普通文件均 fail-closed，不覆盖原数据。
   - Rime 用户数据：`~/Library/RimeBuffer`；词库维护只经官方 `levers` 导入/导出 portable TSV 或恢复官方快照，不直接复制/修改 LevelDB。
   - 日志：`~/rimebuffer.log`（0600，脱敏）。
-- **自更新**：UpdateManager 每小时查 GitHub Releases（这是隐私清单要计入的第 5 处出站）。
-- **发布链**：build_install.sh（dev→~/Library）/ scripts/make-pkg.sh（pkg→/Library）/ CI（编译 + plist 断言 + 日志断言 + smoke 组）/ release.yml（通用二进制）。签名为 ad-hoc（Dev ID 未申请，是钥匙串决策的根因）。
+- **自更新**：UpdateManager 每小时查 GitHub Releases（这是隐私清单要计入的第 5 处出站）；只下载严格版本名的 `.pkg`，以 GitHub HTTPS/大小上限、`pkgutil` + `spctl` 与当前 app Team ID 同时验证，再交给系统 Installer；不自替换 `/Library` payload。
+- **发布链**：`build_install.sh`（dev→`~/Library`，ad-hoc）/ `scripts/make-pkg.sh`（pkg→`/Library`）/ CI（编译 + plist 断言 + 日志断言 + smoke 组）/ `release.yml`（通用二进制）。正式 tag 必须逐层用同一 Developer ID Application Team 重签 bundled Mach-O/app，对 app 公证+staple，用 Developer ID Installer 签 pkg，再对 pkg 公证+staple；缺任一受保护凭据就 fail-closed。手动 workflow 的 ad-hoc/unsigned Artifact 仅供演练，不对外发布。
 
 ---
 

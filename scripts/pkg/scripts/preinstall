@@ -1,0 +1,89 @@
+#!/bin/bash
+# Runs before Installer replaces /Library/Input Methods/ETInput.app. If an old
+# RIMES process is active, hand its clients to a safe ASCII source while the old
+# executable and controller are still intact.
+set -u
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+. "$SCRIPT_DIR/rimes-install-common.sh"
+HANDOFF_HELPER="$SCRIPT_DIR/rimes-update-handoff"
+
+if [ ! -x "$RIMES_TIMEOUT_HELPER" ] || [ ! -x "$HANDOFF_HELPER" ] \
+    || ! rimes_run_bounded 5 /usr/bin/codesign --verify --strict \
+        "$RIMES_TIMEOUT_HELPER" \
+    || ! rimes_run_bounded 5 /usr/bin/codesign --verify --strict \
+        "$HANDOFF_HELPER"; then
+    echo "RIMES preinstall: signed installer lifecycle helpers are invalid"
+    exit 1
+fi
+rimes_begin_budget 30 || {
+    echo "RIMES preinstall: could not start the lifecycle time budget"
+    exit 1
+}
+
+# PackageKit may extract Scripts below a root-only sandbox directory. A helper
+# that is valid and executable as root can still be unreachable after sudo -u.
+# Copy the already verified handoff binary into a root-owned, non-writable but
+# user-traversable directory before entering the Aqua bootstrap.
+USER_HELPER_STAGE="$(
+    rimes_run_bounded 3 /usr/bin/mktemp \
+        -d /private/tmp/rimes-preinstall.XXXXXX
+)" || {
+    echo "RIMES preinstall: could not create the user helper stage"
+    exit 1
+}
+case "$USER_HELPER_STAGE" in
+    /private/tmp/rimes-preinstall.*) ;;
+    *) echo "RIMES preinstall: unsafe helper stage path"; exit 1 ;;
+esac
+cleanup_helper_stage() {
+    case "$USER_HELPER_STAGE" in
+        /private/tmp/rimes-preinstall.*)
+            /usr/bin/find "$USER_HELPER_STAGE" -xdev -depth -delete \
+                2>/dev/null || true
+            ;;
+    esac
+}
+trap cleanup_helper_stage EXIT
+STAGED_HANDOFF="$USER_HELPER_STAGE/rimes-update-handoff"
+if ! rimes_run_bounded 3 /bin/cp "$HANDOFF_HELPER" "$STAGED_HANDOFF" \
+    || ! rimes_run_bounded 3 /bin/chmod 755 "$STAGED_HANDOFF" \
+    || ! rimes_run_bounded 5 /usr/bin/codesign --verify --strict \
+        "$STAGED_HANDOFF" \
+    || ! rimes_run_bounded 3 /bin/chmod 755 "$USER_HELPER_STAGE"; then
+    echo "RIMES preinstall: could not publish the verified user helper"
+    exit 1
+fi
+HANDOFF_HELPER="$STAGED_HANDOFF"
+
+# Strict-identifier replacement cannot express the one supported identity
+# migration: older RIMES builds used com.isaac.inputmethod.ETInput at this same
+# frozen path. Relocation is disabled, so explicitly accept only current/legacy
+# RIMES here and refuse to overwrite any unrelated or malformed occupant.
+CANONICAL_APP="/Library/Input Methods/ETInput.app"
+if [ -e "$CANONICAL_APP" ] || [ -L "$CANONICAL_APP" ]; then
+    if [ -L "$CANONICAL_APP" ] || [ ! -d "$CANONICAL_APP" ] \
+        || ! rimes_is_owned_bundle "$CANONICAL_APP"; then
+        echo "RIMES preinstall: refusing to replace an unrelated canonical path"
+        exit 1
+    fi
+fi
+
+if ! rimes_resolve_console_user; then
+    echo "RIMES preinstall: no ordinary GUI console user; deferring handoff"
+    exit 0
+fi
+
+# The incoming, signed helper understands both current and legacy frozen IDs;
+# it never starts an IMK server and does not depend on the installed version
+# recognizing a new command-line flag.
+if ! rimes_run_console_user_bounded 5 "$HANDOFF_HELPER"; then
+    # Session handoff remains best-effort; a failure says nothing about the
+    # incoming payload, which postinstall validates independently.
+    echo "RIMES preinstall: input source handoff did not converge; continuing"
+fi
+rimes_run_bounded 1 /bin/sleep 0.5 || true
+
+rimes_run_console_user_bounded 3 /usr/bin/killall ETInput 2>/dev/null || true
+rimes_run_console_user_bounded 3 /usr/bin/killall RimeBuffer 2>/dev/null || true
+exit 0

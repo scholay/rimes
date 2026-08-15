@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+    <dict>
+        <key>RootRelativeBundlePath</key>
+        <string>ETInput.app</string>
+        <key>BundleHasStrictIdentifier</key>
+        <!-- The frozen path also contains pre-0.4.2 builds whose legacy
+             bundle id is com.isaac.inputmethod.ETInput. preinstall rejects
+             every unrelated occupant before this deliberate one-time
+             identifier migration; relocatability remains disabled. -->
+        <false/>
+        <key>BundleIsRelocatable</key>
+        <false/>
+        <key>BundleIsVersionChecked</key>
+        <true/>
+        <key>BundleOverwriteAction</key>
+        <string>upgrade</string>
+    </dict>
+</array>
+</plist>

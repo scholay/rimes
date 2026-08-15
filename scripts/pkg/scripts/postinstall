@@ -1,70 +1,295 @@
 #!/bin/bash
-# Runs as root after the payload lands in /Library/Input Methods.
-#
-# Getting a 3rd-party IME to "just work" after install (no manual Add, no logout)
-# takes three things, and the last one is the one everybody misses:
-#   1. clear quarantine
-#   2. register with Launch Services
-#   3. register + enable + select the input source AS THE LOGGED-IN USER — TIS
-#      writes only persist inside the Aqua/login session, so root must drop to
-#      the console user (this mirrors rime/squirrel's postinstall).
+# The payload is already installed. Validate and register that exact bundle,
+# then reconcile the active GUI user's TIS state. Session activation is
+# intentionally non-fatal: recent macOS releases may require logout/login before
+# System Settings and the input menu discover a newly installed source.
+set -u
+
 APP="/Library/Input Methods/ETInput.app"
 EXE="$APP/Contents/MacOS/ETInput"
-LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
-login_user="$(/usr/bin/stat -f%Su /dev/console)"
-user_home=""
-login_uid=""
-/usr/bin/xattr -cr "$APP" 2>/dev/null || true
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+. "$SCRIPT_DIR/rimes-install-common.sh"
+USER_AGENT_HELPER="$SCRIPT_DIR/rimes-user-activation-agent.sh"
+USER_AGENT_HELPER_AVAILABLE=0
+USER_HELPER_STAGE=""
+system_scan=""
+user_scan=""
 
-# The payload is already present, but the old input-method process can still be
-# serving clients from its previous inode. Before unregistering either user- or
-# system-level copies, move the session to ABC so those clients receive a normal
-# deactivate and discard their old IMK document connection.
-if [ -n "$login_user" ] && [ "$login_user" != "root" ]; then
-    login_uid="$(/usr/bin/id -u "$login_user")"
-    user_home="$(/usr/bin/dscl . -read "/Users/$login_user" NFSHomeDirectory 2>/dev/null | /usr/bin/awk '{print $2}')"
-    [ -n "$user_home" ] || exit 1
-    /bin/launchctl asuser "$login_uid" /usr/bin/sudo -u "$login_user" "$EXE" --prepare-update > "$user_home/rimebuffer-install.log" 2>&1 || exit 1
-    /bin/sleep 0.5
+cleanup_install_temporaries() {
+    [ -z "$system_scan" ] || /bin/rm -f "$system_scan"
+    [ -z "$user_scan" ] || /bin/rm -f "$user_scan"
+    case "$USER_HELPER_STAGE" in
+        /private/tmp/rimes-postinstall.*)
+            /usr/bin/find "$USER_HELPER_STAGE" -xdev -depth -delete \
+                2>/dev/null || true
+            ;;
+    esac
+}
+trap cleanup_install_temporaries EXIT
+
+if [ ! -x "$RIMES_TIMEOUT_HELPER" ] \
+    || ! rimes_run_bounded 5 /usr/bin/codesign --verify --strict \
+        "$RIMES_TIMEOUT_HELPER"; then
+    echo "RIMES postinstall: signed timeout helper is invalid"
+    exit 1
+fi
+rimes_begin_budget 240 || {
+    echo "RIMES postinstall: could not start the lifecycle time budget"
+    exit 1
+}
+if ! rimes_run_bounded 5 /bin/test -x "$EXE"; then
+    echo "RIMES postinstall: canonical payload executable is missing"
+    exit 1
+fi
+if [ "$(rimes_bundle_identifier "$APP")" != "com.isaac.inputmethod.RimeBuffer" ]; then
+    echo "RIMES postinstall: canonical payload has the wrong bundle identity"
+    exit 1
+fi
+if ! rimes_run_bounded 10 /usr/bin/codesign --verify --deep --strict "$APP"; then
+    echo "RIMES postinstall: canonical payload failed code-signature verification"
+    exit 1
+fi
+if ! rimes_run_bounded 5 "$EXE" --rimes-tis-validate-bundle; then
+    echo "RIMES postinstall: input-source metadata is invalid"
+    exit 1
 fi
 
-# Remove any stale USER-level copy of the same input-source id. Two bundles at
-# different paths claiming one id poisons TIS/LaunchServices name+icon lookup and
-# yields a blank/greyed picker row — the exact bug this whole thing hit.
-if [ -n "$login_user" ] && [ "$login_user" != "root" ]; then
-    if [ -n "$user_home" ]; then
-        for stale in "$user_home/Library/Input Methods/ETInput.app" \
-                     "$user_home/Library/Input Methods/RimeBuffer.app" \
-                     "$user_home/Library/Input Methods/Enter输入法.app" \
-                     "$user_home/Library/Input Methods/恩特输入法.app"; do
-            [ -e "$stale" ] || continue
-            stale_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$stale/Contents/Info.plist" 2>/dev/null || true)"
-            case "$stale_id" in
-                com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
-                    "$LSREGISTER" -u "$stale" 2>/dev/null || true
-                    /bin/rm -rf "$stale"
+HAS_CONSOLE_USER=0
+if rimes_resolve_console_user; then
+    HAS_CONSOLE_USER=1
+fi
+
+# PackageKit does not promise that a login user can traverse the root-owned
+# directory containing Scripts. Publish the exact package script plus signed
+# timeout helper into a root-owned 0755 staging directory before sudo -u.
+if [ "$HAS_CONSOLE_USER" -eq 1 ]; then
+    USER_HELPER_STAGE="$(
+        rimes_run_bounded 3 /usr/bin/mktemp \
+            -d /private/tmp/rimes-postinstall.XXXXXX
+    )" || USER_HELPER_STAGE=""
+    case "$USER_HELPER_STAGE" in
+        /private/tmp/rimes-postinstall.*)
+            staged_agent="$USER_HELPER_STAGE/rimes-user-activation-agent.sh"
+            staged_timeout="$USER_HELPER_STAGE/rimes-timeout"
+            if rimes_run_bounded 3 /bin/cp \
+                    "$USER_AGENT_HELPER" "$staged_agent" \
+                && rimes_run_bounded 3 /bin/cp \
+                    "$RIMES_TIMEOUT_HELPER" "$staged_timeout" \
+                && rimes_run_bounded 3 /bin/chmod 755 \
+                    "$staged_agent" "$staged_timeout" \
+                && rimes_run_bounded 3 /usr/bin/cmp -s \
+                    "$USER_AGENT_HELPER" "$staged_agent" \
+                && rimes_run_bounded 5 /usr/bin/codesign --verify --strict \
+                    "$staged_timeout" \
+                && rimes_run_bounded 3 /bin/chmod 755 \
+                    "$USER_HELPER_STAGE"; then
+                USER_AGENT_HELPER="$staged_agent"
+                USER_AGENT_HELPER_AVAILABLE=1
+            else
+                echo "RIMES postinstall: could not publish the verified user helper"
+            fi
+            ;;
+        *)
+            echo "RIMES postinstall: could not create a safe user helper stage"
+            USER_HELPER_STAGE=""
+            ;;
+    esac
+fi
+
+# Remove every other immediate .app in the two supported Input Methods roots
+# that claims one of our frozen identities. Relocation is disabled in the
+# component plist, so APP is always the one payload path we keep.
+DUPLICATE_CONFLICTS=0
+system_scan="$(
+    rimes_run_bounded 3 /usr/bin/mktemp \
+        /private/tmp/rimes-system-input-methods.XXXXXX
+)" || system_scan=""
+case "$system_scan" in
+    /private/tmp/rimes-system-input-methods.*) ;;
+    *)
+        echo "RIMES postinstall: could not create the bounded system scan file"
+        system_scan=""
+        DUPLICATE_CONFLICTS=1
+        ;;
+esac
+
+if [ "$HAS_CONSOLE_USER" -eq 1 ]; then
+    user_scan="$(
+        rimes_run_bounded 3 /usr/bin/mktemp \
+            /private/tmp/rimes-user-input-methods.XXXXXX
+    )" || user_scan=""
+    case "$user_scan" in
+        /private/tmp/rimes-user-input-methods.*) ;;
+        *)
+            echo "RIMES postinstall: could not create the bounded user scan file"
+            user_scan=""
+            DUPLICATE_CONFLICTS=1
+            ;;
+    esac
+fi
+
+if [ -n "$system_scan" ] \
+    && ! rimes_run_bounded 5 /usr/bin/find "/Library/Input Methods" \
+        -mindepth 1 -maxdepth 1 \( -type d -o -type l \) \
+        -iname '*.app' -print0 >"$system_scan"; then
+    echo "RIMES postinstall: system Input Methods scan timed out or failed"
+    DUPLICATE_CONFLICTS=1
+fi
+system_scan_count=0
+if [ -n "$system_scan" ]; then
+    while IFS= read -r -d '' stale; do
+        system_scan_count=$((system_scan_count + 1))
+        if [ "$system_scan_count" -gt 32 ]; then
+            echo "RIMES postinstall: system Input Methods scan exceeded 32 apps"
+            DUPLICATE_CONFLICTS=1
+            break
+        fi
+        [ "$stale" != "$APP" ] || continue
+        rimes_is_owned_bundle "$stale"
+        ownership_status=$?
+        case "$ownership_status" in
+            0) ;;
+            1) continue ;;
+            *)
+                echo "RIMES postinstall: system bundle identity is unavailable: $stale"
+                DUPLICATE_CONFLICTS=1
+                continue
+                ;;
+        esac
+        if [ -L "$stale" ]; then
+            if ! rimes_run_bounded 3 /bin/rm -f "$stale" 2>/dev/null; then
+                echo "RIMES postinstall: duplicate system path removal failed: $stale"
+                DUPLICATE_CONFLICTS=1
+                continue
+            fi
+        elif ! rimes_run_bounded 3 /bin/rm -rf "$stale" 2>/dev/null; then
+            echo "RIMES postinstall: duplicate system path removal failed: $stale"
+            DUPLICATE_CONFLICTS=1
+            continue
+        fi
+        # Only an explicit, supervised proof that neither a directory entry nor a
+        # symlink remains counts as success. A timeout/error is a conflict, never
+        # evidence of absence (important for network-backed homes and mounts).
+        if ! rimes_run_bounded 2 /bin/sh -c \
+            '[ ! -e "$1" ] && [ ! -L "$1" ]' rimes-verify-absent "$stale"; then
+            echo "RIMES postinstall: could not remove duplicate system path $stale"
+            DUPLICATE_CONFLICTS=1
+        else
+            echo "RIMES postinstall: removed duplicate system path $stale"
+        fi
+    done <"$system_scan"
+fi
+
+if [ "$HAS_CONSOLE_USER" -eq 1 ]; then
+    user_input_methods="$RIMES_USER_HOME/Library/Input Methods"
+    USER_INPUT_METHODS_AVAILABLE=0
+    if rimes_run_login_user_bounded /bin/test -L "$user_input_methods"; then
+        echo "RIMES postinstall: user Input Methods root must not be a symlink"
+        DUPLICATE_CONFLICTS=1
+    elif rimes_run_login_user_bounded /bin/test -d "$user_input_methods"; then
+        USER_INPUT_METHODS_AVAILABLE=1
+    elif ! rimes_run_login_user_bounded /bin/test ! -e "$user_input_methods"; then
+        echo "RIMES postinstall: user Input Methods root is unavailable"
+        DUPLICATE_CONFLICTS=1
+    fi
+    if [ "$USER_INPUT_METHODS_AVAILABLE" -eq 1 ] \
+        && [ -n "$user_scan" ] \
+        && ! rimes_run_login_user_bounded /usr/bin/find "$user_input_methods" \
+            -mindepth 1 -maxdepth 1 \( -type d -o -type l \) \
+            -iname '*.app' -print0 >"$user_scan"; then
+        echo "RIMES postinstall: user Input Methods scan timed out or failed"
+        DUPLICATE_CONFLICTS=1
+    fi
+    user_scan_count=0
+    if [ -n "$user_scan" ]; then
+        while IFS= read -r -d '' stale; do
+            user_scan_count=$((user_scan_count + 1))
+            if [ "$user_scan_count" -gt 16 ]; then
+                echo "RIMES postinstall: user Input Methods scan exceeded 16 apps; duplicate cleanup is incomplete"
+                DUPLICATE_CONFLICTS=1
+                break
+            fi
+            rimes_is_owned_bundle_as_login_user "$stale"
+            ownership_status=$?
+            case "$ownership_status" in
+                0) ;;
+                1) continue ;;
+                *)
+                    echo "RIMES postinstall: user bundle identity is unavailable: $stale"
+                    DUPLICATE_CONFLICTS=1
+                    continue
                     ;;
             esac
-        done
+            if rimes_run_login_user_bounded /bin/test -L "$stale"; then
+                if ! rimes_run_login_user_bounded /bin/rm -f "$stale" 2>/dev/null; then
+                    echo "RIMES postinstall: duplicate user path removal failed: $stale"
+                    DUPLICATE_CONFLICTS=1
+                    continue
+                fi
+            elif ! rimes_run_login_user_bounded /bin/rm -rf "$stale" 2>/dev/null; then
+                echo "RIMES postinstall: duplicate user path removal failed: $stale"
+                DUPLICATE_CONFLICTS=1
+                continue
+            fi
+            if ! rimes_run_login_user_bounded /bin/sh -c \
+                '[ ! -e "$1" ] && [ ! -L "$1" ]' rimes-verify-absent "$stale"; then
+                echo "RIMES postinstall: could not remove duplicate user path $stale"
+                DUPLICATE_CONFLICTS=1
+            else
+                echo "RIMES postinstall: removed duplicate user path $stale"
+            fi
+        done <"$user_scan"
     fi
 fi
 
-"$LSREGISTER" -f "$APP" 2>/dev/null || true
-
-# Stop any running instance, then self-install as the login user: the app's
-# --install does TISRegisterInputSource(bundleURL) + TISEnableInputSource +
-# TISSelectInputSource. TIS writes only stick inside the user's Aqua session
-# BOOTSTRAP — plain `sudo -u` keeps the installer's Mach bootstrap, where the
-# enable half-lands (parent enabled, input mode not). `launchctl asuser`
-# targets the console user's GUI session so all three calls persist.
-if [ -n "$login_user" ] && [ "$login_user" != "root" ]; then
-    /bin/launchctl asuser "$login_uid" /usr/bin/sudo -u "$login_user" /usr/bin/killall ETInput 2>/dev/null || true
-    /bin/launchctl asuser "$login_uid" /usr/bin/sudo -u "$login_user" /usr/bin/killall RimeBuffer 2>/dev/null || true
-    /bin/launchctl asuser "$login_uid" /usr/bin/sudo -u "$login_user" /usr/bin/killall imklaunchagent 2>/dev/null || true
-    /bin/launchctl asuser "$login_uid" /usr/bin/sudo -u "$login_user" /usr/bin/killall TextInputMenuAgent 2>/dev/null || true
-    /bin/launchctl asuser "$login_uid" /usr/bin/sudo -u "$login_user" "$EXE" --install >> "$user_home/rimebuffer-install.log" 2>&1 || exit 1
-    /bin/launchctl asuser "$login_uid" /usr/bin/sudo -u "$login_user" /usr/bin/killall TextInputMenuAgent 2>/dev/null || true
-    /bin/launchctl asuser "$login_uid" /usr/bin/sudo -u "$login_user" /usr/bin/open "$APP" 2>/dev/null || true
+if [ "$DUPLICATE_CONFLICTS" -ne 0 ]; then
+    echo "RIMES postinstall: duplicate paths remain; remove the logged paths before retrying activation"
 fi
 
+if [ "$HAS_CONSOLE_USER" -ne 1 ]; then
+    # Never make PackageKit synchronously wait on a TIS call without a parent
+    # watchdog. Activation is per-user and must be completed from a GUI login.
+    echo "RIMES postinstall: payload installed; activate RIMES after GUI login"
+    exit 0
+fi
+
+# Never kill imklaunchagent or TextInputMenuAgent here. They are Apple-owned
+# implementation details, and restarting them immediately before TIS calls is
+# exactly the race that made successful enable calls fail later verification.
+rimes_run_console_user_bounded 3 /usr/bin/killall ETInput 2>/dev/null || true
+rimes_run_console_user_bounded 3 /usr/bin/killall RimeBuffer 2>/dev/null || true
+
+ACTIVATION_READY=0
+if [ "$DUPLICATE_CONFLICTS" -eq 0 ] \
+    && rimes_run_console_user_activation_bounded "$EXE" --install; then
+    ACTIVATION_READY=1
+fi
+
+if [ "$ACTIVATION_READY" -eq 1 ]; then
+    if [ "$USER_AGENT_HELPER_AVAILABLE" -eq 1 ]; then
+        rimes_run_login_user_bounded_with_timeout 15 \
+            /bin/bash "$USER_AGENT_HELPER" remove 2>/dev/null || true
+    fi
+    echo "RIMES postinstall: input source registered and enabled; selection attempted"
+else
+    # Do not turn an eventual-consistency/session-refresh limitation into
+    # PackageKit Code 112 after the payload has installed successfully.
+    marker_kind="activation"
+    if [ "$DUPLICATE_CONFLICTS" -ne 0 ]; then
+        marker_kind="duplicate-conflict"
+    fi
+    if [ "$USER_AGENT_HELPER_AVAILABLE" -eq 1 ] \
+        && rimes_run_login_user_bounded_with_timeout 15 \
+        /bin/bash "$USER_AGENT_HELPER" install "$marker_kind"; then
+        if [ "$DUPLICATE_CONFLICTS" -eq 0 ]; then
+            echo "RIMES postinstall: activation pending; it will retry at the next GUI login"
+        else
+            echo "RIMES postinstall: activation pending because duplicate paths remain; remove the logged paths"
+        fi
+    else
+        echo "RIMES postinstall: activation pending, but the per-user login retry could not be scheduled"
+    fi
+fi
+
+rimes_run_console_user_bounded 5 /usr/bin/open "$APP" 2>/dev/null || true
 exit 0
