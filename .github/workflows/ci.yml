@@ -319,9 +319,24 @@ jobs:
             RIMEBUFFER_LOCAL_DATA_ROOT="$ROOT/$MODE/local" \
             RIMEBUFFER_PLUGIN_ROOT="$ROOT/$MODE/plugins" \
               "$BIN" settings-render "$OUTPUT"
-            test "$(find "$OUTPUT" -maxdepth 1 -type f -name '*.png' | wc -l | tr -d ' ')" = '22'
+            png_count="$(find "$OUTPUT" -maxdepth 1 -type f -name '*.png' | wc -l | tr -d ' ')"
             python3 -m json.tool "$OUTPUT/manifest.json" >/dev/null
-            ! /usr/bin/grep -Eq 'extension\.apple-translation' "$OUTPUT/manifest.json"
-            test "$(sips -g pixelWidth -g pixelHeight "$OUTPUT"/*.png | \
-              awk '/pixelWidth:/{w=$2}/pixelHeight:/{print w"x"$2}' | sort -u)" = '1960x1360'
+            route_count="$(python3 -c \
+              'import json, sys; print(len(json.load(open(sys.argv[1]))))' \
+              "$OUTPUT/manifest.json")"
+            translation_route_count="$(/usr/bin/grep -Ec \
+              'extension\.apple-translation' "$OUTPUT/manifest.json" || true)"
+            dimensions="$(sips -g pixelWidth -g pixelHeight "$OUTPUT"/*.png | \
+              awk '/pixelWidth:/{w=$2}/pixelHeight:/{print w"x"$2}' | sort -u)"
+            echo "mode=$MODE pngs=$png_count routes=$route_count dimensions=$dimensions"
+            test "$png_count" = '22'
+            test "$route_count" = '22'
+            test "$translation_route_count" = '0'
+            # bitmapImageRepForCachingDisplay follows the hosted runner's
+            # backing scale. A headless 1x runner and a Retina 2x runner both
+            # represent the same required 980x680-point Settings surface.
+            case "$dimensions" in
+              980x680|1960x1360) ;;
+              *) echo "Unexpected Settings render dimensions: $dimensions" >&2; exit 1 ;;
+            esac
           done
