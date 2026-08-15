@@ -14,9 +14,28 @@ final class MarineChromePairingPromptController: NSObject, NSWindowDelegate {
     static let shared = MarineChromePairingPromptController()
 
     private var panel: MarineChromePairingPanel?
+    private weak var codeLabel: NSTextField?
     private var requestID: UUID?
     private var response: ((Bool) -> Void)?
     private var expiryTimer: Timer?
+    private var appearanceObserver: NSObjectProtocol?
+
+    override init() {
+        super.init()
+        appearanceObserver = NotificationCenter.default.addObserver(
+            forName: .rimeAppearanceDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.applyAppearance()
+        }
+    }
+
+    deinit {
+        if let appearanceObserver {
+            NotificationCenter.default.removeObserver(appearanceObserver)
+        }
+    }
 
     func present(_ request: MarineChromePairingBroker.ApprovalRequest,
                  respond: @escaping (Bool) -> Void) {
@@ -33,6 +52,7 @@ final class MarineChromePairingPromptController: NSObject, NSWindowDelegate {
         panel.isReleasedWhenClosed = false
         panel.level = .floating
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        panel.appearance = RimeUI.appKitAppearance
         panel.delegate = self
         panel.onCancel = { [weak self] in self?.finish(approved: false) }
 
@@ -50,8 +70,11 @@ final class MarineChromePairingPromptController: NSObject, NSWindowDelegate {
         let code = NSTextField(labelWithString: request.displayCode)
         code.font = .monospacedSystemFont(ofSize: 26, weight: .bold)
         code.alignment = .center
-        code.textColor = .controlAccentColor
+        code.textColor = RimeUI.isNight
+            ? RimeUI.accentGreen
+            : RimeUI.selectedCandidateBackgroundColor
         code.setContentHuggingPriority(.required, for: .vertical)
+        codeLabel = code
 
         let allow = NSButton(title: "允许", target: self,
                              action: #selector(approve))
@@ -100,6 +123,14 @@ final class MarineChromePairingPromptController: NSObject, NSWindowDelegate {
         panel.makeKeyAndOrderFront(nil)
     }
 
+    private func applyAppearance() {
+        panel?.appearance = RimeUI.appKitAppearance
+        codeLabel?.textColor = RimeUI.isNight
+            ? RimeUI.accentGreen
+            : RimeUI.selectedCandidateBackgroundColor
+        panel?.contentView?.needsDisplay = true
+    }
+
     func cancel(requestID expectedRequestID: UUID? = nil) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard expectedRequestID == nil || requestID == expectedRequestID else {
@@ -123,6 +154,7 @@ final class MarineChromePairingPromptController: NSObject, NSWindowDelegate {
         requestID = nil
         let currentPanel = panel
         panel = nil
+        codeLabel = nil
         currentPanel?.delegate = nil
         currentPanel?.onCancel = nil
         if closeWindow { currentPanel?.close() }

@@ -434,6 +434,76 @@ private func runMarineChromeOriginAndHostSmoke() -> Bool {
     ) else {
         return marineChromeSmokeFail("gateway route/preflight policy")
     }
+
+    let availability = MarineChromeGatewayAvailability()
+    var pairingCancellationCount = 0
+    var promptCancellationCount = 0
+    var contextClearCount = 0
+    var persistenceOperationCount = 0
+    let guardedPaths = [
+        "/v1/marine-chrome/prove",
+        "/v1/marine-chrome/pair/request",
+        "/v1/marine-chrome/pair",
+        "/v1/marine-chrome/context",
+        "/v1/marine-chrome/heartbeat",
+    ]
+    let unavailablePersistenceResult: Int? = availability.valueIfAvailable {
+        persistenceOperationCount += 1
+        return persistenceOperationCount
+    }
+    guard !availability.isAvailable,
+          unavailablePersistenceResult == nil,
+          persistenceOperationCount == 0,
+          MarineChromeGatewayRoutePolicy.permitsPluginAvailability(
+            path: "/v1/marine-chrome/health",
+            isAvailable: availability.isAvailable
+          ),
+          guardedPaths.allSatisfy({
+            !MarineChromeGatewayRoutePolicy.permitsPluginAvailability(
+                path: $0,
+                isAvailable: availability.isAvailable
+            )
+          }),
+          availability.update(true),
+          availability.isAvailable,
+          availability.valueIfAvailable({
+            persistenceOperationCount += 1
+            return persistenceOperationCount
+          }) == 1,
+          guardedPaths.allSatisfy({
+            MarineChromeGatewayRoutePolicy.permitsPluginAvailability(
+                path: $0,
+                isAvailable: availability.isAvailable
+            )
+          }) else {
+        return marineChromeSmokeFail("optional plug-in gateway availability gate")
+    }
+    MarineChromeGatewayAvailabilityLifecycle.reconcile(
+        false,
+        snapshot: availability,
+        cancelPairing: { pairingCancellationCount += 1 },
+        cancelPrompt: { promptCancellationCount += 1 },
+        clearContext: { contextClearCount += 1 }
+    )
+    MarineChromeGatewayAvailabilityLifecycle.reconcile(
+        false,
+        snapshot: availability,
+        cancelPairing: { pairingCancellationCount += 1 },
+        cancelPrompt: { promptCancellationCount += 1 },
+        clearContext: { contextClearCount += 1 }
+    )
+    let revokedPersistenceResult: Int? = availability.valueIfAvailable {
+        persistenceOperationCount += 1
+        return persistenceOperationCount
+    }
+    guard !availability.isAvailable,
+          revokedPersistenceResult == nil,
+          persistenceOperationCount == 1,
+          pairingCancellationCount == 1,
+          promptCancellationCount == 1,
+          contextClearCount == 1 else {
+        return marineChromeSmokeFail("optional plug-in authority revocation")
+    }
     return true
 }
 

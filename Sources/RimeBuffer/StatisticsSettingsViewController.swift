@@ -118,6 +118,8 @@ final class StatisticsSettingsViewController: NSViewController {
         dailyTopKeyLabel.alignment = .left
 
         dailyHeatmap.translatesAutoresizingMaskIntoConstraints = false
+        dailyHeatmap.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        dailyHeatmap.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         dailyHeatmap.heightAnchor.constraint(equalToConstant: 330).isActive = true
 
         let stack = NSStackView(views: [
@@ -170,6 +172,8 @@ final class StatisticsSettingsViewController: NSViewController {
         historyDayTopKeyLabel.textColor = .secondaryLabelColor
         historyDayTopKeyLabel.alignment = .left
         historyDayHeatmap.translatesAutoresizingMaskIntoConstraints = false
+        historyDayHeatmap.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        historyDayHeatmap.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         historyDayHeatmap.heightAnchor.constraint(equalToConstant: 330).isActive = true
 
         historyDetailStack.orientation = .vertical
@@ -497,6 +501,7 @@ final class StatisticsSettingsViewController: NSViewController {
                 completion(response == .alertFirstButtonReturn)
             }
         } else {
+            alert.window.appearance = RimeUI.appKitAppearance
             completion(alert.runModal() == .alertFirstButtonReturn)
         }
     }
@@ -516,6 +521,7 @@ final class StatisticsSettingsViewController: NSViewController {
         if let window = view.window {
             alert.beginSheetModal(for: window)
         } else {
+            alert.window.appearance = RimeUI.appKitAppearance
             alert.runModal()
         }
         refreshImmediately()

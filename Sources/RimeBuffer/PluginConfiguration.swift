@@ -1121,6 +1121,7 @@ enum PluginConfigurationSheetFactory {
         )
         sheet.title = title
         sheet.isReleasedWhenClosed = false
+        sheet.appearance = RimeUI.appKitAppearance
         sheet.contentViewController = controller
         sheet.setContentSize(preferredSize)
         return sheet
@@ -1139,7 +1140,7 @@ final class PluginConfigurationViewController: NSViewController,
 
     private enum FieldControl {
         case text(NSTextField)
-        case toggle(NSSwitch)
+        case toggle(RimeFixedAccentSwitch)
         case choice(NSPopUpButton)
         case number(PluginConfigurationNumberControl)
     }
@@ -1215,6 +1216,7 @@ final class PluginConfigurationViewController: NSViewController,
         ).isActive = true
 
         saveButton.bezelStyle = .rounded
+        saveButton.bezelColor = RimeUI.accentGreen
         saveButton.keyEquivalent = "\r"
         saveButton.target = self
         saveButton.action = #selector(saveTapped(_:))
@@ -1293,6 +1295,7 @@ final class PluginConfigurationViewController: NSViewController,
         alert.alertStyle = .warning
         alert.addButton(withTitle: "恢复默认值")
         alert.addButton(withTitle: "取消")
+        alert.window.appearance = RimeUI.appKitAppearance
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
             try model.reset()
@@ -1349,13 +1352,14 @@ final class PluginConfigurationViewController: NSViewController,
             controls[field.id] = .text(control)
             controlView = control
         case .toggle:
-            let control = NSSwitch()
+            let control = RimeFixedAccentSwitch()
             control.target = self
             control.action = #selector(controlChanged(_:))
+            control.setAccessibilityLabel(field.title)
             controls[field.id] = .toggle(control)
             controlView = control
         case let .choice(options):
-            let control = NSPopUpButton()
+            let control = RimeFixedAccentPopUpButton()
             for option in options {
                 control.addItem(withTitle: option.title)
                 control.lastItem?.representedObject = option.value
@@ -1473,7 +1477,9 @@ final class PluginConfigurationViewController: NSViewController,
         if isError {
             statusLabel.textColor = .systemRed
         } else if isSuccess {
-            statusLabel.textColor = .systemGreen
+            statusLabel.textColor = RimeUI.isNight
+                ? RimeUI.accentGreen
+                : RimeUI.selectedCandidateBackgroundColor
         } else {
             statusLabel.textColor = .secondaryLabelColor
         }

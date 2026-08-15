@@ -7,8 +7,8 @@ enum RimeAppearanceMode: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .night: return "夜间模式"
-        case .day: return "日间模式"
+        case .night: return "墨竹"
+        case .day: return "翡翠"
         }
     }
 
@@ -46,9 +46,14 @@ struct RimeThemePalette {
 }
 
 enum RimeThemePalettes {
+    /// The product accent is intentionally independent of the macOS accent
+    /// preference. Keep the legacy `accentBlue`/`accentGreen` palette slots in
+    /// sync while their call sites are migrated to a single semantic token.
+    static let productGreen: UInt32 = 0x22C55E
+
     static let night = RimeThemePalette(
-        accentBlue: 0x3B82F6,
-        accentGreen: 0x22C55E,
+        accentBlue: productGreen,
+        accentGreen: productGreen,
         bufferBackground: 0x0C1E33,
         bufferBackgroundSecondary: 0x123458,
         bufferBorder: 0x2C5A8C,
@@ -65,12 +70,12 @@ enum RimeThemePalettes {
         candidateBackground: 0x101318
     )
 
-    // Product-owned light surfaces use fixed sRGB values. AppKit semantic
-    // colors and the user's accent can resolve for the system appearance,
-    // which may be dark even while ETInput is explicitly in day mode.
+    // Product-owned 翡翠 surfaces use fixed sRGB values. AppKit semantic
+    // colors can otherwise resolve for the system appearance, which may be
+    // dark even while ETInput is explicitly using this light theme.
     static let day = RimeThemePalette(
-        accentBlue: 0x1D5FA7,
-        accentGreen: 0x0F6A3F,
+        accentBlue: productGreen,
+        accentGreen: productGreen,
         bufferBackground: 0xF1F6FC,
         bufferBackgroundSecondary: 0xE4EEF9,
         bufferBorder: 0x8298B0,
@@ -142,6 +147,12 @@ enum RimeUI {
 
     static var appearance: RimeAppearanceMode {
         get {
+            // Development renderers can exercise both themes without
+            // mutating the user's persisted preference domain.
+            if let raw = ProcessInfo.processInfo.environment["RIMEBUFFER_APPEARANCE_MODE"],
+               let mode = RimeAppearanceMode(rawValue: raw) {
+                return mode
+            }
             if let raw = UserDefaults.standard.string(forKey: appearanceKey),
                let mode = RimeAppearanceMode(rawValue: raw) {
                 return mode
@@ -149,6 +160,13 @@ enum RimeUI {
             return .night
         }
         set {
+            // Compare against persisted state, not the development-only
+            // environment override. A preview process may force one palette,
+            // but must not make a real preference write appear successful
+            // when the stored value is different.
+            let stored = UserDefaults.standard.string(forKey: appearanceKey)
+                .flatMap(RimeAppearanceMode.init(rawValue:)) ?? .night
+            guard newValue != stored else { return }
             UserDefaults.standard.set(newValue.rawValue, forKey: appearanceKey)
             NotificationCenter.default.post(name: .rimeAppearanceDidChange, object: nil)
         }

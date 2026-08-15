@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "builtin.marine-chrome",
+  "version": "0.2.3",
+  "nameZH": "Marine Chrome",
+  "nameEN": "Marine Chrome",
+  "summaryZH": "由配套 Chrome 扩展读取当前网页和精确回复目标；生成与发送仍由 RIMES 安全处理。",
+  "summaryEN": "Use the companion Chrome extension to read the current page and exact reply target while RIMES retains generation and delivery control."
+}

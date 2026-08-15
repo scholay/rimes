@@ -235,8 +235,6 @@ restore_previous_install() {
     if [ -e "$DEST_BACKUP" ]; then
         mv "$DEST_BACKUP" "$DEST"
         "$LSREGISTER" -f "$DEST" 2>/dev/null || true
-        killall imklaunchagent 2>/dev/null || true
-        killall TextInputMenuAgent 2>/dev/null || true
         /bin/launchctl asuser "$(id -u)" "$DEST/Contents/MacOS/$EXE" --install >> "$HOME/rimebuffer-install.log" 2>&1 || true
         open "$DEST" 2>/dev/null || true
     fi
@@ -259,28 +257,32 @@ fi
 echo "==> registering the single installed copy with Launch Services"
 "$LSREGISTER" -f "$DEST" || true
 
-echo "==> refreshing InputMethodKit / input-menu caches"
-killall imklaunchagent 2>/dev/null || true
-killall TextInputMenuAgent 2>/dev/null || true
-sleep 0.5
-
 echo "==> self-install: register + enable + select inside the login session"
 INSTALL_LOG="$HOME/rimebuffer-install.log"
+ACTIVATION_READY=1
 if ! /bin/launchctl asuser "$(id -u)" "$DEST/Contents/MacOS/$EXE" --install 2>&1 | tee "$INSTALL_LOG"; then
-    restore_previous_install
-    exit 1
+    # The bundle is already valid and atomically installed. Recent macOS
+    # releases can require a login-session refresh before TIS exposes a newly
+    # registered source; do not roll back good payload bytes for that condition.
+    ACTIVATION_READY=0
+    echo "!! input-source activation is pending a logout/login session refresh"
 fi
-killall TextInputMenuAgent 2>/dev/null || true
 open "$DEST" || true                 # start the IMK server (candidate/settings UI ready)
 rm -rf "$DEST_BACKUP"
 
+if [ "$ACTIVATION_READY" -eq 1 ]; then
+    activation_summary="Installed, registered, and enabled RIMES."
+else
+    activation_summary="Installed RIMES; registration/enablement is pending session refresh."
+fi
+
 cat <<EOF
 
-==> done. Installed and self-enabled RIMES using its single compatibility bundle.
+==> done. $activation_summary
 
 If RIMES doesn't appear in the input menu (⌃Space) immediately, run:
-  killall TextInputMenuAgent SystemUIServer
-(or log out / back in once). Then switch to it and press F4 to choose an input scheme.
+  log out and back in once, then add RIMES in System Settings if needed.
+After switching to it, press F4 to choose an input scheme.
 
 Watch behaviour:  tail -f ~/rimebuffer.log
 Self-contained: librime + Rime data are bundled, no Squirrel needed.

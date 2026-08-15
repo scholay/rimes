@@ -37,9 +37,51 @@
 | Remarkable | USB + 本地 OCR，把当前页识别进缓冲 |
 | 隔空传字 | Mac ↔ Mac 加密直连，无需同一 Wi‑Fi / Apple ID |
 
+<!-- BEGIN PRESET BUFFER PLUGINS -->
+## 预置缓冲插件
+
+下表由 [`Catalog/buffer-plugins.json`](Catalog/buffer-plugins.json) 自动生成。更新插件时必须同步更新其版本，并运行 `python3 scripts/sync-buffer-plugin-catalog.py --check`。
+
+| 插件 | ID | 版本 | 默认安装 | 默认状态 |
+|---|---|---:|---|---|
+| AI 生成 | `builtin.ai-text` | 2.0 | 随 RIMES 预装 | 启用 |
+| My Prompt | `builtin.my-prompt` | 1.0 | 随 RIMES 预装 | 启用 |
+| 实时翻译 | `builtin.apple-translation` | 2.0 | 随 RIMES 预装 | 启用 |
+| 意识流输入 | `builtin.stream-input` | 1.1 | 随 RIMES 预装 | 启用 |
+| Remarkable | `builtin.remarkable` | 2.0 | 设置中按需下载 | 禁用 |
+| Marine Chrome | `builtin.marine-chrome` | 0.2.3 | 设置中按需下载 | 禁用 |
+
+预装的四个插件在全新安装后已安装并启用；其他插件不会自动下载，安装后仍默认禁用。
+<!-- END PRESET BUFFER PLUGINS -->
+
 ## 安装
 
-普通用户：从 [GitHub Releases](https://github.com/scholay/rimes/releases) 下载 `RIMES-版本号.pkg`，双击安装。安装器会把内部兼容路径 `ETInput.app` 放进 `/Library/Input Methods`，并尝试注册、启用并切换到「RIMES」。
+### 临时免费预览版（v0.4.3）
+
+在取得 Apple Developer Program 资格前，社区可以从官方仓库的
+[GitHub Pre-release v0.4.3](https://github.com/scholay/rimes/releases/tag/v0.4.3)
+下载 `RIMES-0.4.3.pkg`。这个包**没有 Developer ID 签名、没有经过 Apple 公证，Apple
+无法验证它**；它不是正式版。只从 `scholay/rimes` 下载，并在安装前把本机计算的 SHA-256
+与该 Release 公布的值逐字核对。
+
+先双击 `.pkg` 触发 macOS 的拦截，再到“系统设置 → 隐私与安全性”点“仍要打开”，确认后继续
+Installer；输入源没有立即显示时请注销并重新登录。不要全局关闭 Gatekeeper，也不要用 `xattr`
+移除隔离属性。若系统提示“已损坏”或“将损坏你的电脑”，立即停止，不要绕过。公司/学校管理的
+Mac 可能由 MDM 禁止这个例外。完整步骤与风险边界见
+[《v0.4.3 未签名预览版安装说明》](UNSIGNED-PREVIEW.md)，以及
+[Apple 官方说明](https://support.apple.com/zh-cn/102445)。
+
+v0.4.3 不进入应用内自动更新通道。将来发布 Developer ID 签名并经 Apple 公证的更高版本后，
+预览版用户需要从官方 Release 手动下载安装一次。
+
+### 正式版
+
+取得 Developer ID 后，正式版仍只通过 [GitHub Releases](https://github.com/scholay/rimes/releases)
+提供经 Developer ID 签名和 Apple 公证的 `RIMES-版本号.pkg`。安装器会把内部兼容路径
+`ETInput.app` 固定放进 `/Library/Input Methods`，并在当前 GUI 用户会话中按 parent → child
+的顺序注册、启用和尝试切换。若新版 macOS 的输入法菜单未立即刷新，安装本身仍会正常完成；
+注销并重新登录后再在系统设置中确认「RIMES」即可。不要手动结束 `TextInputMenuAgent` 或
+`imklaunchagent`。
 
 开发者本机：
 
@@ -82,20 +124,23 @@ Rime 方案、词库、Lua 与同批并击配置，但需要用户先安装 Wind
 | [SYSTEM-ARCHITECTURE.md](SYSTEM-ARCHITECTURE.md) | 当前权威全局架构（接手开发请先读） |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | P1/P2 历史契约与踩坑 |
 | [PLUGIN-CONFIGURATION.md](PLUGIN-CONFIGURATION.md) | 插件声明式配置 |
+| [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) | v0.4.3 未签名预览版的下载、校验与安全安装步骤 |
 | [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) | Windows / Linux 输入方案预览边界与验证 |
 | [RELEASE.md](RELEASE.md) | CI、通用二进制、应用内更新 |
 
 ## 自动更新
 
-已安装的 RIMES 会检查 [`scholay/rimes`](https://github.com/scholay/rimes) 的 GitHub Release。发布：
+已安装的正式签名版 RIMES 会检查 [`scholay/rimes`](https://github.com/scholay/rimes) 的
+GitHub Release；未签名的 v0.4.3 预览版不会进入该通道。发布：
 
 ```bash
 ./scripts/release.sh patch         # macOS 正式版
 ./scripts/release.sh preview 0.2.0 # Windows/Linux 数据预览版
 ```
 
-两类 Release 都发布在新仓库：macOS `vX.Y.Z` 是稳定版，Windows/Linux
-`platform-preview-vX.Y.Z` 始终是 Pre-release。
+两类 Release 都发布在新仓库：macOS `vX.Y.Z` 通常是稳定版；`v0.4.3` 是一次性的未签名
+Pre-release 例外，不进入自动更新。Windows/Linux `platform-preview-vX.Y.Z` 始终是
+Pre-release。
 
 ## 友链
 

@@ -8,8 +8,16 @@ final class InboundToast: NSObject {
     static let shared = InboundToast()
 
     private var panel: NSPanel?
+    private weak var toastButton: NSButton?
     private let countLabel = NSTextField(labelWithString: "")
     private var hideTimer: Timer?
+    private var appearanceObserver: NSObjectProtocol?
+
+    deinit {
+        if let appearanceObserver {
+            NotificationCenter.default.removeObserver(appearanceObserver)
+        }
+    }
 
     /// Called on every inbound change. Shows/updates the toast when there are
     /// pending items and the inbox isn't already open; hides it otherwise.
@@ -21,6 +29,7 @@ final class InboundToast: NSObject {
 
     private func show() {
         if panel == nil { build() }
+        applyAppearance()
         position()
         panel?.orderFrontRegardless()
         hideTimer?.invalidate()
@@ -45,6 +54,7 @@ final class InboundToast: NSObject {
         p.backgroundColor = .clear
         p.isOpaque = false
         p.hasShadow = true
+        p.appearance = RimeUI.appKitAppearance
 
         let button = ToastButton()
         button.title = ""
@@ -57,6 +67,7 @@ final class InboundToast: NSObject {
         button.layer?.borderColor = RimeUI.border.cgColor
         button.layer?.borderWidth = 1
         button.translatesAutoresizingMaskIntoConstraints = false
+        toastButton = button
 
         let dot = NSView()
         dot.wantsLayer = true
@@ -88,6 +99,21 @@ final class InboundToast: NSObject {
             button.bottomAnchor.constraint(equalTo: p.contentView!.bottomAnchor),
         ])
         panel = p
+        appearanceObserver = NotificationCenter.default.addObserver(
+            forName: .rimeAppearanceDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.applyAppearance()
+        }
+    }
+
+    private func applyAppearance() {
+        panel?.appearance = RimeUI.appKitAppearance
+        toastButton?.layer?.backgroundColor = RimeUI.surface2.cgColor
+        toastButton?.layer?.borderColor = RimeUI.border.cgColor
+        countLabel.textColor = RimeUI.textPrimary
+        toastButton?.needsDisplay = true
     }
 
     private func position() {

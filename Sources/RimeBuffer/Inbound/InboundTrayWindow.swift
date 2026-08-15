@@ -11,12 +11,20 @@ final class InboundTrayWindow: NSObject {
     private var window: NSWindow?
     private let listStack = NSStackView()
     private let emptyLabel = NSTextField(labelWithString: "还没有外部来源推送内容。")
+    private var appearanceObserver: NSObjectProtocol?
+
+    deinit {
+        if let appearanceObserver {
+            NotificationCenter.default.removeObserver(appearanceObserver)
+        }
+    }
 
     static func refreshIfOpen() { shared.reloadIfVisible() }
     static var isVisible: Bool { shared.window?.isVisible == true }
 
     func show() {
         if window == nil { build() }
+        window?.appearance = RimeUI.appKitAppearance
         reload()
         NSApp.activate(ignoringOtherApps: true)
         window?.center()
@@ -35,6 +43,7 @@ final class InboundTrayWindow: NSObject {
         win.title = "外部来源收件箱"
         win.isReleasedWhenClosed = false
         win.minSize = NSSize(width: 480, height: 360)
+        win.appearance = RimeUI.appKitAppearance
 
         let root = NSStackView(views: [connectBox(), divider(), listScroll()])
         root.orientation = .vertical
@@ -52,6 +61,15 @@ final class InboundTrayWindow: NSObject {
             root.bottomAnchor.constraint(equalTo: win.contentView!.bottomAnchor),
         ])
         window = win
+        appearanceObserver = NotificationCenter.default.addObserver(
+            forName: .rimeAppearanceDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.window?.appearance = RimeUI.appKitAppearance
+            self.reloadIfVisible()
+        }
     }
 
     // MARK: connect info
@@ -170,7 +188,7 @@ final class InboundTrayWindow: NSObject {
             ? "作为普通文本加入"
             : "发送到缓冲区"
         let accept = NSButton(title: acceptTitle, target: self, action: #selector(acceptTapped(_:)))
-        accept.bezelColor = .controlAccentColor
+        accept.bezelColor = RimeUI.accentGreen
         accept.tag = 0
         accept.identifier = NSUserInterfaceItemIdentifier(item.id.uuidString)
         let reject = NSButton(title: "拒绝", target: self, action: #selector(rejectTapped(_:)))
@@ -190,9 +208,9 @@ final class InboundTrayWindow: NSObject {
         card.spacing = 5
         card.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
         card.wantsLayer = true
-        card.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        card.layer?.backgroundColor = RimeUI.surface2.cgColor
         card.layer?.cornerRadius = 8
-        card.layer?.borderColor = NSColor.separatorColor.cgColor
+        card.layer?.borderColor = RimeUI.border.cgColor
         card.layer?.borderWidth = 1
         return card
     }

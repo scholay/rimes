@@ -25,11 +25,11 @@ MARINE_STATE_FILES=(
     marine-chrome-generation
     marine-chrome-credential.lock
 )
-mkdir -p "$PROFILE_DIR/ai" "$PROFILE_DIR/plugins" "$PROFILE_DIR/stats" \
+mkdir -p "$PROFILE_DIR/ai" "$PROFILE_DIR/plugins" "$PROFILE_DIR/preset-plugins" "$PROFILE_DIR/stats" \
          "$PROFILE_DIR/learning" "$PROFILE_DIR/my-prompt/library" \
          "$PROFILE_DIR/build" \
          "$PROFILE_DIR/plugin-config/builtin.remarkable" "$IMPORT_DIR/ai" \
-         "$IMPORT_DIR/plugins" "$IMPORT_DIR/stats" "$IMPORT_DIR/learning" \
+         "$IMPORT_DIR/plugins" "$IMPORT_DIR/preset-plugins" "$IMPORT_DIR/stats" "$IMPORT_DIR/learning" \
          "$IMPORT_DIR/my-prompt" "$IMPORT_DIR/plugin-config/builtin.remarkable" \
          "$EXPECTED_MARINE_DIR"
 
@@ -56,6 +56,7 @@ printf '%s\n' 'SQLite format 3 prompt-index-fixture' > "$EXPECTED_PROMPT_INDEX"
 cp "$EXPECTED_PROMPT" "$PROFILE_DIR/my-prompt/library/research.md"
 cp "$EXPECTED_PROMPT_INDEX" "$PROFILE_DIR/my-prompt/prompts.sqlite"
 printf '%s\n' 'installed-plugin' > "$PROFILE_DIR/plugins/marker"
+printf '%s\n' 'installed-preset-plugin' > "$PROFILE_DIR/preset-plugins/marker"
 printf '%s\n' 'stats-state' > "$PROFILE_DIR/stats/marker"
 printf '%s\n' 'learning-state' > "$PROFILE_DIR/learning/marker"
 printf '%s\n' 'gateway-state' > "$PROFILE_DIR/gateway-token"
@@ -75,6 +76,7 @@ printf '%s\n' \
     '{"baseURL":"https://wrong.invalid/v1","model":"wrong-model","apiKey":"must-not-win"}' \
     > "$IMPORT_DIR/ai/openai-compatible.json"
 printf '%s\n' 'must-not-replace-installed-plugin' > "$IMPORT_DIR/plugins/marker"
+printf '%s\n' 'must-not-replace-installed-preset-plugin' > "$IMPORT_DIR/preset-plugins/marker"
 printf '%s\n' '{"password":"must-not-replace"}' \
     > "$IMPORT_DIR/plugin-config/builtin.remarkable/credentials.json"
 printf '%s\n' 'must-not-replace-stats' > "$IMPORT_DIR/stats/marker"
@@ -128,6 +130,7 @@ test "$(
 test "$(mode_of "$PROFILE_DIR/plugin-config/builtin.remarkable")" = \
     "$PLUGIN_CONFIG_DIR_MODE_BEFORE"
 test "$(cat "$PROFILE_DIR/plugins/marker")" = 'installed-plugin'
+test "$(cat "$PROFILE_DIR/preset-plugins/marker")" = 'installed-preset-plugin'
 test "$(cat "$PROFILE_DIR/stats/marker")" = 'stats-state'
 test "$(cat "$PROFILE_DIR/learning/marker")" = 'learning-state'
 cmp -s "$EXPECTED_PROMPT" "$PROFILE_DIR/my-prompt/library/research.md"
@@ -158,6 +161,8 @@ test "$(
 )" = "$PLUGIN_CONFIG_MODE_BEFORE"
 test "$(mode_of "$PROFILE_DIR/plugin-config/builtin.remarkable")" = \
     "$PLUGIN_CONFIG_DIR_MODE_BEFORE"
+test "$(cat "$PROFILE_DIR/plugins/marker")" = 'installed-plugin'
+test "$(cat "$PROFILE_DIR/preset-plugins/marker")" = 'installed-preset-plugin'
 assert_marine_chrome_state_preserved
 test ! -e "$PROFILE_DIR/build"
 test ! -e "$PROFILE_DIR/default.yaml"

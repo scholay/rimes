@@ -12,5 +12,7 @@
     <choice id="default" title="RIMES">
         <pkg-ref id="com.isaac.inputmethod.RimeBuffer"/>
     </choice>
+    <!-- make-pkg.sh requires this sole zero-version placeholder and stamps the
+         validated release version before productbuild. -->
     <pkg-ref id="com.isaac.inputmethod.RimeBuffer" version="0" onConclusion="none">component.pkg</pkg-ref>
 </installer-gui-script>

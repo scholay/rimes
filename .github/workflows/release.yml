@@ -6,12 +6,17 @@ on:
       # GitHub tag filters are globs, so the job validates the exact vX.Y.Z
       # shape again before it is allowed to publish.
       - 'v*'
-  workflow_dispatch:    # manual builds (produces an artifact, no release)
+  workflow_dispatch:
     inputs:
       version:
-        description: 'Version number (e.g. 0.2.0)'
+        description: 'Version number (strict X.Y.Z)'
         required: false
-        default: '0.0.0-dev'
+        default: '0.4.3'
+      publish_unsigned_preview:
+        description: 'Publish an UNSIGNED / NOT NOTARIZED GitHub pre-release'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,21 +26,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build, verify, and publish macOS
+  build_and_smoke:
+    name: Build and runtime-smoke macOS without secrets
     # Releases are canonical only in the post-migration repository. Keeping
     # this guard in the workflow also makes an accidentally pushed tag in the
     # retired repository harmless.
     if: github.repository == 'scholay/rimes'
     runs-on: macos-15   # ARM64 runner; the app is built universal below
     permissions:
-      contents: write   # create and then inspect the GitHub Release
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+      is_release: ${{ steps.version.outputs.IS_RELEASE }}
+      is_unsigned_preview: ${{ steps.version.outputs.IS_UNSIGNED_PREVIEW }}
+      marine_zip: ${{ steps.marine_chrome.outputs.ZIP }}
+      handoff_artifact: ${{ steps.handoff.outputs.ARTIFACT_NAME }}
+      preview_handoff_artifact: ${{ steps.preview_handoff.outputs.ARTIFACT_NAME }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: latest-stable
 
@@ -82,9 +96,34 @@ jobs:
             echo 'Do not declare an empty/per-mode key equivalent; global input-source shortcuts are owned by macOS.'
             exit 1
           fi
+          plutil -lint scripts/pkg/component.plist
+          test "$(/usr/libexec/PlistBuddy -c 'Print :0:RootRelativeBundlePath' scripts/pkg/component.plist)" = 'ETInput.app'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :0:BundleIsRelocatable' scripts/pkg/component.plist)" = 'false'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :0:BundleIsVersionChecked' scripts/pkg/component.plist)" = 'true'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :0:BundleOverwriteAction' scripts/pkg/component.plist)" = 'upgrade'
+          # false is deliberate: the same frozen ETInput.app path must migrate
+          # the pre-0.4.2 com.isaac.inputmethod.ETInput identity. preinstall
+          # rejects every unrelated occupant before payload replacement.
+          test "$(/usr/libexec/PlistBuddy -c 'Print :0:BundleHasStrictIdentifier' scripts/pkg/component.plist)" = 'false'
           bash -n build_install.sh
           bash -n scripts/release.sh
+          bash -n scripts/sign-import-certificates.sh
+          bash -n scripts/sign-macos-app.sh
+          bash -n scripts/notarize-macos.sh
+          bash -n scripts/make-pkg.sh
+          bash -n scripts/fetch-rime.sh
+          bash -n scripts/pkg/scripts/rimes-install-common.sh
+          bash -n scripts/pkg/scripts/rimes-user-activation-agent.sh
+          bash -n scripts/pkg/scripts/preinstall
           bash -n scripts/pkg/scripts/postinstall
+          if /usr/bin/grep -REn '(/usr/bin/)?(killall|pkill)[[:space:]]+.*(TextInputMenuAgent|imklaunchagent|SystemUIServer)' \
+              scripts/pkg/scripts \
+              || /usr/bin/grep -En '(TextInputMenuAgent|imklaunchagent|SystemUIServer)' \
+                  Sources/RimeBuffer/UpdateManager.swift build_install.sh; then
+            echo 'Install/update paths must never kill Apple-owned input or menu agents.' >&2
+            exit 1
+          fi
+          python3 -B scripts/sync-buffer-plugin-catalog.py --check
           python3 scripts/lint-log-privacy.py
           node Extensions/marine-chrome/tests/smoke.mjs
 
@@ -92,9 +131,10 @@ jobs:
         id: version
         env:
           DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          PUBLISH_UNSIGNED_PREVIEW: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_unsigned_preview }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_TYPE" == "tag" ]]; then
             if [[ ! "$GITHUB_REF_NAME" =~ ^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]; then
               echo "Stable release tags must be exactly vX.Y.Z: $GITHUB_REF_NAME" >&2
               exit 1
@@ -108,13 +148,63 @@ jobs:
             VERSION="0.0.0-dev"
             IS_RELEASE=false
           fi
+          IS_UNSIGNED_PREVIEW=false
+          if [[ "$PUBLISH_UNSIGNED_PREVIEW" == true ]]; then
+            [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
+            [[ "$IS_RELEASE" == false ]]
+            if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+              echo "Unsigned previews require a strict X.Y.Z version: $VERSION" >&2
+              exit 1
+            fi
+            IS_UNSIGNED_PREVIEW=true
+          fi
           if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
             echo "Invalid build version: $VERSION" >&2
             exit 1
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
           echo "IS_RELEASE=$IS_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "IS_UNSIGNED_PREVIEW=$IS_UNSIGNED_PREVIEW" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
+
+      # A tag name alone is not authority to use the Developer ID keys. Keep
+      # this check before the credential-import step, and pair it with the
+      # protected macos-release environment/tag rules documented in RELEASE.md.
+      - name: Authorize formal release source
+        if: steps.version.outputs.IS_RELEASE == 'true'
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin \
+            '+refs/heads/main:refs/remotes/origin/main'
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          [[ "$GITHUB_SHA" == "$main_sha" ]] || {
+            echo "Formal release tags must point at the current protected main commit." >&2
+            echo "tag=$GITHUB_SHA main=$main_sha" >&2
+            exit 1
+          }
+
+      # An unsigned preview is still a public software release. It may only be
+      # made manually from the exact current protected main commit; selecting a
+      # historical branch/commit in the workflow_dispatch UI is rejected.
+      - name: Authorize unsigned preview source
+        if: steps.version.outputs.IS_UNSIGNED_PREVIEW == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$GITHUB_REF_TYPE" == branch && "$GITHUB_REF_NAME" == main ]]
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          git fetch --no-tags --depth=1 origin \
+            '+refs/heads/main:refs/remotes/origin/main'
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          [[ "$GITHUB_SHA" == "$main_sha" ]] || {
+            echo "Unsigned previews must use current origin/main." >&2
+            echo "event=$GITHUB_SHA main=$main_sha" >&2
+            exit 1
+          }
 
       - name: Stamp version into Info.plist
         run: |
@@ -123,6 +213,11 @@ jobs:
           echo "----- Info.plist versions -----"
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist
           /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" Info.plist
+
+      - name: Stage immutable preset plug-in manifests
+        run: |
+          python3 -B scripts/sync-buffer-plugin-catalog.py \
+            --stage-release-assets release-assets/preset-plugins
 
       # Universal (arm64 + x86_64) so the same .app runs on Apple Silicon and
       # Intel. librime is dlopen'd at runtime, so nothing extra is needed here.
@@ -134,12 +229,18 @@ jobs:
       # Download librime + Rime data (from Squirrel's official pkg) so the app is
       # self-contained — end users don't need to install Squirrel separately.
       - name: Fetch bundled librime runtime
-        run: ./scripts/fetch-rime.sh
+        # Never trust a mutable or locally cached Vendor directory in a release.
+        run: ./scripts/fetch-rime.sh --force
 
       - name: Generate RIMES brand assets
         run: bash Logo/generate.sh
 
       - name: Assemble the app bundle
+        env:
+          # Assemble and exercise only an ad-hoc build before any signing or
+          # notarization credential exists on the runner. The exact verified
+          # bytes are re-signed below for a formal release.
+          RIMES_REQUIRE_SIGNING: 'false'
         run: |
           APP="ETInput.app"
           rm -rf "$APP"
@@ -160,10 +261,9 @@ jobs:
           cp Resources/etinput.pdf "$APP/Contents/Resources/" 2>/dev/null || true  # colored brand icon (Settings row)
           cp Resources/etinput-menu.pdf "$APP/Contents/Resources/" 2>/dev/null || true  # monochrome input-menu glyph
           cp Resources/menubar-template.png "$APP/Contents/Resources/" 2>/dev/null || true  # status-bar glyph
-          # --deep: sign the nested librime + plugin dylibs too.
-          codesign --force --deep --sign - "$APP"
-          codesign --verify --deep --strict --verbose=2 "$APP"
-          xattr -cr "$APP"
+          # Seal the smoke-test bundle ad hoc. A formal tag is re-signed only
+          # after every executable smoke test has completed successfully.
+          ./scripts/sign-macos-app.sh "$APP"
           echo "----- assembled bundle -----"
           file "$APP/Contents/MacOS/ETInput"
           du -sh "$APP"
@@ -190,38 +290,1370 @@ jobs:
           RIMEBUFFER_FRAMEWORKS_DIR="$FRAMEWORKS" \
             "$BIN" user-lexicon-bridge-smoke
 
-      - name: Package ZIP
-        id: package
-        run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          ZIP="ETInput-${VERSION}.zip"
-          # ditto preserves the bundle structure + ad-hoc signature; the in-app
-          # updater unzips this with /usr/bin/unzip.
-          ditto -c -k --sequesterRsrc --keepParent "ETInput.app" "$ZIP"
-          SHA256=$(shasum -a 256 "$ZIP" | awk '{print $1}')
-          echo "ZIP=$ZIP" >> "$GITHUB_OUTPUT"
-          echo "SHA256=$SHA256" >> "$GITHUB_OUTPUT"
-          echo "ZIP: $ZIP  SHA256: $SHA256"
-
       - name: Package Marine Chrome extension
         id: marine_chrome
         run: |
+          set -euo pipefail
           MARINE_VERSION="$(node -p "require('./Extensions/marine-chrome/manifest.json').version")"
+          [[ "$MARINE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "Marine Chrome version must be strict X.Y.Z: $MARINE_VERSION" >&2
+            exit 1
+          }
           MARINE_ZIP="marine-chrome-${MARINE_VERSION}.zip"
-          ditto -c -k --sequesterRsrc --keepParent \
+          # Browser-extension archives need no Finder metadata. Keeping this
+          # archive free of xattrs/resource forks also makes its complete
+          # member set deterministic for the fresh runner's byte-for-byte
+          # passive verification.
+          ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent \
             "Extensions/marine-chrome" "$MARINE_ZIP"
           MARINE_SHA256="$(shasum -a 256 "$MARINE_ZIP" | awk '{print $1}')"
           echo "ZIP=$MARINE_ZIP" >> "$GITHUB_OUTPUT"
           echo "SHA256=$MARINE_SHA256" >> "$GITHUB_OUTPUT"
           echo "Marine Chrome ZIP: $MARINE_ZIP  SHA256: $MARINE_SHA256"
 
+      # workflow_dispatch is deliberately unsigned/ad-hoc and never enters the
+      # protected signing environment. It remains useful for installation and
+      # packaging smoke tests, but cannot be mistaken for a releasable build.
+      - name: Package manual ad-hoc artifacts
+        if: steps.version.outputs.IS_RELEASE != 'true'
+        id: manual_package
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          MARINE_ZIP: ${{ steps.marine_chrome.outputs.ZIP }}
+        run: |
+          set -euo pipefail
+          APP_ZIP="ETInput-${VERSION}.zip"
+          PKG="RIMES-${VERSION}.pkg"
+          codesign --verify --deep --strict --verbose=2 ETInput.app
+          app_signature="$(codesign --display --verbose=4 ETInput.app 2>&1)"
+          printf '%s\n' "$app_signature" | grep -Fq 'Signature=adhoc'
+          ditto -c -k --sequesterRsrc --keepParent ETInput.app "$APP_ZIP"
+          ./scripts/make-pkg.sh "$VERSION" ETInput.app "$PKG"
+
+          set +e
+          pkg_signature="$(/usr/sbin/pkgutil --check-signature "$PKG" 2>&1)"
+          pkg_signature_status=$?
+          set -e
+          [[ "$pkg_signature_status" -ne 0 ]]
+          printf '%s\n' "$pkg_signature" | grep -Fq 'Status: no signature'
+
+          preset_assets=(release-assets/preset-plugins/preset-plugin-*.json)
+          [[ "${#preset_assets[@]}" -gt 0 && -f "${preset_assets[0]}" ]]
+          for asset in "$PKG" "$APP_ZIP" "$MARINE_ZIP" "${preset_assets[@]}"; do
+            [[ -f "$asset" && ! -L "$asset" && -s "$asset" ]]
+            bytes="$(stat -f%z "$asset")"
+            [[ "$bytes" -le 536870912 ]] || {
+              echo "Manual artifact exceeds 512 MiB: $asset" >&2
+              exit 1
+            }
+          done
+          unzip -tq "$APP_ZIP"
+          unzip -tq "$MARINE_ZIP"
+          echo "PKG=$PKG" >> "$GITHUB_OUTPUT"
+          echo "APP_ZIP=$APP_ZIP" >> "$GITHUB_OUTPUT"
+
+      # A hosted runner is disposable, so exercise the real PackageKit path
+      # before any unsigned build may leave it. This directly guards against a
+      # postinstall regression surfacing as Installer Code 112. A missing Aqua
+      # session may leave the documented activation marker, but installation
+      # itself must succeed and place the validated canonical payload.
+      - name: Exercise unsigned installer through PackageKit
+        if: steps.version.outputs.IS_RELEASE != 'true'
+        timeout-minutes: 8
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          PKG: ${{ steps.manual_package.outputs.PKG }}
+        run: |
+          set -euo pipefail
+          [[ "$PKG" == "RIMES-${VERSION}.pkg" ]]
+          install_log="$RUNNER_TEMP/rimes-unsigned-installer.log"
+          set +e
+          sudo -n /usr/sbin/installer -pkg "$PKG" -target / \
+            2>&1 | tee "$install_log"
+          installer_status="${PIPESTATUS[0]}"
+          set -e
+          [[ "$installer_status" -eq 0 ]] || {
+            echo "Unsigned PackageKit installation failed with status $installer_status." >&2
+            exit 1
+          }
+          if grep -Eq 'Code[[:space:]]*=?[[:space:]]*112|The install failed' "$install_log"; then
+            echo 'PackageKit reported an installation failure despite a zero status.' >&2
+            exit 1
+          fi
+
+          app='/Library/Input Methods/ETInput.app'
+          info="$app/Contents/Info.plist"
+          bin="$app/Contents/MacOS/ETInput"
+          [[ -d "$app" && ! -L "$app" && -f "$info" && -x "$bin" ]]
+          plutil -lint "$info"
+          bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")
+          parent_id=$(/usr/libexec/PlistBuddy -c 'Print :TISInputSourceID' "$info")
+          mode_id=$(/usr/libexec/PlistBuddy -c 'Print :ComponentInputModeDict:tsVisibleInputModeOrderedArrayKey:0' "$info")
+          declared_mode_id=$(/usr/libexec/PlistBuddy -c "Print :ComponentInputModeDict:tsInputModeListKey:${mode_id}:TISInputSourceID" "$info")
+          [[ "$bundle_id" == com.isaac.inputmethod.RimeBuffer ]]
+          [[ "$parent_id" == "$bundle_id" ]]
+          [[ "$mode_id" == com.isaac.inputmethod.RimeBuffer.Hans ]]
+          [[ "$declared_mode_id" == "$mode_id" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")" == "$VERSION" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info")" == ETInput ]]
+          codesign --verify --deep --strict --verbose=2 "$app"
+          installed_signature="$(codesign --display --verbose=4 "$app" 2>&1)"
+          printf '%s\n' "$installed_signature" | grep -Fq 'Signature=adhoc'
+          lipo "$bin" -verify_arch arm64 x86_64
+          "$bin" input-source-install-smoke
+
+          receipt="$(pkgutil --pkg-info com.isaac.inputmethod.RimeBuffer)"
+          printf '%s\n' "$receipt" | grep -Fq "version: $VERSION"
+          printf '%s\n' "$receipt" | grep -Fq 'location: Library/Input Methods'
+
+      - name: Upload manual unsigned artifacts
+        if: steps.version.outputs.IS_RELEASE != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: RIMES-${{ steps.version.outputs.VERSION }}-unsigned
+          path: |
+            ${{ steps.manual_package.outputs.PKG }}
+            ${{ steps.manual_package.outputs.APP_ZIP }}
+            ${{ steps.marine_chrome.outputs.ZIP }}
+            release-assets/preset-plugins/preset-plugin-*.json
+          if-no-files-found: error
+          retention-days: 7
+
+      # Build a dedicated, immutable handoff for the fresh public-preview job.
+      # ETInput-handoff.zip is an internal verification input only and is never
+      # attached to the GitHub Release; end users receive the guided PKG.
+      - name: Stage immutable unsigned-preview inputs
+        if: steps.version.outputs.IS_UNSIGNED_PREVIEW == 'true'
+        id: preview_handoff
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          PKG: ${{ steps.manual_package.outputs.PKG }}
+          MARINE_ZIP: ${{ steps.marine_chrome.outputs.ZIP }}
+        run: |
+          set -euo pipefail
+          handoff="$RUNNER_TEMP/rimes-unsigned-preview-inputs"
+          [[ ! -e "$handoff" ]]
+          mkdir -m 700 "$handoff" "$handoff/preset-plugins"
+          app_archive='ETInput-handoff.zip'
+          ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent \
+            "$GITHUB_WORKSPACE/ETInput.app" "$handoff/$app_archive"
+          cp "$PKG" "$handoff/$PKG"
+          cp "$MARINE_ZIP" "$handoff/$MARINE_ZIP"
+          preset_assets=(release-assets/preset-plugins/preset-plugin-*.json)
+          [[ "${#preset_assets[@]}" -gt 0 && -f "${preset_assets[0]}" ]]
+          cp "${preset_assets[@]}" "$handoff/preset-plugins/"
+
+          {
+            printf 'schema=rimes-unsigned-preview-v1\n'
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'version=%s\n' "$VERSION"
+            printf 'is_release=false\n'
+            printf 'unsigned_preview=true\n'
+            printf 'pkg=%s\n' "$PKG"
+            printf 'marine_zip=%s\n' "$MARINE_ZIP"
+            printf 'app_archive=%s\n' "$app_archive"
+          } >"$handoff/context.txt"
+
+          # This checksum file is itself a public Release asset and therefore
+          # lists only the exact end-user assets, using their uploaded basenames.
+          (
+            cd "$handoff"
+            for relative in "$PKG" "$MARINE_ZIP" preset-plugins/preset-plugin-*.json; do
+              [[ -f "$relative" && ! -L "$relative" ]]
+              digest="$(shasum -a 256 "$relative" | awk '{print $1}')"
+              printf '%s  %s\n' "$digest" "$(basename "$relative")"
+            done | LC_ALL=C sort -k2
+          ) >"$handoff/SHA256SUMS"
+
+          # A second manifest seals every cross-runner input, including the
+          # internal app archive, context, and the public checksum manifest.
+          (
+            cd "$handoff"
+            while IFS= read -r relative; do
+              shasum -a 256 "$relative"
+            done < <(
+              find . -type f ! -name HANDOFF-SHA256SUMS -print \
+                | sed 's#^\./##' | LC_ALL=C sort
+            ) >HANDOFF-SHA256SUMS
+          )
+
+          artifact_name="rimes-unsigned-preview-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "ARTIFACT_NAME=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "Staged unsigned-preview artifact: $artifact_name"
+
+      - name: Upload verified unsigned-preview inputs
+        if: steps.version.outputs.IS_UNSIGNED_PREVIEW == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.preview_handoff.outputs.ARTIFACT_NAME }}
+          path: ${{ runner.temp }}/rimes-unsigned-preview-inputs
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      # Archive the smoke-tested app before crossing the runner boundary. The
+      # signing job never executes this app; a fresh runner only performs static
+      # structure/signature checks before importing protected credentials.
+      - name: Stage immutable cross-runner release inputs
+        if: steps.version.outputs.IS_RELEASE == 'true'
+        id: handoff
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          IS_RELEASE: ${{ steps.version.outputs.IS_RELEASE }}
+          MARINE_ZIP: ${{ steps.marine_chrome.outputs.ZIP }}
+        run: |
+          set -euo pipefail
+          handoff="$RUNNER_TEMP/rimes-release-inputs"
+          [[ ! -e "$handoff" ]]
+          mkdir -m 700 "$handoff" "$handoff/preset-plugins"
+
+          # Handoff deliberately carries no xattrs, ACLs, resource forks, or
+          # AppleDouble sidecars. The signing runner applies its own strict ZIP
+          # member policy and never calls a general-purpose extractor here.
+          ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent \
+            "$GITHUB_WORKSPACE/ETInput.app" "$handoff/ETInput-handoff.zip"
+          cp "$MARINE_ZIP" "$handoff/$MARINE_ZIP"
+          preset_assets=(release-assets/preset-plugins/preset-plugin-*.json)
+          [[ "${#preset_assets[@]}" -gt 0 && -f "${preset_assets[0]}" ]]
+          cp "${preset_assets[@]}" "$handoff/preset-plugins/"
+
+          {
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'version=%s\n' "$VERSION"
+            printf 'is_release=%s\n' "$IS_RELEASE"
+            printf 'marine_zip=%s\n' "$MARINE_ZIP"
+          } >"$handoff/context.txt"
+          (
+            cd "$handoff"
+            while IFS= read -r relative; do
+              shasum -a 256 "$relative"
+            done < <(
+              find . -type f ! -name SHA256SUMS -print \
+                | sed 's#^\./##' | LC_ALL=C sort
+            ) >SHA256SUMS
+          )
+
+          artifact_name="rimes-release-inputs-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "ARTIFACT_NAME=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "Staged cross-runner artifact: $artifact_name"
+
+      - name: Upload verified release inputs
+        if: steps.version.outputs.IS_RELEASE == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.handoff.outputs.ARTIFACT_NAME }}
+          path: ${{ runner.temp }}/rimes-release-inputs
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  publish_unsigned_preview:
+    name: Passively verify and publish unsigned preview
+    needs: build_and_smoke
+    if: >-
+      needs.build_and_smoke.result == 'success' &&
+      needs.build_and_smoke.outputs.is_unsigned_preview == 'true' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'scholay/rimes'
+    runs-on: macos-15
+    # This fresh runner receives no Developer ID/App Store Connect secrets and
+    # never executes ETInput. Its only elevated capability is creating the
+    # explicitly marked GitHub pre-release after passive byte/metadata checks.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact preview source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Authorize current main and reject an occupied version
+        env:
+          VERSION: ${{ needs.build_and_smoke.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: scholay/rimes
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$GITHUB_REF_TYPE" == branch && "$GITHUB_REF_NAME" == main ]]
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          git fetch --no-tags --depth=1 origin \
+            '+refs/heads/main:refs/remotes/origin/main'
+          [[ "$(git rev-parse refs/remotes/origin/main)" == "$GITHUB_SHA" ]]
+          [[ "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" == "$GITHUB_SHA" ]]
+
+          tag="v$VERSION"
+          set +e
+          tag_probe="$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq .object.sha 2>&1)"
+          tag_status=$?
+          set -e
+          if [[ "$tag_status" -eq 0 ]]; then
+            echo "Tag already exists; refusing unsigned publication: $tag ($tag_probe)" >&2
+            exit 1
+          fi
+          printf '%s\n' "$tag_probe" | grep -Fq 'HTTP 404' || {
+            echo "Could not prove that tag $tag is vacant: $tag_probe" >&2
+            exit 1
+          }
+
+          set +e
+          release_probe="$(gh api "repos/$GH_REPO/releases/tags/$tag" --jq .id 2>&1)"
+          release_status=$?
+          set -e
+          if [[ "$release_status" -eq 0 ]]; then
+            echo "Release already exists; refusing to replace it: $tag ($release_probe)" >&2
+            exit 1
+          fi
+          printf '%s\n' "$release_probe" | grep -Fq 'HTTP 404' || {
+            echo "Could not prove that Release $tag is vacant: $release_probe" >&2
+            exit 1
+          }
+          echo "PREVIEW_TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: Download immutable unsigned-preview inputs
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: ${{ needs.build_and_smoke.outputs.preview_handoff_artifact }}
+          path: ${{ runner.temp }}/rimes-unsigned-preview-inputs
+
+      - name: Passively verify exact unsigned-preview assets
+        env:
+          VERSION: ${{ needs.build_and_smoke.outputs.version }}
+          MARINE_ZIP: ${{ needs.build_and_smoke.outputs.marine_zip }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$MARINE_ZIP" =~ ^marine-chrome-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.zip$ ]]
+          marine_version="$(/usr/bin/plutil -extract version raw -o - \
+            Extensions/marine-chrome/manifest.json)"
+          [[ "$MARINE_ZIP" == "marine-chrome-${marine_version}.zip" ]]
+
+          handoff="$RUNNER_TEMP/rimes-unsigned-preview-inputs"
+          pkg="RIMES-${VERSION}.pkg"
+          app_archive='ETInput-handoff.zip'
+          context="$handoff/context.txt"
+          [[ -d "$handoff" && ! -L "$handoff" ]]
+          [[ -f "$context" && ! -L "$context" ]]
+          [[ "$(wc -l <"$context" | tr -d '[:space:]')" == 8 ]]
+          [[ "$(sed -n '1p' "$context")" == 'schema=rimes-unsigned-preview-v1' ]]
+          [[ "$(sed -n '2p' "$context")" == "commit=$GITHUB_SHA" ]]
+          [[ "$(sed -n '3p' "$context")" == "version=$VERSION" ]]
+          [[ "$(sed -n '4p' "$context")" == 'is_release=false' ]]
+          [[ "$(sed -n '5p' "$context")" == 'unsigned_preview=true' ]]
+          [[ "$(sed -n '6p' "$context")" == "pkg=$pkg" ]]
+          [[ "$(sed -n '7p' "$context")" == "marine_zip=$MARINE_ZIP" ]]
+          [[ "$(sed -n '8p' "$context")" == "app_archive=$app_archive" ]]
+
+          expected_top="$RUNNER_TEMP/rimes-preview-expected-top.txt"
+          actual_top="$RUNNER_TEMP/rimes-preview-actual-top.txt"
+          printf '%s\n' \
+            HANDOFF-SHA256SUMS SHA256SUMS context.txt "$app_archive" \
+            "$pkg" "$MARINE_ZIP" preset-plugins | LC_ALL=C sort >"$expected_top"
+          find "$handoff" -mindepth 1 -maxdepth 1 -exec basename {} \; \
+            | LC_ALL=C sort >"$actual_top"
+          cmp "$expected_top" "$actual_top"
+          for required_file in \
+            HANDOFF-SHA256SUMS SHA256SUMS context.txt "$app_archive" \
+            "$pkg" "$MARINE_ZIP"; do
+            [[ -f "$handoff/$required_file" && ! -L "$handoff/$required_file" ]]
+          done
+          [[ -d "$handoff/preset-plugins" && ! -L "$handoff/preset-plugins" ]]
+          if find "$handoff" -mindepth 1 \
+              \( -type l -o \( ! -type d ! -type f \) \) \
+              -print -quit | grep -q .; then
+            echo 'Preview handoff contains a symlink or special file.' >&2
+            exit 1
+          fi
+          if find "$handoff/preset-plugins" -mindepth 1 \
+              \( ! -type f -o ! -name 'preset-plugin-*.json' \) \
+              -print -quit | grep -q .; then
+            echo 'Preview preset manifest layout is invalid.' >&2
+            exit 1
+          fi
+          preset_assets=("$handoff"/preset-plugins/preset-plugin-*.json)
+          [[ "${#preset_assets[@]}" -gt 0 && -f "${preset_assets[0]}" ]]
+
+          checksum_paths="$RUNNER_TEMP/rimes-preview-checksum-paths.txt"
+          : >"$checksum_paths"
+          checksum_count=0
+          while IFS= read -r checksum_line; do
+            [[ "$checksum_line" =~ ^[0-9a-f]{64}\ \ (.+)$ ]] || {
+              echo "Malformed preview handoff checksum: $checksum_line" >&2
+              exit 1
+            }
+            relative="${BASH_REMATCH[1]}"
+            case "$relative" in
+              SHA256SUMS|context.txt|"$app_archive"|"$pkg"|"$MARINE_ZIP"|preset-plugins/preset-plugin-*.json) ;;
+              *) echo "Unexpected handoff checksum path: $relative" >&2; exit 1 ;;
+            esac
+            printf '%s\n' "$relative" >>"$checksum_paths"
+            checksum_count=$((checksum_count + 1))
+          done <"$handoff/HANDOFF-SHA256SUMS"
+          expected_checksum_paths="$RUNNER_TEMP/rimes-preview-expected-checksum-paths.txt"
+          find "$handoff" -type f ! -name HANDOFF-SHA256SUMS -print \
+            | sed "s#^$handoff/##" | LC_ALL=C sort >"$expected_checksum_paths"
+          LC_ALL=C sort -o "$checksum_paths" "$checksum_paths"
+          cmp "$expected_checksum_paths" "$checksum_paths"
+          regular_count="$(find "$handoff" -type f ! -name HANDOFF-SHA256SUMS \
+            | wc -l | tr -d '[:space:]')"
+          [[ "$checksum_count" -eq "$regular_count" && "$checksum_count" -ge 6 ]]
+          (cd "$handoff" && shasum -a 256 -c HANDOFF-SHA256SUMS)
+
+          expected_public_sums="$RUNNER_TEMP/rimes-preview-public-sums.txt"
+          (
+            cd "$handoff"
+            for relative in "$pkg" "$MARINE_ZIP" preset-plugins/preset-plugin-*.json; do
+              digest="$(shasum -a 256 "$relative" | awk '{print $1}')"
+              printf '%s  %s\n' "$digest" "$(basename "$relative")"
+            done | LC_ALL=C sort -k2
+          ) >"$expected_public_sums"
+          cmp "$expected_public_sums" "$handoff/SHA256SUMS"
+
+          for bounded_input in "$handoff/$pkg" "$handoff/$app_archive" "$handoff/$MARINE_ZIP"; do
+            bytes="$(stat -f%z "$bounded_input")"
+            [[ "$bytes" -gt 0 && "$bytes" -le 536870912 ]] || {
+              echo "Preview binary asset is empty or exceeds 512 MiB: $bounded_input" >&2
+              exit 1
+            }
+          done
+          for manifest in "${preset_assets[@]}"; do
+            bytes="$(stat -f%z "$manifest")"
+            [[ "$bytes" -gt 0 && "$bytes" -le 1048576 ]] || {
+              echo "Preset manifest is empty or exceeds 1 MiB: $manifest" >&2
+              exit 1
+            }
+          done
+          for metadata_file in "$context" "$handoff/SHA256SUMS" "$handoff/HANDOFF-SHA256SUMS"; do
+            bytes="$(stat -f%z "$metadata_file")"
+            [[ "$bytes" -gt 0 && "$bytes" -le 65536 ]]
+          done
+
+          set +e
+          pkg_signature="$(pkgutil --check-signature "$handoff/$pkg" 2>&1)"
+          pkg_signature_status=$?
+          set -e
+          [[ "$pkg_signature_status" -ne 0 ]]
+          printf '%s\n' "$pkg_signature" | grep -Fq 'Status: no signature'
+
+          expected_xar="$RUNNER_TEMP/rimes-preview-expected-xar.txt"
+          actual_xar="$RUNNER_TEMP/rimes-preview-actual-xar.txt"
+          printf '%s\n' \
+            component.pkg \
+            component.pkg/Bom \
+            component.pkg/Payload \
+            component.pkg/Scripts \
+            component.pkg/PackageInfo \
+            Resources \
+            Resources/welcome.html \
+            Resources/readme.html \
+            Resources/conclusion.html \
+            Distribution >"$expected_xar"
+          xar -tf "$handoff/$pkg" >"$actual_xar"
+          cmp "$expected_xar" "$actual_xar"
+
+          verify_root="$(mktemp -d "$RUNNER_TEMP/rimes-unsigned-preview.XXXXXX")"
+          chmod 700 "$verify_root"
+          pkgutil --expand-full "$handoff/$pkg" "$verify_root/pkg"
+          expanded="$verify_root/pkg"
+          component="$expanded/component.pkg"
+          product_distribution="$expanded/Distribution"
+          package_info="$component/PackageInfo"
+          payload="$component/Payload"
+          payload_app="$payload/ETInput.app"
+
+          printf '%s\n' Distribution Resources component.pkg | LC_ALL=C sort \
+            >"$verify_root/expected-product-members"
+          find "$expanded" -mindepth 1 -maxdepth 1 -exec basename {} \; \
+            | LC_ALL=C sort >"$verify_root/actual-product-members"
+          cmp "$verify_root/expected-product-members" "$verify_root/actual-product-members"
+          printf '%s\n' conclusion.html readme.html welcome.html | LC_ALL=C sort \
+            >"$verify_root/expected-resource-members"
+          find "$expanded/Resources" -mindepth 1 -maxdepth 1 -exec basename {} \; \
+            | LC_ALL=C sort >"$verify_root/actual-resource-members"
+          cmp "$verify_root/expected-resource-members" "$verify_root/actual-resource-members"
+          printf '%s\n' Bom PackageInfo Payload Scripts | LC_ALL=C sort \
+            >"$verify_root/expected-component-members"
+          find "$component" -mindepth 1 -maxdepth 1 -exec basename {} \; \
+            | LC_ALL=C sort >"$verify_root/actual-component-members"
+          cmp "$verify_root/expected-component-members" "$verify_root/actual-component-members"
+          printf '%s\n' \
+            postinstall preinstall rimes-install-common.sh \
+            rimes-timeout rimes-update-handoff rimes-user-activation-agent.sh \
+            | LC_ALL=C sort >"$verify_root/expected-script-members"
+          find "$component/Scripts" -mindepth 1 -maxdepth 1 -type f \
+            -exec basename {} \; | LC_ALL=C sort >"$verify_root/actual-script-members"
+          cmp "$verify_root/expected-script-members" "$verify_root/actual-script-members"
+          [[ "$(find "$payload" -mindepth 1 -maxdepth 1 | wc -l | tr -d '[:space:]')" == 1 ]]
+          [[ -d "$payload_app" && ! -L "$payload_app" ]]
+          if find "$payload_app" -type l -print -quit | grep -q .; then
+            echo 'Unsigned payload contains an unexpected symlink.' >&2
+            exit 1
+          fi
+
+          [[ "$(xmllint --xpath "count(/installer-gui-script/pkg-ref[@id='com.isaac.inputmethod.RimeBuffer' and @version='$VERSION' and text()='#component.pkg'])" "$product_distribution")" == 1 ]]
+          [[ "$(xmllint --xpath "count(/pkg-info[@identifier='com.isaac.inputmethod.RimeBuffer' and @version='$VERSION'])" "$package_info")" == 1 ]]
+          [[ "$(xmllint --xpath 'count(/pkg-info/bundle)' "$package_info")" == 1 ]]
+          [[ "$(xmllint --xpath "count(/pkg-info/bundle[@id='com.isaac.inputmethod.RimeBuffer' and @path='./ETInput.app' and @CFBundleShortVersionString='$VERSION'])" "$package_info")" == 1 ]]
+          [[ "$(xmllint --xpath 'count(/pkg-info/strict-identifier/bundle)' "$package_info")" == 0 ]]
+          [[ "$(xmllint --xpath 'count(/pkg-info/relocate/bundle)' "$package_info")" == 0 ]]
+          grep -Eq '<pkg-info[^>]*relocatable="false"' "$package_info"
+          grep -Fq '<preinstall file="./preinstall"' "$package_info"
+          grep -Fq '<postinstall file="./postinstall"' "$package_info"
+
+          info="$payload_app/Contents/Info.plist"
+          bin="$payload_app/Contents/MacOS/ETInput"
+          [[ -f "$info" && -x "$bin" ]]
+          plutil -lint "$info"
+          bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")
+          parent_id=$(/usr/libexec/PlistBuddy -c 'Print :TISInputSourceID' "$info")
+          mode_id=$(/usr/libexec/PlistBuddy -c 'Print :ComponentInputModeDict:tsVisibleInputModeOrderedArrayKey:0' "$info")
+          declared_mode_id=$(/usr/libexec/PlistBuddy -c "Print :ComponentInputModeDict:tsInputModeListKey:${mode_id}:TISInputSourceID" "$info")
+          [[ "$bundle_id" == com.isaac.inputmethod.RimeBuffer ]]
+          [[ "$parent_id" == "$bundle_id" ]]
+          [[ "$mode_id" == com.isaac.inputmethod.RimeBuffer.Hans ]]
+          [[ "$declared_mode_id" == "$mode_id" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")" == "$VERSION" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info")" == ETInput ]]
+          lipo "$bin" -verify_arch arm64 x86_64
+          codesign --verify --deep --strict --verbose=2 "$payload_app"
+          app_signature="$(codesign --display --verbose=4 "$payload_app" 2>&1)"
+          printf '%s\n' "$app_signature" | grep -Fq 'Signature=adhoc'
+          if printf '%s\n' "$app_signature" | grep -q '^Authority='; then
+            echo 'Unsigned preview app unexpectedly has a certificate authority.' >&2
+            exit 1
+          fi
+
+          nested_mach_o_count=0
+          while IFS= read -r -d '' nested_file; do
+            description="$(file -b "$nested_file")"
+            if [[ "$description" == *Mach-O* ]]; then
+              lipo "$nested_file" -verify_arch arm64 x86_64
+              codesign --verify --strict --verbose=2 "$nested_file"
+              nested_signature="$(codesign --display --verbose=4 "$nested_file" 2>&1)"
+              printf '%s\n' "$nested_signature" | grep -Fq 'Signature=adhoc'
+              if printf '%s\n' "$nested_signature" | grep -q '^Authority='; then
+                echo "Nested preview binary unexpectedly has an authority: $nested_file" >&2
+                exit 1
+              fi
+              nested_mach_o_count=$((nested_mach_o_count + 1))
+            elif [[ "$nested_file" == *.dylib ]]; then
+              echo "Bundled dylib is not Mach-O: $nested_file" >&2
+              exit 1
+            fi
+          done < <(find "$payload_app/Contents/Frameworks" -type f -print0)
+          [[ "$nested_mach_o_count" -gt 0 ]]
+
+          for installer_helper in rimes-timeout rimes-update-handoff; do
+            helper="$component/Scripts/$installer_helper"
+            [[ -x "$helper" ]]
+            lipo "$helper" -verify_arch arm64 x86_64
+            codesign --verify --strict --verbose=2 "$helper"
+            helper_signature="$(codesign --display --verbose=4 "$helper" 2>&1)"
+            printf '%s\n' "$helper_signature" | grep -Fq 'Signature=adhoc'
+            if printf '%s\n' "$helper_signature" | grep -q '^Authority='; then
+              echo "Unsigned installer helper unexpectedly has an authority: $installer_helper" >&2
+              exit 1
+            fi
+          done
+
+          # Compare both ZIPs directly against their trusted source trees. No
+          # archive member is extracted and ETInput is never executed here.
+          python3 - "$handoff/$app_archive" "$payload_app" \
+            "$handoff/$MARINE_ZIP" "$GITHUB_WORKSPACE/Extensions/marine-chrome" <<'PY'
+          import hashlib
+          import os
+          import stat
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          def reject(label: str, reason: str) -> None:
+              raise SystemExit(f"unsafe or inexact {label} ZIP: {reason}")
+
+          def compare_archive(archive_name: str, source_name: str, label: str) -> None:
+              archive_path = Path(archive_name)
+              source_root = Path(source_name)
+              prefix = source_root.name
+              root_metadata = os.lstat(source_root)
+              if not stat.S_ISDIR(root_metadata.st_mode):
+                  reject(label, "comparison source is not a directory")
+
+              expected_directories = {f"{prefix}/"}
+              expected_files: dict[str, tuple[Path, os.stat_result]] = {}
+              for directory, directory_names, file_names in os.walk(
+                  source_root, topdown=True, followlinks=False
+              ):
+                  directory_path = Path(directory)
+                  for child_name in directory_names:
+                      child = directory_path / child_name
+                      metadata = os.lstat(child)
+                      if not stat.S_ISDIR(metadata.st_mode):
+                          reject(label, f"source symlink/special directory: {child}")
+                      relative = child.relative_to(source_root).as_posix()
+                      expected_directories.add(f"{prefix}/{relative}/")
+                  for child_name in file_names:
+                      child = directory_path / child_name
+                      metadata = os.lstat(child)
+                      if not stat.S_ISREG(metadata.st_mode):
+                          reject(label, f"source symlink/special file: {child}")
+                      relative = child.relative_to(source_root).as_posix()
+                      expected_files[f"{prefix}/{relative}"] = (child, metadata)
+
+              try:
+                  archive = zipfile.ZipFile(archive_path, mode="r")
+              except (OSError, zipfile.BadZipFile) as error:
+                  reject(label, f"cannot open archive: {error}")
+
+              with archive:
+                  if archive.comment:
+                      reject(label, "archive comment is not permitted")
+                  entries = archive.infolist()
+                  if not entries or len(entries) > 50_000:
+                      reject(label, "entry count is empty or exceeds 50,000")
+                  seen: set[str] = set()
+                  actual_directories: set[str] = set()
+                  actual_files: dict[str, zipfile.ZipInfo] = {}
+                  expanded_bytes = 0
+                  for info in entries:
+                      name = info.orig_filename
+                      if not isinstance(name, str) or not name or "\x00" in name:
+                          reject(label, "empty or NUL-containing member name")
+                      if name.startswith("/") or "\\" in name:
+                          reject(label, f"absolute/backslash member: {name!r}")
+                      if any(ord(character) < 32 or ord(character) == 127 for character in name):
+                          reject(label, f"control character in member: {name!r}")
+                      parts = name.rstrip("/").split("/")
+                      if any(part in ("", ".", "..") for part in parts):
+                          reject(label, f"empty/dot/parent component: {name!r}")
+                      if any(part == "__MACOSX" or part.startswith("._") for part in parts):
+                          reject(label, f"AppleDouble/resource-fork member: {name!r}")
+                      if name in seen:
+                          reject(label, f"duplicate member: {name!r}")
+                      seen.add(name)
+                      if info.create_system != 3:
+                          reject(label, f"member lacks Unix type/mode: {name!r}")
+                      mode = info.external_attr >> 16
+                      file_type = stat.S_IFMT(mode)
+                      if info.is_dir():
+                          if not name.endswith("/") or file_type != stat.S_IFDIR or info.file_size:
+                              reject(label, f"invalid directory member: {name!r}")
+                          if name not in expected_directories:
+                              reject(label, f"unexpected directory member: {name!r}")
+                          actual_directories.add(name)
+                      else:
+                          if name.endswith("/") or file_type != stat.S_IFREG:
+                              reject(label, f"symlink/special member: {name!r}")
+                          expected = expected_files.get(name)
+                          if expected is None:
+                              reject(label, f"unexpected file member: {name!r}")
+                          expected_path, expected_metadata = expected
+                          if info.file_size != expected_metadata.st_size:
+                              reject(label, f"file size differs from source: {name!r}")
+                          if bool(mode & 0o111) != bool(expected_metadata.st_mode & 0o111):
+                              reject(label, f"executable bit differs from source: {name!r}")
+                          expanded_bytes += info.file_size
+                          if info.file_size > 512 * 1024 * 1024 \
+                                  or expanded_bytes > 1024 * 1024 * 1024:
+                              reject(label, "expanded size limit exceeded")
+                          actual_files[name] = info
+                      if mode & (stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX | 0o022):
+                          reject(label, f"unsafe permissions: {name!r}")
+                      if info.flag_bits & 0x1 or info.flag_bits & ~(0x8 | 0x800):
+                          reject(label, f"encrypted/unsupported ZIP flags: {name!r}")
+                      if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                          reject(label, f"unsupported compression: {name!r}")
+                      if info.comment:
+                          reject(label, f"member comment is not permitted: {name!r}")
+
+                  if actual_directories != expected_directories \
+                          or set(actual_files) != set(expected_files):
+                      reject(label, "member set does not exactly match source")
+                  for name, info in actual_files.items():
+                      source_path = expected_files[name][0]
+                      archived_digest = hashlib.sha256()
+                      with archive.open(info, mode="r") as archived:
+                          while chunk := archived.read(1024 * 1024):
+                              archived_digest.update(chunk)
+                      source_digest = hashlib.sha256()
+                      with source_path.open("rb") as source:
+                          while chunk := source.read(1024 * 1024):
+                              source_digest.update(chunk)
+                      if archived_digest.digest() != source_digest.digest():
+                          reject(label, f"bytes differ from source: {name!r}")
+
+          compare_archive(sys.argv[1], sys.argv[2], "ETInput handoff")
+          compare_archive(sys.argv[3], sys.argv[4], "Marine")
+          PY
+
+          mkdir -p release-assets/preset-plugins
+          cp "$handoff"/preset-plugins/preset-plugin-*.json \
+            release-assets/preset-plugins/
+          python3 -B scripts/sync-buffer-plugin-catalog.py \
+            --check-release-assets release-assets/preset-plugins
+
+          publish_dir="$RUNNER_TEMP/rimes-unsigned-preview-assets"
+          [[ ! -e "$publish_dir" ]]
+          mkdir -m 700 "$publish_dir"
+          cp "$handoff/$pkg" "$publish_dir/$pkg"
+          cp "$handoff/$MARINE_ZIP" "$publish_dir/$MARINE_ZIP"
+          cp "$handoff/SHA256SUMS" "$publish_dir/SHA256SUMS"
+          cp "$handoff"/preset-plugins/preset-plugin-*.json "$publish_dir/"
+          if find "$publish_dir" -mindepth 1 \( ! -type f -o -type l \) \
+              -print -quit | grep -q .; then
+            echo 'Public preview asset set contains a non-regular file.' >&2
+            exit 1
+          fi
+          public_names="$RUNNER_TEMP/rimes-preview-public-names.txt"
+          find "$publish_dir" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; \
+            | LC_ALL=C sort >"$public_names"
+          {
+            sed -E 's/^[0-9a-f]{64}  //' "$publish_dir/SHA256SUMS"
+            printf 'SHA256SUMS\n'
+          } | LC_ALL=C sort >"$RUNNER_TEMP/rimes-preview-expected-public-names.txt"
+          cmp "$RUNNER_TEMP/rimes-preview-expected-public-names.txt" "$public_names"
+          (cd "$publish_dir" && shasum -a 256 -c SHA256SUMS)
+
+          echo "PREVIEW_PUBLISH_DIR=$publish_dir" >> "$GITHUB_ENV"
+          echo "PREVIEW_PKG=$pkg" >> "$GITHUB_ENV"
+          echo "PREVIEW_MARINE_ZIP=$MARINE_ZIP" >> "$GITHUB_ENV"
+
+      - name: Reauthorize vacancy and create UNSIGNED pre-release
+        env:
+          VERSION: ${{ needs.build_and_smoke.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: scholay/rimes
+        run: |
+          set -euo pipefail
+          [[ "$PREVIEW_TAG" == "v$VERSION" ]]
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/main ]]
+          git fetch --no-tags --depth=1 origin \
+            '+refs/heads/main:refs/remotes/origin/main'
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ "$(git rev-parse refs/remotes/origin/main)" == "$GITHUB_SHA" ]]
+          [[ "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" == "$GITHUB_SHA" ]]
+
+          set +e
+          tag_probe="$(gh api "repos/$GH_REPO/git/ref/tags/$PREVIEW_TAG" --jq .object.sha 2>&1)"
+          tag_status=$?
+          release_probe="$(gh api "repos/$GH_REPO/releases/tags/$PREVIEW_TAG" --jq .id 2>&1)"
+          release_status=$?
+          set -e
+          [[ "$tag_status" -ne 0 ]] || {
+            echo "Tag appeared during verification; refusing publication: $PREVIEW_TAG" >&2
+            exit 1
+          }
+          printf '%s\n' "$tag_probe" | grep -Fq 'HTTP 404'
+          [[ "$release_status" -ne 0 ]] || {
+            echo "Release appeared during verification; refusing publication: $PREVIEW_TAG" >&2
+            exit 1
+          }
+          printf '%s\n' "$release_probe" | grep -Fq 'HTTP 404'
+
+          preset_assets=("$PREVIEW_PUBLISH_DIR"/preset-plugin-*.json)
+          [[ "${#preset_assets[@]}" -gt 0 && -f "${preset_assets[0]}" ]]
+          gh release create "$PREVIEW_TAG" --repo "$GH_REPO" \
+            "$PREVIEW_PUBLISH_DIR/$PREVIEW_PKG" \
+            "$PREVIEW_PUBLISH_DIR/SHA256SUMS" \
+            "$PREVIEW_PUBLISH_DIR/$PREVIEW_MARINE_ZIP" \
+            "${preset_assets[@]}" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --latest=false \
+            --title "RIMES v${VERSION} — UNSIGNED PREVIEW" \
+            --notes-file - <<'EOF'
+          # ⚠️ UNSIGNED / NOT NOTARIZED 免费预览版
+
+          此版本为了让社区先验证修复，**没有 Apple Developer ID 签名，也没有经过
+          Apple 公证**。macOS 无法验证开发者身份；它不是将来的正式签名版，也绝不会
+          被标记为 Latest。
+
+          ## 安装
+
+          1. 下载 `RIMES-${{ needs.build_and_smoke.outputs.version }}.pkg` 和 `SHA256SUMS`，在同一目录运行
+             `grep -E '  RIMES-${{ needs.build_and_smoke.outputs.version }}\.pkg$' SHA256SUMS | shasum -a 256 -c -`
+             校验安装包。`SHA256SUMS` 还覆盖可选插件资产，未下载那些文件时不要整文件校验。
+          2. 双击 PKG。若 macOS 拦截，请仅针对这个文件按 Apple 官方中文说明使用
+             “系统设置 → 隐私与安全性 → 仍要打开”：
+             https://support.apple.com/zh-cn/102445
+          3. 安装后从输入法菜单选择「RIMES」。若菜单尚未刷新，先注销再登录；不要终止
+             Apple 的输入法或菜单服务进程。
+
+          **不要**全局关闭 Gatekeeper，也不要运行 `sudo spctl --master-disable`、
+          `sudo spctl --global-disable` 或递归删除隔离属性的 `xattr -dr` 命令。
+          如果系统显示“已损坏”或“包含恶意软件”，请立即停止、删除下载文件并到项目
+          Issue 报告，不能继续绕过警告。
+
+          此免费预览版只支持**手动升级**：后续版本请重新下载 PKG 安装。应用内更新的
+          同 Team 签名校验只适用于未来的 Developer ID 正式版。
+
+          构建过程已在一次性 macOS runner 上真实执行 `sudo installer` 并验证退出状态、
+          固定安装路径、输入法元数据、通用架构及 ad-hoc 代码签名；这不能替代不同 macOS
+          版本上的 Gatekeeper 界面测试。
+          EOF
+
+          [[ "$(gh api "repos/$GH_REPO/git/ref/tags/$PREVIEW_TAG" --jq .object.sha)" == "$GITHUB_SHA" ]]
+          [[ "$(gh api "repos/$GH_REPO/releases/tags/$PREVIEW_TAG" --jq .prerelease)" == true ]]
+          [[ "$(gh api "repos/$GH_REPO/releases/tags/$PREVIEW_TAG" --jq .draft)" == false ]]
+          release_id="$(gh api "repos/$GH_REPO/releases/tags/$PREVIEW_TAG" --jq .id)"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          expected_assets="$RUNNER_TEMP/rimes-preview-release-assets-expected.txt"
+          actual_assets="$RUNNER_TEMP/rimes-preview-release-assets-actual.txt"
+          find "$PREVIEW_PUBLISH_DIR" -mindepth 1 -maxdepth 1 -type f \
+            -exec basename {} \; | LC_ALL=C sort >"$expected_assets"
+          gh api --paginate "repos/$GH_REPO/releases/$release_id/assets" \
+            --jq '.[].name' | LC_ALL=C sort >"$actual_assets"
+          cmp "$expected_assets" "$actual_assets"
+
+          set +e
+          latest_probe="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>&1)"
+          latest_status=$?
+          set -e
+          if [[ "$latest_status" -eq 0 ]]; then
+            [[ "$latest_probe" != "$PREVIEW_TAG" ]] || {
+              echo 'Unsigned preview was incorrectly marked Latest.' >&2
+              exit 1
+            }
+          else
+            printf '%s\n' "$latest_probe" | grep -Fq 'HTTP 404'
+          fi
+
+  sign_and_publish:
+    name: Sign, verify, and publish macOS
+    needs: build_and_smoke
+    if: >-
+      needs.build_and_smoke.result == 'success' &&
+      needs.build_and_smoke.outputs.is_release == 'true' &&
+      github.repository == 'scholay/rimes'
+    runs-on: macos-15
+    # Only this fresh runner reaches the protected environment. Configure it
+    # with required reviewers and a deployment rule limited to vX.Y.Z tags.
+    environment: macos-release
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Download verified release inputs
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: ${{ needs.build_and_smoke.outputs.handoff_artifact }}
+          path: ${{ runner.temp }}/rimes-release-inputs
+
+      - name: Passively verify cross-runner inputs
+        id: stage_inputs
+        env:
+          VERSION: ${{ needs.build_and_smoke.outputs.version }}
+          IS_RELEASE: ${{ needs.build_and_smoke.outputs.is_release }}
+          MARINE_ZIP: ${{ needs.build_and_smoke.outputs.marine_zip }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
+          # This protected job is formal-release-only. Never retain an unsigned
+          # downgrade branch here; workflow_dispatch artifacts are completed
+          # entirely in build_and_smoke without entering this environment.
+          [[ "$IS_RELEASE" == true ]]
+          [[ "$MARINE_ZIP" =~ ^marine-chrome-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.zip$ ]]
+          marine_version="$(/usr/bin/plutil -extract version raw -o - \
+            Extensions/marine-chrome/manifest.json)"
+          [[ "$marine_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$MARINE_ZIP" == "marine-chrome-${marine_version}.zip" ]]
+
+          handoff="$RUNNER_TEMP/rimes-release-inputs"
+          context="$handoff/context.txt"
+          [[ -d "$handoff" && ! -L "$handoff" ]]
+          [[ -f "$context" && ! -L "$context" ]]
+          [[ "$(wc -l <"$context" | tr -d '[:space:]')" == 4 ]]
+          [[ "$(sed -n '1p' "$context")" == "commit=$GITHUB_SHA" ]]
+          [[ "$(sed -n '2p' "$context")" == "version=$VERSION" ]]
+          [[ "$(sed -n '3p' "$context")" == "is_release=$IS_RELEASE" ]]
+          [[ "$(sed -n '4p' "$context")" == "marine_zip=$MARINE_ZIP" ]]
+          [[ "$(find "$handoff" -mindepth 1 -maxdepth 1 | wc -l | tr -d '[:space:]')" == 5 ]]
+          [[ -f "$handoff/ETInput-handoff.zip" && ! -L "$handoff/ETInput-handoff.zip" ]]
+          [[ -f "$handoff/$MARINE_ZIP" && ! -L "$handoff/$MARINE_ZIP" ]]
+          [[ -f "$handoff/SHA256SUMS" && ! -L "$handoff/SHA256SUMS" ]]
+          [[ -d "$handoff/preset-plugins" && ! -L "$handoff/preset-plugins" ]]
+          if find "$handoff" -mindepth 1 \( -type l -o \( ! -type d ! -type f \) \) \
+              -print -quit | grep -q .; then
+            echo 'Cross-runner artifact contains a symlink or special file.' >&2
+            exit 1
+          fi
+          if find "$handoff/preset-plugins" -mindepth 1 \
+              \( ! -type f -o ! -name 'preset-plugin-*.json' \) \
+              -print -quit | grep -q .; then
+            echo 'Cross-runner preset manifest layout is invalid.' >&2
+            exit 1
+          fi
+
+          checksum_count=0
+          while IFS= read -r checksum_line; do
+            [[ "$checksum_line" =~ ^[0-9a-f]{64}\ \ (.+)$ ]] || {
+              echo "Malformed handoff checksum: $checksum_line" >&2
+              exit 1
+            }
+            relative="${BASH_REMATCH[1]}"
+            case "$relative" in
+              ETInput-handoff.zip|context.txt|"$MARINE_ZIP"|preset-plugins/preset-plugin-*.json) ;;
+              *) echo "Unexpected handoff checksum path: $relative" >&2; exit 1 ;;
+            esac
+            checksum_count=$((checksum_count + 1))
+          done <"$handoff/SHA256SUMS"
+          regular_count="$(find "$handoff" -type f ! -name SHA256SUMS | wc -l | tr -d '[:space:]')"
+          [[ "$checksum_count" -eq "$regular_count" && "$checksum_count" -ge 4 ]]
+          (cd "$handoff" && shasum -a 256 -c SHA256SUMS)
+
+          for bounded_input in "$handoff/ETInput-handoff.zip" "$handoff/$MARINE_ZIP"; do
+            bytes="$(stat -f%z "$bounded_input")"
+            [[ "$bytes" -gt 0 && "$bytes" -le 536870912 ]] || {
+              echo "Cross-runner input exceeds 512 MiB: $bounded_input" >&2
+              exit 1
+            }
+          done
+
+          app_root="$RUNNER_TEMP/rimes-passive-app"
+          [[ ! -e "$app_root" ]]
+          mkdir -m 700 "$app_root"
+          python3 - "$handoff/ETInput-handoff.zip" "$app_root" <<'PY'
+          import os
+          import stat
+          import sys
+          import unicodedata
+          import zipfile
+          from pathlib import Path
+
+          archive_path = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+          maximum_entries = 50_000
+          maximum_file_bytes = 512 * 1024 * 1024
+          maximum_expanded_bytes = 1024 * 1024 * 1024
+          read_chunk_bytes = 1024 * 1024
+
+          def reject(reason: str) -> None:
+              raise SystemExit(f"unsafe ETInput handoff ZIP: {reason}")
+
+          destination_metadata = os.lstat(destination)
+          if (
+              not stat.S_ISDIR(destination_metadata.st_mode)
+              or destination_metadata.st_uid != os.geteuid()
+              or destination_metadata.st_mode & 0o077
+              or any(destination.iterdir())
+          ):
+              reject("extraction root is not an empty private current-user directory")
+
+          try:
+              archive = zipfile.ZipFile(archive_path, mode="r")
+          except (OSError, zipfile.BadZipFile) as error:
+              reject(f"cannot open archive: {error}")
+
+          with archive:
+              if archive.comment:
+                  reject("archive comments are not permitted")
+              entries = archive.infolist()
+              if not entries or len(entries) > maximum_entries:
+                  reject("entry count is empty or exceeds the limit")
+
+              seen_entries: set[str] = set()
+              namespace: dict[str, str] = {}
+              entry_kinds: dict[str, str] = {}
+              records: list[tuple[zipfile.ZipInfo, tuple[str, ...], str, int]] = []
+              expanded_bytes = 0
+
+              for info in entries:
+                  name = info.orig_filename
+                  if not isinstance(name, str) or not name:
+                      reject("entry has no decoded name")
+                  if "\x00" in name:
+                      reject("entry name contains NUL")
+                  if name.startswith("/") or "\\" in name:
+                      reject(f"absolute/backslash path: {name!r}")
+                  if any(ord(character) < 32 or ord(character) == 127 for character in name):
+                      reject(f"entry name contains a control character: {name!r}")
+
+                  directory_name = name.endswith("/")
+                  stripped_name = name[:-1] if directory_name else name
+                  parts = tuple(stripped_name.split("/"))
+                  if not stripped_name or any(part in ("", ".", "..") for part in parts):
+                      reject(f"empty, dot, or parent path component: {name!r}")
+                  if parts[0] != "ETInput.app":
+                      reject(f"entry is outside ETInput.app: {name!r}")
+                  if any(part == "__MACOSX" or part.startswith("._") for part in parts):
+                      reject(f"AppleDouble/resource-fork entry: {name!r}")
+                  if len(stripped_name.encode("utf-8")) > 4096 \
+                          or any(len(part.encode("utf-8")) > 255 for part in parts):
+                      reject(f"entry path is too long: {name!r}")
+
+                  exact_name = "/".join(parts)
+                  if exact_name in seen_entries:
+                      reject(f"duplicate entry: {exact_name!r}")
+                  seen_entries.add(exact_name)
+
+                  canonical_parts: list[str] = []
+                  for depth, part in enumerate(parts, start=1):
+                      canonical_part = unicodedata.normalize("NFC", part).casefold()
+                      canonical_parts.append(canonical_part)
+                      spelling = "/".join(parts[:depth])
+                      canonical = "/".join(canonical_parts)
+                      prior_spelling = namespace.get(canonical)
+                      if prior_spelling is not None and prior_spelling != spelling:
+                          reject(
+                              "case-folding/Unicode path collision: "
+                              f"{prior_spelling!r} vs {spelling!r}"
+                          )
+                      namespace[canonical] = spelling
+                  canonical_name = "/".join(canonical_parts)
+
+                  if info.create_system != 3:
+                      reject(f"entry lacks explicit Unix type/mode: {name!r}")
+                  mode = info.external_attr >> 16
+                  file_type = stat.S_IFMT(mode)
+                  if directory_name:
+                      if not info.is_dir() or file_type != stat.S_IFDIR \
+                              or info.file_size != 0:
+                          reject(f"invalid directory entry type: {name!r}")
+                      kind = "directory"
+                      extracted_mode = 0o755
+                  else:
+                      if info.is_dir() or file_type != stat.S_IFREG:
+                          reject(f"symlink or special entry: {name!r}")
+                      if info.file_size < 0 or info.file_size > maximum_file_bytes:
+                          reject(f"entry exceeds the per-file size limit: {name!r}")
+                      expanded_bytes += info.file_size
+                      if expanded_bytes > maximum_expanded_bytes:
+                          reject("expanded archive exceeds 1 GiB")
+                      kind = "file"
+                      extracted_mode = 0o755 if mode & 0o111 else 0o644
+
+                  if mode & (stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX | 0o022):
+                      reject(f"unsafe Unix permissions: {name!r}")
+                  if info.flag_bits & 0x1:
+                      reject(f"encrypted entry: {name!r}")
+                  if info.flag_bits & ~(0x8 | 0x800):
+                      reject(f"unsupported ZIP flags: {name!r}")
+                  if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                      reject(f"unsupported compression method: {name!r}")
+                  if info.comment:
+                      reject(f"entry comment is not permitted: {name!r}")
+
+                  entry_kinds[canonical_name] = kind
+                  records.append((info, parts, kind, extracted_mode))
+
+              root_key = unicodedata.normalize("NFC", "ETInput.app").casefold()
+              if entry_kinds.get(root_key) != "directory":
+                  reject("ETInput.app root directory entry is missing")
+              for _info, parts, _kind, _mode in records:
+                  canonical_parts = []
+                  for part in parts[:-1]:
+                      canonical_parts.append(
+                          unicodedata.normalize("NFC", part).casefold()
+                      )
+                      parent_key = "/".join(canonical_parts)
+                      if entry_kinds.get(parent_key, "directory") != "directory":
+                          reject(f"file is used as a parent directory: {'/'.join(parts)!r}")
+
+              for _info, parts, kind, _mode in sorted(
+                  records, key=lambda record: len(record[1])
+              ):
+                  if kind != "directory":
+                      continue
+                  target = destination.joinpath(*parts)
+                  target.mkdir(mode=0o755, parents=True, exist_ok=True)
+                  os.chmod(target, 0o755, follow_symlinks=False)
+
+              for info, parts, kind, extracted_mode in records:
+                  if kind != "file":
+                      continue
+                  target = destination.joinpath(*parts)
+                  target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+                  descriptor = os.open(
+                      target,
+                      os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                      extracted_mode,
+                  )
+                  written = 0
+                  with archive.open(info, mode="r") as source, \
+                          os.fdopen(descriptor, mode="wb") as output:
+                      while True:
+                          chunk = source.read(read_chunk_bytes)
+                          if not chunk:
+                              break
+                          written += len(chunk)
+                          if written > info.file_size:
+                              reject(f"entry expanded beyond declared size: {info.filename!r}")
+                          output.write(chunk)
+                  if written != info.file_size:
+                      reject(f"entry size changed while extracting: {info.filename!r}")
+                  os.chmod(target, extracted_mode, follow_symlinks=False)
+          PY
+          [[ "$(find "$app_root" -mindepth 1 -maxdepth 1 | wc -l | tr -d '[:space:]')" == 1 ]]
+          app="$app_root/ETInput.app"
+          bin="$app/Contents/MacOS/ETInput"
+          [[ -d "$app" && ! -L "$app" && -x "$bin" ]]
+          if find "$app" -type l -print -quit | grep -q .; then
+            echo 'Smoke-tested app contains an unexpected symlink.' >&2
+            exit 1
+          fi
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" == 'com.isaac.inputmethod.RimeBuffer' ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" == "$VERSION" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" == 'ETInput' ]]
+          lipo "$bin" -verify_arch arm64 x86_64
+          codesign --verify --deep --strict --verbose=2 "$app"
+          app_signature="$(codesign --display --verbose=4 "$app" 2>&1)"
+          printf '%s\n' "$app_signature" | grep -Fq 'Signature=adhoc'
+
+          nested_mach_o_count=0
+          while IFS= read -r -d '' nested_file; do
+            if file -b "$nested_file" | grep -Fq 'Mach-O'; then
+              lipo "$nested_file" -verify_arch arm64 x86_64
+              codesign --verify --strict --verbose=2 "$nested_file"
+              nested_signature="$(codesign --display --verbose=4 "$nested_file" 2>&1)"
+              printf '%s\n' "$nested_signature" | grep -Fq 'Signature=adhoc'
+              nested_mach_o_count=$((nested_mach_o_count + 1))
+            fi
+          done < <(find "$app/Contents/Frameworks" -type f -print0)
+          [[ "$nested_mach_o_count" -gt 0 ]]
+
+          # Marine is published unchanged, so accept only the exact checkout
+          # tree. This is intentionally read-only: no untrusted archive member
+          # is ever materialized on the credential-bearing runner.
+          python3 - "$handoff/$MARINE_ZIP" \
+            "$GITHUB_WORKSPACE/Extensions/marine-chrome" <<'PY'
+          import hashlib
+          import os
+          import stat
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          archive_path = Path(sys.argv[1])
+          source_root = Path(sys.argv[2])
+          archive_prefix = "marine-chrome"
+          maximum_entries = 10_000
+          maximum_file_bytes = 128 * 1024 * 1024
+          maximum_expanded_bytes = 512 * 1024 * 1024
+          read_chunk_bytes = 1024 * 1024
+
+          def reject(reason: str) -> None:
+              raise SystemExit(f"unsafe Marine ZIP: {reason}")
+
+          root_metadata = os.lstat(source_root)
+          if not stat.S_ISDIR(root_metadata.st_mode):
+              reject("checkout source is not a directory")
+
+          expected_directories = {f"{archive_prefix}/"}
+          expected_files: dict[str, Path] = {}
+          for directory, directory_names, file_names in os.walk(
+              source_root, topdown=True, followlinks=False
+          ):
+              directory_path = Path(directory)
+              for child_name in directory_names:
+                  child = directory_path / child_name
+                  metadata = os.lstat(child)
+                  if not stat.S_ISDIR(metadata.st_mode):
+                      reject(f"checkout contains a symlink/special directory: {child}")
+                  relative = child.relative_to(source_root).as_posix()
+                  expected_directories.add(f"{archive_prefix}/{relative}/")
+              for child_name in file_names:
+                  child = directory_path / child_name
+                  metadata = os.lstat(child)
+                  if not stat.S_ISREG(metadata.st_mode):
+                      reject(f"checkout contains a symlink/special file: {child}")
+                  relative = child.relative_to(source_root).as_posix()
+                  expected_files[f"{archive_prefix}/{relative}"] = child
+
+          try:
+              archive = zipfile.ZipFile(archive_path, mode="r")
+          except (OSError, zipfile.BadZipFile) as error:
+              reject(f"cannot open archive: {error}")
+
+          with archive:
+              if archive.comment:
+                  reject("archive comments are not permitted")
+              entries = archive.infolist()
+              if not entries or len(entries) > maximum_entries:
+                  reject("entry count is empty or exceeds the limit")
+
+              seen_entries: set[str] = set()
+              actual_directories: set[str] = set()
+              actual_files: dict[str, zipfile.ZipInfo] = {}
+              expanded_bytes = 0
+              for info in entries:
+                  name = info.orig_filename
+                  if not isinstance(name, str) or not name or "\x00" in name:
+                      reject("entry has an empty or NUL-containing name")
+                  if name.startswith("/") or "\\" in name:
+                      reject(f"absolute/backslash path: {name!r}")
+                  parts = name.rstrip("/").split("/")
+                  if any(part in ("", ".", "..") for part in parts):
+                      reject(f"empty, dot, or parent path component: {name!r}")
+                  if any(part == "__MACOSX" or part.startswith("._") for part in parts):
+                      reject(f"AppleDouble/resource-fork entry: {name!r}")
+                  if name in seen_entries:
+                      reject(f"duplicate entry: {name!r}")
+                  seen_entries.add(name)
+                  if info.create_system != 3:
+                      reject(f"entry lacks explicit Unix type/mode: {name!r}")
+
+                  mode = info.external_attr >> 16
+                  file_type = stat.S_IFMT(mode)
+                  if info.is_dir():
+                      if not name.endswith("/") or file_type != stat.S_IFDIR \
+                              or info.file_size != 0:
+                          reject(f"invalid directory entry: {name!r}")
+                      if name not in expected_directories:
+                          reject(f"unexpected directory entry: {name!r}")
+                      actual_directories.add(name)
+                  else:
+                      if name.endswith("/") or file_type != stat.S_IFREG:
+                          reject(f"symlink or special entry: {name!r}")
+                      expected_path = expected_files.get(name)
+                      if expected_path is None:
+                          reject(f"unexpected file entry: {name!r}")
+                      expected_metadata = os.lstat(expected_path)
+                      if bool(mode & 0o111) != bool(expected_metadata.st_mode & 0o111):
+                          reject(f"executable mode drift: {name!r}")
+                      if info.file_size != expected_metadata.st_size \
+                              or info.file_size > maximum_file_bytes:
+                          reject(f"file size drift or limit exceeded: {name!r}")
+                      expanded_bytes += info.file_size
+                      if expanded_bytes > maximum_expanded_bytes:
+                          reject("expanded archive exceeds 512 MiB")
+                      actual_files[name] = info
+
+                  if mode & (stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX | 0o022):
+                      reject(f"unsafe Unix permissions: {name!r}")
+                  if info.flag_bits & 0x1 or info.flag_bits & ~(0x8 | 0x800):
+                      reject(f"encrypted or unsupported ZIP flags: {name!r}")
+                  if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                      reject(f"unsupported compression method: {name!r}")
+                  if info.comment:
+                      reject(f"entry comment is not permitted: {name!r}")
+
+              if actual_directories != expected_directories \
+                      or set(actual_files) != set(expected_files):
+                  reject("archive member set does not exactly match the checkout")
+
+              for name, info in actual_files.items():
+                  archive_digest = hashlib.sha256()
+                  with archive.open(info, mode="r") as archived_file:
+                      while chunk := archived_file.read(read_chunk_bytes):
+                          archive_digest.update(chunk)
+                  source_digest = hashlib.sha256()
+                  with expected_files[name].open("rb") as source_file:
+                      while chunk := source_file.read(read_chunk_bytes):
+                          source_digest.update(chunk)
+                  if archive_digest.digest() != source_digest.digest():
+                      reject(f"file bytes differ from the checkout: {name!r}")
+          PY
+          mkdir -p release-assets/preset-plugins
+          cp "$handoff"/preset-plugins/preset-plugin-*.json \
+            release-assets/preset-plugins/
+          python3 -B scripts/sync-buffer-plugin-catalog.py \
+            --check-release-assets release-assets/preset-plugins
+          cp "$handoff/$MARINE_ZIP" "$GITHUB_WORKSPACE/$MARINE_ZIP"
+
+          echo "RIMES_APP_PATH=$app" >> "$GITHUB_ENV"
+          echo "MARINE_ZIP=$MARINE_ZIP" >> "$GITHUB_OUTPUT"
+          echo "MARINE_SHA256=$(shasum -a 256 "$handoff/$MARINE_ZIP" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      # Re-authorize the exact commit on the fresh signing runner before any
+      # protected secret is materialized. Runtime output from the prior runner
+      # is never treated as authority for a release tag.
+      - name: Authorize signing and publication source
+        env:
+          VERSION: ${{ needs.build_and_smoke.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: scholay/rimes
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_TYPE" == tag ]]
+          [[ "$GITHUB_REF_NAME" == "v$VERSION" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          git fetch --no-tags --depth=1 origin \
+            '+refs/heads/main:refs/remotes/origin/main'
+          [[ "$(git rev-parse refs/remotes/origin/main)" == "$GITHUB_SHA" ]]
+          remote_sha="$(gh api "repos/$GH_REPO/commits/$GITHUB_REF_NAME" --jq .sha)"
+          [[ "$remote_sha" == "$GITHUB_SHA" ]]
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to replace assets: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+      # No process that executed on the build/smoke runner can survive onto this
+      # fresh runner. From credential import through destruction, the app is
+      # only re-signed, packaged, notarized, and passively assessed.
+      - name: Import protected Developer ID credentials
+        env:
+          RIMES_DEVELOPER_ID_APPLICATION_P12_BASE64: ${{ secrets.RIMES_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          RIMES_DEVELOPER_ID_APPLICATION_P12_PASSWORD: ${{ secrets.RIMES_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+          RIMES_DEVELOPER_ID_INSTALLER_P12_BASE64: ${{ secrets.RIMES_DEVELOPER_ID_INSTALLER_P12_BASE64 }}
+          RIMES_DEVELOPER_ID_INSTALLER_P12_PASSWORD: ${{ secrets.RIMES_DEVELOPER_ID_INSTALLER_P12_PASSWORD }}
+          RIMES_DEVELOPER_TEAM_ID: ${{ secrets.RIMES_DEVELOPER_TEAM_ID }}
+          RIMES_NOTARY_KEY_P8_BASE64: ${{ secrets.RIMES_NOTARY_KEY_P8_BASE64 }}
+          RIMES_NOTARY_KEY_ID: ${{ secrets.RIMES_NOTARY_KEY_ID }}
+          RIMES_NOTARY_ISSUER_ID: ${{ secrets.RIMES_NOTARY_ISSUER_ID }}
+        run: ./scripts/sign-import-certificates.sh
+
+      - name: Sign the formal app bundle
+        env:
+          RIMES_REQUIRE_SIGNING: 'true'
+        run: ./scripts/sign-macos-app.sh "$RIMES_APP_PATH"
+
+      - name: Notarize and staple the app
+        env:
+          RIMES_REQUIRE_NOTARIZATION: 'true'
+        run: ./scripts/notarize-macos.sh app "$RIMES_APP_PATH"
+
+      - name: Package ZIP
+        id: package
+        env:
+          VERSION: ${{ needs.build_and_smoke.outputs.version }}
+        run: |
+          set -euo pipefail
+          ZIP="ETInput-${VERSION}.zip"
+          # Preserve the Developer ID signature and the already-stapled
+          # notarization ticket. Manual artifacts are built in build_and_smoke.
+          ditto -c -k --sequesterRsrc --keepParent "$RIMES_APP_PATH" "$ZIP"
+          SHA256=$(shasum -a 256 "$ZIP" | awk '{print $1}')
+          echo "ZIP=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "SHA256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "ZIP: $ZIP  SHA256: $SHA256"
+
       # Guided .pkg installer — installs to /Library/Input Methods and registers
       # the input source (the drag-from-Downloads path hits App Translocation).
       - name: Build installer (.pkg)
-        id: pkg
+        env:
+          VERSION: ${{ needs.build_and_smoke.outputs.version }}
+          RIMES_REQUIRE_SIGNING: 'true'
+          RIMES_REQUIRE_NOTARIZATION: 'true'
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          ./scripts/make-pkg.sh "$VERSION" "ETInput.app" "RIMES-${VERSION}.pkg"
+          set -euo pipefail
+          ./scripts/make-pkg.sh "$VERSION" "$RIMES_APP_PATH" "RIMES-${VERSION}.pkg"
+
+      - name: Notarize and staple the installer
+        env:
+          VERSION: ${{ needs.build_and_smoke.outputs.version }}
+          RIMES_REQUIRE_NOTARIZATION: 'true'
+        run: |
+          set -euo pipefail
+          ./scripts/notarize-macos.sh pkg "RIMES-${VERSION}.pkg"
+
+      # Stapling mutates the package, so calculate its published digest only
+      # after the notarization ticket has been attached.
+      - name: Finalize installer metadata
+        id: pkg
+        env:
+          VERSION: ${{ needs.build_and_smoke.outputs.version }}
+        run: |
+          set -euo pipefail
           PKG="RIMES-${VERSION}.pkg"
           PKG_SHA256=$(shasum -a 256 "$PKG" | awk '{print $1}')
           echo "PKG=$PKG" >> "$GITHUB_OUTPUT"
@@ -230,22 +1662,29 @@ jobs:
 
       - name: Reopen and verify the exact macOS release assets
         env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
+          VERSION: ${{ needs.build_and_smoke.outputs.version }}
           PKG: ${{ steps.pkg.outputs.PKG }}
           PKG_SHA256: ${{ steps.pkg.outputs.PKG_SHA256 }}
           APP_ZIP: ${{ steps.package.outputs.ZIP }}
           APP_ZIP_SHA256: ${{ steps.package.outputs.SHA256 }}
-          MARINE_ZIP: ${{ steps.marine_chrome.outputs.ZIP }}
-          MARINE_ZIP_SHA256: ${{ steps.marine_chrome.outputs.SHA256 }}
+          MARINE_ZIP: ${{ steps.stage_inputs.outputs.MARINE_ZIP }}
+          MARINE_ZIP_SHA256: ${{ steps.stage_inputs.outputs.MARINE_SHA256 }}
         run: |
           set -euo pipefail
           [[ "$(basename "$PKG")" == "RIMES-${VERSION}.pkg" ]]
           [[ "$(basename "$APP_ZIP")" == "ETInput-${VERSION}.zip" ]]
           [[ "$(basename "$MARINE_ZIP")" == marine-chrome-*.zip ]]
+          preset_assets=(release-assets/preset-plugins/preset-plugin-*.json)
+          [[ "${#preset_assets[@]}" -gt 0 && -f "${preset_assets[0]}" ]]
 
-          for asset in "$PKG" "$APP_ZIP" "$MARINE_ZIP"; do
+          for asset in "$PKG" "$APP_ZIP" "$MARINE_ZIP" "${preset_assets[@]}"; do
             [[ -f "$asset" && ! -L "$asset" && -s "$asset" ]] || {
               echo "Release asset is missing, empty, or a symlink: $asset" >&2
+              exit 1
+            }
+            asset_bytes="$(stat -f%z "$asset")"
+            [[ "$asset_bytes" -le 536870912 ]] || {
+              echo "Release asset exceeds the 512 MiB updater limit: $asset" >&2
               exit 1
             }
           done
@@ -264,16 +1703,118 @@ jobs:
           lipo "$extracted_bin" -verify_arch arm64 x86_64
           codesign --verify --deep --strict --verbose=2 "$extracted_app"
 
+          [[ "${RIMES_TEAM_ID:-}" =~ ^[A-Z0-9]{10}$ ]]
+          [[ "${RIMES_APPLICATION_IDENTITY:-}" == "Developer ID Application:"* ]]
+          app_signature="$(codesign --display --verbose=4 "$extracted_app" 2>&1)"
+          printf '%s\n' "$app_signature" | grep -Fq "Authority=$RIMES_APPLICATION_IDENTITY"
+          printf '%s\n' "$app_signature" | grep -Fq "TeamIdentifier=$RIMES_TEAM_ID"
+          printf '%s\n' "$app_signature" | grep -Eq 'flags=.*runtime'
+
+          nested_mach_o_count=0
+          while IFS= read -r -d '' nested_file; do
+            if file -b "$nested_file" | grep -Fq 'Mach-O'; then
+              lipo "$nested_file" -verify_arch arm64 x86_64
+              codesign --verify --strict --verbose=2 "$nested_file"
+              nested_signature="$(codesign --display --verbose=4 "$nested_file" 2>&1)"
+              printf '%s\n' "$nested_signature" | grep -Fq "Authority=$RIMES_APPLICATION_IDENTITY"
+              printf '%s\n' "$nested_signature" | grep -Fq "TeamIdentifier=$RIMES_TEAM_ID"
+              printf '%s\n' "$nested_signature" | grep -Eq 'flags=.*runtime'
+              nested_mach_o_count=$((nested_mach_o_count + 1))
+            fi
+          done < <(find "$extracted_app/Contents/Frameworks" -type f -print0)
+          [[ "$nested_mach_o_count" -gt 0 ]]
+
+          # These verify the stapled ticket and Gatekeeper's execute policy on
+          # the exact app bytes recovered from the published ZIP.
+          xcrun stapler validate -v "$extracted_app"
+          spctl --assess --type execute --verbose=4 "$extracted_app"
+
           xar -tf "$PKG" | grep -x 'Distribution' >/dev/null
           pkgutil --payload-files "$PKG" \
             | grep -E '(^|/)ETInput\.app/Contents/MacOS/ETInput$' >/dev/null
+
+          expanded_pkg="$verify_root/pkg"
+          pkgutil --expand-full "$PKG" "$expanded_pkg"
+          product_distribution="$expanded_pkg/Distribution"
+          component_dir="$expanded_pkg/component.pkg"
+          package_info="$component_dir/PackageInfo"
+          payload_app="$component_dir/Payload/ETInput.app"
+          [[ -f "$product_distribution" ]]
+          [[ -f "$package_info" ]]
+          [[ -x "$component_dir/Scripts/preinstall" ]]
+          [[ -x "$component_dir/Scripts/postinstall" ]]
+          [[ -f "$component_dir/Scripts/rimes-install-common.sh" ]]
+          [[ -f "$component_dir/Scripts/rimes-user-activation-agent.sh" ]]
+          [[ -x "$component_dir/Scripts/rimes-timeout" ]]
+          [[ -x "$component_dir/Scripts/rimes-update-handoff" ]]
+          [[ "$(xmllint --xpath "count(/installer-gui-script/pkg-ref[@id='com.isaac.inputmethod.RimeBuffer' and @version='$VERSION' and text()='#component.pkg'])" "$product_distribution")" == '1' ]]
+          grep -Eq '<pkg-info[^>]*relocatable="false"' "$package_info"
+          grep -Fq "identifier=\"com.isaac.inputmethod.RimeBuffer\"" "$package_info"
+          grep -Fq "version=\"$VERSION\"" "$package_info"
+          [[ "$(xmllint --xpath 'count(/pkg-info/bundle)' "$package_info")" == '1' ]]
+          [[ "$(xmllint --xpath \
+            "count(/pkg-info/bundle[@id='com.isaac.inputmethod.RimeBuffer' and @path='./ETInput.app' and @CFBundleShortVersionString='$VERSION'])" \
+            "$package_info")" == '1' ]]
+          grep -Fq '<bundle-version>' "$package_info"
+          grep -Fq '<upgrade-bundle>' "$package_info"
+          [[ "$(xmllint --xpath 'count(/pkg-info/strict-identifier/bundle)' "$package_info")" == '0' ]]
+          [[ "$(xmllint --xpath 'count(/pkg-info/relocate/bundle)' "$package_info")" == '0' ]]
+          grep -Fq '<preinstall file="./preinstall"' "$package_info"
+          grep -Fq '<postinstall file="./postinstall"' "$package_info"
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$payload_app/Contents/Info.plist")" == 'com.isaac.inputmethod.RimeBuffer' ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$payload_app/Contents/Info.plist")" == "$VERSION" ]]
+          lipo "$payload_app/Contents/MacOS/ETInput" -verify_arch arm64 x86_64
+          codesign --verify --deep --strict --verbose=2 "$payload_app"
+          for installer_helper in rimes-timeout rimes-update-handoff; do
+            helper_path="$component_dir/Scripts/$installer_helper"
+            lipo "$helper_path" -verify_arch arm64 x86_64
+            codesign --verify --strict --verbose=2 "$helper_path"
+          done
+
+          if ! pkg_signature="$(pkgutil --check-signature "$PKG" 2>&1)"; then
+            printf '%s\n' "$pkg_signature" >&2
+            echo 'pkgutil rejected the signed release installer.' >&2
+            exit 1
+          fi
+          printf '%s\n' "$pkg_signature"
+          [[ "${RIMES_INSTALLER_IDENTITY:-}" == "Developer ID Installer:"* ]]
+          printf '%s\n' "$pkg_signature" | grep -Fq "$RIMES_INSTALLER_IDENTITY"
+          printf '%s\n' "$pkg_signature" | grep -Fq "($RIMES_TEAM_ID)"
+          for installer_helper in rimes-timeout rimes-update-handoff; do
+            helper_signature="$(codesign --display --verbose=4 "$component_dir/Scripts/$installer_helper" 2>&1)"
+            printf '%s\n' "$helper_signature" | grep -Fq "Authority=$RIMES_APPLICATION_IDENTITY"
+            printf '%s\n' "$helper_signature" | grep -Fq "TeamIdentifier=$RIMES_TEAM_ID"
+            printf '%s\n' "$helper_signature" | grep -Eq 'flags=.*runtime'
+          done
+          xcrun stapler validate -v "$payload_app"
+          xcrun stapler validate -v "$PKG"
+          spctl --assess --type install --verbose=4 "$PKG"
 
           unzip -tq "$MARINE_ZIP"
           unzip -p "$MARINE_ZIP" marine-chrome/manifest.json \
             | cmp - Extensions/marine-chrome/manifest.json
 
-      - name: Validate canonical tag and vacant Release
-        if: steps.version.outputs.IS_RELEASE == 'true'
+      # No network publisher is invoked while the Developer ID private keys or
+      # App Store Connect key remain usable on this runner.
+      - name: Destroy signing material before publication
+        run: |
+          set -euo pipefail
+          signing_dir="$RUNNER_TEMP/rimes-signing"
+          marker="$signing_dir/.rimes-signing-material"
+          [[ -f "$marker" ]] || {
+            echo "Signing-material marker is missing before publication." >&2
+            exit 1
+          }
+          security delete-keychain "$signing_dir/rimes-signing.keychain-db" >/dev/null 2>&1 || true
+          rm -f \
+            "$signing_dir/developer-id-application.p12" \
+            "$signing_dir/developer-id-installer.p12" \
+            "$signing_dir/AuthKey_RIMES.p8" \
+            "$signing_dir/rimes-signing.keychain-db" \
+            "$marker"
+          rmdir "$signing_dir"
+
+      - name: Revalidate canonical tag and vacant Release after key destruction
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: scholay/rimes
@@ -290,57 +1831,72 @@ jobs:
           fi
 
       - name: Create Release
-        if: steps.version.outputs.IS_RELEASE == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          repository: scholay/rimes
-          tag_name: ${{ github.ref_name }}
-          name: RIMES v${{ steps.version.outputs.VERSION }}
-          fail_on_unmatched_files: true
-          make_latest: true
-          files: |
-            ${{ steps.pkg.outputs.PKG }}
-            ${{ steps.package.outputs.ZIP }}
-            ${{ steps.marine_chrome.outputs.ZIP }}
-          body: |
-            ## RIMES v${{ steps.version.outputs.VERSION }}
-
-            现代 macOS 中文输入法（IMK + librime）。**自包含**：librime 引擎与 Rime
-            词库已打包在 app 内，**无需单独安装 Squirrel**，装一个就能用。通用二进制
-            （Apple Silicon + Intel）。
-
-            ### 安装（推荐：向导式安装器）
-            下载 **`RIMES-${{ steps.version.outputs.VERSION }}.pkg`** → 双击 → 按向导安装
-            （输入管理员密码，装到 `/Library/Input Methods`，并自动注册、启用、尝试切换）。
-            未经 Apple 公证，若首次被拦：在 pkg 上**右键 → 打开**。
-            多数情况下安装完成后可直接用输入菜单或 `Ctrl-Space` 切换到「RIMES」；
-            若菜单未刷新，先运行 `killall TextInputMenuAgent SystemUIServer`，仍看不到再注销重登一次。
-
-            ### 应用内自动更新
-            已安装并运行的 RIMES 会自动检查最新 Release，静默下载后在状态栏提示；
-            点「立即更新」即自动替换并重启。（更新走下方 `.zip`，无需手动。）
-
-            ### Marine Chrome 扩展
-            需要网页上下文时，下载并解压 **`${{ steps.marine_chrome.outputs.ZIP }}`**，
-            在 `chrome://extensions` 开启开发者模式后选择“加载已解压的扩展程序”。
-
-            ### 校验和
-            | 文件 | SHA256 |
-            |------|--------|
-            | PKG | `${{ steps.pkg.outputs.PKG_SHA256 }}` |
-            | ZIP | `${{ steps.package.outputs.SHA256 }}` |
-            | Marine Chrome | `${{ steps.marine_chrome.outputs.SHA256 }}` |
-          draft: false
-          prerelease: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: scholay/rimes
+          PKG: ${{ steps.pkg.outputs.PKG }}
+          APP_ZIP: ${{ steps.package.outputs.ZIP }}
+          MARINE_ZIP: ${{ steps.stage_inputs.outputs.MARINE_ZIP }}
+          VERSION: ${{ needs.build_and_smoke.outputs.version }}
+        run: |
+          set -euo pipefail
+          preset_assets=(release-assets/preset-plugins/preset-plugin-*.json)
+          [[ "${#preset_assets[@]}" -gt 0 && -f "${preset_assets[0]}" ]]
+          gh release create "$GITHUB_REF_NAME" --repo "$GH_REPO" \
+            "$PKG" "$APP_ZIP" "$MARINE_ZIP" "${preset_assets[@]}" \
+            --verify-tag \
+            --latest \
+            --title "RIMES v${VERSION}" \
+            --notes-file - <<'EOF'
+          ## RIMES v${{ needs.build_and_smoke.outputs.version }}
 
-      - name: Upload artifacts (manual builds)
-        if: steps.version.outputs.IS_RELEASE != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: RIMES-${{ steps.version.outputs.VERSION }}
-          path: |
-            ${{ steps.pkg.outputs.PKG }}
-            ${{ steps.package.outputs.ZIP }}
-            ${{ steps.marine_chrome.outputs.ZIP }}
+          现代 macOS 中文输入法（IMK + librime）。**自包含**：librime 引擎与 Rime
+          词库已打包在 app 内，**无需单独安装 Squirrel**，装一个就能用。通用二进制
+          （Apple Silicon + Intel）。
+
+          ### 安装（推荐：向导式安装器）
+          下载 **`RIMES-${{ needs.build_and_smoke.outputs.version }}.pkg`** → 双击 → 按向导安装
+          （输入管理员密码，装到 `/Library/Input Methods`；有普通 GUI 登录会话时会尝试注册、启用和切换）。
+          安装器及内含 app 已使用 Developer ID 签名、通过 Apple 公证并附加公证票据。
+          多数情况下安装完成后可直接用输入菜单或 `Ctrl-Space` 切换到「RIMES」；
+          若菜单暂未刷新，请先到“系统设置 → 键盘 → 输入法”确认，仍未显示再注销重登；
+          不要手动终止 Apple 的输入法或菜单服务进程。
+
+          ### 应用内自动更新
+          已安装并运行的正式签名版 RIMES 会检查最新 Release，下载并再次验证同一
+          Apple Team 签名、公证状态与包内版本；输入法菜单会显示可安装版本。确认后
+          只会打开 macOS 系统安装器，由用户授权完成更新，不再用 ZIP 自替换。
+
+          ### Marine Chrome 扩展
+          需要网页上下文时，下载并解压 **`${{ steps.stage_inputs.outputs.MARINE_ZIP }}`**，
+          在 `chrome://extensions` 开启开发者模式后选择“加载已解压的扩展程序”。
+
+          ### 校验和
+          | 文件 | SHA256 |
+          |------|--------|
+          | PKG | `${{ steps.pkg.outputs.PKG_SHA256 }}` |
+          | ZIP | `${{ steps.package.outputs.SHA256 }}` |
+          | Marine Chrome | `${{ steps.stage_inputs.outputs.MARINE_SHA256 }}` |
+          EOF
+
+      - name: Always remove temporary signing material
+        if: always()
+        run: |
+          set -euo pipefail
+          signing_dir="$RUNNER_TEMP/rimes-signing"
+          [[ -e "$signing_dir" ]] || exit 0
+          if [[ ! -d "$signing_dir" || -L "$signing_dir" ]]; then
+            echo "Signing path is not the expected regular directory: $signing_dir" >&2
+            exit 1
+          fi
+          security delete-keychain "$signing_dir/rimes-signing.keychain-db" >/dev/null 2>&1 || true
+          rm -f \
+            "$signing_dir/developer-id-application.p12" \
+            "$signing_dir/developer-id-installer.p12" \
+            "$signing_dir/AuthKey_RIMES.p8" \
+            "$signing_dir/rimes-signing.keychain-db" \
+            "$signing_dir/.rimes-signing-material"
+          rmdir "$signing_dir" || {
+            echo "Signing directory contains an unexpected file; refusing broad cleanup." >&2
+            exit 1
+          }

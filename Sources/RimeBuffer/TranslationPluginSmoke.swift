@@ -42,6 +42,27 @@ private final class TranslationSmokeDeliverySource: BufferDeliveryContentSource 
     func markDeliveryBlockStale(id: UUID, generation: UInt64) -> Bool { false }
 }
 
+private final class TranslationConfigurationNotificationProbe {
+    private(set) var changedFieldIDs: Set<String> = []
+
+    func reset() {
+        changedFieldIDs.removeAll()
+    }
+
+    func record(_ notification: Notification) {
+        guard notification.userInfo?[
+            PluginConfigurationNotificationKey.pluginID
+        ] as? String == BuiltInPluginID.appleTranslation else {
+            return
+        }
+        changedFieldIDs.formUnion(
+            notification.userInfo?[
+                PluginConfigurationNotificationKey.changedFieldIDs
+            ] as? [String] ?? []
+        )
+    }
+}
+
 func runTranslationPluginSmokeTest() -> Bool {
     func fail(_ message: String) -> Bool {
         print("FAILED: translation plugin \(message)")
@@ -71,6 +92,9 @@ func runTranslationPluginSmokeTest() -> Bool {
     defer { defaults.removePersistentDomain(forName: defaultsName) }
     let sourceDefaultsKey = "plugins.appleTranslation.sourceLanguage.v1"
     let targetDefaultsKey = "plugins.appleTranslation.targetLanguage.v1"
+    let configurationDefaultsKey =
+        "RimeBuffer.PluginConfiguration."
+            + BuiltInPluginID.appleTranslation
 
     let missingSourceWorkspace = AppleTranslationWorkspace(
         defaults: defaults,
@@ -112,6 +136,55 @@ func runTranslationPluginSmokeTest() -> Bool {
     guard explicitSourceWorkspace.sourceLanguageID == "ja",
           explicitSourceWorkspace.targetLanguageID == "en" else {
         return fail("explicit source preservation")
+    }
+
+    let swapProbe = TranslationConfigurationNotificationProbe()
+    let swapObserver = NotificationCenter.default.addObserver(
+        forName: .pluginConfigurationDidChange,
+        object: nil,
+        queue: nil
+    ) { notification in
+        swapProbe.record(notification)
+    }
+    defer { NotificationCenter.default.removeObserver(swapObserver) }
+    guard explicitSourceWorkspace.canSwapLanguages,
+          explicitSourceWorkspace.swapLanguages(),
+          explicitSourceWorkspace.sourceLanguageID == "en",
+          explicitSourceWorkspace.targetLanguageID == "ja",
+          defaults.string(forKey: sourceDefaultsKey) == "en",
+          defaults.string(forKey: targetDefaultsKey) == "ja",
+          defaults.dictionary(
+            forKey: configurationDefaultsKey
+          )?[RealtimeTranslationPluginConfigurationFieldID.sourceLanguage]
+            as? String == "en",
+          defaults.dictionary(
+            forKey: configurationDefaultsKey
+          )?[RealtimeTranslationPluginConfigurationFieldID.targetLanguage]
+            as? String == "ja",
+          swapProbe.changedFieldIDs == [
+            RealtimeTranslationPluginConfigurationFieldID.sourceLanguage,
+            RealtimeTranslationPluginConfigurationFieldID.targetLanguage,
+          ] else {
+        return fail("language swap persistence and refresh notification")
+    }
+    swapProbe.reset()
+    explicitSourceWorkspace.setSourceLanguage("sv")
+    guard explicitSourceWorkspace.sourceLanguageID == "sv",
+          explicitSourceWorkspace.targetLanguageID == "ja",
+          swapProbe.changedFieldIDs == [
+            RealtimeTranslationPluginConfigurationFieldID.sourceLanguage,
+          ] else {
+        return fail("runtime-discovered language persistence")
+    }
+    swapProbe.reset()
+    guard explicitSourceWorkspace.swapLanguages(),
+          explicitSourceWorkspace.sourceLanguageID == "ja",
+          explicitSourceWorkspace.targetLanguageID == "sv",
+          swapProbe.changedFieldIDs == [
+            RealtimeTranslationPluginConfigurationFieldID.sourceLanguage,
+            RealtimeTranslationPluginConfigurationFieldID.targetLanguage,
+          ] else {
+        return fail("runtime-discovered language swap")
     }
 
     let currentJob = AppleTranslationWorkspace.Job(generation: 4,

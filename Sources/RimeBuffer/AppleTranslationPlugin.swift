@@ -536,26 +536,12 @@ final class AppleTranslationWorkspace {
 
     @discardableResult
     private func saveLanguagePair(source: String, target: String) -> Bool {
-        let previousLegacySource = defaults.object(
-            forKey: RealtimeTranslationConfigurationKey.sourceLanguage
-        )
-        let previousLegacyTarget = defaults.object(
-            forKey: RealtimeTranslationConfigurationKey.targetLanguage
-        )
-        // The legacy mirror is retained only for downgrade compatibility and
-        // lets the declarative schema include an already selected system
-        // language that is outside the compact built-in choice list.
-        defaults.set(
-            source,
-            forKey: RealtimeTranslationConfigurationKey.sourceLanguage
-        )
-        defaults.set(
-            target,
-            forKey: RealtimeTranslationConfigurationKey.targetLanguage
-        )
         do {
             let model = try PluginConfigurationCatalog
-                .makeRealtimeTranslationModel(defaults: defaults)
+                .makeRealtimeTranslationModel(
+                    defaults: defaults,
+                    additionalLanguageIDs: [source, target]
+                )
             var snapshot = try model.load()
             snapshot[
                 RealtimeTranslationPluginConfigurationFieldID.sourceLanguage
@@ -566,23 +552,7 @@ final class AppleTranslationWorkspace {
             _ = try model.save(snapshot)
             return true
         } catch {
-            restoreLegacy(
-                previousLegacySource,
-                key: RealtimeTranslationConfigurationKey.sourceLanguage
-            )
-            restoreLegacy(
-                previousLegacyTarget,
-                key: RealtimeTranslationConfigurationKey.targetLanguage
-            )
             return false
-        }
-    }
-
-    private func restoreLegacy(_ value: Any?, key: String) {
-        if let value {
-            defaults.set(value, forKey: key)
-        } else {
-            defaults.removeObject(forKey: key)
         }
     }
 
@@ -1307,8 +1277,8 @@ private struct AppleTranslationTaskView: View {
 }
 
 final class AppleTranslationSettingsViewController: NSViewController {
-    private let sourcePopup = NSPopUpButton()
-    private let targetPopup = NSPopUpButton()
+    private let sourcePopup = RimeFixedAccentPopUpButton()
+    private let targetPopup = RimeFixedAccentPopUpButton()
     private let swapButton = NSButton(title: "交换", target: nil, action: nil)
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private var observer: NSObjectProtocol?

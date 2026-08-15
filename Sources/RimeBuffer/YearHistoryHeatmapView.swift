@@ -368,12 +368,11 @@ final class YearHistoryHeatmapView: NSView {
         path.fill()
 
         if hoveredDayKey == cell.dayKey {
-            NSColor.controlAccentColor.setStroke()
+            RimeUI.accentGreen.setStroke()
             path.lineWidth = 1.5
             path.stroke()
         } else if level == 0 {
-            NSColor.separatorColor.withAlphaComponent(isDarkAppearance ? 0.28 : 0.18)
-                .setStroke()
+            RimeUI.border.setStroke()
             path.lineWidth = 0.5
             path.stroke()
         }
@@ -382,7 +381,7 @@ final class YearHistoryHeatmapView: NSView {
     private func drawMonthLabels() {
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 10, weight: .medium),
-            .foregroundColor: NSColor.secondaryLabelColor,
+            .foregroundColor: RimeUI.textSecondary,
         ]
         var lastMaxX: CGFloat = -CGFloat.greatestFiniteMagnitude
         let pitch = Metrics.cellSize + Metrics.spacing
@@ -400,7 +399,7 @@ final class YearHistoryHeatmapView: NSView {
     private func drawWeekdayLabels() {
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 9, weight: .regular),
-            .foregroundColor: NSColor.tertiaryLabelColor,
+            .foregroundColor: RimeUI.textMuted,
         ]
         let pitch = Metrics.cellSize + Metrics.spacing
         for (row, title) in Self.weekdayTitles.enumerated() {
@@ -418,7 +417,7 @@ final class YearHistoryHeatmapView: NSView {
     private func drawLegend() {
         let labelAttributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 9),
-            .foregroundColor: NSColor.tertiaryLabelColor,
+            .foregroundColor: RimeUI.textMuted,
         ]
         let less = "少" as NSString
         let more = "多" as NSString
@@ -448,7 +447,7 @@ final class YearHistoryHeatmapView: NSView {
         let text = "暂无历史统计" as NSString
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 13, weight: .medium),
-            .foregroundColor: NSColor.secondaryLabelColor,
+            .foregroundColor: RimeUI.textMuted,
         ]
         let size = text.size(withAttributes: attributes)
         text.draw(in: CGRect(x: bounds.midX - size.width / 2,
@@ -458,19 +457,12 @@ final class YearHistoryHeatmapView: NSView {
                   withAttributes: attributes)
     }
 
-    private var isDarkAppearance: Bool {
-        effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-    }
-
     private func color(for level: Int) -> NSColor {
         guard level > 0 else {
-            return isDarkAppearance
-                ? NSColor.white.withAlphaComponent(0.07)
-                : NSColor.black.withAlphaComponent(0.045)
+            return RimeUI.surface2
         }
-        let heat = isDarkAppearance ? NSColor.systemGreen : NSColor.systemBlue
         let alpha: [CGFloat] = [0, 0.24, 0.43, 0.67, 0.92]
-        return heat.withAlphaComponent(alpha[min(4, max(0, level))])
+        return RimeUI.accentGreen.withAlphaComponent(alpha[min(4, max(0, level))])
     }
 
     private static let historyCalendar: Calendar = {

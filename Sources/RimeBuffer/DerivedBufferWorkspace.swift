@@ -173,6 +173,7 @@ enum DerivedBufferWorkspaceRouter {
         guard let activeKey = BufferPluginSelectionStore.shared.activeKey else {
             return nil
         }
+        guard PluginRegistry.shared.isEnabled(activeKey) else { return nil }
         return all.first { $0.workspacePluginKey == activeKey }
     }
 

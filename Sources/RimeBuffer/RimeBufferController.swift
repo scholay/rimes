@@ -348,6 +348,7 @@ final class RimeBufferController: IMKInputController {
     private static let duplicateClipboardCommandWindow: CFTimeInterval = 0.5
     private static let bufferEnterHoldDelay: TimeInterval = 1.2
     private static let bufferEnterPollInterval: TimeInterval = 0.02
+    private static let keyboardLayoutOverrideCache = RimeKeyboardLayoutOverrideCache()
     /// Rime pages fetched per matrix batch — also the initial expand size, so
     /// the first ↓ costs the same as before and deeper rows load on demand.
     private static let expandedPageBatch = 3
@@ -704,9 +705,9 @@ final class RimeBufferController: IMKInputController {
     /// Lifecycle callbacks are less regular than key callbacks: some hosts
     /// pass nil/non-client senders, while others reuse one IMK proxy across
     /// fields and deliver the old field's deactivate late. Resolve only the
-    /// current lease. A reused proxy makes lifecycle attribution unsafe for the
-    /// whole epoch; delivery stays suspended until an exact ordered event or
-    /// activation establishes a new epoch.
+    /// current lease. A reused proxy makes lifecycle attribution unsafe until a
+    /// fully validated keyDown proves the current field owns it; keyUp, flags,
+    /// elapsed time, or activation alone never clear that latch.
     private func lifecycleLease(for sender: Any?, operation: String) -> FocusLease? {
         guard let lease = currentLease(), lease.client != nil else {
             IMELog.write("\(operation): no current focus lease")
@@ -860,7 +861,7 @@ final class RimeBufferController: IMKInputController {
             if let layout = keyboard.layout {
                 activeClient.overrideKeyboard(withKeyboardNamed: layout)
             }
-            IMELog.write("activate: client=\(bundleId(of: activeClient)) keyboard=\(keyboard.layout ?? "last") source=\(keyboard.source)")
+            IMELog.write("activate: client=\(bundleId(of: activeClient)) keyboard=\(keyboard.layout ?? "last") source=\(keyboard.source) cache=\(keyboard.cacheStatus.rawValue)")
         } else if InputFocusCoordinator.shared.owner != nil {
             IMELog.write("activate: missing current client; suspending global focus lease")
             suspendGlobalFocusLeaseIfPresent(reason: "activate missing client")
@@ -985,7 +986,8 @@ final class RimeBufferController: IMKInputController {
     /// Resolve Squirrel's `keyboard_layout` setting without requiring a
     /// deployed `build/squirrel.yaml`. `last`/missing means no override;
     /// `default` is ABC; an explicit TIS layout id is passed through.
-    private static func resolveKeyboardLayoutOverride() -> (layout: String?, source: String) {
+    private static func resolveKeyboardLayoutOverride()
+        -> RimeKeyboardLayoutOverrideResolution {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let environment = ProcessInfo.processInfo.environment
         let userDirectory = environment["RIMEBUFFER_USER_DIR"].map {
@@ -1002,43 +1004,11 @@ final class RimeBufferController: IMKInputController {
         ]
 
         var visited: Set<String> = []
-        for url in candidates {
+        let uniqueCandidates = candidates.filter { url in
             let path = url.standardizedFileURL.path
-            guard visited.insert(path).inserted,
-                  let configured = keyboardLayout(in: url) else { continue }
-            switch configured {
-            case "", "last":
-                return (nil, path)
-            case "default":
-                return ("com.apple.keylayout.ABC", path)
-            default:
-                return (configured, path)
-            }
+            return visited.insert(path).inserted
         }
-        return (nil, "fallback:last")
-    }
-
-    private static func keyboardLayout(in url: URL) -> String? {
-        guard let contents = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        for rawLine in contents.components(separatedBy: .newlines) {
-            let uncommented = rawLine.split(separator: "#", maxSplits: 1,
-                                            omittingEmptySubsequences: false).first ?? ""
-            let parts = uncommented.split(separator: ":", maxSplits: 1,
-                                          omittingEmptySubsequences: false)
-            guard parts.count == 2,
-                  parts[0].trimmingCharacters(in: .whitespaces) == "keyboard_layout" else {
-                continue
-            }
-            var value = parts[1].trimmingCharacters(in: .whitespaces)
-            if value.count >= 2,
-               (value.hasPrefix("\"") && value.hasSuffix("\"")
-                || value.hasPrefix("'") && value.hasSuffix("'")) {
-                value.removeFirst()
-                value.removeLast()
-            }
-            return value
-        }
-        return nil
+        return keyboardLayoutOverrideCache.resolve(candidates: uniqueCandidates)
     }
 
     @discardableResult
@@ -1111,6 +1081,9 @@ final class RimeBufferController: IMKInputController {
             displaced.controller?.finalizeDisplacedFocus(displaced)
         }
         focusToken = activation.token
+        BufferWindowController.shared.focusedInputDidActivate(
+            expected: activation.token
+        )
     }
 
     /// Resolve a lease that was replaced by a newer focus epoch. Candidate hide
@@ -1940,12 +1913,17 @@ final class RimeBufferController: IMKInputController {
             return true
         }
         if candidateOptionSelecting {
-            if mask == 0 {
-                _ = handleCandidateKey(keycode, client: client)
+            if !candidateWindow.hasInteractableCandidates {
+                resetCandidateOptionGesture()
+                IMELog.write("candidate option gesture cancelled; panel not interactable")
             } else {
-                _ = handleCandidateOptionSelectionKey(keycode, client: client)
+                if mask == 0 {
+                    _ = handleCandidateKey(keycode, client: client)
+                } else {
+                    _ = handleCandidateOptionSelectionKey(keycode, client: client)
+                }
+                return true
             }
-            return true
         }
         if mask == 0 {
             if handleCandidateKey(keycode, client: client) {
@@ -2426,7 +2404,7 @@ final class RimeBufferController: IMKInputController {
             return false
         }
         if let keycode = candidateCommandKey(for: selector),
-           candidateWindow.hasCandidates {
+           candidateWindow.hasInteractableCandidates {
             guard let client = callbackClient else {
                 IMELog.write("candidate command ignored; stale callback selector=\(NSStringFromSelector(selector))")
                 return false
@@ -2919,7 +2897,7 @@ final class RimeBufferController: IMKInputController {
             chord.flush()
         }
         mutualPairingState.reset()
-        guard candidateWindow.hasCandidates,
+        guard candidateWindow.hasInteractableCandidates,
               let candidateText = candidateWindow.selectedCandidateText,
               candidateWindow.beginSingleCharacterSelection(candidateText: candidateText) else {
             return false
@@ -2938,6 +2916,11 @@ final class RimeBufferController: IMKInputController {
 
     private func finishCandidateOptionSelection(client: IMKTextInput?, source: String) {
         guard candidateOptionSelecting else { return }
+        guard candidateWindow.hasInteractableCandidates else {
+            IMELog.write("candidate option release consumed; panel not interactable")
+            resetCandidateOptionGesture()
+            return
+        }
         let proposedClient = client ?? candidateOptionClient
         let resolvedClient = proposedClient.flatMap {
             currentCallbackClient($0)
@@ -4022,7 +4005,13 @@ final class RimeBufferController: IMKInputController {
     // MARK: Candidate selection (mouse; routed here via `active` from main.swift)
 
     private func handleCandidateKey(_ keycode: Int32, client: IMKTextInput) -> Bool {
-        guard candidateWindow.hasCandidates else { return false }
+        guard candidateWindow.hasInteractableCandidates else {
+            if candidateOptionSelecting
+                || candidateWindow.isSingleCharacterSelectionActive {
+                resetCandidateOptionGesture()
+            }
+            return false
+        }
         if candidateOptionSelecting || candidateWindow.isSingleCharacterSelectionActive {
             return handleCandidateOptionSelectionKey(keycode, client: client)
         }
@@ -4040,7 +4029,7 @@ final class RimeBufferController: IMKInputController {
             if chord.hasPending {
                 IMELog.write("candidate key \(keycode) resolving pending chord before local action")
                 chord.flush()
-                guard candidateWindow.hasCandidates else { return false }
+                guard candidateWindow.hasInteractableCandidates else { return false }
             }
             mutualPairingState.reset()
         }
@@ -4107,7 +4096,7 @@ final class RimeBufferController: IMKInputController {
 
     @discardableResult
     private func pageCandidates(delta: Int, client: IMKTextInput) -> Bool {
-        guard candidateWindow.hasCandidates else { return false }
+        guard candidateWindow.hasInteractableCandidates else { return false }
         if candidateWindow.movePage(delta: delta) { return true }
         let keycode = delta < 0 ? RimeKey.pageUp : RimeKey.pageDown
         _ = processRimeKey(keycode, mask: 0, client: client)

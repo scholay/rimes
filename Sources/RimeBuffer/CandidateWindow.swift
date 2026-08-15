@@ -5,6 +5,18 @@ extension Notification.Name {
     static let candidateWindowMetricsDidChange = Notification.Name("CandidateWindowMetricsDidChange")
 }
 
+enum CandidatePanelInteractionRules {
+    static func mayInteract(hasLogicalCandidates: Bool,
+                            hasInteractionTarget: Bool,
+                            panelIsVisible: Bool,
+                            panelIsOnActiveSpace: Bool) -> Bool {
+        hasLogicalCandidates
+            && hasInteractionTarget
+            && panelIsVisible
+            && panelIsOnActiveSpace
+    }
+}
+
 enum CandidateWindowMetric: String, CaseIterable {
     case baseWidth
     case compactStripHeight
@@ -423,9 +435,32 @@ final class CandidateWindow {
               InputFocusCoordinator.shared.interactionTarget(expected: ownerToken) != nil else { return false }
         return !currentContext.candidates.isEmpty
     }
+    /// Candidate-only keyboard and mouse actions require WindowServer-visible
+    /// candidates. Logical context remains available to composition cleanup,
+    /// but a panel hidden by privacy/layout/Space transitions must not capture
+    /// arrows, Return, Space, Option-selection, or paging.
+    var hasInteractableCandidates: Bool {
+        CandidatePanelInteractionRules.mayInteract(
+            hasLogicalCandidates: !currentContext.candidates.isEmpty,
+            hasInteractionTarget: ownerToken.map {
+                InputFocusCoordinator.shared.interactionTarget(expected: $0) != nil
+            } ?? false,
+            panelIsVisible: panel.isVisible,
+            panelIsOnActiveSpace: panel.isOnActiveSpace
+        )
+    }
     var isVisible: Bool {
         guard let ownerToken,
-              InputFocusCoordinator.shared.interactionTarget(expected: ownerToken) != nil else { return false }
+              InputFocusCoordinator.shared.interactionTarget(expected: ownerToken) != nil,
+              !currentContext.candidates.isEmpty || !projectionPreedit.isEmpty else {
+            return false
+        }
+        // Logical candidate state is not enough: AppKit can order a panel out
+        // during an application/Space transition without changing our owner or
+        // Rime context. Callers asking whether candidates are visible must see
+        // the WindowServer truth, otherwise a hidden panel can keep steering
+        // candidate-only key paths indefinitely.
+        guard panel.isVisible, panel.isOnActiveSpace else { return false }
         return !currentContext.candidates.isEmpty || !projectionPreedit.isEmpty
     }
     var isExpanded: Bool { !expandedPages.isEmpty }
@@ -646,20 +681,19 @@ final class CandidateWindow {
 
     func hide(owner: FocusToken) {
         guard let ownerToken else {
-            panel.orderOut(nil)
+            hidePanel(reason: "owner-hide-without-presentation",
+                      clearsPresentation: true)
             return
         }
         guard ownerToken == owner else {
             IMELog.write("candidate stale hide ignored owner=\(owner)")
             return
         }
-        resetPresentationState()
-        panel.orderOut(nil)
+        hidePanel(reason: "owner-hide", clearsPresentation: true)
     }
 
     func hideAll() {
-        resetPresentationState()
-        panel.orderOut(nil)
+        hidePanel(reason: "global-hide", clearsPresentation: true)
     }
 
     private func resetPresentationState() {
@@ -671,6 +705,9 @@ final class CandidateWindow {
         currentSignature = ""
         projectionPreedit = ""
         ownerToken = nil
+        presentationMode = .caret
+        lastCaretRect = .zero
+        lastBundleId = ""
         preeditLabel.stringValue = ""
         preeditLabel.isHidden = true
         strip.isHidden = false
@@ -1001,10 +1038,23 @@ final class CandidateWindow {
     }
 
     private func layoutAndShowAccordingToPresentation() {
-        guard let ownerToken,
-              InputFocusCoordinator.shared.interactionTarget(expected: ownerToken) != nil,
-              !currentContext.candidates.isEmpty || !projectionPreedit.isEmpty else {
-            panel.orderOut(nil)
+        guard let ownerToken else {
+            hidePanel(reason: "missing-owner", clearsPresentation: true)
+            return
+        }
+        guard InputFocusCoordinator.shared.interactionTarget(
+                expected: ownerToken
+              ) != nil else {
+            // Authority is fail-closed. Clear the logical presentation as well
+            // as the physical panel so a suspended lease cannot leave behind a
+            // candidate state that looks visible. A later trusted `update`
+            // supplies a fresh context and safely reconstructs the panel.
+            hidePanel(reason: "interaction-target-unavailable",
+                      clearsPresentation: true)
+            return
+        }
+        guard !currentContext.candidates.isEmpty || !projectionPreedit.isEmpty else {
+            hidePanel(reason: "empty-content", clearsPresentation: true)
             return
         }
         // A missing workbench anchor means the bar is privacy-shielded,
@@ -1012,14 +1062,98 @@ final class CandidateWindow {
         // Never fall back to a caret location in that case: doing so would
         // expose the same candidate text the shield is meant to hide.
         if presentationMode == .workbench, !isPlausible(lastCaretRect) {
-            panel.orderOut(nil)
+            hidePanel(reason: "workbench-anchor-unavailable",
+                      clearsPresentation: false)
             return
         }
         guard layoutPanel(caretRect: lastCaretRect, bundleId: lastBundleId) else {
-            panel.orderOut(nil)
+            hidePanel(reason: "layout-unavailable", clearsPresentation: false)
             return
         }
+        showPanel(reason: "layout-ready")
+    }
+
+    /// Candidate presentation changes are centralized here so logical state and
+    /// AppKit visibility cannot silently diverge. Reasons are fixed internal
+    /// strings; logs contain only counts, geometry, and focus tokens — never
+    /// candidate, preedit, input, or bundle text.
+    private func hidePanel(reason: String, clearsPresentation: Bool) {
+        let snapshot = panelLogSnapshot()
+        panel.orderOut(nil)
+        if clearsPresentation {
+            resetPresentationState()
+        }
+        logPanelTransition(
+            action: "hide",
+            reason: reason,
+            before: snapshot,
+            retiredPresentation: clearsPresentation
+        )
+    }
+
+    private func showPanel(reason: String) {
+        let snapshot = panelLogSnapshot()
         panel.orderFrontRegardless()
+        logPanelTransition(
+            action: "show",
+            reason: reason,
+            before: snapshot,
+            retiredPresentation: false
+        )
+    }
+
+    private struct PanelLogSnapshot {
+        let owner: String
+        let presentation: String
+        let candidateCount: Int
+        let preeditLength: Int
+        let visible: Bool
+        let onActiveSpace: Bool
+    }
+
+    private func panelLogSnapshot() -> PanelLogSnapshot {
+        let presentation: String
+        switch presentationMode {
+        case .caret: presentation = "caret"
+        case .workbench: presentation = "workbench"
+        }
+        return PanelLogSnapshot(
+            owner: ownerToken?.description ?? "none",
+            presentation: presentation,
+            candidateCount: currentContext.candidates.count,
+            preeditLength: projectionPreedit.count,
+            visible: panel.isVisible,
+            onActiveSpace: panel.isOnActiveSpace
+        )
+    }
+
+    private func logPanelTransition(action: String,
+                                    reason: String,
+                                    before: PanelLogSnapshot,
+                                    retiredPresentation: Bool) {
+        let afterVisible = panel.isVisible
+        let afterOnActiveSpace = panel.isOnActiveSpace
+        let hadLogicalPresentation = before.owner != "none"
+            || before.candidateCount > 0
+            || before.preeditLength > 0
+        // Candidate updates are frequent. Log every real WindowServer
+        // transition and every hide that retires logical presentation, while
+        // suppressing repeated visible->visible layout refreshes.
+        guard before.visible != afterVisible
+                || before.onActiveSpace != afterOnActiveSpace
+                || (action == "hide"
+                    && retiredPresentation
+                    && hadLogicalPresentation) else {
+            return
+        }
+        IMELog.write(
+            "candidate panel transition action=\(action) reason=\(reason) "
+            + "owner=\(before.owner) presentation=\(before.presentation) "
+            + "candidates=\(before.candidateCount) preeditLength=\(before.preeditLength) "
+            + "visible=\(before.visible)->\(afterVisible) "
+            + "onSpace=\(before.onActiveSpace)->\(afterOnActiveSpace) "
+            + "frame=\(NSStringFromRect(panel.frame))"
+        )
     }
 
     // MARK: Rendering
@@ -1805,7 +1939,8 @@ final class CandidateWindow {
 
     @objc private func candidateTapped(_ sender: NSButton) {
         guard let ownerToken,
-              InputFocusCoordinator.shared.interactionTarget(expected: ownerToken) != nil else {
+              InputFocusCoordinator.shared.interactionTarget(expected: ownerToken) != nil,
+              hasInteractableCandidates else {
             hideAll()
             return
         }

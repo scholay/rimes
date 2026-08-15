@@ -96,7 +96,7 @@ Marine Chrome 的上下文不进 `InboundBus`，也不进外部 Action Plugin ru
                                  ▼
                      BufferDeliveryCoordinator
                     ┌──── 普通 App：FocusToken/client 与前台 bundle/PID 精确匹配
-                    │     Spotlight：系统 PID + 可见窗口 + 下层前台 bundle/PID 锚点
+                    │     Spotlight/Paste：精确 bundle/path + 唯一 PID + 可见窗口 + 下层前台锚点
                     │     打开/保存面板：系统 XPC 来源集合 + 冻结窗口 ID + 发起 App bundle/PID
                     ├──── 组字未决 / secure input → 拒绝或先显式收束
                     ├──── 每个块投递前再次校验，焦点变化立即停
@@ -108,7 +108,7 @@ Marine Chrome 的上下文不进 `InboundBus`，也不进外部 Action Plugin ru
 1. **非配对外部文字永不自动上屏**——MCP/HTTP 先进收件箱待决；用户主动调用且仍匹配原 request/context/focus 的插件结果可直接进缓冲，失效或迟到结果退回收件箱。
 2. **插件/处理器结果永不直接上屏**——无论直接进缓冲还是退回收件箱，都只能由用户随后明确投递。
 3. **secure input（密码框）激活时，Return 在动作边界同步 fail-closed**：只吞下按键，不收束组字、不重建 U+200B guard、不请求 AI，也不投递；工作台正文与派生 workspace 同步进入保护态。
-4. **缓冲投递不保存“最近输入框”兜底**：只有当前 `FocusToken` 的外部文本框能接收。普通 App 的 bundle/PID 必须同时匹配当前前台应用。Spotlight 需匹配精确系统路径中的唯一 PID、自有可见窗口与下层前台锚点；AppKit 打开/保存面板则要求所有同 bundle 活服务都来自固定系统 XPC 路径，并匹配发起 App bundle/PID 与冻结的面板窗口 ID，不绑定任一可能残留的 service PID。切 app、切文本框、窗口隐藏或服务来源异常都会令旧目标失效。
+4. **缓冲投递不保存“最近输入框”兜底**：只有当前 `FocusToken` 的外部文本框能接收。普通 App 的 bundle/PID 必须同时匹配当前前台应用。Spotlight/Paste 需匹配各自精确 bundle/path、唯一 PID、自有可见窗口与下层前台锚点；AppKit 打开/保存面板则要求所有同 bundle 活服务都来自固定系统 XPC 路径，并匹配发起 App bundle/PID 与冻结的面板窗口 ID，不绑定任一可能残留的 service PID。切 app、切文本框、窗口隐藏或服务来源异常都会令旧目标失效。
 5. **手动投递不等于目标已确认收到**：当前产品在 `Delivery.insert` 成功返回后立即消费 live block，不保留明文发送历史；失败的块和后续尚未发送的块原位保留。
 6. **配对设备是来源侧唯一直通例外**：收到的文字沿既有实时传字路径直接上屏，不进入缓冲工作台。
 7. **缓冲按键与宿主隔离**：缓冲模式下普通/Shift+Return 与 Backspace 总是被输入法消费。有未决 Rime/并击组字或尚未 ready 的意识流 raw 时，本次 Return 只收束/强制生成并抑制同一物理按键余下事件；意识流 final 已 ready 时，keyDown 先确认所选候选并淘汰其余项，同一次按键继续进入轻按/长按投递。其他没有未决组字的内容也在 Return keyDown 中定点重建不可见 marked-text guard。普通/ready 内容仍是轻按发送下一块、按住约 1.2 秒发送全部；AI request 状态则在 keyDown 就吞下整次物理按键并请求生成，running/disabled 只吞键，不进入长按计时。`didCommand` 与 repeat 只有消费权。Backspace 只在精确焦点下编辑 Rime/并击状态或删除缓冲块。焦点不可信时始终吞键且不投递；宿主绝不会收到换行或删除。
@@ -172,14 +172,14 @@ MarineChromeWorkspace.Job ── 一次显式网页评论/回复生成
              └─▶ CandidateWindow      唯一候选面板；锚定 caret 或工作台真实外沿
 ```
 
-- **RimeEngine / CRimeBridge**：手写声明整个 `RimeApi` 结构体，`dlopen` 优先加载自带 librime，失败回退系统 Squirrel。首启 `start_maintenance` 自部署，自包含无需装 Squirrel。
+- **RimeEngine / CRimeBridge**：手写声明整个 `RimeApi` 结构体，`dlopen` 优先加载自带 librime，失败回退系统 Squirrel。首启 `start_maintenance` 自部署，自包含无需装 Squirrel。激活时所需 schema 列表与键盘布局配置按文件指纹缓存，部署成功显式失效；standalone smoke/preview 在 librime 初始化前强制使用隔离 userdir，engine smoke 只把仓库的只读产品数据种入临时 SharedSupport。
 - **`my_combo` AI 去耦**：旧 `ai_mode`、`ai_box`/剪贴板 processor、状态 translator、AI translator/filter、快捷键与 `python_bin` 配置已从 schema 下线；Rime schema 不再启动 Lua/Python AI 链路。普通输入依赖的 librime Lua 模块继续保留，AI 只由原生工作台插件和 Rime 侧连接器执行。
 - **`my_combo` 字面 `v`**：飞耀继续把 `v` 用作物理和弦键，但单键结算必须保留英文原码；该 schema 显式关闭从 `rime_ice` 继承的 lowercase-`v` 符号前缀与 `v_filter`，因此 `video` 等英文输入不会进入符号模式。多键中包含 `v` 的既有飞耀映射不变。
 - **RimeBufferController 按键隔离与 Return 手势**：缓冲模式在最外层吞掉普通/Shift+Return 与 Backspace。精确外部租约持有缓冲控制期间，`CompositionSession` 会常驻一次不可见 U+200B marked-text guard（包括 Rime 空闲和引擎不可用阶段），防止 Chromium/ProseMirror 在 IMK handled 结果之外观察 raw Return 并提交；guard 生命周期与真实组字状态分离，空闲 guard 不会把 `composition.composing` / lease `compositionActive` 置真，且 marked range 标为不可靠。Return keyDown 绑定当时的 `FocusToken`；有未决 Rime/并击组字或未 ready 意识流 raw 时只收束/强制生成并抑制到物理抬起。ready 意识流则在该 keyDown 先执行同一个 `prepareForDelivery()` 确认，删除其他候选后继续当前轻按/长按手势；其他可投递内容也在 keyDown 定点重建 guard，再由 keyUp/物理轮询判定轻按 `sendNext` 或持续 1.2 秒的长按 `sendAll`。每次被接管的物理按键持有 sticky keyUp / `didCommand(insertNewline:)` suppression，发送最后一个 transient block 令 buffer inactive、动作 reset 或失焦都不能把迟到/重复回调放给宿主；旧字段的 stale callback 不改变当前按压状态，下一次确认的 non-repeat keyDown 才退休旧代并立即按新状态路由。`didCommand` 只防御性消费，不形成第二条发送路径。Backspace 仅在精确租约下改 Rime/缓冲。隔离分支先于 raw fallback，故引擎失败和不可信焦点也不会把这两个键交给宿主。
 - **RimeBufferController 全选/粘贴路由**：`BufferClipboardShortcutRules` 只识别单一 Control 或 Command 修饰的 A/V；额外 Shift/Option 或 Control+Command 保持宿主快捷键。精确外部租约下，普通/插件 source 先收束 Rime 或 chord 组字再对 `BufferModel` 全选/粘贴，意识流则只操作 raw source。NSEvent 主路与 `didCommand(selectAll:/paste:)` 共用防重和物理 keyDown 所有权；对 Notes 等先套用 Cocoa 标准键位的宿主，只有在对应物理 Control+A/V 仍按下时，才把 `moveToBeginningOfParagraph:` / `pageDown:` command-only 回调还原为工作台动作，并从严格 live lease 恢复缺失的 callback client。真实 preedit 收束后，每次精确 A/V 都重装 U+200B host guard，避免 Chromium/Electron 在 IMK handled 周边再次执行宿主快捷键；`setMarkedText` 同步返回后必须重验同一租约。正在计时的 Return 发送会在 source 编辑前取消，但仍吞掉它的迟到 keyUp，防止新文本被误发。`NSPasteboard.general` 只在 secure input 为 false 且精确租约校验之间读取；延迟 pasteboard provider 返回后再重验，任一门控失配都不修改 source。
 - **ShiftModifierGesture**：在所有 keyDown 早退之前记录 Shift 已被作为修饰键，并保存起始左/右 Shift keysym、session 与 schema。物理 press 不立即进入 `ascii_composer`；release 只为同 session/schema 的独立短按补发匹配的一对事件，其余手势不发。候选 Option 选择、预先按住的 Option/Control/Command、双 Shift 和失焦因此都不会留下 Rime modifier 债务，也不会先执行 `commit_code` 再尝试回滚。
-- **CandidateWindow**：Rime 组字候选交互与显示的唯一状态机。普通模式锚定 caret；缓冲模式把同一个 `nonactivatingPanel` 锚定在工作台真实外沿：手动/无目标布局默认在下方，匹配焦点唤出 token 的上下文布局则严格沿远离输入框的一侧。因此主题、尺寸、翻页、单字选择和 token 化点击行为与常规候选完全一致。三行矩阵先把 panel、scroll viewport 与 frame-driven document stack 准备到最终 78pt，再挂 3×24pt row（3pt 间隔）；document stack 禁止生成旧 compact frame 的 autoresizing-mask 约束。工作台不再维护 Rime `CandidateProjection` 或第二份 Rime 候选视图；意识流的 1–3 个 target rows 是派生文本解释，不使用 Rime 候选状态机。
-- **InputFocusCoordinator**：把 controller、租约 `IMKTextInput`、`controller.client()` 当前对象身份、bundle id、宿主进程/前台锚点与单调 token 绑定；普通 App 的 `liveTarget` 重验全部身份及 frontmost bundle/PID。只有系统路径精确 allowlist 中的 `com.apple.Spotlight` 与 `com.apple.appkit.xpc.openAndSavePanelService` 可走瞬态系统界面路径：activation 只创建 suspended 预热租约，新鲜 keyDown 才建立可投递 epoch。Spotlight 冻结唯一 service PID、自有可见窗口和下层前台锚点；打开/保存面板接受多个 genuine 系统 service PID，但不选择其中任何一个，而是冻结发起 App bundle/PID 与其最前 layer-0 面板窗口 ID。后续 target/event/commit 都重验同一权限组合；keyUp/flagsChanged 不能建立或解锁，任一 workspace activation 都撤销。事件时间戳必须晚于 activation floor/最近已接受事件；先于 activate 的首键只建立短期 provisional 租约。explicit/implicit lifecycle callback 都必须与当前 client 一致；同一 proxy 跨字段或跨 controller 复用、异步 chord 回放失配、弱 client 过期时，旧 session 只在 Rime 内回收/丢弃，不调用已移动或释放的 proxy。
+- **CandidateWindow**：Rime 组字候选交互与显示的唯一状态机。普通模式锚定 caret；缓冲模式把同一个 `nonactivatingPanel` 锚定在工作台真实外沿：手动/无目标布局默认在下方，匹配焦点唤出 token 的上下文布局则严格沿远离输入框的一侧。因此主题、尺寸、翻页、单字选择和 token 化点击行为与常规候选完全一致。`isVisible` 必须同时满足逻辑 owner/context、可信 `interactionTarget`、非空内容、真实 panel 可见且位于 active Space；show/hide 统一记账，权限失败会同时清空 presentation，避免物理隐藏与逻辑可见分裂。候选专属键盘/鼠标/Option 手势还要过同一真实可见性门，临时 `orderOut` 可保留组字但不能隐式选择。三行矩阵先把 panel、scroll viewport 与 frame-driven document stack 准备到最终 78pt，再挂 3×24pt row（3pt 间隔）；document stack 禁止生成旧 compact frame 的 autoresizing-mask 约束。工作台不再维护 Rime `CandidateProjection` 或第二份 Rime 候选视图；意识流的 1–3 个 target rows 是派生文本解释，不使用 Rime 候选状态机。
+- **InputFocusCoordinator**：把 controller、租约 `IMKTextInput`、`controller.client()` 当前对象身份、bundle id、宿主进程/前台锚点与单调 token 绑定；普通 App 的 `liveTarget` 重验全部身份及 frontmost bundle/PID。只有精确 bundle/path allowlist 中的 `com.apple.Spotlight`、`com.wiheads.paste` 与 `com.apple.appkit.xpc.openAndSavePanelService` 可走瞬态界面路径：activation 只创建 suspended 预热租约，新鲜 keyDown 才建立可投递 epoch。Spotlight/Paste 冻结唯一 service PID、自有可见窗口和下层前台锚点；打开/保存面板接受多个 genuine 系统 service PID，但不选择其中任何一个，而是冻结发起 App bundle/PID 与其最前 layer-0 面板窗口 ID。后续 target/event/commit 都重验同一权限组合；keyUp/flagsChanged 不能建立或解锁，任一 workspace activation 都撤销。事件时间戳必须晚于 activation floor/最近已接受事件；先于 activate 的首键只建立短期 provisional 租约。无 bundle 的首键可暂用当前 PID，但不缓存该推测身份；后续 bundle/path 验证会刷新 epoch。同一 proxy 跨字段或跨 controller 复用时，生命周期回调保持锁闭，直到完全验证的 keyDown 确认新字段。异步 chord 回放失配、弱 client 过期时，旧 session 只在 Rime 内回收/丢弃，不调用已移动或释放的 proxy。
 - **ChordController + ChordSettings**：常规 Rime 路径负责 FlyYao release-replay；时长是 UI 可配置项（`ChordSettings`，默认 0.10s，UserDefaults + 通知）。意识流 `.chord`/`.mutual` 路径不把批次送入 Rime，而是复用同一时长、`FlyChordBatchState` 和有效 schema parser，在焦点绑定的 workspace 内分别执行同批映射或跨左右批精确重组。
 - **StatusMenu**：不建独立 NSStatusItem，命令挂在系统输入法菜单里（设置 / 收件箱 / 显示或关闭工作台 / 常显 / 移到当前屏幕 / 更新 / 部署 / 重装 / 重启）。
 
@@ -327,8 +327,9 @@ Delivery.insert(_ text, into: client)
 ```
 
 - **缓冲工作台是独立 `NSPanel`**：默认 nonactivating，不抢目标输入框焦点；顶部功能栏永久展开，普通高度固定 78pt。用户显式从隐藏态唤出时，宿主先恢复当前精确外部 `FocusToken` 的 marked guard，再以同一 live lease 前后校验一次 caret 行矩形。IMK 的 `attributes(forCharacterIndex:)` 使用 inline-session 相对下标 `0`；禁止传入文档级 `selectedRange`/`markedRange`。合法目标优先把工作台放在输入框下方，空间不足则翻到上方。最大 174pt 布局只用于预判可稳定容纳的一侧，真实 78/112/143/174pt frame 始终贴输入行 10pt，不预留不可见高度。无可信目标、secure input、零/异常/离屏矩形才使用鼠标所在屏幕的居中靠下位置。工作台显示后不会随焦点、输入或流式刷新追踪移动；自动 origin 不覆盖用户保存的 frame，被动启动和会话恢复也不重新锚定。实时翻译、AI 生成与单候选意识流的 source rail 在上、target rail 在下，固定为 112pt；Marine Chrome 的空上下文态折叠 source rail，以单 target rail 保持 78pt，真实上下文摘要或用户备注出现后才恢复 112pt；意识流出现 2/3 个候选时 target 增为 2/3 条独立滚动行，对应高度为 143/174pt。每条 target row 行内再以 chips 显示宿主分块。增长时必须先扩展 panel/rail 并完成 layout 再挂新 row；缩小时先移除 row 再收窄高度。每个横向 document stack 禁用 autoresizing-mask constraints，高度绑定 scroll viewport，并在 host geometry 变化后重算 document size。主条只保留正文轨与右侧主操作，发送与最下方目标行对齐。顶部功能栏固定显示状态、紧凑插件选择器与当前动作、右侧上下文诊断、刷新/重置与关闭，不再含 disclosure、专用拖拽手柄、块编辑器或面板内缓冲开关；其空白、间距与弹性留白可拖动窗口，`NSControl` 与正文轨不可拖。焦点锚定布局切 owner 或改变 target row 数时保持靠输入框的一侧并向外增减，匹配原 `FocusToken` 的 Rime 候选严格贴真实外沿继续向外；外侧空间不足时隐藏而不穿过输入行。手动/无目标布局仍固定底边并允许候选按常规方向翻侧。窗口仍可调整宽度，frame 持久化并在屏幕拓扑变化后夹回可见区域，旧展开态偏好不再参与布局。原来的标题/字数、手动遮蔽、历史、清空和工具层发送入口均已移除。
+- **跨 Space/显示器恢复是唯一焦点跟随例外**：缓冲捕获开启且新焦点仍是精确、可信、非 secure 的外部文本目标时，如果工作台滞留旧 Space，或合法 caret 已在另一物理显示器，就只迁移一次。当前 Space 同屏字段切换、输入和流式刷新不移动窗口。自动路径在真正置前前再次校验 token、secure input 与会话保护；拿不到合法 caret 时只重排原 frame，不使用鼠标屏 fallback。未固定窗口同时使用 `.moveToActiveSpace` 与 `.fullScreenAuxiliary`，固定窗口使用 `.canJoinAllSpaces` 与 `.fullScreenAuxiliary`；两组 Space 行为互斥。自动 origin 不覆盖用户手动位置，关闭仍通过暂停捕获表达明确隐藏意图。
 - **全局切换快捷键**：`GlobalHotKeyController` 用 Carbon 注册精确 `Command+Shift+B`，不需 Accessibility 权限，按下后调用 `BufferWindowController.toggleVisibility()`。关闭时它把非 pin 面板带到当前 Space、显示窗口并恢复 `BufferModel.enabled`；打开时复用 `closeAndPause()`，安全收束当前组字、保留块、暂停捕获并隐藏。该注册快捷键被消费，B 不继续传给前台应用。
-- **边缘绘制**：圆角层内缩到透明窗口边距，并覆盖固定的日/夜工作台背景 token，避免 HUD 背景采样破坏对比度；边框按 backing scale 以路径内 hairline 绘制，避免把居中 border 压在窗口 bounds 上造成圆角或边缘裁剪毛边。
+- **边缘绘制**：圆角层内缩到透明窗口边距，并覆盖固定的墨竹/翡翠工作台背景 token，避免 HUD 背景采样破坏对比度；边框按 backing scale 以路径内 hairline 绘制，避免把居中 border 压在窗口 bounds 上造成圆角或边缘裁剪毛边。
 - **关闭不会删除已有块**：先显式收束当前组字，暂停捕获，结束 transient 加载/错误状态并保留已有模型块，再隐藏。从设置/输入法菜单显示工作台时会恢复底层捕获。工作台没有手动清空或撤销入口；隐私选项触发的跨 app 清理仍是不可恢复的安全操作。
 - **常显与多屏**：pin 开启时加入所有桌面与全屏辅助空间；关闭时只属于一个 Space。工作台位于当前 Space 时，常规候选面板使用细条下沿作为锚点；需要时仍可跟随 caret。菜单“显示”会把仍留在旧 Space 的面板重新带到当前 Space，菜单和设置都能把窗口移到鼠标所在屏幕。
 - **隐私**：工作台不再维护手动遮蔽状态；secure input 会隐藏正文并禁用发送与插件动作。此时 Ctrl/Cmd+A/V 保留宿主原生处理，RIMES 在任何 pasteboard API 调用之前就返回。锁屏、睡眠或会话切出会撤销 FocusToken，只在 Rime 内回收/丢弃组字并隐藏窗口；恢复后等待新焦点租约。可选的切 app 清理只认真实外部 A→B，A→本应用窗口→A 不清理；混有任一外部来源块时则整体保留。
@@ -349,12 +350,14 @@ Delivery.insert(_ text, into: client)
 ```
 
 - 每个一级页的子页固定显示在右侧顶部；route/subpage 使用稳定字符串身份，不依赖 sidebar 行号。启停内置扩展后目录会重建；若当前扩展被停用，安全回退到「插件 ▸ 内置扩展」。
+- 主题只提供深色「墨竹」与浅色「翡翠」；为兼容已安装版本，`appearanceMode` 仍持久化为 `night` / `day`。两套主题主动选择 Aqua/Dark Aqua，不跟随系统明暗或系统强调色；产品强调色固定为绿色，同时继续尊重“增强对比度”辅助功能。
 - 输入法页明确分开三层：输入编码、键入模式和词库。运行时只暴露经过验证的 Rime 组合方案，不允许三层任意交叉，以免生成不可部署配置。`my_combo` 的产品名是「飞耀互击」；同一 schema 由完整的 `InputConfiguration.keyingMode` 区分“只结算当前批的并击”与“可跨批配对左右半区的互击”，两者都保留多键单侧批次，不能从 schema ID 反推。单个物理字母保持英文原码且不自动添加分词符；互击只在至少一侧为多键和弦时跨批配对。`my_combo` 仅覆盖物理和弦映射，候选拼写、中文/英文翻译及过滤链继承 `rime_ice`，因此多音节组字仍能选择前缀单字并正常翻页。无映射批保留可由 Return 提交的原码；`,`/`.` 只在 chord alphabet 中充当双角色键，单键结算继续落到 punctuator。词库页通过 librime `levers` API 维护真实的 `rime_ice` / `english` 用户学习库，导入是合并，导出是可移植 TSV，不复制 live LevelDB。
 - 缓冲区、连接器和外部插件管理仍接真实运行时；“AI 模型”子页用单选控件在 Codex CLI、Claude Code CLI 与 OpenAI 兼容 API 三个模型源间切换，展示两个 CLI 的可用性与授权/远程服务隐私说明，并管理 OpenAI 兼容 API 的 Base URL、model 与 API key。该单选独立于缓冲插件 owner；AI 生成、实时翻译和 Marine 的配置页可写回这个共享选择，意识流则维护自己的渠道选择（仍复用连接器授权/凭据）。插件列表中凡 registry 能解析配置 schema 的项目都显示同一个“设置…”入口。通用 SSE/SSH provider 尚未实现；Remarkable 只是用户显式调用、目标与命令固定的专用只读 SSH 动作。当前没有按来源编辑信任等级或重新生成 token 的 UI。
 
 ### 5.3 统一插件平台
 
 - `PluginRegistry` 是发现、命名空间、内置扩展生命周期和统一启停 facade；`PluginKey(domain, rawID)` 防止内置与外部包同名遮蔽。
+- **预置 Buffer 插件分发**：六个第一方 Buffer 插件仍编译在签名的 RIMES 进程内，网络内容只允许声明式安装凭据，绝不加载或执行下载的 Swift/脚本。`Catalog/buffer-plugins.json` 是版本与分发策略的唯一来源，生成运行时 catalog、中英文 README 表和可选插件 manifest，CI 用 `scripts/sync-buffer-plugin-catalog.py --check` 锁定三者及 SHA-256。全新用户只预装并启用 AI 生成、My Prompt、实时翻译和意识流输入；Remarkable、Marine Chrome 初始未下载且禁用。设置页只从与当前 app bundle 版本相同的 `scholay/rimes` GitHub Release 下载不可变、hash-pinned manifest 到 `~/Library/RimeBuffer/preset-plugins/`；宿主生成的 receipt 用 SHA-256 与安装实例共同绑定启用授权，重装/升级成功后仍保持关闭，必须由用户显式启用。旧用户只迁移一次，并保留原有安装与禁用选择；该目录属于重部署时必须保留的产品状态。
 - **外部缓冲插件**仍完全沿用 Action Plugin v1：`ActionPluginHost + ActionPluginManager` 是执行、runtime binding、授权与撤权的唯一 authority。Registry 不重建 wire metadata，也不能让外部包贡献原生 AppKit 设置页，因此 Marine 兼容路径不变。
 - **内置扩展/缓冲插件**是随应用编译的可信模块。统计、打字测速和飞耀互击学习贡献动态设置页；实时翻译、My Prompt、Remarkable、唯一「AI 生成」与「意识流输入」贡献 `.bufferAction`，在唯一 owner 下与 Marine 等插件互斥运行且不出现为左侧动态扩展页。My Prompt 是本地优先的派生检索 workspace；Remarkable 是普通缓冲的显式 importer，不建立 source/target 派生轨；二者都不会自动上屏。Codex CLI、Claude Code CLI 与 OpenAI 兼容 API 是 `AITextConnectorRegistry` 下的三个普通连接器，不再是三个插件；意识流用自己的 provider 字段选择其中一个，默认 OpenAI 兼容，不跟随共享 AI 单选。
 - `InputTelemetryBus` 是非消费型、脱敏的主线程观测通道：不携带正文、候选、IMK client、FocusToken、应用或焦点身份。secure input、RIMES 自身窗口和不可信/失焦目标不发事件；字符计数只在真正进入缓冲或 `Delivery.insert` 成功后发布。
@@ -394,7 +397,7 @@ Delivery.insert(_ text, into: client)
 |---|---|---|
 | 密码框保护 | `IsSecureEventInputEnabled()` 在投递动作时刻同步查；命中拒发 | ✅ M0（Delivery 唯一咽喉） |
 | 切换应用重置 | 默认跨应用保留；启用后，仅当整个缓冲不含外部来源块时不可撤销地丢弃 blocks；只要含外部块就全部保留 | ✅ |
-| 焦点租约 | 单调 FocusToken + controller/client 对象身份 + client bundle + 前台 bundle/PID + 事件/生命周期归因；Spotlight 另需唯一系统 PID/自有窗口，打开/保存面板另需全体服务来源可信/冻结发起 App 窗口，二者均由 keyDown 建权；无 recent/last client 回退 | ✅ |
+| 焦点租约 | 单调 FocusToken + controller/client 对象身份 + client bundle + 前台 bundle/PID + 事件/生命周期归因；Spotlight/Paste 另需精确路径、唯一 PID/自有窗口，打开/保存面板另需全体服务来源可信/冻结发起 App 窗口，两类都由 keyDown 建权；无 recent/last client 回退 | ✅ |
 | 工作台隐私 | secure-input 自动遮蔽正文并禁用发送/插件动作；锁屏/睡眠/会话切出撤销租约且不回写旧 client；自身设置窗口不成为缓冲捕获源 | ✅ |
 | 日志脱敏 | 用户文本走 `IMELog.redact()` 只记长度；日志 0600；CI 断言禁 `'\(…)'` 明文 | ✅ M0 |
 | 本地端口鉴权 | 只绑 127.0.0.1 + Bearer token（0600）+ 常数时间比较 + 严格解析上限 | ✅ M2 |
@@ -422,8 +425,8 @@ Delivery.insert(_ text, into: client)
   - 0600 JSON：按键统计（按日 + 全历史）、打字测速聚合、飞耀互击学习进度；测速中的“成文字符”按 Rime commit 计数（直输或进入缓冲均计入），只保存数量、不保存正文；损坏、超限或非普通文件均 fail-closed，不覆盖原数据。
   - Rime 用户数据：`~/Library/RimeBuffer`；词库维护只经官方 `levers` 导入/导出 portable TSV 或恢复官方快照，不直接复制/修改 LevelDB。
   - 日志：`~/rimebuffer.log`（0600，脱敏）。
-- **自更新**：UpdateManager 每小时查 GitHub Releases（这是隐私清单要计入的第 5 处出站）。
-- **发布链**：build_install.sh（dev→~/Library）/ scripts/make-pkg.sh（pkg→/Library）/ CI（编译 + plist 断言 + 日志断言 + smoke 组）/ release.yml（通用二进制）。签名为 ad-hoc（Dev ID 未申请，是钥匙串决策的根因）。
+- **自更新**：UpdateManager 每小时查 GitHub Releases（这是隐私清单要计入的第 5 处出站）；只下载严格版本名的 `.pkg`，以 GitHub HTTPS/大小上限、`pkgutil` + `spctl` 与当前 app Team ID 同时验证，再交给系统 Installer；不自替换 `/Library` payload。
+- **发布链**：`build_install.sh`（dev→`~/Library`，ad-hoc）/ `scripts/make-pkg.sh`（pkg→`/Library`）/ CI（编译 + plist 断言 + 日志断言 + smoke 组）/ `release.yml`（通用二进制）。正式 tag 必须逐层用同一 Developer ID Application Team 重签 bundled Mach-O/app，对 app 公证+staple，用 Developer ID Installer 签 pkg，再对 pkg 公证+staple；缺任一受保护凭据就 fail-closed。手动 workflow 的 ad-hoc/unsigned Artifact 仅供演练，不对外发布。
 
 ---
 
@@ -496,8 +499,8 @@ Sources/RimeBuffer/
 
 - `plugin-smoke` 覆盖 manifest 发现与 schema、可选 `preparePath` 契约、唯一 prepared presentation 提升到主操作及多动作歧义回退、request/generating/deliver 四态、普通块/其他 action/stale 结果不误亮纸飞机、上下文动作聚合及 `status.actionId` 动态切换、`~`/相对 runtime path、runtime 从新到旧回退与 status→prepare/invoke 精确绑定、只允许 loopback、prepared 五字段身份与 `blocks-v1` 格式校验、流式 1 MiB 响应上限、Bearer request、request/context/action/focus 路由规则、切 owner 后已完成 Marine block 仍保留原投递 authority、切换评论后迟到校验不得上屏、收件箱满载显式失败，以及 stale 结果经人工接受后保留来源但安全降级为普通文本。
 
-- `buffer-window-smoke` 覆盖 focus epoch/弱 lease 清理、target 的 current/expected token 与双 client 身份、普通前台 bundle/PID、事件顺序、provisional 与 nil-bundle activation、lifecycle/chord 隔离、own-PID 排除；Spotlight 矩阵另覆盖系统路径/唯一进程、双 PID/锚点匹配、nil anchor bundle 延续、进程重启/窗口隐藏拒绝、activation/keyDown/keyUp 建权差异及 workspace fail-closed；同时覆盖只在真实外部 A→B 触发的隐私清理。
-- 同一 smoke 还覆盖工作台布局契约（主条 rail/send、常显工具栏 status/plugin-selector+actions/refresh/close、工具栏空白拖窗而控件与正文轨不拖、状态不泄露应用去向）、`Command+Shift+B` 精确全局路由、缓冲 Return 的轻按/长按轮询判定、Return/Backspace 路由与 callback ownership；另覆盖长按进度在 secure-input 遮蔽时清除、派生 source/target 分行对齐、意识流 1–3 条 target row、全部 target rows 在遮蔽时擦除、active-Space 可见性和窗口 geometry：完全离屏时回到 fallback screen、超宽 frame 收进相交 screen、永久展开的普通 78pt 与 1/2/3 target rows 的 112/143/174pt 高度归一化、手动/无目标布局底边固定、焦点锚定布局 10pt 贴边并向外增减、候选严格贴真实外沿，以及可见区域窄于常规最小宽度时仍能完整放入。`plugin-stream-smoke` 另以 Marine 双 block 结果验证重复的单块主操作每次只消费一个 block。真实 IMK 回调顺序、宿主隔离与实际投递仍需安装后的交互回归。
+- `buffer-window-smoke` 覆盖 focus epoch/弱 lease 清理、target 的 current/expected token 与双 client 身份、普通前台 bundle/PID、事件顺序、provisional nil-bundle 不污染 PID cache、经验证身份刷新 epoch、复用 proxy 仅由可信 keyDown 解锁 lifecycle、own-PID 排除；Spotlight/Paste 矩阵另覆盖精确路径/唯一进程、双 PID/锚点匹配、进程重启/窗口隐藏拒绝、activation/keyDown/keyUp 建权差异及 workspace fail-closed；同时覆盖只在真实外部 A→B 触发的隐私清理。`activation-cache-smoke` 覆盖冷加载、命中、内容变化、原子替换、配置优先级变化与显式部署失效。
+- 同一 smoke 还覆盖工作台布局契约（主条 rail/send、常显工具栏 status/plugin-selector+actions/refresh/close、工具栏空白拖窗而控件与正文轨不拖、状态不泄露应用去向）、`Command+Shift+B` 精确全局路由、缓冲 Return 的轻按/长按轮询判定、Return/Backspace 路由与 callback ownership；另覆盖长按进度在 secure-input 遮蔽时清除、派生 source/target 分行对齐、意识流 1–3 条 target row、全部 target rows 在遮蔽时擦除、active-Space 可见性、跨 Space/显示器恢复门控、旧 Space 的 unpinned 重排和 pinned/unpinned 全屏 behavior，以及窗口 geometry：完全离屏时回到 fallback screen、超宽 frame 收进相交 screen、永久展开的普通 78pt 与 1/2/3 target rows 的 112/143/174pt 高度归一化、手动/无目标布局底边固定、焦点锚定布局 10pt 贴边并向外增减、候选严格贴真实外沿，以及可见区域窄于常规最小宽度时仍能完整放入。`plugin-stream-smoke` 另以 Marine 双 block 结果验证重复的单块主操作每次只消费一个 block。真实 Space/full-screen、IMK 回调顺序、宿主隔离与实际投递仍需安装后的交互回归。
 - `buffer-smoke` 覆盖成功块即时消费且不留历史、未发送块顺序、插入点、暂停保留、transient 状态清理与不可恢复的隐私丢弃。真实窗口关闭/锁屏和 IMK 交互仍需安装后的真机验证。
 
 ---
@@ -529,9 +532,9 @@ Sources/RimeBuffer/
 
 1. **身份三元组永不再改**——10 天换 5 代身份造成过 10+ 重复注册鬼影，CI 断言已钉死。
 2. **Delivery.insert 是唯一上屏咽喉**——任何新上屏路径都必须走它，安全护栏才生效。
-3. **FocusToken 是候选与缓冲投递的共同所有权**——迟到回调只能处理自己的 token；普通 App 的前台 bundle/PID 必须匹配；Spotlight 只能走精确系统路径 + 唯一 PID/自有窗口路径，AppKit 打开/保存面板只能走精确系统 XPC 集合 + 发起 App/冻结窗口路径，禁止把 accessory app 或任意 XPC 服务泛化放行；禁止恢复 `active ?? recent`、`lastClient` 或 bundle-only 投递兜底。
+3. **FocusToken 是候选与缓冲投递的共同所有权**——迟到回调只能处理自己的 token；普通 App 的前台 bundle/PID 必须匹配；Spotlight/Paste 只能走各自精确 bundle/path + 唯一 PID/自有窗口路径，AppKit 打开/保存面板只能走精确系统 XPC 集合 + 发起 App/冻结窗口路径，禁止把其他 accessory app 或任意 XPC 服务泛化放行；禁止恢复 `active ?? recent`、`lastClient` 或 bundle-only 投递兜底。
 4. **NWListener 连接对象必须持有**——不持有会立刻释放，`weak self` 变 nil，连接静默失效（spike 抓到过）。
-5. **异步事件不许拉起候选面板或工作台**——外部待决项可更新专用 nonactivating toast/收件箱提示；工作台显隐只由用户与持久化偏好决定。
+5. **异步内容事件不许拉起候选面板或工作台**——外部待决项可更新专用 nonactivating toast/收件箱提示；工作台显隐由用户与持久化的缓冲启停决定。唯一自动可见性修复是：缓冲已开启后，新的精确外部文本焦点证明窗口滞留旧 Space/显示器时，把既有工作台带回该焦点所在环境。
 6. **处理器必须在入缓冲侧跑**——结果先落块，投递路径保持同步、可逐块重验目标。
 7. **翻译 session 不得离开 SwiftUI 视图生命周期**——工作台内 1×1 `NSHostingView` 承载 `translationTask`；切插件、安全输入、锁屏和关闭时作废 generation。首次语言组合仍可由 macOS 请求下载本地模型。
 8. **钥匙串 vs ad-hoc 签名**——ad-hoc 下钥匙串每次重装弹密码，所有密钥用 0600 文件；拿 Dev ID 后再迁。

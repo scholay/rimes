@@ -12,6 +12,75 @@ extension Notification.Name {
     )
 }
 
+/// Cross-queue snapshot of whether the optional Marine Chrome plug-in is both
+/// installed and enabled. `PluginRegistry` remains main-thread owned; the
+/// loopback gateway reads only this fail-closed value from its Network queue.
+final class MarineChromeGatewayAvailability {
+    static let shared = MarineChromeGatewayAvailability()
+
+    private let lock = NSLock()
+    private var available: Bool
+
+    init(initiallyAvailable: Bool = false) {
+        available = initiallyAvailable
+    }
+
+    var isAvailable: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return available
+    }
+
+    /// Returns true only for a real availability transition.
+    @discardableResult
+    func update(_ newValue: Bool) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard available != newValue else { return false }
+        available = newValue
+        return true
+    }
+
+    /// Linearizes a persistence-capable operation with availability revocation.
+    /// Once `update(false)` returns, no guarded operation can still be writing a
+    /// newly issued proof credential or pairing origin.
+    func valueIfAvailable<T>(
+        _ operation: () throws -> T
+    ) rethrows -> T? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard available else { return nil }
+        return try operation()
+    }
+
+    func optionalValueIfAvailable<T>(
+        _ operation: () -> T?
+    ) -> T? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard available else { return nil }
+        return operation()
+    }
+}
+
+enum MarineChromeGatewayAvailabilityLifecycle {
+    /// Applies a Registry snapshot and revokes every in-memory authority exactly
+    /// once on an available -> unavailable transition.
+    static func reconcile(
+        _ available: Bool,
+        snapshot: MarineChromeGatewayAvailability = .shared,
+        cancelPairing: () -> Void,
+        cancelPrompt: () -> Void,
+        clearContext: () -> Void
+    ) {
+        let changed = snapshot.update(available)
+        guard changed, !available else { return }
+        cancelPairing()
+        cancelPrompt()
+        clearContext()
+    }
+}
+
 enum MarineChromeGatewayFiles {
     static var root: URL {
         let url = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DIR"].map {
@@ -467,16 +536,35 @@ final class MarineChromePairingBroker {
         var state: State
     }
 
-    static let shared = MarineChromePairingBroker { origin, generation in
-        guard let credential = MarineChromeCredentialTransaction.issue(
-            origin: origin,
-            expectedGeneration: generation
-        ) else { return nil }
-        DispatchQueue.main.async {
-            MarineChromeContextStore.shared.clear()
+    static let shared = MarineChromePairingBroker(
+        currentGeneration: {
+            MarineChromeGatewayAvailability.shared
+                .optionalValueIfAvailable {
+                    MarineChromeCredentialTransaction.currentGeneration()
+                }
+        },
+        generationMatches: { expected in
+            MarineChromeGatewayAvailability.shared.valueIfAvailable {
+                MarineChromeCredentialTransaction.matchesGeneration(expected)
+            } ?? false
+        },
+        issueCredential: { origin, generation in
+            // The gateway checks before submitting/polling a claim, and the
+            // approval UI checks again before presentation. Holding the same
+            // gate here closes the last race before credential persistence.
+            guard let credential = MarineChromeGatewayAvailability.shared
+                .optionalValueIfAvailable({
+                    MarineChromeCredentialTransaction.issue(
+                        origin: origin,
+                        expectedGeneration: generation
+                    )
+                }) else { return nil }
+            DispatchQueue.main.async {
+                MarineChromeContextStore.shared.clear()
+            }
+            return credential
         }
-        return credential
-    }
+    )
 
     private let lock = NSLock()
     private let now: () -> TimeInterval
@@ -745,6 +833,15 @@ enum MarineChromeGatewayRoutePolicy {
 
     static func allowedMethods(for path: String) -> Set<String>? {
         methodsByPath[path]
+    }
+
+    /// The public health probe is deliberately inert and may stay reachable so
+    /// the companion can diagnose that RIMES is running. Every route capable of
+    /// proving, pairing, authenticating, or mutating context is fail-closed
+    /// while the optional plug-in is absent or disabled.
+    static func permitsPluginAvailability(path: String,
+                                          isAvailable: Bool) -> Bool {
+        path == "/v1/marine-chrome/health" || isAvailable
     }
 
     static func allows(method: String, path: String) -> Bool {
