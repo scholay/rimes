@@ -274,14 +274,14 @@ func runThemeAppKitSmokeTest() -> Bool {
           "a disabled radio must reject accessibility press")
 
     let popup = RimeFixedAccentPopUpButton()
-    popup.addItems(withTitles: ["墨竹", "翡翠"])
+    popup.addItems(withTitles: ["墨竹", "翡翠", "静谧"])
     let popupProbe = FixedAccentPopUpActionProbe()
     popup.target = popupProbe
     popup.action = #selector(FixedAccentPopUpActionProbe.changed(_:))
-    check(popup.numberOfItems == 2 && popup.selectedItem?.title == "墨竹",
+    check(popup.numberOfItems == 3 && popup.selectedItem?.title == "墨竹",
           "fixed-accent popup should retain native menu selection behavior")
-    popup.selectItem(at: 1)
-    check(popup.selectedItem?.title == "翡翠" && popupProbe.count == 0,
+    popup.selectItem(at: 2)
+    check(popup.selectedItem?.title == "静谧" && popupProbe.count == 0,
           "programmatic popup selection should not dispatch an action")
     let nativePopup = NSPopUpButton()
     check(popup.accessibilityRole() == nativePopup.accessibilityRole()
@@ -340,12 +340,20 @@ func runThemeAppKitSmokeTest() -> Bool {
     check(matches(settingsWindow, mode: .day),
           "the same settings window should transition to 翡翠")
 
+    RimeUI.appearance = .quiet
+    drainMainRunLoop {
+        RimeUI.appearance == .quiet && matches(settingsWindow, mode: .quiet)
+    }
+    check(RimeUI.appearance == .quiet
+            && matches(settingsWindow, mode: .quiet),
+          "the same settings window should transition to dark 静谧")
+
     RimeUI.appearance = .night
     drainMainRunLoop { matches(settingsWindow, mode: .night) }
     check(matches(settingsWindow, mode: .night),
           "the same settings window should transition back to 墨竹")
-    check(appearanceNotificationCount == 2,
-          "墨竹→翡翠→墨竹 should emit exactly two appearance notifications")
+    check(appearanceNotificationCount == 3,
+          "墨竹→翡翠→静谧→墨竹 should emit exactly three appearance notifications")
 
     NotificationCenter.default.removeObserver(observer)
     settingsWindow?.close()

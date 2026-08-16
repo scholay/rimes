@@ -1,35 +1,86 @@
 import Carbon.HIToolbox
 import Foundation
 
-enum WorkbenchGlobalHotKeyRoute: Equatable {
-    case toggleVisibility
+enum GlobalHotKeyRoute: Equatable {
+    case toggleWorkbench
+    case openSettings
     case ignore
 }
 
-/// Pure definition/matcher for the process-wide workbench shortcut. Keeping
-/// this separate from registration lets smoke tests validate the contract
-/// without temporarily claiming a real global shortcut from the user's Mac.
-enum WorkbenchGlobalHotKeyRouting {
-    /// FourCC `ETBW` (Enter input method, Buffer Workbench).
-    static let signature: OSType = 0x4554_4257
-    static let identifierValue: UInt32 = 1
-    static let keyCode = UInt32(kVK_ANSI_B)
-    static let modifiers = UInt32(cmdKey | shiftKey)
+enum GlobalHotKeyAction: UInt32, CaseIterable, Hashable {
+    case toggleWorkbench = 1
+    case openSettings = 2
 
-    static var identifier: EventHotKeyID {
-        EventHotKeyID(signature: signature, id: identifierValue)
+    var shortcutAction: RimeShortcutAction {
+        switch self {
+        case .toggleWorkbench: return .toggleWorkbench
+        case .openSettings: return .openSettings
+        }
+    }
+}
+
+struct GlobalHotKeyDefinition {
+    let action: GlobalHotKeyAction
+    let keyCode: UInt32
+    let modifiers: UInt32
+
+    var logDescription: String {
+        "action=\(action) keyCode=\(keyCode) modifiers=\(modifiers)"
+    }
+
+    var identifier: EventHotKeyID {
+        EventHotKeyID(signature: GlobalHotKeyRouting.signature,
+                      id: action.rawValue)
+    }
+}
+
+/// Pure definitions and matching for the process-wide shortcuts. Keeping this
+/// separate from registration lets smoke tests validate the contract without
+/// temporarily claiming real global shortcuts from the user's Mac.
+enum GlobalHotKeyRouting {
+    /// FourCC `ETBW`; the original workbench namespace now owns all RIMES
+    /// process-global shortcuts while preserving its stable Carbon signature.
+    static let signature: OSType = 0x4554_4257
+
+    static func definitions(defaults: UserDefaults = .standard)
+        -> [GlobalHotKeyDefinition] {
+        GlobalHotKeyAction.allCases.map { action in
+            let shortcut = RimeShortcutPreferences.shortcut(
+                for: action.shortcutAction,
+                defaults: defaults
+            )
+            return GlobalHotKeyDefinition(action: action,
+                                          keyCode: UInt32(shortcut.keyCode),
+                                          modifiers: shortcut.carbonModifiers)
+        }
+    }
+
+    static func definition(
+        for action: GlobalHotKeyAction,
+        defaults: UserDefaults = .standard
+    ) -> GlobalHotKeyDefinition {
+        let shortcut = RimeShortcutPreferences.shortcut(
+            for: action.shortcutAction,
+            defaults: defaults
+        )
+        return GlobalHotKeyDefinition(action: action,
+                                      keyCode: UInt32(shortcut.keyCode),
+                                      modifiers: shortcut.carbonModifiers)
     }
 
     static func route(eventClass: OSType,
                       eventKind: UInt32,
-                      identifier: EventHotKeyID) -> WorkbenchGlobalHotKeyRoute {
+                      identifier: EventHotKeyID) -> GlobalHotKeyRoute {
         guard eventClass == OSType(kEventClassKeyboard),
               eventKind == UInt32(kEventHotKeyPressed),
               identifier.signature == signature,
-              identifier.id == identifierValue else {
+              let action = GlobalHotKeyAction(rawValue: identifier.id) else {
             return .ignore
         }
-        return .toggleVisibility
+        switch action {
+        case .toggleWorkbench: return .toggleWorkbench
+        case .openSettings: return .openSettings
+        }
     }
 }
 
@@ -42,57 +93,94 @@ final class GlobalHotKeyController {
     static let shared = GlobalHotKeyController()
 
     private var eventHandlerRef: EventHandlerRef?
-    private var hotKeyRef: EventHotKeyRef?
+    private var hotKeyRefs: [GlobalHotKeyAction: EventHotKeyRef] = [:]
+    private var shortcutPreferencesObserver: NSObjectProtocol?
 
-    private init() {}
+    private init() {
+        shortcutPreferencesObserver = NotificationCenter.default.addObserver(
+            forName: .rimeShortcutPreferencesDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            if let rawAction = notification.userInfo?["action"] as? String,
+               let action = RimeShortcutAction(rawValue: rawAction),
+               action != .toggleWorkbench,
+               action != .openSettings {
+                return
+            }
+            _ = self?.reloadFromPreferences()
+        }
+    }
 
     @discardableResult
     func install() -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
-        if hotKeyRef != nil { return true }
 
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
-        var installedHandler: EventHandlerRef?
-        let handlerStatus = InstallEventHandler(
-            GetApplicationEventTarget(),
-            Self.eventHandler,
-            1,
-            &eventType,
-            Unmanaged.passUnretained(self).toOpaque(),
-            &installedHandler
-        )
-        guard handlerStatus == noErr, let installedHandler else {
-            IMELog.write("global hotkey handler install failed status=\(handlerStatus)")
-            return false
-        }
-        eventHandlerRef = installedHandler
-
-        var registeredHotKey: EventHotKeyRef?
-        let registrationStatus = RegisterEventHotKey(
-            WorkbenchGlobalHotKeyRouting.keyCode,
-            WorkbenchGlobalHotKeyRouting.modifiers,
-            WorkbenchGlobalHotKeyRouting.identifier,
-            GetApplicationEventTarget(),
-            OptionBits(kEventHotKeyNoOptions),
-            &registeredHotKey
-        )
-        guard registrationStatus == noErr, let registeredHotKey else {
-            IMELog.write("global hotkey registration failed shortcut=Cmd+Shift+B status=\(registrationStatus)")
-            _ = RemoveEventHandler(installedHandler)
-            eventHandlerRef = nil
-            return false
+        if eventHandlerRef == nil {
+            var eventType = EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyPressed)
+            )
+            var installedHandler: EventHandlerRef?
+            let handlerStatus = InstallEventHandler(
+                GetApplicationEventTarget(),
+                Self.eventHandler,
+                1,
+                &eventType,
+                Unmanaged.passUnretained(self).toOpaque(),
+                &installedHandler
+            )
+            guard handlerStatus == noErr, let installedHandler else {
+                IMELog.write("global hotkey handler install failed status=\(handlerStatus)")
+                return false
+            }
+            eventHandlerRef = installedHandler
         }
 
-        hotKeyRef = registeredHotKey
-        IMELog.write("global hotkey installed shortcut=Cmd+Shift+B")
-        return true
+        let definitions = GlobalHotKeyRouting.definitions()
+        for definition in definitions
+        where hotKeyRefs[definition.action] == nil {
+            var registeredHotKey: EventHotKeyRef?
+            let registrationStatus = RegisterEventHotKey(
+                definition.keyCode,
+                definition.modifiers,
+                definition.identifier,
+                GetApplicationEventTarget(),
+                OptionBits(kEventHotKeyNoOptions),
+                &registeredHotKey
+            )
+            guard registrationStatus == noErr, let registeredHotKey else {
+                IMELog.write(
+                    "global hotkey registration failed "
+                        + "\(definition.logDescription) status=\(registrationStatus)"
+                )
+                continue
+            }
+
+            hotKeyRefs[definition.action] = registeredHotKey
+            IMELog.write("global hotkey installed \(definition.logDescription)")
+        }
+
+        return hotKeyRefs.count == definitions.count
+    }
+
+    /// Settings can persist new bindings, then call this method to apply them
+    /// without restarting the input method process.
+    @discardableResult
+    func reloadFromPreferences() -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        for hotKeyRef in hotKeyRefs.values {
+            _ = UnregisterEventHotKey(hotKeyRef)
+        }
+        hotKeyRefs.removeAll()
+        return install()
     }
 
     deinit {
-        if let hotKeyRef {
+        if let shortcutPreferencesObserver {
+            NotificationCenter.default.removeObserver(shortcutPreferencesObserver)
+        }
+        for hotKeyRef in hotKeyRefs.values {
             _ = UnregisterEventHotKey(hotKeyRef)
         }
         if let eventHandlerRef {
@@ -119,28 +207,39 @@ final class GlobalHotKeyController {
             nil,
             &identifier
         )
-        guard parameterStatus == noErr,
-              WorkbenchGlobalHotKeyRouting.route(
-                eventClass: GetEventClass(event),
-                eventKind: GetEventKind(event),
-                identifier: identifier
-              ) == .toggleVisibility else {
+        guard parameterStatus == noErr else {
+            return OSStatus(eventNotHandledErr)
+        }
+        let route = GlobalHotKeyRouting.route(
+            eventClass: GetEventClass(event),
+            eventKind: GetEventKind(event),
+            identifier: identifier
+        )
+        guard route != .ignore else {
             return OSStatus(eventNotHandledErr)
         }
 
         // The application event target normally invokes us on the main loop;
         // retain the same behavior defensively if Carbon ever calls elsewhere.
-        let toggleWorkbench = {
-            BufferWindowController.shared.toggleVisibility()
-            IMELog.write("global hotkey toggled buffer workbench")
+        let performRoute = {
+            switch route {
+            case .toggleWorkbench:
+                BufferWindowController.shared.toggleVisibility()
+                IMELog.write("global hotkey toggled buffer workbench")
+            case .openSettings:
+                SettingsWindowController.shared.show()
+                IMELog.write("global hotkey opened settings")
+            case .ignore:
+                break
+            }
         }
         if Thread.isMainThread {
-            toggleWorkbench()
+            performRoute()
         } else {
-            DispatchQueue.main.async(execute: toggleWorkbench)
+            DispatchQueue.main.async(execute: performRoute)
         }
 
-        // This exact registered hot key is ours. Mark it handled so the B key
+        // This exact registered hot key is ours. Mark it handled so its key
         // cannot continue into the focused host application.
         return noErr
     }

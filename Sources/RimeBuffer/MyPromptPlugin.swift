@@ -140,7 +140,10 @@ final class MyPromptWorkspace: DerivedBufferWorkspace,
                 return notice ?? "没有匹配提示词"
             }
             if deliveryLease != nil {
-                return "已确认提示词 · Enter 上屏"
+                let key = RimeShortcutPreferences
+                    .shortcut(for: .deliverBuffer)
+                    .displayTitle
+                return "已确认提示词 · \(key) 上屏"
             }
             let selection = min(selectedPosition + 1, candidates.count)
             let base = candidates.count > 1

@@ -1,7 +1,7 @@
 import AppKit
 
-/// A product-owned switch that keeps RIMES green instead of inheriting the
-/// user's macOS accent preference. It deliberately subclasses `NSControl`:
+/// A product-owned switch that keeps the selected theme accent instead of
+/// inheriting the user's macOS accent preference. It deliberately subclasses `NSControl`:
 /// `NSSwitch` renders through private AppKit internals and does not call an
 /// overridden `draw(_:)`, so it cannot be reliably recolored.
 class RimeFixedAccentSwitch: NSControl {
@@ -136,7 +136,8 @@ class RimeFixedAccentSwitch: NSControl {
             width: knobSize,
             height: knobSize
         )
-        NSColor.white.withAlphaComponent(isEnabled ? 1 : 0.70).setFill()
+        let knobColor = isOn ? RimeUI.accentForegroundColor : NSColor.white
+        knobColor.withAlphaComponent(isEnabled ? 1 : 0.70).setFill()
         NSBezierPath(ovalIn: knobRect).fill()
 
         if window?.firstResponder === self {

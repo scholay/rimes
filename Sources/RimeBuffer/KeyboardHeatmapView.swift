@@ -86,7 +86,7 @@ final class KeyboardHeatmapView: NSView {
         path.fill()
         let foreground = labelColor(background: fill)
 
-        RimeUI.border.withAlphaComponent(RimeUI.isNight ? 0.75 : 0.55).setStroke()
+        RimeUI.border.withAlphaComponent(RimeUI.isDark ? 0.75 : 0.55).setStroke()
         path.lineWidth = hoveredKeyId == key.keyId ? 1.6 : 1
         path.stroke()
 

@@ -1,6 +1,6 @@
 import AppKit
 
-/// Native popup behavior with a product-owned disclosure treatment. AppKit's
+/// Native popup behavior with a theme-owned disclosure treatment. AppKit's
 /// `bezelColor` is ignored by the standard popup cell on supported macOS
 /// versions, so drawing the chevrons here is the reliable way to avoid the
 /// user's system accent leaking into RIMES settings.
@@ -26,11 +26,7 @@ class RimeFixedAccentPopUpButton: NSPopUpButton {
             yRadius: min(6, indicatorRect.height / 2)
         ).fill()
 
-        let foreground = RimeUI.color(
-            RimeColorContrast.preferredForeground(
-                background: RimeThemePalettes.productGreen
-            )
-        ).withAlphaComponent(alpha)
+        let foreground = RimeUI.accentForegroundColor.withAlphaComponent(alpha)
         foreground.setStroke()
         drawChevron(centerY: indicatorRect.midY + 3, pointsUp: true)
         drawChevron(centerY: indicatorRect.midY - 3, pointsUp: false)

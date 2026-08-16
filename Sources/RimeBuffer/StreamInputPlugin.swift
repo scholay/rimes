@@ -956,12 +956,18 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
                 return "正在逐块上屏 · 还剩 \(remaining) 块"
             }
             if confirmedAlternativeIndex != nil {
-                return "已确认当前答案 · Enter 逐块上屏"
+                let key = RimeShortcutPreferences
+                    .shortcut(for: .deliverBuffer)
+                    .displayTitle
+                return "已确认当前答案 · \(key) 逐块上屏"
             }
             if outputBlocks.count > 1 {
                 return "已选 \(selectedAlternativePosition + 1)/\(outputBlocks.count) · ↑↓ 切换"
             }
-            return "结果已就绪 · Enter 逐块上屏"
+            let key = RimeShortcutPreferences
+                .shortcut(for: .deliverBuffer)
+                .displayTitle
+            return "结果已就绪 · \(key) 逐块上屏"
         }
     }
 

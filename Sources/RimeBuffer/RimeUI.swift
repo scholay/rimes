@@ -4,11 +4,28 @@ import QuartzCore
 enum RimeAppearanceMode: String, CaseIterable {
     case night
     case day
+    case quiet
 
     var title: String {
         switch self {
         case .night: return "墨竹"
         case .day: return "翡翠"
+        case .quiet: return "静谧"
+        }
+    }
+
+    var usesDarkSurfaces: Bool {
+        switch self {
+        case .night, .quiet: return true
+        case .day: return false
+        }
+    }
+
+    var palette: RimeThemePalette {
+        switch self {
+        case .night: return RimeThemePalettes.night
+        case .day: return RimeThemePalettes.day
+        case .quiet: return RimeThemePalettes.quiet
         }
     }
 
@@ -18,6 +35,8 @@ enum RimeAppearanceMode: String, CaseIterable {
         case (.night, true): return .accessibilityHighContrastDarkAqua
         case (.day, false): return .aqua
         case (.day, true): return .accessibilityHighContrastAqua
+        case (.quiet, false): return .darkAqua
+        case (.quiet, true): return .accessibilityHighContrastDarkAqua
         }
     }
 }
@@ -43,12 +62,26 @@ struct RimeThemePalette {
     let selectedCandidateBackground: UInt32
     let selectedCandidateText: UInt32
     let candidateBackground: UInt32
+
+    var accentForeground: UInt32 {
+        RimeColorContrast.preferredForeground(background: accentGreen)
+    }
+
+    /// Small status copy needs normal-text contrast. The bright accent works
+    /// on dark themes; light themes fall back to their deeper selection tone.
+    var accentText: UInt32 {
+        RimeColorContrast.ratio(
+            foreground: accentGreen,
+            background: surfaceSecondary
+        ) >= 4.5 ? accentGreen : selectedCandidateBackground
+    }
 }
 
 enum RimeThemePalettes {
-    /// The product accent is intentionally independent of the macOS accent
-    /// preference. Keep the legacy `accentBlue`/`accentGreen` palette slots in
-    /// sync while their call sites are migrated to a single semantic token.
+    /// 墨竹 and 翡翠 share the product green. 静谧 intentionally replaces it
+    /// with a neutral accent, while every theme remains independent of the
+    /// user's macOS accent preference. Keep the legacy `accentBlue` and
+    /// `accentGreen` slots in sync inside each palette.
     static let productGreen: UInt32 = 0x22C55E
 
     static let night = RimeThemePalette(
@@ -90,6 +123,28 @@ enum RimeThemePalettes {
         selectedCandidateBackground: 0x0F6A3F,
         selectedCandidateText: 0xFFFFFF,
         candidateBackground: 0xF8FAFC
+    )
+
+    /// A deliberately chroma-free dark palette. Accent surfaces are light
+    /// enough to remain readable as status text; controls choose their black
+    /// or white foreground from `accentForeground` instead of assuming white.
+    static let quiet = RimeThemePalette(
+        accentBlue: 0xA3A3A3,
+        accentGreen: 0xA3A3A3,
+        bufferBackground: 0x111111,
+        bufferBackgroundSecondary: 0x1C1C1C,
+        bufferBorder: 0x6B6B6B,
+        surface: 0x141414,
+        surfaceSecondary: 0x1B1B1B,
+        surfaceTertiary: 0x252525,
+        border: 0x3A3A3A,
+        borderStrong: 0x737373,
+        textPrimary: 0xF5F5F5,
+        textSecondary: 0xC7C7C7,
+        textMuted: 0xA3A3A3,
+        selectedCandidateBackground: 0x6B6B6B,
+        selectedCandidateText: 0xFFFFFF,
+        candidateBackground: 0x141414
     )
 }
 
@@ -147,7 +202,7 @@ enum RimeUI {
 
     static var appearance: RimeAppearanceMode {
         get {
-            // Development renderers can exercise both themes without
+            // Development renderers can exercise every theme without
             // mutating the user's persisted preference domain.
             if let raw = ProcessInfo.processInfo.environment["RIMEBUFFER_APPEARANCE_MODE"],
                let mode = RimeAppearanceMode(rawValue: raw) {
@@ -172,10 +227,10 @@ enum RimeUI {
         }
     }
 
-    static var isNight: Bool { appearance == .night }
+    static var isDark: Bool { appearance.usesDarkSurfaces }
 
     static var palette: RimeThemePalette {
-        isNight ? RimeThemePalettes.night : RimeThemePalettes.day
+        appearance.palette
     }
 
     static var appKitAppearance: NSAppearance? {
@@ -187,6 +242,8 @@ enum RimeUI {
 
     static var accentBlue: NSColor { color(palette.accentBlue) }
     static var accentGreen: NSColor { color(palette.accentGreen) }
+    static var accentForegroundColor: NSColor { color(palette.accentForeground) }
+    static var accentTextColor: NSColor { color(palette.accentText) }
     static var bufferBg: NSColor { color(palette.bufferBackground) }
     static var bufferBg2: NSColor { color(palette.bufferBackgroundSecondary) }
     static var bufferBorder: NSColor { color(palette.bufferBorder) }

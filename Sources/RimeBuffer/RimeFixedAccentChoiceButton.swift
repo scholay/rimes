@@ -1,7 +1,7 @@
 import AppKit
 
 /// Product-owned checkbox/radio control whose selected state always uses the
-/// RIMES green instead of the user's macOS accent preference.
+/// current theme accent instead of the user's macOS accent preference.
 final class RimeFixedAccentChoiceButton: NSControl {
     enum Style {
         case checkbox
@@ -238,7 +238,7 @@ final class RimeFixedAccentChoiceButton: NSControl {
         check.lineCapStyle = .round
         check.lineJoinStyle = .round
         check.lineWidth = max(1.5, rect.width * 0.12)
-        NSColor.white.withAlphaComponent(alpha).setStroke()
+        RimeUI.accentForegroundColor.withAlphaComponent(alpha).setStroke()
         check.stroke()
     }
 

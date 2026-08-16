@@ -70,9 +70,7 @@ final class MarineChromePairingPromptController: NSObject, NSWindowDelegate {
         let code = NSTextField(labelWithString: request.displayCode)
         code.font = .monospacedSystemFont(ofSize: 26, weight: .bold)
         code.alignment = .center
-        code.textColor = RimeUI.isNight
-            ? RimeUI.accentGreen
-            : RimeUI.selectedCandidateBackgroundColor
+        code.textColor = RimeUI.accentTextColor
         code.setContentHuggingPriority(.required, for: .vertical)
         codeLabel = code
 
@@ -125,9 +123,7 @@ final class MarineChromePairingPromptController: NSObject, NSWindowDelegate {
 
     private func applyAppearance() {
         panel?.appearance = RimeUI.appKitAppearance
-        codeLabel?.textColor = RimeUI.isNight
-            ? RimeUI.accentGreen
-            : RimeUI.selectedCandidateBackgroundColor
+        codeLabel?.textColor = RimeUI.accentTextColor
         panel?.contentView?.needsDisplay = true
     }
 

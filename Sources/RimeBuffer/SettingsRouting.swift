@@ -83,14 +83,14 @@ enum CoreSettingsSubpages {
                 ("dictionaries", "词库"),
             ]
         case .appearance:
-            values = [("candidate-window", "候选窗"), ("theme", "主题")]
+            values = [("theme", "主题"), ("size", "尺寸")]
         case .buffer:
-            values = [("general", "常规"), ("workbench", "工作台")]
+            values = [("buffer", "缓冲区")]
         case .connectors:
             values = [
-                ("remote-typing", "隔空传字"),
-                ("local-gateway", "本地网关"),
                 ("ai-model", "AI 模型"),
+                ("local-gateway", "本地网关"),
+                ("remote-typing", "隔空传字"),
             ]
         case .plugins:
             return PluginManagementSubpage.allCases.map {
@@ -462,11 +462,18 @@ func runSettingsRoutingSmokeTest() -> Bool {
               catalog.sections.map(\.id) == [.core, .extensions],
               catalog.route(for: SettingsCoreRoute.plugins.id)?.subpages.map(\.id)
                 == PluginManagementSubpage.allCases.map(\.id),
+              catalog.route(for: SettingsCoreRoute.appearance.id)?.subpages.map(\.id)
+                == [
+                    SettingsSubpageID(rawValue: "theme"),
+                    SettingsSubpageID(rawValue: "size"),
+                ],
+              catalog.route(for: SettingsCoreRoute.buffer.id)?.subpages.map(\.id)
+                == [SettingsSubpageID(rawValue: "buffer")],
               catalog.route(for: SettingsCoreRoute.connectors.id)?.subpages.map(\.id)
                 == [
-                    SettingsSubpageID(rawValue: "remote-typing"),
-                    SettingsSubpageID(rawValue: "local-gateway"),
                     SettingsSubpageID(rawValue: "ai-model"),
+                    SettingsSubpageID(rawValue: "local-gateway"),
+                    SettingsSubpageID(rawValue: "remote-typing"),
                 ] else {
             return fail("stable route catalog")
         }

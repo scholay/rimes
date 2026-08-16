@@ -1477,9 +1477,7 @@ final class PluginConfigurationViewController: NSViewController,
         if isError {
             statusLabel.textColor = .systemRed
         } else if isSuccess {
-            statusLabel.textColor = RimeUI.isNight
-                ? RimeUI.accentGreen
-                : RimeUI.selectedCandidateBackgroundColor
+            statusLabel.textColor = RimeUI.accentTextColor
         } else {
             statusLabel.textColor = .secondaryLabelColor
         }

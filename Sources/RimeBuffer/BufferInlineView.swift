@@ -227,8 +227,8 @@ private final class TranslationRailChipView: NSStackView {
         layer?.backgroundColor = (target
             ? RimeUI.accentBlue.withAlphaComponent(
                 renderedSelected
-                    ? (RimeUI.isNight ? 0.30 : 0.20) + extraEmphasis
-                    : (RimeUI.isNight ? 0.22 : 0.14) + extraEmphasis
+                    ? (RimeUI.isDark ? 0.30 : 0.20) + extraEmphasis
+                    : (RimeUI.isDark ? 0.22 : 0.14) + extraEmphasis
             )
             : RimeUI.surface2).cgColor
         layer?.borderColor = (renderedSelected || pointerHovered
@@ -705,7 +705,7 @@ final class BufferInlineView: NSView {
             loadingActive: model.transientLoadingActive,
             translation: translation,
             shielded: false,
-            isNight: RimeUI.isNight
+            isNight: RimeUI.isDark
         )
         if signature == lastRenderSignature {
             isHidden = false
@@ -811,7 +811,7 @@ final class BufferInlineView: NSView {
             loadingActive: false,
             translation: nil,
             shielded: true,
-            isNight: RimeUI.isNight
+            isNight: RimeUI.isDark
         )
         if signature == lastRenderSignature {
             isHidden = true
@@ -1132,8 +1132,8 @@ final class BufferInlineView: NSView {
         box.wantsLayer = true
         box.layer?.backgroundColor = RimeUI.accentBlue.withAlphaComponent(
             selected
-                ? (RimeUI.isNight ? 0.34 : 0.24)
-                : (RimeUI.isNight ? 0.22 : 0.14)
+                ? (RimeUI.isDark ? 0.34 : 0.24)
+                : (RimeUI.isDark ? 0.22 : 0.14)
         ).cgColor
         box.layer?.cornerRadius = BufferInlineMetrics.chipCornerRadius
         box.layer?.borderColor = (selected ? RimeUI.accentBlue : RimeUI.border).cgColor
@@ -1200,7 +1200,7 @@ final class BufferInlineView: NSView {
         let box = NSView()
         box.wantsLayer = true
         box.layer?.backgroundColor = RimeUI.accentBlue.withAlphaComponent(
-            RimeUI.isNight ? 0.34 : 0.22
+            RimeUI.isDark ? 0.34 : 0.22
         ).cgColor
         box.layer?.borderWidth = 1
         box.layer?.borderColor = RimeUI.accentBlue.withAlphaComponent(0.45).cgColor
@@ -1403,14 +1403,14 @@ final class BufferInlineView: NSView {
         layer?.backgroundColor = RimeUI.candidateBackgroundColor.cgColor
         layer?.borderColor = RimeUI.borderStrong.cgColor
         translationSourceScroll.layer?.backgroundColor = RimeUI.surface2
-            .withAlphaComponent(RimeUI.isNight ? 0.70 : 0.78).cgColor
+            .withAlphaComponent(RimeUI.isDark ? 0.70 : 0.78).cgColor
         for rail in translationTargetRails.values {
             rail.scroll.layer?.backgroundColor = RimeUI.accentBlue
-                .withAlphaComponent(RimeUI.isNight ? 0.13 : 0.08).cgColor
+                .withAlphaComponent(RimeUI.isDark ? 0.13 : 0.08).cgColor
         }
         caretView.layer?.backgroundColor = RimeUI.accentBlue.cgColor
         enterHoldProgressLayer.backgroundColor = RimeUI.accentBlue.cgColor
-        emptyLabel.textColor = RimeUI.isNight ? RimeUI.textSecondary : RimeUI.textMuted
+        emptyLabel.textColor = RimeUI.isDark ? RimeUI.textSecondary : RimeUI.textMuted
         translationSourceEmptyLabel.textColor = RimeUI.textSecondary
         translationTargetEmptyLabel.textColor = RimeUI.textSecondary
     }

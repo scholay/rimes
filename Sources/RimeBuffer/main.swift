@@ -5227,29 +5227,193 @@ func runBufferWindowSmokeTest() -> Bool {
         return false
     }
 
-    let workbenchHotKeyID = WorkbenchGlobalHotKeyRouting.identifier
-    let unrelatedHotKeyID = EventHotKeyID(
-        signature: WorkbenchGlobalHotKeyRouting.signature,
-        id: WorkbenchGlobalHotKeyRouting.identifierValue + 1
+    let hotKeyDefaultsSuite = "RimeBuffer.GlobalHotKeySmoke.\(UUID().uuidString)"
+    guard let hotKeyDefaults = UserDefaults(suiteName: hotKeyDefaultsSuite) else {
+        print("FAILED: could not create isolated global hotkey preferences")
+        return false
+    }
+    defer { hotKeyDefaults.removePersistentDomain(forName: hotKeyDefaultsSuite) }
+
+    let workbenchHotKey = GlobalHotKeyRouting.definition(
+        for: .toggleWorkbench,
+        defaults: hotKeyDefaults
     )
-    guard WorkbenchGlobalHotKeyRouting.keyCode == UInt32(kVK_ANSI_B),
-          WorkbenchGlobalHotKeyRouting.modifiers == UInt32(cmdKey | shiftKey),
-          WorkbenchGlobalHotKeyRouting.route(
+    let settingsHotKey = GlobalHotKeyRouting.definition(
+        for: .openSettings,
+        defaults: hotKeyDefaults
+    )
+    let workbenchHotKeyID = workbenchHotKey.identifier
+    let settingsHotKeyID = settingsHotKey.identifier
+    let unrelatedHotKeyID = EventHotKeyID(
+        signature: GlobalHotKeyRouting.signature,
+        id: UInt32.max
+    )
+    let customSettingsShortcut = RimeKeyboardShortcut(
+        keyCode: UInt16(kVK_ANSI_G),
+        modifiers: [.control, .option]
+    )
+    do {
+        try RimeShortcutPreferences.set(
+            customSettingsShortcut,
+            for: .openSettings,
+            defaults: hotKeyDefaults
+        )
+    } catch {
+        print("FAILED: could not persist isolated global hotkey preference \(error)")
+        return false
+    }
+    let reloadedSettingsHotKey = GlobalHotKeyRouting.definition(
+        for: .openSettings,
+        defaults: hotKeyDefaults
+    )
+    let defaultDeliveryShortcut = RimeShortcutPreferences.shortcut(
+        for: .deliverBuffer,
+        defaults: hotKeyDefaults
+    )
+    let customDeliveryShortcut = RimeKeyboardShortcut(
+        keyCode: UInt16(kVK_F6),
+        modifiers: []
+    )
+    do {
+        try RimeShortcutPreferences.set(
+            customDeliveryShortcut,
+            for: .deliverBuffer,
+            defaults: hotKeyDefaults
+        )
+    } catch {
+        print("FAILED: could not persist isolated delivery shortcut \(error)")
+        return false
+    }
+    let commandDeliveryShortcut = RimeKeyboardShortcut(
+        keyCode: UInt16(kVK_ANSI_D),
+        modifiers: [.command]
+    )
+    do {
+        try RimeShortcutPreferences.set(
+            commandDeliveryShortcut,
+            for: .deliverBuffer,
+            defaults: hotKeyDefaults
+        )
+    } catch {
+        print("FAILED: could not persist Command delivery shortcut \(error)")
+        return false
+    }
+    var rejectedUnsafeBareShortcut = false
+    do {
+        try RimeShortcutPreferences.set(
+            RimeKeyboardShortcut(keyCode: UInt16(kVK_ANSI_A), modifiers: []),
+            for: .deliverBuffer,
+            defaults: hotKeyDefaults
+        )
+    } catch RimeShortcutPreferenceError.unsafeBareKey {
+        rejectedUnsafeBareShortcut = true
+    } catch {
+        print("FAILED: wrong unsafe delivery shortcut error \(error)")
+        return false
+    }
+    var rejectedReservedEditingShortcut = false
+    do {
+        try RimeShortcutPreferences.set(
+            RimeKeyboardShortcut(
+                keyCode: UInt16(kVK_ANSI_A),
+                modifiers: [.command]
+            ),
+            for: .previousPlugin,
+            defaults: hotKeyDefaults
+        )
+    } catch RimeShortcutPreferenceError.reservedBufferEditingShortcut {
+        rejectedReservedEditingShortcut = true
+    } catch {
+        print("FAILED: wrong reserved editing shortcut error \(error)")
+        return false
+    }
+    var rejectedShortcutConflict = false
+    do {
+        try RimeShortcutPreferences.set(
+            customSettingsShortcut,
+            for: .previousPlugin,
+            defaults: hotKeyDefaults
+        )
+    } catch RimeShortcutPreferenceError.conflict(.openSettings) {
+        rejectedShortcutConflict = true
+    } catch {
+        print("FAILED: wrong shortcut conflict error \(error)")
+        return false
+    }
+    let customWorkbenchShortcut = RimeKeyboardShortcut(
+        keyCode: UInt16(kVK_ANSI_X),
+        modifiers: [.command, .shift]
+    )
+    do {
+        try RimeShortcutPreferences.set(
+            customWorkbenchShortcut,
+            for: .toggleWorkbench,
+            defaults: hotKeyDefaults
+        )
+        try RimeShortcutPreferences.set(
+            RimeShortcutAction.toggleWorkbench.defaultShortcut,
+            for: .openSettings,
+            defaults: hotKeyDefaults
+        )
+    } catch {
+        print("FAILED: could not prepare reset conflict \(error)")
+        return false
+    }
+    var rejectedResetConflict = false
+    do {
+        try RimeShortcutPreferences.reset(
+            .toggleWorkbench,
+            defaults: hotKeyDefaults
+        )
+    } catch RimeShortcutPreferenceError.conflict(.openSettings) {
+        rejectedResetConflict = true
+    } catch {
+        print("FAILED: wrong reset conflict error \(error)")
+        return false
+    }
+
+    guard workbenchHotKey.keyCode == UInt32(kVK_ANSI_B),
+          workbenchHotKey.modifiers == UInt32(cmdKey | shiftKey),
+          settingsHotKey.keyCode == UInt32(kVK_ANSI_S),
+          settingsHotKey.modifiers == UInt32(cmdKey | shiftKey),
+          workbenchHotKeyID.id != settingsHotKeyID.id,
+          reloadedSettingsHotKey.keyCode == UInt32(kVK_ANSI_G),
+          reloadedSettingsHotKey.modifiers == UInt32(controlKey | optionKey),
+          defaultDeliveryShortcut
+            == RimeShortcutAction.deliverBuffer.defaultShortcut,
+          RimeShortcutPreferences.shortcut(
+            for: .deliverBuffer,
+            defaults: hotKeyDefaults
+          ) == commandDeliveryShortcut,
+          rejectedUnsafeBareShortcut,
+          rejectedReservedEditingShortcut,
+          rejectedShortcutConflict,
+          rejectedResetConflict,
+          RimeShortcutPreferences.shortcut(
+            for: .toggleWorkbench,
+            defaults: hotKeyDefaults
+          ) == customWorkbenchShortcut,
+          GlobalHotKeyRouting.route(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed),
             identifier: workbenchHotKeyID
-          ) == .toggleVisibility,
-          WorkbenchGlobalHotKeyRouting.route(
+          ) == .toggleWorkbench,
+          GlobalHotKeyRouting.route(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed),
+            identifier: settingsHotKeyID
+          ) == .openSettings,
+          GlobalHotKeyRouting.route(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyReleased),
             identifier: workbenchHotKeyID
           ) == .ignore,
-          WorkbenchGlobalHotKeyRouting.route(
+          GlobalHotKeyRouting.route(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed),
             identifier: unrelatedHotKeyID
           ) == .ignore else {
-        print("FAILED: Cmd+Shift+B global workbench hotkey routing")
+        print("FAILED: global workbench/settings hotkey routing")
         return false
     }
 
@@ -8165,8 +8329,8 @@ func runCandidateMetricsSmokeTest() -> Bool {
     return ok
 }
 
-/// Guards the fixed 墨竹 / 翡翠 palettes against regressions to a system-owned
-/// accent or foregrounds that disappear on small candidate/workbench text.
+/// Guards the fixed 墨竹 / 翡翠 / 静谧 palettes against regressions to a
+/// system-owned accent or foregrounds that disappear on small UI text.
 func runThemeSmokeTest() -> Bool {
     print("== \(ProductIdentity.displayName) theme contrast smoke test ==")
     var ok = true
@@ -8181,17 +8345,26 @@ func runThemeSmokeTest() -> Bool {
           "墨竹 must preserve the persisted night raw value")
     check(RimeAppearanceMode.day.rawValue == "day",
           "翡翠 must preserve the persisted day raw value")
+    check(RimeAppearanceMode.quiet.rawValue == "quiet",
+          "静谧 must use a stable persisted quiet raw value")
     check(RimeAppearanceMode(rawValue: "night") == .night,
           "the legacy night preference must still load as 墨竹")
     check(RimeAppearanceMode(rawValue: "day") == .day,
           "the legacy day preference must still load as 翡翠")
+    check(RimeAppearanceMode(rawValue: "quiet") == .quiet,
+          "the quiet preference must load as 静谧")
     check(RimeAppearanceMode.night.title == "墨竹",
           "night's visible theme name should be 墨竹")
     check(RimeAppearanceMode.day.title == "翡翠",
           "day's visible theme name should be 翡翠")
+    check(RimeAppearanceMode.quiet.title == "静谧",
+          "quiet's visible theme name should be 静谧")
+    check(RimeAppearanceMode.allCases == [.night, .day, .quiet],
+          "theme order should preserve the two existing themes before 静谧")
 
     let day = RimeThemePalettes.day
     let night = RimeThemePalettes.night
+    let quiet = RimeThemePalettes.quiet
     let productGreen = RimeThemePalettes.productGreen
     check(productGreen == 0x22C55E,
           "the product accent should remain the approved fixed green")
@@ -8200,7 +8373,14 @@ func runThemeSmokeTest() -> Bool {
     check(night.accentBlue == productGreen && night.accentGreen == productGreen,
           "墨竹 should use the fixed product green for every accent alias")
     check(day.accentBlue == night.accentBlue,
-          "theme changes must not change the product accent")
+          "the two product-green themes must keep the same accent")
+    check(quiet.accentBlue == 0xA3A3A3
+            && quiet.accentGreen == quiet.accentBlue,
+          "静谧 should use the approved neutral accent in both legacy slots")
+    check(quiet.accentGreen != productGreen,
+          "静谧 must not leak the product green into its normal theme accent")
+    check(quiet.accentForeground == 0x000000,
+          "静谧 accent controls should choose their higher-contrast black foreground")
     check(KeyboardHeatmapColorRules.sRGBHex(
             red: 34.0 / 255.0,
             green: 197.0 / 255.0,
@@ -8262,6 +8442,8 @@ func runThemeSmokeTest() -> Bool {
         ("day accent", day.accentGreen),
         ("night surface", night.surfaceSecondary),
         ("night accent", night.accentGreen),
+        ("quiet surface", quiet.surfaceSecondary),
+        ("quiet accent", quiet.accentGreen),
     ]
     for (name, background) in heatmapBackgrounds {
         let foreground = KeyboardHeatmapColorRules.preferredForeground(
@@ -8302,6 +8484,18 @@ func runThemeSmokeTest() -> Bool {
     )
     check(nightFlyChordRatio >= 4.5,
           "墨竹 FlyChord success contrast \(nightFlyChordRatio) should be >= 4.5")
+
+    let quietFlyChordSuccess = FlyChordSettingsThemeRules.successTextHex(
+        for: .quiet
+    )
+    check(quietFlyChordSuccess == quiet.accentGreen,
+          "静谧 FlyChord success text should use its neutral accent")
+    let quietFlyChordRatio = RimeColorContrast.ratio(
+        foreground: quietFlyChordSuccess,
+        background: quiet.surfaceSecondary
+    )
+    check(quietFlyChordRatio >= 4.5,
+          "静谧 FlyChord success contrast \(quietFlyChordRatio) should be >= 4.5")
 
     let nightTextColors: [(String, UInt32)] = [
         ("primary", night.textPrimary),
@@ -8355,6 +8549,73 @@ func runThemeSmokeTest() -> Bool {
     check(nightWorkbenchBorderRatio >= 3,
           "night workbench border contrast \(nightWorkbenchBorderRatio) should be >= 3")
 
+    let quietColors = [
+        quiet.accentBlue,
+        quiet.accentGreen,
+        quiet.bufferBackground,
+        quiet.bufferBackgroundSecondary,
+        quiet.bufferBorder,
+        quiet.surface,
+        quiet.surfaceSecondary,
+        quiet.surfaceTertiary,
+        quiet.border,
+        quiet.borderStrong,
+        quiet.textPrimary,
+        quiet.textSecondary,
+        quiet.textMuted,
+        quiet.selectedCandidateBackground,
+        quiet.selectedCandidateText,
+        quiet.candidateBackground,
+    ]
+    check(quietColors.allSatisfy { color in
+        let red = (color >> 16) & 0xff
+        let green = (color >> 8) & 0xff
+        let blue = color & 0xff
+        return red == green && green == blue
+    }, "every 静谧 palette token should be chroma-free")
+
+    for (name, color) in [
+        ("primary", quiet.textPrimary),
+        ("secondary", quiet.textSecondary),
+        ("muted", quiet.textMuted),
+    ] {
+        let ratio = RimeColorContrast.ratio(
+            foreground: color,
+            background: quiet.candidateBackground
+        )
+        check(ratio >= 4.5,
+              "quiet \(name) contrast \(ratio) should be >= 4.5")
+    }
+    let quietSelectedTextRatio = RimeColorContrast.ratio(
+        foreground: quiet.selectedCandidateText,
+        background: quiet.selectedCandidateBackground
+    )
+    check(quietSelectedTextRatio >= 4.5,
+          "quiet selected text contrast \(quietSelectedTextRatio) should be >= 4.5")
+    check(quiet.selectedCandidateText
+            == RimeColorContrast.preferredForeground(
+                background: quiet.selectedCandidateBackground
+            ),
+          "quiet selected text should use the safest monochrome foreground")
+    let quietSelectionRatio = RimeColorContrast.ratio(
+        foreground: quiet.selectedCandidateBackground,
+        background: quiet.candidateBackground
+    )
+    check(quietSelectionRatio >= 3,
+          "quiet selected background contrast \(quietSelectionRatio) should be >= 3")
+    let quietAccentTextRatio = RimeColorContrast.ratio(
+        foreground: quiet.accentText,
+        background: quiet.surfaceSecondary
+    )
+    check(quietAccentTextRatio >= 4.5,
+          "quiet small accent text contrast \(quietAccentTextRatio) should be >= 4.5")
+    let quietBorderRatio = RimeColorContrast.ratio(
+        foreground: quiet.borderStrong,
+        background: quiet.bufferBackground
+    )
+    check(quietBorderRatio >= 3,
+          "quiet workbench border contrast \(quietBorderRatio) should be >= 3")
+
     check(RimeAppearanceMode.day.appKitAppearanceName(increasedContrast: false) == .aqua,
           "day mode should force Aqua")
     check(RimeAppearanceMode.night.appKitAppearanceName(increasedContrast: false) == .darkAqua,
@@ -8365,6 +8626,12 @@ func runThemeSmokeTest() -> Bool {
     check(RimeAppearanceMode.night.appKitAppearanceName(increasedContrast: true)
             == .accessibilityHighContrastDarkAqua,
           "night mode should preserve increased contrast")
+    check(RimeAppearanceMode.quiet.appKitAppearanceName(increasedContrast: false)
+            == .darkAqua,
+          "quiet mode should force Dark Aqua")
+    check(RimeAppearanceMode.quiet.appKitAppearanceName(increasedContrast: true)
+            == .accessibilityHighContrastDarkAqua,
+          "quiet mode should preserve increased contrast")
 
     if ok { print("theme contrast smoke: OK") }
     return ok

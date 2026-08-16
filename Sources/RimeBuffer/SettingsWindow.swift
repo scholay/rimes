@@ -104,6 +104,15 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private var candidateMetricSliders: [CandidateWindowMetric: NSSlider] = [:]
     private var candidateMetricHints: [CandidateWindowMetric: NSTextField] = [:]
     private var candidatePreview: CandidatePreviewView?
+    private let bufferWidthSlider = NSSlider(
+        value: 760,
+        minValue: Double(BufferWindowGeometry.standardMinimumWidth),
+        maxValue: Double(BufferWindowGeometry.standardMaximumWidth),
+        target: nil,
+        action: nil
+    )
+    private let bufferWidthField = NSTextField(string: "760")
+    private let shortcutFeedbackLabel = NSTextField(wrappingLabelWithString: "")
     private let chordDurationField = NSTextField(string: "")
     private let chordDurationStepper = NSStepper()
     private let statsDatePicker = NSDatePicker()
@@ -136,11 +145,10 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("rimebuffer-install.log")
     }
 
-    /// Bright product green is excellent for controls and icons, but small
-    /// text on 翡翠's light surface needs the darker selection green for AA
-    /// contrast. 墨竹 can use the product green directly.
+    /// Theme accents may be bright enough for controls but not for small text.
+    /// The palette resolves an AA-safe status tone for its own surface.
     private var themeStatusColor: NSColor {
-        RimeUI.isNight ? RimeUI.accentGreen : RimeUI.selectedCandidateBackgroundColor
+        RimeUI.accentTextColor
     }
 
     func show() {
@@ -163,7 +171,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         let targets = previewTargets()
         let target = targets.indices.contains(pageIndex)
             ? targets[pageIndex]
-            : (SettingsCoreRoute.buffer.id, SettingsSubpageID(rawValue: "general"), "buffer")
+            : (SettingsCoreRoute.buffer.id, SettingsSubpageID(rawValue: "buffer"), "buffer")
         selectPreviewTarget(routeID: target.0, subpageID: target.1)
         renderCurrentView(to: path)
     }
@@ -665,6 +673,39 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             candidateMetricSliders[metric] = slider
             candidateMetricHints[metric] = hint
         }
+
+        let widthFormatter = NumberFormatter()
+        widthFormatter.minimumFractionDigits = 0
+        widthFormatter.maximumFractionDigits = 0
+        widthFormatter.allowsFloats = false
+        widthFormatter.minimum = NSNumber(
+            value: Double(BufferWindowGeometry.standardMinimumWidth)
+        )
+        widthFormatter.maximum = NSNumber(
+            value: Double(BufferWindowGeometry.standardMaximumWidth)
+        )
+        bufferWidthField.formatter = widthFormatter
+        bufferWidthField.alignment = .right
+        bufferWidthField.font = .monospacedDigitSystemFont(
+            ofSize: 12,
+            weight: .regular
+        )
+        bufferWidthField.target = self
+        bufferWidthField.action = #selector(bufferWidthFieldChanged)
+        bufferWidthField.delegate = self
+        bufferWidthField.translatesAutoresizingMaskIntoConstraints = false
+        bufferWidthField.widthAnchor.constraint(equalToConstant: 58).isActive = true
+
+        bufferWidthSlider.target = self
+        bufferWidthSlider.action = #selector(bufferWidthSliderChanged)
+        bufferWidthSlider.isContinuous = true
+        bufferWidthSlider.trackFillColor = RimeUI.accentGreen
+        bufferWidthSlider.translatesAutoresizingMaskIntoConstraints = false
+        bufferWidthSlider.widthAnchor.constraint(equalToConstant: 260).isActive = true
+
+        shortcutFeedbackLabel.font = .systemFont(ofSize: 11)
+        shortcutFeedbackLabel.textColor = .tertiaryLabelColor
+        shortcutFeedbackLabel.isHidden = true
     }
 
     private func configureChordControl() {
@@ -831,9 +872,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                               subpageID: String?) -> NSView {
         switch route {
         case .inputMethod: return inputPage(subpageID: subpageID ?? "encoding")
-        case .appearance: return appearancePage(subpageID: subpageID ?? "candidate-window")
-        case .buffer: return bufferPage(subpageID: subpageID ?? "general")
-        case .connectors: return connectionsPage(subpageID: subpageID ?? "remote-typing")
+        case .appearance: return appearancePage(subpageID: subpageID ?? "theme")
+        case .buffer: return bufferPage(subpageID: subpageID ?? "buffer")
+        case .connectors: return connectionsPage(subpageID: subpageID ?? "ai-model")
         case .plugins: return pluginsPage(subpageID: subpageID ?? "all")
         case .maintenance: return maintenancePage(subpageID: subpageID ?? "update-restart")
         }
@@ -1004,7 +1045,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     private func themePreviewCard(_ mode: RimeAppearanceMode) -> NSView {
-        let palette = mode == .night ? RimeThemePalettes.night : RimeThemePalettes.day
+        let palette = mode.palette
         let isSelected = RimeUI.appearance == mode
         let name = NSTextField(labelWithString: mode.title)
         name.font = .systemFont(ofSize: 13, weight: .semibold)
@@ -1013,14 +1054,18 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         let status = NSTextField(labelWithString: isSelected ? "当前" : "可选")
         status.font = .systemFont(ofSize: 10, weight: .semibold)
         status.textColor = isSelected
-            ? (mode == .night
-                ? RimeUI.color(palette.accentGreen)
-                : RimeUI.color(palette.selectedCandidateBackground))
+            ? RimeUI.color(palette.accentText)
             : RimeUI.color(palette.textMuted)
 
-        let detailText = mode == .night
-            ? "深墨表面、浅色正文，使用固定翡翠绿作为强调色。"
-            : "玉白表面、深色正文，使用同一固定翡翠绿作为强调色。"
+        let detailText: String
+        switch mode {
+        case .night:
+            detailText = "深墨表面、浅色正文，使用固定翡翠绿作为强调色。"
+        case .day:
+            detailText = "玉白表面、深色正文，使用同一固定翡翠绿作为强调色。"
+        case .quiet:
+            detailText = "炭黑表面、灰白正文，以纯中性灰建立安静清晰的层级。"
+        }
         let detail = NSTextField(wrappingLabelWithString: detailText)
         detail.font = .systemFont(ofSize: 11)
         detail.textColor = RimeUI.color(palette.textSecondary)
@@ -1171,32 +1216,40 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             appearancePopUp.removeFromSuperview()
             return contentColumn([
                 title("主题"),
-                caption("主题同时作用于候选窗、缓冲工作台和设置页；明暗与强调色不跟随 macOS，统一使用 RIMES 绿色。"),
+                caption("主题同时作用于候选窗、缓冲工作台和设置页，且不跟随 macOS 外观与强调色；静谧使用完整的黑白灰视觉体系。"),
                 spacer(8),
                 sectionLabel("主题方案"),
                 appearancePopUp,
                 spacer(12),
                 themePreviewCard(.night),
                 themePreviewCard(.day),
+                themePreviewCard(.quiet),
             ])
         }
         let preview = CandidatePreviewView(maxWidth: 620)
         candidatePreview = preview
+        refreshBufferWidthControls()
         return contentColumn([
-            title("候选窗"),
-            caption("拖动滑块即时预览效果；滑块灰色区间表示当前不支持（受关联项限制），无法调整。"),
+            title("尺寸"),
+            caption("分别调整候选窗与缓冲工作台。候选窗可即时预览；工作台高度会根据内容自动适配。"),
             spacer(8),
-            sectionLabel("实时预览"),
+            sectionLabel("候选窗预览"),
             preview,
-            spacer(16),
-            sectionLabel("尺寸与文字"),
+            spacer(12),
+            secondaryLabel("滑块灰色区间表示当前不支持（受关联项限制），无法调整。"),
             candidateMetricsView(),
+            spacer(20),
+            sectionLabel("缓冲工作台"),
+            bufferWidthView(),
         ])
     }
 
-    private func bufferPage(subpageID: String) -> NSView {
+    private func bufferPage(subpageID _: String) -> NSView {
+        let deliveryShortcut = RimeShortcutPreferences
+            .shortcut(for: .deliverBuffer)
+            .displayTitle
         let note = NSTextField(wrappingLabelWithString:
-            "缓冲区开启后，Rime 提交内容会进入单行缓冲条；轻按 Enter 或点击右侧纸飞机发送下一块，按住 Enter 约 1.2 秒发送全部。AI 生成插件会复用右侧主按钮和 Enter 请求 AI，结果就绪后再变回逐块发送。成功发送的块会立即消失；失败或未发送的块不会丢失，也不会保存发送历史。")
+            "缓冲区开启后，Rime 提交内容会进入单行缓冲条；轻按 \(deliveryShortcut) 或点击右侧纸飞机发送下一块，按住 \(deliveryShortcut) 约 1.2 秒发送全部。AI 生成插件会复用右侧主按钮和同一投递键请求 AI，结果就绪后再变回逐块发送。成功发送的块会立即消失；失败或未发送的块不会丢失，也不会保存发送历史。")
         note.font = .systemFont(ofSize: 11)
         note.textColor = .tertiaryLabelColor
 
@@ -1210,28 +1263,25 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         secureNote.font = .systemFont(ofSize: 11)
         secureNote.textColor = .tertiaryLabelColor
 
-        if subpageID == "workbench" {
-            return contentColumn([
-                title("缓冲工作台"),
-                caption("独立、可拖动、可常显的缓冲区窗口；关闭只暂停捕获，不删除已有块。"),
-                spacer(8),
-                sectionLabel("窗口"),
-                bufferWindowVisibleCheck,
-                bufferPinnedCheck,
-                secondaryLabel("候选显示位置"),
-                candidatePlacementPopUp,
-                moveBufferWindowButton,
-                caption("顶部功能栏始终展开；可拖动其空白区域移动工作台，按钮和下拉框仍保持正常点击。"),
-            ])
-        }
         return contentColumn([
             title("缓冲区"),
-            caption("把提交内容先暂存，再由你确认发送到当前输入框。"),
+            caption("把提交内容先暂存，再由你确认发送；快捷键、工作台窗口和安全规则都在这一页配置。"),
             spacer(8),
-            sectionLabel("模式"),
+            sectionLabel("快捷键"),
+            shortcutSettingsView(),
+            spacer(20),
+            sectionLabel("模式与投递"),
             bufferCheck,
             note,
-            spacer(16),
+            spacer(20),
+            sectionLabel("工作台窗口"),
+            bufferWindowVisibleCheck,
+            bufferPinnedCheck,
+            secondaryLabel("候选显示位置"),
+            candidatePlacementPopUp,
+            moveBufferWindowButton,
+            caption("关闭工作台只暂停捕获，不删除已有块。顶部功能栏始终展开；拖动空白区域可移动窗口。"),
+            spacer(20),
             sectionLabel("安全与清理"),
             resetOnAppSwitchCheck,
             resetNote,
@@ -1878,6 +1928,112 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         return stack
     }
 
+    private func bufferWidthView() -> NSView {
+        bufferWidthSlider.removeFromSuperview()
+        bufferWidthField.removeFromSuperview()
+
+        let label = NSTextField(labelWithString: "工作台宽度")
+        label.alignment = .right
+        label.font = .systemFont(ofSize: 12)
+        label.textColor = .secondaryLabelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.widthAnchor.constraint(equalToConstant: 84).isActive = true
+
+        let unit = NSTextField(labelWithString: "px")
+        unit.font = .systemFont(ofSize: 11)
+        unit.textColor = .tertiaryLabelColor
+
+        let reset = NSButton(
+            title: "恢复默认",
+            target: self,
+            action: #selector(resetBufferWidth)
+        )
+        reset.bezelStyle = .rounded
+
+        let row = NSStackView(
+            views: [label, bufferWidthSlider, bufferWidthField, unit, reset]
+        )
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+
+        let help = secondaryLabel(
+            "工作台高度会随普通、翻译和多结果布局自动变化；这里只调整稳定宽度。也可以直接拖动工作台边缘。"
+        )
+        help.translatesAutoresizingMaskIntoConstraints = false
+        help.widthAnchor.constraint(equalToConstant: 590).isActive = true
+
+        let stack = NSStackView(views: [row, help])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 7
+        return stack
+    }
+
+    private func shortcutSettingsView() -> NSView {
+        shortcutFeedbackLabel.removeFromSuperview()
+        shortcutFeedbackLabel.stringValue = ""
+        shortcutFeedbackLabel.isHidden = true
+
+        let rows = RimeShortcutAction.allCases.map { action -> NSView in
+            let titleLabel = NSTextField(labelWithString: action.title)
+            titleLabel.font = .systemFont(ofSize: 12, weight: .medium)
+            titleLabel.textColor = .labelColor
+
+            let detailLabel = NSTextField(labelWithString: action.detail)
+            detailLabel.font = .systemFont(ofSize: 10)
+            detailLabel.textColor = .tertiaryLabelColor
+
+            let labels = NSStackView(views: [titleLabel, detailLabel])
+            labels.orientation = .vertical
+            labels.alignment = .leading
+            labels.spacing = 2
+
+            let recorder = RimeShortcutRecorderButton(action: action)
+            recorder.onFeedback = { [weak self] message in
+                guard let self else { return }
+                self.shortcutFeedbackLabel.stringValue = message ?? ""
+                self.shortcutFeedbackLabel.isHidden = message == nil
+            }
+
+            let row = NSStackView(views: [labels, flexSpacer(), recorder])
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 16
+            row.edgeInsets = NSEdgeInsets(top: 9, left: 12, bottom: 9, right: 12)
+            row.wantsLayer = true
+            row.layer?.backgroundColor = RimeUI.surface2.cgColor
+            row.layer?.borderColor = RimeUI.border.cgColor
+            row.layer?.borderWidth = 0.5
+            row.layer?.cornerRadius = 8
+            row.translatesAutoresizingMaskIntoConstraints = false
+            row.widthAnchor.constraint(equalToConstant: 600).isActive = true
+            labels.widthAnchor.constraint(lessThanOrEqualToConstant: 390).isActive = true
+            return row
+        }
+
+        let reset = NSButton(
+            title: "恢复全部默认快捷键",
+            target: self,
+            action: #selector(resetAllShortcuts)
+        )
+        reset.bezelStyle = .rounded
+
+        let note = secondaryLabel(
+            "这里配置 RIMES 自己定义的快捷键。⌘/⌃A、⌘/⌃V、Backspace 与未配置的方向键继续遵循系统编辑语义，不在此处重映射。"
+        )
+        note.translatesAutoresizingMaskIntoConstraints = false
+        note.widthAnchor.constraint(equalToConstant: 600).isActive = true
+
+        let stack = NSStackView(
+            views: rows + [shortcutFeedbackLabel, reset, note]
+        )
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        return stack
+    }
+
     private func candidateMetricRow(_ metric: CandidateWindowMetric) -> NSView {
         let label = NSTextField(labelWithString: metric.title)
         label.alignment = .right
@@ -1931,6 +2087,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             appearancePopUp.selectItem(at: idx)
         }
         refreshCandidateMetricControls()
+        refreshBufferWidthControls()
         refreshChordDurationControl()
         refreshRemoteStatus()
         refreshStats()
@@ -2147,6 +2304,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             stored[metric] = Double(CandidateWindowMetrics.value(for: metric))
         }
         updateCandidateControls(resolveMetricValues(stored))
+    }
+
+    private func refreshBufferWidthControls() {
+        let width = Double(BufferWindowController.shared.configuredWidth)
+        bufferWidthSlider.doubleValue = width
+        bufferWidthField.stringValue = String(Int(width.rounded()))
     }
 
     /// Current (possibly unsaved) values straight off the live controls.
@@ -2962,6 +3125,10 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             applyChordDuration(field.doubleValue)
             return
         }
+        if field === bufferWidthField {
+            applyBufferWidth(field.doubleValue)
+            return
+        }
         guard candidateMetricFields.values.contains(where: { $0 === field }) else { return }
         handleCandidateMetricEdit(tag: field.tag, value: field.doubleValue)
     }
@@ -2986,6 +3153,32 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     @objc private func resetCandidateMetrics() {
         CandidateWindowMetrics.resetToDefaults()
         refreshCandidateMetricControls()
+    }
+
+    @objc private func bufferWidthSliderChanged() {
+        applyBufferWidth(bufferWidthSlider.doubleValue)
+    }
+
+    @objc private func bufferWidthFieldChanged() {
+        applyBufferWidth(bufferWidthField.doubleValue)
+    }
+
+    private func applyBufferWidth(_ value: Double) {
+        window?.makeFirstResponder(nil)
+        BufferWindowController.shared.setConfiguredWidth(CGFloat(value))
+        refreshBufferWidthControls()
+    }
+
+    @objc private func resetBufferWidth() {
+        BufferWindowController.shared.resetConfiguredWidth()
+        refreshBufferWidthControls()
+    }
+
+    @objc private func resetAllShortcuts() {
+        RimeShortcutPreferences.resetAll()
+        DispatchQueue.main.async { [weak self] in
+            self?.showCurrentRoute()
+        }
     }
 
     @objc private func statsDateChanged() {

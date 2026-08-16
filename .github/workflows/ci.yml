@@ -311,7 +311,7 @@ jobs:
         run: |
           BIN="$(swift build --show-bin-path)/RimeBuffer"
           ROOT="$RUNNER_TEMP/rimebuffer-settings-render"
-          for MODE in night day; do
+          for MODE in night day quiet; do
             OUTPUT="$ROOT/$MODE/output"
             mkdir -p "$OUTPUT" "$ROOT/$MODE/profile" "$ROOT/$MODE/local" "$ROOT/$MODE/plugins"
             RIMEBUFFER_APPEARANCE_MODE="$MODE" \
@@ -329,8 +329,8 @@ jobs:
             dimensions="$(sips -g pixelWidth -g pixelHeight "$OUTPUT"/*.png | \
               awk '/pixelWidth:/{w=$2}/pixelHeight:/{print w"x"$2}' | sort -u)"
             echo "mode=$MODE pngs=$png_count routes=$route_count dimensions=$dimensions"
-            test "$png_count" = '22'
-            test "$route_count" = '22'
+            test "$png_count" = '21'
+            test "$route_count" = '21'
             test "$translation_route_count" = '0'
             # bitmapImageRepForCachingDisplay follows the hosted runner's
             # backing scale. A headless 1x runner and a Retina 2x runner both

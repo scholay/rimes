@@ -116,6 +116,26 @@ enum BufferPluginKeyboardShortcutRules {
         }
     }
 
+    /// Runtime matching uses the user-configurable physical shortcut. The
+    /// keysym helper above remains pure for legacy smoke coverage and Cocoa
+    /// command fallbacks.
+    static func direction(hardwareKeyCode: UInt16,
+                          modifierFlags: NSEvent.ModifierFlags) -> Int? {
+        if RimeShortcutPreferences.shortcut(for: .previousPlugin).matches(
+            keyCode: hardwareKeyCode,
+            modifiers: modifierFlags
+        ) {
+            return -1
+        }
+        if RimeShortcutPreferences.shortcut(for: .nextPlugin).matches(
+            keyCode: hardwareKeyCode,
+            modifiers: modifierFlags
+        ) {
+            return 1
+        }
+        return nil
+    }
+
     /// Some AppKit clients translate Command+Shift+arrow to selection commands
     /// before IMK sees an NSEvent. Accept only the matching physical chord.
     static func commandDirection(selectorName: String,
@@ -1383,8 +1403,8 @@ final class RimeBufferController: IMKInputController {
                     return true
                 }
                 if BufferPluginKeyboardShortcutRules.direction(
-                    keycode: keysym(for: event),
-                    mask: RimeKey.modifierMask(from: event.modifierFlags)
+                    hardwareKeyCode: event.keyCode,
+                    modifierFlags: event.modifierFlags
                 ) != nil,
                    bufferPluginShortcutDisposition(client: client) != .passThrough {
                     bufferPluginNavigationKeysDown.remove(event.keyCode)
@@ -1428,7 +1448,7 @@ final class RimeBufferController: IMKInputController {
                     return true
                 }
             }
-            let isPlainReturn = isUnmodifiedBufferReturn(event)
+            let isPlainReturn = isBufferDeliveryShortcut(event)
             if isPlainReturn, bufferEnterGestureActive {
                 lastBufferEnterKeyHandledAt = CFAbsoluteTimeGetCurrent()
                 // A stale field must never mutate callback ownership belonging
@@ -1463,7 +1483,7 @@ final class RimeBufferController: IMKInputController {
             return false
         }
         if event.type == .keyDown,
-           isUnmodifiedBufferReturn(event),
+           isBufferDeliveryShortcut(event),
            prepareBufferEnterKeyDown(event) {
             return true
         }
@@ -1476,16 +1496,44 @@ final class RimeBufferController: IMKInputController {
     }
 
     private func isUnmodifiedBufferControlEvent(_ event: NSEvent) -> Bool {
+        if isBufferDeliveryShortcut(event) { return true }
         guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
               let keycode = keysym(for: event) else { return false }
-        return keycode == RimeKey.return || keycode == RimeKey.backspace
+        return keycode == RimeKey.backspace
     }
 
-    private func isUnmodifiedBufferReturn(_ event: NSEvent) -> Bool {
-        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
-            return false
+    private func isBufferDeliveryShortcut(_ event: NSEvent) -> Bool {
+        RimeShortcutPreferences.shortcut(for: .deliverBuffer).matches(
+            keyCode: event.keyCode,
+            modifiers: event.modifierFlags
+        )
+    }
+
+    /// Returns a concrete routing result only when the configured delivery
+    /// shortcut is owned by the current buffer/focus state. A pass-through
+    /// result stays `nil` so the host still receives an unavailable shortcut.
+    private func routeBufferDeliveryShortcut(
+        _ event: NSEvent,
+        client: IMKTextInput
+    ) -> Bool? {
+        guard isBufferDeliveryShortcut(event) else { return nil }
+        switch bufferControlDisposition(client: client) {
+        case .passThrough:
+            return nil
+        case .consumeOnly:
+            if streamInputModeSelected {
+                StreamInputWorkspace.shared.authorityRejected()
+            }
+            IMELog.write("buffer delivery consumed without action; focus not trusted")
+            suppressUntrustedBufferEnter(hardwareKeyCode: event.keyCode)
+            return true
+        case .executeBufferAction:
+            return handleBufferEnter(
+                RimeKey.return,
+                client: client,
+                hardwareKeyCode: event.keyCode
+            )
         }
-        return keysym(for: event) == RimeKey.return
     }
 
     private var bufferEnterGestureActive: Bool {
@@ -1534,8 +1582,8 @@ final class RimeBufferController: IMKInputController {
             return true
         }
         if BufferPluginKeyboardShortcutRules.direction(
-            keycode: keycode,
-            mask: RimeKey.modifierMask(from: event.modifierFlags)
+            hardwareKeyCode: event.keyCode,
+            modifierFlags: event.modifierFlags
         ) != nil,
            bufferPluginShortcutDisposition(client: client) != .passThrough {
             return true
@@ -1580,9 +1628,9 @@ final class RimeBufferController: IMKInputController {
             }
             return true
         }
-        if keycode != RimeKey.return
-            || !event.modifierFlags
-                .intersection([.command, .control, .option]).isEmpty {
+        let releasesOwnedDeliveryKey = bufferEnterGestureActive
+            && event.keyCode == UInt16(bufferEnterHardwareKeyCode)
+        if !releasesOwnedDeliveryKey && !isBufferDeliveryShortcut(event) {
             let streamLease = streamInputLease(client: client)
             switch streamInputDisposition(
                 keycode: keycode,
@@ -1691,8 +1739,8 @@ final class RimeBufferController: IMKInputController {
         }
 
         if let direction = BufferPluginKeyboardShortcutRules.direction(
-            keycode: routedKeycode,
-            mask: routedMask
+            hardwareKeyCode: event.keyCode,
+            modifierFlags: event.modifierFlags
         ) {
             switch bufferPluginShortcutDisposition(client: client) {
             case .passThrough:
@@ -1715,10 +1763,20 @@ final class RimeBufferController: IMKInputController {
             }
         }
 
-        // Cmd belongs to the app, always (macOS Rime configs never bind Super).
-        // In my_combo every letter is a chording key, so without this early-out
-        // chord_composer would eat Cmd+C/Cmd+V outright. Resolve any live
-        // composition first so the shortcut acts on committed text.
+        // A user-configured modified delivery shortcut is the deliberate
+        // exception to modifier/stream pass-through. Route it before those
+        // generic gates so Settings never persists a combination that the
+        // controller ignores. Bare Return/F6–F12 retain their existing order.
+        if RimeShortcutPreferences.shortcut(for: .deliverBuffer)
+            .hasCommandLikeModifier,
+           let handled = routeBufferDeliveryShortcut(event, client: client) {
+            return handled
+        }
+
+        // Cmd otherwise belongs to the app (macOS Rime configs never bind
+        // Super). In my_combo every letter is a chording key, so without this
+        // early-out chord_composer would eat Cmd+C/Cmd+V outright. Resolve any
+        // live composition first so the shortcut acts on committed text.
         if event.modifierFlags.contains(.command) {
             if composition.composing || chord.hasPending { forceCommit() }
             if streamInputModeSelected {
@@ -1830,8 +1888,12 @@ final class RimeBufferController: IMKInputController {
             return true
         }
         let controlMask = RimeKey.controlMask | RimeKey.altMask | RimeKey.superMask
-        if routedMask & controlMask == 0,
-           routedKeycode == RimeKey.return || routedKeycode == RimeKey.backspace {
+        let isUnmodifiedBackspace = routedMask & controlMask == 0
+            && routedKeycode == RimeKey.backspace
+        if let handled = routeBufferDeliveryShortcut(event, client: client) {
+            return handled
+        }
+        if isUnmodifiedBackspace {
             switch bufferControlDisposition(client: client) {
             case .passThrough:
                 break
@@ -1839,28 +1901,16 @@ final class RimeBufferController: IMKInputController {
                 if streamInputModeSelected {
                     StreamInputWorkspace.shared.authorityRejected()
                 }
-                IMELog.write("buffer \(routedKeycode == RimeKey.return ? "enter" : "backspace") consumed without action; focus not trusted")
-                if routedKeycode == RimeKey.return {
-                    suppressUntrustedBufferEnter(hardwareKeyCode: event.keyCode)
-                }
+                IMELog.write("buffer backspace consumed without action; focus not trusted")
                 return true
             case .executeBufferAction:
-                if routedKeycode == RimeKey.backspace {
-                    // This must run before the engine-health fallback. If the
-                    // engine is unavailable, performBufferBackspace removes a
-                    // staged block or consumes an empty no-op; it never lets
-                    // the host field delete text.
-                    return handleBufferBackspace(RimeKey.backspace,
-                                                 mask: routedMask,
-                                                 client: client)
-                }
-                // The full Return press is owned here: an in-flight
-                // composition is settled without sending; otherwise keyUp is
-                // a one-block send and a 1.2s hold is send-all. No branch can
-                // insert the Return newline itself.
-                return handleBufferEnter(RimeKey.return,
-                                         client: client,
-                                         hardwareKeyCode: event.keyCode)
+                // This must run before the engine-health fallback. If the
+                // engine is unavailable, performBufferBackspace removes a
+                // staged block or consumes an empty no-op; it never lets the
+                // host field delete text.
+                return handleBufferBackspace(RimeKey.backspace,
+                                             mask: routedMask,
+                                             client: client)
             }
         }
         // Keep Shift+Return/Backspace inside the buffer-control contract even
@@ -2533,20 +2583,24 @@ final class RimeBufferController: IMKInputController {
 
     private func physicalBufferPluginSwitchDirection() -> Int? {
         let flags = CGEventSource.flagsState(.combinedSessionState)
-        var mask: Int32 = 0
-        if flags.contains(.maskShift) { mask |= RimeKey.shiftMask }
-        if flags.contains(.maskControl) { mask |= RimeKey.controlMask }
-        if flags.contains(.maskAlternate) { mask |= RimeKey.altMask }
-        if flags.contains(.maskCommand) { mask |= RimeKey.superMask }
-        let up = CGEventSource.keyState(.combinedSessionState,
-                                       key: CGKeyCode(126))
-        let down = CGEventSource.keyState(.combinedSessionState,
-                                         key: CGKeyCode(125))
-        guard up != down else { return nil }
-        return BufferPluginKeyboardShortcutRules.direction(
-            keycode: up ? RimeKey.up : RimeKey.down,
-            mask: mask
-        )
+        var modifiers: NSEvent.ModifierFlags = []
+        if flags.contains(.maskShift) { modifiers.insert(.shift) }
+        if flags.contains(.maskControl) { modifiers.insert(.control) }
+        if flags.contains(.maskAlternate) { modifiers.insert(.option) }
+        if flags.contains(.maskCommand) { modifiers.insert(.command) }
+
+        let previous = RimeShortcutPreferences.shortcut(for: .previousPlugin)
+        let next = RimeShortcutPreferences.shortcut(for: .nextPlugin)
+        let previousDown = CGEventSource.keyState(
+            .combinedSessionState,
+            key: CGKeyCode(previous.keyCode)
+        ) && previous.modifiers == modifiers
+        let nextDown = CGEventSource.keyState(
+            .combinedSessionState,
+            key: CGKeyCode(next.keyCode)
+        ) && next.modifiers == modifiers
+        guard previousDown != nextDown else { return nil }
+        return previousDown ? -1 : 1
     }
 
     @discardableResult

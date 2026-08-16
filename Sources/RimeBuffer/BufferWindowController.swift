@@ -78,6 +78,10 @@ enum BufferWindowGeometry {
         height(expanded: true, mode: .derived(targetRows: 3))
     }
 
+    static func clampedStandardWidth(_ width: CGFloat) -> CGFloat {
+        min(max(width, standardMinimumWidth), standardMaximumWidth)
+    }
+
     static func height(expanded: Bool,
                        mode: BufferWorkbenchLayoutMode = .standard) -> CGFloat {
         switch mode {
@@ -399,9 +403,9 @@ enum BufferWorkbenchPointerRules {
         case .idle, .disabled:
             return .clear
         case .hovered:
-            return RimeUI.accentBlue.withAlphaComponent(RimeUI.isNight ? 0.20 : 0.13)
+            return RimeUI.accentBlue.withAlphaComponent(RimeUI.isDark ? 0.20 : 0.13)
         case .pressed:
-            return RimeUI.accentBlue.withAlphaComponent(RimeUI.isNight ? 0.34 : 0.23)
+            return RimeUI.accentBlue.withAlphaComponent(RimeUI.isDark ? 0.34 : 0.23)
         }
     }
 
@@ -979,6 +983,22 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var scheduledFocusFollowToken: FocusToken?
     private var activeSpaceFocusFollowPending = false
 
+    private var pluginSwitchShortcutTitle: String {
+        let previous = RimeShortcutPreferences
+            .shortcut(for: .previousPlugin)
+            .displayTitle
+        let next = RimeShortcutPreferences
+            .shortcut(for: .nextPlugin)
+            .displayTitle
+        return "\(previous) / \(next)"
+    }
+
+    private var deliveryShortcutTitle: String {
+        RimeShortcutPreferences
+            .shortcut(for: .deliverBuffer)
+            .displayTitle
+    }
+
     func preferredCandidatePanelSide(for owner: FocusToken?) -> CandidatePanelPreferredSide {
         BufferCandidateSideRules.preferredSide(
             openingSide: openingSide,
@@ -1000,6 +1020,31 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             isOrdered: panel.isVisible,
             isOnActiveSpace: panel.isOnActiveSpace
         )
+    }
+    var configuredWidth: CGFloat {
+        BufferWindowGeometry.clampedStandardWidth(panel.frame.width)
+    }
+
+    func setConfiguredWidth(_ width: CGFloat) {
+        var frame = panel.frame
+        let resolved = BufferWindowGeometry.clampedStandardWidth(width.rounded())
+        frame.origin.x -= (resolved - frame.width) / 2
+        frame.size.width = resolved
+        let fallback = NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        applyClampedFrame(
+            frame,
+            visibleFrames: NSScreen.screens.map(\.visibleFrame),
+            fallback: fallback,
+            display: true
+        )
+        saveFrame()
+        candidateWindow.syncWorkbenchAnchor(candidateAnchorRect)
+        IMELog.write("buffer workbench width=\(configuredWidth)")
+    }
+
+    func resetConfiguredWidth() {
+        setConfiguredWidth(760)
     }
     var pinned: Bool {
         get { UserDefaults.standard.bool(forKey: Key.pinned) }
@@ -1511,7 +1556,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             translationBridgeView.heightAnchor.constraint(equalToConstant: 1),
         ])
 
-        configureIconButton(sendButton, "paperplane.fill", "发送下一块", #selector(sendTapped))
+        configureIconButton(
+            sendButton,
+            "paperplane.fill",
+            "发送下一块（\(deliveryShortcutTitle)）",
+            #selector(sendTapped)
+        )
         sendButtonProgressIndicator.style = .spinning
         sendButtonProgressIndicator.controlSize = .small
         sendButtonProgressIndicator.isDisplayedWhenStopped = false
@@ -1543,7 +1593,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         pluginSelector.imageHugsTitle = true
         pluginSelector.target = self
         pluginSelector.action = #selector(bufferPluginSelectionChanged)
-        pluginSelector.toolTip = "切换缓冲插件（⌘⇧↑/↓）"
+        pluginSelector.toolTip = "切换缓冲插件（\(pluginSwitchShortcutTitle)）"
         pluginSelector.translatesAutoresizingMaskIntoConstraints = false
         let pluginSelectorMinimumWidth = pluginSelector.widthAnchor.constraint(
             greaterThanOrEqualToConstant: 64
@@ -1752,7 +1802,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func applyAppearance() {
         panel.appearance = RimeUI.appKitAppearance
-        visual.material = RimeUI.isNight ? .hudWindow : .popover
+        visual.material = RimeUI.isDark ? .hudWindow : .popover
         visual.fillColor = RimeUI.workbenchChrome
         visual.strokeColor = RimeUI.borderStrong
         shelfDivider.layer?.backgroundColor = RimeUI.borderStrong.withAlphaComponent(0.55).cgColor
@@ -1821,7 +1871,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             setSendButtonGenerating(false)
             setSendButtonSymbol("paperplane.fill")
             sendButton.isEnabled = availability.canSend && !contentProtected
-            sendButton.toolTip = availability.canSend ? "发送下一块" : availability.label
+            sendButton.toolTip = availability.canSend
+                ? "发送下一块（\(deliveryShortcutTitle)）"
+                : availability.label
             sendButton.setAccessibilityLabel("发送下一块")
             return
         }
@@ -1858,7 +1910,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             setSendButtonGenerating(false)
             setSendButtonSymbol("paperplane.fill")
             sendButton.isEnabled = availability.canSend && !contentProtected
-            sendButton.toolTip = availability.canSend ? "发送下一块" : availability.label
+            sendButton.toolTip = availability.canSend
+                ? "发送下一块（\(deliveryShortcutTitle)）"
+                : availability.label
             sendButton.setAccessibilityLabel("发送下一块 AI 内容")
             sendButtonUsesAccent = true
         }
@@ -1927,8 +1981,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             names.append(presentation.pluginName)
         }
         pluginSelector.toolTip = pluginNames.isEmpty
-            ? "切换缓冲插件（⌘⇧↑/↓）"
-            : "当前插件：\(pluginNames.joined(separator: "、"))（⌘⇧↑/↓ 切换）"
+            ? "切换缓冲插件（\(pluginSwitchShortcutTitle)）"
+            : "当前插件：\(pluginNames.joined(separator: "、"))（\(pluginSwitchShortcutTitle) 切换）"
 
         let keys = presentations.map(\.presentationKey)
         if keys != renderedPluginKeys {
@@ -1985,7 +2039,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         let presentation = workspace.actionPresentation
         let optionPresentation = workspace.optionPresentation
         let hasOptions = optionPresentation != nil
-        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)（⌘⇧↑/↓ 切换）"
+        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)（\(pluginSwitchShortcutTitle) 切换）"
         pluginLoadingIndicator.isHidden = !presentation.isRunning
         presentation.isRunning
             ? pluginLoadingIndicator.startAnimation(nil)
@@ -2048,7 +2102,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func refreshLanguageControls(workspace: any DerivedBufferWorkspace,
                                          controls: any DerivedLanguagePairControls) {
-        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)（⌘⇧↑/↓ 切换）"
+        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)（\(pluginSwitchShortcutTitle) 切换）"
         let loading: Bool
         if lastSecureInputState || sessionProtectionActive {
             loading = false
@@ -2102,7 +2156,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         workspace: any DerivedBufferWorkspace,
         controls _: any WorkbenchManualGenerationControls
     ) {
-        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)（⌘⇧↑/↓ 切换）"
+        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)（\(pluginSwitchShortcutTitle) 切换）"
         // The target rail owns the animated first-content indicator. Keep the
         // shelf compact; the right-side primary button owns generation state.
         pluginLoadingIndicator.isHidden = true
@@ -2126,7 +2180,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         _ workspace: any DerivedBufferWorkspace
     ) {
         resetDerivedControlRendering()
-        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)（⌘⇧↑/↓ 切换）"
+        pluginSelector.toolTip = "当前插件：\(workspace.workbenchDisplayName)（\(pluginSwitchShortcutTitle) 切换）"
         pluginLoadingIndicator.isHidden = true
         pluginLoadingIndicator.stopAnimation(nil)
     }
@@ -2221,6 +2275,13 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         observers.append(center.addObserver(forName: .rimeAppearanceDidChange,
                                             object: nil,
                                             queue: .main) { [weak self] _ in
+            self?.refresh()
+        })
+        observers.append(center.addObserver(
+            forName: .rimeShortcutPreferencesDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
             self?.refresh()
         })
         observers.append(center.addObserver(

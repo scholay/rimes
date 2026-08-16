@@ -3,12 +3,7 @@ import Foundation
 
 enum FlyChordSettingsThemeRules {
     static func successTextHex(for appearance: RimeAppearanceMode) -> UInt32 {
-        switch appearance {
-        case .night:
-            return RimeThemePalettes.productGreen
-        case .day:
-            return RimeThemePalettes.day.selectedCandidateBackground
-        }
+        appearance.palette.accentText
     }
 }
 
