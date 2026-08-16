@@ -146,6 +146,12 @@ Pre-release。
 
 - [本项目已在L站发布开源推广](https://linux.do/u/leowangling/preferences/account)
 
+## 贡献者
+
+完整名单见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
+
+**AI 编程助手**：Claude、Cursor、Codex、Grok 参与了设计、实现与审阅；合并与发布仍由人工负责。
+
 ## 已知问题
 
 - **macOS 26 上，在微信窗口聚焦时切换输入法可能导致微信崩溃**（崩在 Apple `TextInputUIMacHelper`）。这是上游问题，同样影响原生 Rime/Squirrel（[rime/squirrel#951](https://github.com/rime/squirrel/issues/951)）。**规避**：先在别处切好输入法，再进入微信打字。

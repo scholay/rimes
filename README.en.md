@@ -149,6 +149,12 @@ Both release channels are published in the new repository: macOS `vX.Y.Z` is nor
 `v0.4.3` is a one-time unsigned pre-release exception and is excluded from auto-update.
 Windows/Linux `platform-preview-vX.Y.Z` is always a pre-release.
 
+## Contributors
+
+See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list.
+
+**AI coding assistants**: Claude, Cursor, Codex, and Grok helped with design, implementation, and review; humans remain responsible for merges and releases.
+
 ## Known issues
 
 - **On macOS 26, switching input methods while WeChat is focused may crash WeChat** (inside Apple’s `TextInputUIMacHelper`). Upstream issue; also affects stock Rime/Squirrel ([rime/squirrel#951](https://github.com/rime/squirrel/issues/951)). **Workaround**: switch IME elsewhere first, then focus WeChat.
