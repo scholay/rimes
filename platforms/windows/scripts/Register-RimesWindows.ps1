@@ -135,11 +135,11 @@ function Invoke-RimesRegistrar {
     return @($output)
 }
 
-$isWindows = Test-RimesWindowsPlatform
-if (-not $SkipPlatformCheck -and -not $isWindows) {
+$runningOnWindows = Test-RimesWindowsPlatform
+if (-not $SkipPlatformCheck -and -not $runningOnWindows) {
     throw 'TSF registration is supported only on Windows.'
 }
-if (-not $isWindows -and (-not $DryRun -or -not $SkipPlatformCheck)) {
+if (-not $runningOnWindows -and (-not $DryRun -or -not $SkipPlatformCheck)) {
     throw 'A non-Windows host may inspect only a -DryRun plan with -SkipPlatformCheck.'
 }
 
@@ -199,7 +199,7 @@ $plan = [pscustomobject]@{
 }
 
 if ($DryRun) {
-    if ($isWindows -and -not $SkipPlatformCheck) {
+    if ($runningOnWindows -and -not $SkipPlatformCheck) {
         Invoke-RimesRegistrar -Executable $registrar -Arguments @('register', '--dll', $dllPath, '--dry-run') | Out-Host
     }
     $plan

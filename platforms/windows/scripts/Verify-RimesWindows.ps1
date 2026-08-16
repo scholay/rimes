@@ -164,17 +164,17 @@ function Invoke-RimesRegistrarVerify {
     $output | Out-Host
 }
 
-$isWindows = Test-RimesWindowsPlatform
-if (-not $SkipPlatformCheck -and -not $isWindows) {
+$runningOnWindows = Test-RimesWindowsPlatform
+if (-not $SkipPlatformCheck -and -not $runningOnWindows) {
     throw 'Native Windows artifact verification targets Windows. Use -SkipPlatformCheck for static PE/manifest checks only.'
 }
-if ($Registered -and -not $isWindows) {
+if ($Registered -and -not $runningOnWindows) {
     throw '-Registered verification requires Windows.'
 }
 if ($Registered -and $SkipPlatformCheck) {
     throw '-Registered cannot be combined with -SkipPlatformCheck.'
 }
-if ($RequireSignature -and -not $isWindows) {
+if ($RequireSignature -and -not $runningOnWindows) {
     throw '-RequireSignature verification requires Windows Authenticode support.'
 }
 
@@ -232,7 +232,7 @@ foreach ($artifact in $artifacts) {
         throw "Artifact architecture mismatch: expected=$Architecture, actual=$artifactArchitecture, path=$artifact"
     }
     $hashes[[System.IO.Path]::GetFileName($artifact)] = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($isWindows) {
+    if ($runningOnWindows) {
         $signature = Get-AuthenticodeSignature -LiteralPath $artifact
         $signatures[[System.IO.Path]::GetFileName($artifact)] = [string]$signature.Status
         if ($RequireSignature -and $signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
@@ -241,7 +241,7 @@ foreach ($artifact in $artifacts) {
     }
 }
 
-if ($isWindows -and -not $SkipPlatformCheck) {
+if ($runningOnWindows -and -not $SkipPlatformCheck) {
     Assert-RimesManifestMatchesRegistrar -Manifest $manifest -Registrar $registrar
 }
 if ($Registered) {
@@ -257,6 +257,6 @@ if ($Registered) {
     Registrar = $registrar
     Broker = $broker
     Sha256 = [pscustomobject]$hashes
-    Authenticode = if ($isWindows) { [pscustomobject]$signatures } else { 'not checked (non-Windows static verification)' }
+    Authenticode = if ($runningOnWindows) { [pscustomobject]$signatures } else { 'not checked (non-Windows static verification)' }
     SignatureRequired = [bool]$RequireSignature
 }
