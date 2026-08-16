@@ -17,7 +17,10 @@ concurrency:
 jobs:
   build-and-test:
     name: Release ${{ matrix.architecture }}
-    runs-on: windows-latest
+    # The checked-in CMake presets intentionally target Visual Studio 17 2022.
+    # Pin the matching image instead of following windows-latest to a newer
+    # Visual Studio generation that cannot resolve that generator.
+    runs-on: windows-2022
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -26,7 +29,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -39,7 +42,7 @@ jobs:
             -RunBuild
 
       - name: Upload unsigned foundation binaries
-        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: RIMES-Windows-Native-Foundation-UNSIGNED-${{ matrix.architecture }}-${{ github.sha }}
           path: |
