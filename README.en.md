@@ -106,9 +106,17 @@ requires an existing installation of [Weasel](https://github.com/rime/weasel) on
 [Fcitx5 Rime](https://github.com/fcitx/fcitx5-rime) / [IBus Rime](https://github.com/rime/ibus-rime)
 on Linux.
 
-The preview does not include the macOS buffer workbench, AI/translation/OCR, native settings,
-or a RIMES-owned Windows TSF or Linux Fcitx5/IBus frontend. Cross-batch mutual typing is a
-current macOS frontend feature and cannot be supplied by a data package alone. Use the
+The repository also contains an in-development
+[native Windows foundation](platforms/windows/native/README.md). Its x64/Win32 TSF registration,
+bounded Broker protocol, real `librime` session, and committed-text path have been validated on
+Windows 11. It remains a commit-only engineering milestone: preedit and candidate UI, Broker logon
+startup, a signed installer, and the macOS buffer/workbench are not yet implemented, so it is not
+included in a public release.
+
+The public data preview does not include the macOS buffer workbench, AI/translation/OCR, native
+settings, the experimental Windows TSF described above, or a Linux Fcitx5/IBus frontend.
+Cross-batch mutual typing is a current macOS frontend feature and cannot be supplied by a data
+package alone. Use the
 **Pre-release** assets named `RIMES-Windows-Data-Preview-*` or
 `RIMES-Linux-Data-Preview-*`; see [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)
 for the exact boundary, safety model, and validation commands.

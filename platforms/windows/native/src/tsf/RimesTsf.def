@@ -1,0 +1,5 @@
+LIBRARY "RimesTsf"
+
+EXPORTS
+    DllCanUnloadNow PRIVATE
+    DllGetClassObject PRIVATE

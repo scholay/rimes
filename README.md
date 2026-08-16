@@ -101,8 +101,13 @@ Rime 方案、词库、Lua 与同批并击配置，但需要用户先安装 Wind
 [Fcitx5 Rime](https://github.com/fcitx/fcitx5-rime) 或
 [IBus Rime](https://github.com/rime/ibus-rime)。
 
-预览包不包含 macOS 版的缓冲工作台、AI/翻译/OCR、原生设置窗口，也不包含 RIMES
-自己的 Windows TSF 或 Linux Fcitx5/IBus 前端。跨批互击是当前 macOS 前端能力，不能
+仓库内另有一套正在开发的 [Windows 原生基础层](platforms/windows/native/README.md)：
+x64/Win32 TSF 注册、受限 Broker 协议、真实 `librime` 会话与提交上屏链路已经通过
+Windows 11 实机验证。它目前仍是 commit-only 开发里程碑，尚无预编辑/候选窗、Broker
+登录启动、签名安装包，以及 macOS 缓冲区和工作台能力，因此没有进入公开 Release。
+
+公开的数据预览包不包含 macOS 版的缓冲工作台、AI/翻译/OCR、原生设置窗口，也不包含
+上述实验性 Windows TSF 或 Linux Fcitx5/IBus 前端。跨批互击是当前 macOS 前端能力，不能
 由数据包单独提供。请从 Releases 中标记为 **Pre-release** 的
 `RIMES-Windows-Data-Preview-*` / `RIMES-Linux-Data-Preview-*` 资产安装；完整边界、
 安全策略和验证方式见 [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)。

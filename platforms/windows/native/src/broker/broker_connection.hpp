@@ -1,0 +1,81 @@
+#pragma once
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include <bitset>
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+
+#include "../core/broker_protocol.hpp"
+#include "../engine/rime_engine.hpp"
+#include "named_pipe_server.hpp"
+
+namespace rimes::windows::broker {
+
+// Owns all librime sessions opened by one already-verified pipe client. The
+// process-level RimeEngine outlives every BrokerConnection and remains the sole
+// owner of the librime runtime.
+class BrokerConnection final {
+ public:
+  BrokerConnection(DWORD broker_session_id,
+                   engine::RimeEngine* engine) noexcept;
+  ~BrokerConnection();
+
+  BrokerConnection(const BrokerConnection&) = delete;
+  BrokerConnection& operator=(const BrokerConnection&) = delete;
+
+  ClientAction Handle(const core::Frame& request,
+                      DWORD verified_client_process_id,
+                      core::Frame* response);
+
+ private:
+  struct SessionState {
+    std::uint64_t context_id = 0;
+    std::uint64_t last_sequence_id = 0;
+    std::uint64_t revision = 0;
+    engine::RimeEngine::SessionId engine_session_id = 0;
+    bool composing = false;
+    std::string schema_id;
+    std::bitset<256> handled_key_downs;
+  };
+
+  ClientAction HandleHello(const core::Frame& request,
+                           DWORD verified_client_process_id,
+                           core::Frame* response);
+  ClientAction HandleOpenSession(const core::Frame& request,
+                                 core::Frame* response);
+  ClientAction HandleCloseSession(const core::Frame& request,
+                                  core::Frame* response);
+  ClientAction HandleKeyEvent(const core::Frame& request,
+                              core::Frame* response);
+  ClientAction RespondWithInputState(const core::Frame& request,
+                                     core::InputState state,
+                                     core::Frame* response);
+  ClientAction RespondPassThrough(const core::Frame& request,
+                                  const core::KeyEvent& key,
+                                  const SessionState& session,
+                                  core::Frame* response);
+  std::uint64_t AllocateSessionId() noexcept;
+  void CloseAllSessions() noexcept;
+
+  static void MakeResponse(const core::Frame& request,
+                           core::MessageType type,
+                           std::vector<std::byte> payload,
+                           core::Frame* response);
+  static void MakeError(const core::Frame& request,
+                        core::BrokerErrorCode code,
+                        std::string message,
+                        core::Frame* response);
+
+  DWORD broker_session_id_;
+  engine::RimeEngine* engine_;
+  bool hello_received_ = false;
+  std::uint64_t next_session_id_ = 1;
+  std::unordered_map<std::uint64_t, SessionState> sessions_;
+};
+
+}  // namespace rimes::windows::broker
