@@ -196,7 +196,7 @@
 
 ### 5.5 CandidateWindow — 状态：✅ 单一候选面板与双锚点已实现
 
-- NSPanel（borderless + nonactivating，`.popUpMenu` 层级，canJoinAllSpaces + fullScreenAuxiliary + stationary，orderFrontRegardless）。宿主进程必须 `NSApp.setActivationPolicy(.accessory)`（纯 LSBackgroundOnly 应用不能可靠置窗，已在 main.swift 落实）。
+- NSPanel（borderless + nonactivating；普通宿主使用 `.popUpMenu`，只有精确验证的 iShot 非激活标注租约临时使用 `CGShieldingWindowLevel()`，隐藏或换宿主时立即恢复普通层级；canJoinAllSpaces + fullScreenAuxiliary + stationary，orderFrontRegardless）。这个条件升层用于兼容截图遮罩，仍需目标版本 iShot 真机验证；最终排序前再次检查 secure input，焦点租约、非空组字和锁屏门控仍然 fail closed。宿主进程必须 `NSApp.setActivationPolicy(.accessory)`（纯 LSBackgroundOnly 应用不能可靠置窗，已在 main.swift 落实）。
 - 渲染：`page_size` 行（用户=9）· label 用 librime select_labels · 高亮行 `highlightedIndex` 以墨竹/翡翠主题高亮色作实底，并在黑/白文字中自动选择 WCAG 对比度更高者 · comment 淡色 · 翻页指示（page_no/is_last_page）· stacked 竖排 · 字号对齐用户（候选 20pt/标签 14pt）· 配色向 purity_of_form_custom 靠（P4 精调）。
 - **定位链**（每次更新执行）：
   1. `client.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)`——该下标相对于 inline session；没有 inline session 时 `0` 按 IMK 契约定位 current selection。它不能替换成文档级 `selectedRange`/`markedRange`。有 marked 会话后这是可靠主路径（Squirrel 同款）；窗放 rect 下沿、必要时翻到上方防出屏。
