@@ -1,4 +1,5 @@
 import Cocoa
+import Carbon.HIToolbox
 import CoreText
 
 extension Notification.Name {
@@ -14,6 +15,30 @@ enum CandidatePanelInteractionRules {
             && hasInteractionTarget
             && panelIsVisible
             && panelIsOnActiveSpace
+    }
+}
+
+enum CandidatePanelLevelRules {
+    static let standard = NSWindow.Level.popUpMenu
+    private static let displayShielding = NSWindow.Level(
+        rawValue: Int(CGShieldingWindowLevel())
+    )
+
+    /// iShot's verified nonactivating annotation surface sits above ordinary
+    /// menu windows. Elevate only that exact focus host while it owns the lease;
+    /// every other client stays at the normal candidate level.
+    static func level(bundleID: String, hostKind: FocusHostKind) -> NSWindow.Level {
+        guard bundleID == FocusHostRules.iShotBundleID,
+              hostKind == .nonactivatingSystemOverlay else {
+            return standard
+        }
+        return displayShielding
+    }
+}
+
+enum CandidatePanelSecurityRules {
+    static func mayOrderFront(secureInputEnabled: Bool) -> Bool {
+        !secureInputEnabled
     }
 }
 
@@ -341,6 +366,9 @@ enum CandidatePanelGeometry {
 }
 
 struct CandidateMatrixLayoutSnapshot {
+    let initialPanelLevel: Int
+    let iShotPanelLevel: Int
+    let hiddenPanelLevel: Int
     let rowCount: Int
     let rowHeights: [CGFloat]
     let expectedRowHeight: CGFloat
@@ -511,12 +539,15 @@ final class CandidateWindow {
                                             height: metrics.compactStripHeight),
                         styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
-        panel.level = .popUpMenu
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.animationBehavior = .none
         panel.isFloatingPanel = true
+        // `isFloatingPanel` resets the AppKit level to `.floating`; establish
+        // the candidate policy after toggling it so ordinary hosts really use
+        // `.popUpMenu` rather than inheriting that lower level.
+        panel.level = CandidatePanelLevelRules.standard
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
@@ -645,6 +676,7 @@ final class CandidateWindow {
         }
 
         if ownerToken != owner {
+            panel.level = CandidatePanelLevelRules.standard
             resetPresentationState()
         }
         ownerToken = owner
@@ -1042,9 +1074,9 @@ final class CandidateWindow {
             hidePanel(reason: "missing-owner", clearsPresentation: true)
             return
         }
-        guard InputFocusCoordinator.shared.interactionTarget(
+        guard let interactionTarget = InputFocusCoordinator.shared.interactionTarget(
                 expected: ownerToken
-              ) != nil else {
+              ) else {
             // Authority is fail-closed. Clear the logical presentation as well
             // as the physical panel so a suspended lease cannot leave behind a
             // candidate state that looks visible. A later trusted `update`
@@ -1070,6 +1102,16 @@ final class CandidateWindow {
             hidePanel(reason: "layout-unavailable", clearsPresentation: false)
             return
         }
+        guard CandidatePanelSecurityRules.mayOrderFront(
+            secureInputEnabled: IsSecureEventInputEnabled()
+        ) else {
+            hidePanel(reason: "secure-input-before-level", clearsPresentation: true)
+            return
+        }
+        panel.level = CandidatePanelLevelRules.level(
+            bundleID: interactionTarget.bundleID,
+            hostKind: interactionTarget.hostKind
+        )
         showPanel(reason: "layout-ready")
     }
 
@@ -1080,6 +1122,7 @@ final class CandidateWindow {
     private func hidePanel(reason: String, clearsPresentation: Bool) {
         let snapshot = panelLogSnapshot()
         panel.orderOut(nil)
+        panel.level = CandidatePanelLevelRules.standard
         if clearsPresentation {
             resetPresentationState()
         }
@@ -1092,6 +1135,12 @@ final class CandidateWindow {
     }
 
     private func showPanel(reason: String) {
+        guard CandidatePanelSecurityRules.mayOrderFront(
+            secureInputEnabled: IsSecureEventInputEnabled()
+        ) else {
+            hidePanel(reason: "secure-input-before-show", clearsPresentation: true)
+            return
+        }
         let snapshot = panelLogSnapshot()
         panel.orderFrontRegardless()
         logPanelTransition(
@@ -1717,6 +1766,17 @@ final class CandidateWindow {
     /// hierarchy and catches a reintroduced autoresizing-mask conflict.
     static func matrixLayoutSnapshotForSmoke(rowCount: Int) -> CandidateMatrixLayoutSnapshot {
         let candidateWindow = CandidateWindow()
+        let initialPanelLevel = candidateWindow.panel.level.rawValue
+        candidateWindow.panel.level = CandidatePanelLevelRules.level(
+            bundleID: FocusHostRules.iShotBundleID,
+            hostKind: .nonactivatingSystemOverlay
+        )
+        let iShotPanelLevel = candidateWindow.panel.level.rawValue
+        candidateWindow.hidePanel(
+            reason: "smoke-panel-level-reset",
+            clearsPresentation: false
+        )
+        let hiddenPanelLevel = candidateWindow.panel.level.rawValue
         let pages = (0..<rowCount).map { pageIndex -> RimeContextModel in
             var page = RimeContextModel()
             page.pageNo = pageIndex
@@ -1759,6 +1819,9 @@ final class CandidateWindow {
         }.count
 
         return CandidateMatrixLayoutSnapshot(
+            initialPanelLevel: initialPanelLevel,
+            iShotPanelLevel: iShotPanelLevel,
+            hiddenPanelLevel: hiddenPanelLevel,
             rowCount: document.arrangedSubviews.count,
             rowHeights: document.arrangedSubviews.map(\.frame.height),
             expectedRowHeight: expectedRowHeight,

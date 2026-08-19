@@ -5204,7 +5204,25 @@ func runBufferWindowSmokeTest() -> Bool {
 
     let candidateMatrix = CandidateWindow.matrixLayoutSnapshotForSmoke(rowCount: 3)
     let candidateLayoutEpsilon: CGFloat = 0.5
-    guard candidateMatrix.rowCount == 3,
+    guard candidateMatrix.initialPanelLevel == NSWindow.Level.popUpMenu.rawValue,
+          candidateMatrix.iShotPanelLevel == Int(CGShieldingWindowLevel()),
+          candidateMatrix.iShotPanelLevel > candidateMatrix.initialPanelLevel,
+          candidateMatrix.hiddenPanelLevel == NSWindow.Level.popUpMenu.rawValue,
+          CandidatePanelLevelRules.level(
+            bundleID: "app.a",
+            hostKind: .frontmostApplication
+          ) == .popUpMenu,
+          CandidatePanelLevelRules.level(
+            bundleID: "com.apple.Spotlight",
+            hostKind: .nonactivatingSystemOverlay
+          ) == .popUpMenu,
+          CandidatePanelLevelRules.level(
+            bundleID: FocusHostRules.iShotBundleID,
+            hostKind: .frontmostApplication
+          ) == .popUpMenu,
+          CandidatePanelSecurityRules.mayOrderFront(secureInputEnabled: false),
+          !CandidatePanelSecurityRules.mayOrderFront(secureInputEnabled: true),
+          candidateMatrix.rowCount == 3,
           candidateMatrix.rowHeights.allSatisfy({
               abs($0 - candidateMatrix.expectedRowHeight) <= candidateLayoutEpsilon
           }),
@@ -5217,6 +5235,7 @@ func runBufferWindowSmokeTest() -> Bool {
           !candidateMatrix.documentTranslatesAutoresizingMaskIntoConstraints,
           candidateMatrix.documentAutoresizingMaskConstraintCount == 0 else {
         print("FAILED: three-row candidate matrix geometry",
+              "panelLevels=\(candidateMatrix.initialPanelLevel)/\(candidateMatrix.iShotPanelLevel)/\(candidateMatrix.hiddenPanelLevel)",
               "rows=\(candidateMatrix.rowCount)",
               "rowHeights=\(candidateMatrix.rowHeights)",
               "document=\(candidateMatrix.documentHeight)/\(candidateMatrix.expectedDocumentHeight)",
@@ -6106,6 +6125,20 @@ func runBufferWindowSmokeTest() -> Bool {
         foregroundAnchorBundleID: "app.a",
         foregroundAnchorProcessIdentifier: 101
     )
+    let iShotBundleID = FocusHostRules.iShotBundleID
+    let iShotPath = FocusHostRules.iShotBundlePath
+    let iShotHost = FocusHostRules.resolveKnownFrontmost(
+        incomingBundleID: iShotBundleID,
+        frontmostBundleID: "app.a",
+        frontmostProcessIdentifier: 101,
+        trustedOverlayProcessIdentifier: 304
+    )
+    let iShotLease = FocusHostResolution(
+        kind: .nonactivatingSystemOverlay,
+        clientProcessIdentifier: 304,
+        foregroundAnchorBundleID: "app.a",
+        foregroundAnchorProcessIdentifier: 101
+    )
     let savePanelBundleID = "com.apple.appkit.xpc.openAndSavePanelService"
     let savePanelPath =
         "/System/Library/Frameworks/AppKit.framework/Versions/C/XPCServices/com.apple.appkit.xpc.openAndSavePanelService.xpc"
@@ -6640,11 +6673,18 @@ func runBufferWindowSmokeTest() -> Bool {
           ),
           spotlightHost == spotlightLease,
           pasteHost == pasteLease,
+          iShotHost == iShotLease,
           FocusHostRules.resolveKnownFrontmost(
             incomingBundleID: pasteBundleID,
             frontmostBundleID: pasteBundleID,
             frontmostProcessIdentifier: 303,
             trustedOverlayProcessIdentifier: 303
+          ) == nil,
+          FocusHostRules.resolveKnownFrontmost(
+            incomingBundleID: iShotBundleID,
+            frontmostBundleID: iShotBundleID,
+            frontmostProcessIdentifier: 304,
+            trustedOverlayProcessIdentifier: 304
           ) == nil,
           savePanelHost == savePanelLease,
           FocusHostRules.isTrustedNonactivatingSystemOverlay(
@@ -6655,6 +6695,12 @@ func runBufferWindowSmokeTest() -> Bool {
             bundleID: pasteBundleID,
             bundlePath: pastePath
           ),
+          FocusHostRules.isTrustedNonactivatingSystemOverlay(
+            bundleID: iShotBundleID,
+            bundlePath: iShotPath
+          ),
+          FocusHostRules.isTransientSystemSurfaceBundle(iShotBundleID),
+          !FocusHostRules.mayUseOrdinaryProcessBoundFallback(iShotBundleID),
           FocusHostRules.isTrustedAppKitOpenSavePanel(
             bundleID: savePanelBundleID,
             bundlePath: savePanelPath
@@ -6666,6 +6712,10 @@ func runBufferWindowSmokeTest() -> Bool {
           !FocusHostRules.isTrustedNonactivatingSystemOverlay(
             bundleID: pasteBundleID,
             bundlePath: "/Applications/FakePaste.app"
+          ),
+          !FocusHostRules.isTrustedNonactivatingSystemOverlay(
+            bundleID: iShotBundleID,
+            bundlePath: "/Applications/FakeiShot.app"
           ),
           !FocusHostRules.isTrustedAppKitOpenSavePanel(
             bundleID: savePanelBundleID,
@@ -6690,6 +6740,17 @@ func runBufferWindowSmokeTest() -> Bool {
             runningCandidates: [(303, pastePath)]
           ) == 303,
           FocusHostRules.uniqueTrustedOverlayProcessIdentifier(
+            bundleID: iShotBundleID,
+            runningCandidates: [(304, iShotPath)]
+          ) == 304,
+          FocusHostRules.uniqueTrustedOverlayProcessIdentifier(
+            bundleID: iShotBundleID,
+            runningCandidates: [
+                (304, iShotPath),
+                (305, iShotPath),
+            ]
+          ) == nil,
+          FocusHostRules.uniqueTrustedOverlayProcessIdentifier(
             bundleID: pasteBundleID,
             runningCandidates: [
                 (303, pastePath),
@@ -6702,10 +6763,23 @@ func runBufferWindowSmokeTest() -> Bool {
             frontmostProcessIdentifier: 101,
             trustedOverlayProcessIdentifier: nil
           ) == nil,
+          FocusHostRules.resolveKnownFrontmost(
+            incomingBundleID: iShotBundleID,
+            frontmostBundleID: "app.a",
+            frontmostProcessIdentifier: 101,
+            trustedOverlayProcessIdentifier: nil
+          ) == nil,
           FocusHostRules.resolutionMatchesLease(
             pasteLease,
             hostKind: .nonactivatingSystemOverlay,
             clientProcessIdentifier: 303,
+            foregroundAnchorBundleID: "app.a",
+            foregroundAnchorProcessIdentifier: 101
+          ),
+          FocusHostRules.resolutionMatchesLease(
+            iShotLease,
+            hostKind: .nonactivatingSystemOverlay,
+            clientProcessIdentifier: 304,
             foregroundAnchorBundleID: "app.a",
             foregroundAnchorProcessIdentifier: 101
           ),

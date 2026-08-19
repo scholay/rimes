@@ -40,6 +40,9 @@ struct FocusHostResolution: Equatable {
 }
 
 enum FocusHostRules {
+    static let iShotBundleID = "cn.better365.ishot"
+    static let iShotBundlePath = "/Applications/iShot.app"
+
     private static let trustedNonactivatingSystemOverlayPaths = [
         "com.apple.Spotlight": "/System/Library/CoreServices/Spotlight.app",
         // Paste is an LSUIElement app whose search field owns the IMK client
@@ -48,6 +51,13 @@ enum FocusHostRules {
         // exact bundle + canonical install path + unique live PID + visible
         // WindowServer surface; the latter gates remain enforced at runtime.
         "com.wiheads.paste": "/Applications/Paste.app",
+        // iShot's screenshot annotation editor is another LSUIElement surface:
+        // its IMK client belongs to iShot while the application underneath the
+        // capture overlay remains frontmost. Keep the exception as narrow as
+        // Paste's — exact App Store bundle, canonical path, unique live PID and
+        // a visible WindowServer surface are all required before the first
+        // fresh keyDown can promote the provisional focus lease.
+        iShotBundleID: iShotBundlePath,
     ]
     private static let trustedAppKitOpenSavePanelPaths = [
         "com.apple.appkit.xpc.openAndSavePanelService":
