@@ -1517,15 +1517,32 @@
   gap: 3px;
 }
 
-.buffer-workbench > .r-button {
-  min-width: 58px;
-  max-width: 92px;
+.buffer-workbench > .buffer-workbench__primary-action {
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  min-height: 22px;
   align-self: center;
   flex: 0 0 auto;
-  min-height: 30px;
-  padding-inline: 7px;
-  border-radius: 6px;
-  font-size: 9px;
+  padding: 0;
+  color: var(--r-text-2);
+  border-color: transparent;
+  border-radius: 5px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.buffer-workbench > .buffer-workbench__primary-action.is-accented:not(:disabled) {
+  color: var(--r-accent-text);
+}
+
+.buffer-workbench > .buffer-workbench__primary-action:hover:not(:disabled) {
+  border-color: var(--r-border-strong);
+  background: var(--r-surface-3);
+}
+
+.buffer-workbench > .buffer-workbench__primary-action[aria-busy="true"] svg {
+  animation: r-spin 800ms linear infinite;
 }
 
 .buffer-track {

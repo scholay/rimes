@@ -8,7 +8,7 @@ import {
 } from "react";
 import { Icon, type IconName } from "../design-system/Icon";
 import { initialPlugins } from "../design-system/data";
-import { Button, IconButton } from "../design-system/primitives";
+import { IconButton } from "../design-system/primitives";
 
 export type BufferMode =
   | "normal"
@@ -1234,12 +1234,14 @@ export function BufferSurface({
       data-phase={phase}
     >
       <header className="buffer-toolbar">
-        <span
-          className={`buffer-toolbar__status buffer-status--${statusTone}`}
-        >
-          {protectedContent && status ? <Icon name="lock" size={13} weight="bold" /> : null}
-          {status}
-        </span>
+        {status ? (
+          <span
+            className={`buffer-toolbar__status buffer-status--${statusTone}`}
+          >
+            {protectedContent ? <Icon name="lock" size={13} weight="bold" /> : null}
+            {status}
+          </span>
+        ) : null}
 
         <label className="buffer-toolbar__plugin-select">
           <Icon name={descriptor.icon} size={14} weight="bold" />
@@ -1370,7 +1372,9 @@ export function BufferSurface({
           ) : null}
         </div>
 
-        <Button
+        <IconButton
+          aria-busy={loading || sending}
+          className={`buffer-workbench__primary-action${effectiveMode === "normal" ? "" : " is-accented"}`}
           disabled={
             protectedContent
             || paused
@@ -1379,11 +1383,9 @@ export function BufferSurface({
             || (primaryAction === generate && !canRequest)
           }
           icon={primaryIcon}
-          kind="primary"
+          label={primaryLabel}
           onClick={primaryAction}
-        >
-          {primaryLabel}
-        </Button>
+        />
       </div>
     </section>
   );
