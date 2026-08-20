@@ -10,9 +10,14 @@ const source = JSON.parse(fs.readFileSync(sourcePath, "utf8"));
 const swiftName = (value) => value[0].toUpperCase() + value.slice(1);
 const hex = (value) => `0x${value.slice(1).toUpperCase()}`;
 const colorKeys = [
-  "accent", "accentForeground", "buffer", "bufferSecondary", "bufferBorder",
+  "accent", "accentForeground", "accentText", "settingsBackground", "settingsSeparator",
+  "buffer", "bufferSecondary", "bufferBorder", "bufferDivider", "bufferSourceRail",
+  "bufferTargetRail", "bufferChip", "bufferChipSelected", "bufferPreedit", "bufferMuted",
+  "clipboardSelected",
   "surface", "surfaceSecondary", "surfaceTertiary", "border", "borderStrong",
   "textPrimary", "textSecondary", "textMuted", "selection", "selectionText", "candidate",
+  "warningText", "warningSurface", "warningBorder", "dangerText", "dangerFill",
+  "dangerForeground", "dangerBorder",
 ];
 
 let output = "// Generated from DesignSystem/src/design-system/tokens/themes.json.\n";

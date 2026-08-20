@@ -98,7 +98,7 @@ export function App() {
   }, [themeID]);
 
   const updateThemeColor = (
-    key: "accent" | "selection" | "surface" | "surfaceSecondary",
+    key: "accent" | "accentText" | "selection" | "settingsBackground" | "surface" | "surfaceSecondary",
     value: string,
   ) => {
     setThemeOverrides((current) => ({ ...current, [key]: value.toUpperCase() }));
@@ -303,7 +303,9 @@ export function App() {
             <h2>颜色</h2>
             {([
               ["accent", "产品强调色"],
+              ["accentText", "强调文字色"],
               ["selection", "选中背景"],
+              ["settingsBackground", "设置页背景"],
               ["surface", "主表面"],
               ["surfaceSecondary", "卡片表面"],
             ] as const).map(([key, label]) => (
@@ -353,6 +355,8 @@ export function App() {
             <div className="token-swatch-grid">
               {([
                 ["Accent", activeTheme.accent],
+                ["Accent text", activeTheme.accentText],
+                ["Settings", activeTheme.settingsBackground],
                 ["Surface", activeTheme.surface],
                 ["Surface 2", activeTheme.surfaceSecondary],
                 ["Surface 3", activeTheme.surfaceTertiary],

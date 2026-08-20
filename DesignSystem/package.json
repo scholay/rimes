@@ -10,9 +10,10 @@
     "dev": "vite",
     "build": "vite build && node scripts/prepare-sites-build.mjs",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run build && npm run test:sites",
+    "check": "npm run typecheck && npm run test:colors && npm run build && npm run test:sites",
     "tokens:swift": "node scripts/generate-swift-tokens.mjs",
     "preview": "vite preview",
+    "test:colors": "node scripts/check-color-contrast.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs"
   },
   "dependencies": {

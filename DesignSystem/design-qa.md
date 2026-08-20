@@ -1,78 +1,93 @@
 # RIMES Design System · Design QA
 
+## Run
+
+- Date: 2026-08-20
+- Browser: the user-selected Chrome browser, controlled through the Chrome plugin.
+- Browser viewport: 1632 × 967 CSS px.
+- Prototype: `http://localhost:4173/?surface=settings&theme=day`
+- Native source: current AppKit renderers from the same `design/react-system` worktree.
+- Native normalization:
+  - Settings: 1960 × 1360 px at 2× → 980 × 680 logical px.
+  - Translation Buffer: 1520 × 224 px at 2× → 760 × 112 logical px.
+
 ## Evidence
 
-- Source visual truth:
-  - `/tmp/rimes-design-source.fmRCbL/night/settings/core-appearance--theme.png`
-  - `/tmp/rimes-design-source.fmRCbL/day/settings/core-plugins--buffer-plugins.png`
-  - `/tmp/rimes-design-source.fmRCbL/night/buffer-translation.png`
-  - `/Users/isaac/Documents/05-dev/apps/rime-buffer-design-system/images/Pencil 2026-07-04 23.09.43.png`
-- Source implementation anchors:
-  - `Sources/RimeBuffer/RimeUI.swift`
-  - `Sources/RimeBuffer/SettingsWindow.swift`
-  - `Sources/RimeBuffer/CandidateWindow.swift`
-  - `Sources/RimeBuffer/BufferWindowController.swift`
-- Implementation URL attempted: `http://terminal.local:4173/`
-- Implementation screenshot path: unavailable; the browser runtime reported that no browser was connected.
-- Intended browser viewport: 1440 × 1000 CSS px at device scale factor 1.
-- Source dimensions and normalization:
-  - Settings source: 1960 × 1360 px at 2×, normalized target 980 × 680 CSS px.
-  - Buffer translation source: 1520 × 224 px at 2×, normalized target 760 × 112 CSS px.
-  - Historical candidate reference: 1028 × 140 px; used as product-language reference, while current geometry is taken from native layout constants (460 × 59 logical pt default).
-- Intended comparison state: 墨竹 theme; appearance page, buffer-plugin page, translation Buffer, compact candidate; default fixture data.
+Current-run native sources:
 
-## Full-view comparison evidence
+- `/tmp/rimes-react-color-audit/native/day/settings/core-appearance--theme.png`
+- `/tmp/rimes-react-color-audit/native/night/settings/core-appearance--theme.png`
+- `/tmp/rimes-react-color-audit/native/day/buffer-translation.png`
+- `/tmp/rimes-react-color-audit/native/night/buffer-translation.png`
 
-The native source captures were generated and opened during implementation. The React project builds and the local URL serves correctly, but a browser-rendered implementation screenshot could not be captured because the environment exposed no in-app or extension browser. A visual comparison cannot be represented as complete without that second artifact.
+Current-run React captures:
 
-## Focused region comparison evidence
+- `/tmp/rimes-react-color-audit/after-01-settings-day.png`
+- `/tmp/rimes-react-color-audit/after-02-settings-night.png`
+- `/tmp/rimes-react-color-audit/after-03-buffer-night-translation.png`
+- `/tmp/rimes-react-color-audit/after-04-buffer-day-translation.png`
+- `/tmp/rimes-react-color-audit/after-05-candidate-day.png`
+- `/tmp/rimes-react-color-audit/after-06-clipboard-day.png`
+- `/tmp/rimes-react-color-audit/after-07-clipboard-protected-day.png`
+- `/tmp/rimes-react-color-audit/after-08-extensions-failure-day.png`
+- `/tmp/rimes-react-color-audit/after-09-translation-dialog-day.png`
+- `/tmp/rimes-react-color-audit/after-10-extensions-quiet.png`
 
-Blocked for the same reason. The planned focused regions are:
+Combined source/implementation comparisons used for visual review:
 
-- Settings sidebar, segmented subpage control, theme cards and plugin rows.
-- Candidate preedit, selected candidate, pagination and Buffer action strip.
-- Buffer toolbar, source/target rails, translation language swap and protected state.
-- Clipboard 40 pt rail, selected/active cards and protected placeholder.
+- `/tmp/rimes-react-color-audit/compare-settings-day-after.png`
+- `/tmp/rimes-react-color-audit/compare-settings-night-after.png`
+- `/tmp/rimes-react-color-audit/compare-buffer-day-after.png`
+- `/tmp/rimes-react-color-audit/compare-buffer-night-after.png`
 
-## Findings
+## Findings and resolution
 
-- [P0] Browser-rendered implementation evidence is missing.
-  - Location: all five React surfaces.
-  - Evidence: browser discovery returned an empty browser list; no implementation pixels or console log could be captured.
-  - Impact: typography, clipping, contrast, focus treatment and responsive behavior cannot receive the required visual sign-off.
-  - Fix: connect the in-app browser, or receive explicit permission to use direct Playwright automation; capture all five surfaces in 墨竹 and 翡翠, then compare the matching source and implementation images in a combined artifact.
+1. **[P1 · fixed] Accent fill was also used as foreground text.**
+   - The fixed product green `#22C55E` is suitable for controls and fills but had only about 2:1 contrast as small text in 翡翠.
+   - Added the separate `accentText` semantic: 墨竹 `#22C55E`, 翡翠 `#0F6A3F`, 静谧 `#A3A3A3`.
+   - Status labels, small icons, selected borders and focus indicators now use `accentText`; switches and primary fills retain `accent`.
 
-## Static and functional checks completed
+2. **[P1 · fixed] Settings used the generic surface instead of the AppKit window background.**
+   - Added `settingsBackground` and `settingsSeparator` tokens matching the current native renderer.
+   - Settings chrome now uses `#323232` for 墨竹/静谧 and `#ECECEC` for 翡翠.
+   - Each theme choice card now receives its own theme scope, so all three previews remain visually truthful regardless of the active theme.
 
+3. **[P1 · fixed] Candidate selected metadata lost contrast.**
+   - Selected index and annotation no longer reduce the native selection foreground with opacity.
+   - Unselected indices use the native secondary-text semantic instead of muted text.
+
+4. **[P1 · fixed] Buffer and Clipboard reused unrelated surface/selection colors.**
+   - Buffer toolbar, content, divider, source rail, target rail, chips and muted text now have explicit native-derived semantics.
+   - The React translation target uses a light accent tint like the AppKit block chip, rather than a deep candidate selection fill.
+   - Clipboard inactive, active, selected and protected states now use distinct rail/card semantics.
+
+5. **[P1 · fixed] Warning and error states shared an inaccessible foreground.**
+   - Added separate warning and danger foreground/surface/border tokens.
+   - 翡翠 warning text now uses `#8A4B00`; errors use the danger semantic instead of warning orange.
+
+## Browser verification
+
+- Switched the same running app through 墨竹, 翡翠 and 静谧.
+- Checked Settings, Extensions/menu, Candidate, Buffer, Clipboard, protected state, engine failure state and the realtime-translation configuration dialog.
+- Visible bright product green is now used as a fill in 翡翠; the browser scan found no exact `#22C55E` foreground text in that theme.
+- Console warnings/errors: none.
+- Document horizontal overflow: none.
+- Visible elements outside the viewport: none.
+
+## Automated verification
+
+- `npm run tokens:swift`: passed.
+- `npm run test:colors`: passed for all three themes.
 - `npm run typecheck`: passed.
 - `npm run build`: passed.
 - `npm run test:sites`: 4/4 passed.
-- `npm run tokens:swift`: passed.
-- Five-surface CSS class coverage: no missing product selectors.
-- Plugin configuration is shared between Settings and Extensions.
-- Optional Buffer plugins are unavailable until installed and enabled.
-- Translation language swap updates both source and target state.
-- Buffer generation is invalidated on mode, source and privacy changes.
-- Candidate keyboard routing excludes its own layout, pagination and settings controls.
+- The color check enforces WCAG 4.5:1 for primary/secondary/muted text, accent text, selected text, Buffer muted text, warnings and danger text against their intended surfaces.
 
-## Required fidelity surfaces
+## Accepted implementation boundaries
 
-- Fonts and typography: token and CSS definitions use the macOS system-font stack; pixel fidelity remains unverified.
-- Spacing and layout rhythm: native logical dimensions are encoded; browser clipping and wrapping remain unverified.
-- Colors and visual tokens: native 墨竹 / 翡翠 / 静谧 values and fixed product accent are encoded; rendered contrast remains unverified.
-- Image quality and asset fidelity: UI uses the Phosphor icon adapter and no placeholder imagery; rendered icon alignment remains unverified.
-- Copy and content: preset plugin names, versions, default install state and native UI terminology were checked against the repository.
+- The React lab specifies visual tokens, component anatomy and interaction states; AppKit remains authoritative for IME focus, nonactivating panels and text delivery.
+- The input-source menu is a design mock of a native `NSMenu`, whose production chrome is controlled by macOS.
+- Clipboard is a forward-looking design surface; the current native product does not yet capture a clipboard history.
+- Phosphor icons map to semantic icon IDs; production AppKit maps the same intent to SF Symbols, so icon paths are not expected to be pixel-identical.
 
-## Comparison history
-
-- Pass 0: source captures available; implementation browser capture unavailable. No visual fixes can be certified from a combined comparison input.
-
-## Implementation checklist
-
-- Capture 1440 × 1000 full-workbench screenshots for all five surfaces.
-- Capture 1:1 focused regions for Settings 980 × 680, Candidate 460 × 59 and Buffer 760 × 112.
-- Exercise theme switching and core interactions while checking the browser console.
-- Place each native source and matching React capture into a single comparison image.
-- Fix any P0/P1/P2 findings, recapture and update this report.
-
-final result: blocked
+final result: passed

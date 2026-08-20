@@ -16,7 +16,7 @@ import {
   Segmented,
   Switch,
 } from "../design-system/primitives";
-import { themes, type ThemeID } from "../design-system/tokens";
+import { themeCSSVariables, themes, type ThemeID } from "../design-system/tokens";
 import {
   PluginConfigurationDialog,
   type PluginConfiguration,
@@ -548,6 +548,7 @@ export function SettingsSurface({
                     onThemeChange?.(id);
                     setStatus(`已切换到${theme.title}主题`);
                   }}
+                  style={themeCSSVariables(theme)}
                   type="button"
                 >
                   <span className="theme-choice__icon"><Icon name="appearance" size={21} weight="duotone" /></span>

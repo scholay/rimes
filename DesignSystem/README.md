@@ -70,7 +70,7 @@ generated/
   RimeDesignTokens.generated.swift
 ```
 
-`themes.json` 保留原生 `RimeUI.swift` 的主题语义：墨竹、翡翠共用固定产品绿 `#22C55E`，静谧使用中性强调色。`1 CSS px = 1 macOS logical pt`，候选框、Buffer 和设置窗口的基准尺寸与原生实现保持一致。
+`themes.json` 保留原生 `RimeUI.swift` 的主题语义：墨竹、翡翠共用固定产品绿 `#22C55E`，静谧使用中性强调色。产品绿填充（`accent`）与可读状态文字（`accentText`）是两个独立 token；翡翠的小字与图标使用深绿，按钮、开关和焦点填充继续使用亮绿。设置页背景、Buffer 轨道/块、剪贴板选中态以及 warning/danger 也有独立语义 token，不能互相借色。`1 CSS px = 1 macOS logical pt`，候选框、Buffer 和设置窗口的基准尺寸与原生实现保持一致。
 
 ## Token 迁移到 Swift
 
@@ -88,4 +88,3 @@ npm run tokens:swift
 - AppKit / InputMethodKit 继续负责输入焦点、候选窗口、文本投递、跨 Space 行为和安全边界。
 - Buffer 与 Clipboard 在设计层共享工作台语法，但在原生端仍需遵守单进程、非激活窗口与 `Delivery.insert` 约束。
 - 右上角输入源菜单在原生端由 macOS `NSMenu` 绘制；这里的实现用于内容结构与交互讨论，不承诺像素级替换系统菜单。
-

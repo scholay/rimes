@@ -40,7 +40,7 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid var(--r-accent);
+  outline: 2px solid var(--r-accent-text);
   outline-offset: 2px;
 }
 
@@ -183,7 +183,7 @@ select:focus-visible,
 
 .studio-nav-item.is-selected {
   color: var(--r-text);
-  border-color: color-mix(in srgb, var(--r-accent) 34%, transparent);
+  border-color: color-mix(in srgb, var(--r-accent-text) 34%, transparent);
   background: color-mix(in srgb, var(--r-accent) 15%, var(--r-surface-2));
 }
 
@@ -200,8 +200,8 @@ select:focus-visible,
 }
 
 .studio-nav-item.is-selected .studio-nav-item__icon {
-  color: var(--r-accent);
-  border-color: color-mix(in srgb, var(--r-accent) 52%, var(--r-border));
+  color: var(--r-accent-text);
+  border-color: color-mix(in srgb, var(--r-accent-text) 52%, var(--r-border));
 }
 
 .studio-nav-item__copy {
@@ -237,7 +237,7 @@ select:focus-visible,
 
 .studio-navigation__note > svg {
   flex: 0 0 auto;
-  color: var(--r-accent);
+  color: var(--r-accent-text);
 }
 
 .studio-navigation__note strong { font-size: 10px; }
@@ -274,7 +274,7 @@ select:focus-visible,
   gap: 7px;
 }
 
-.studio-canvas-toolbar__title > svg { color: var(--r-accent); }
+.studio-canvas-toolbar__title > svg { color: var(--r-accent-text); }
 .studio-canvas-toolbar__title strong { font-size: 12px; }
 
 .studio-canvas-toolbar__title small {
@@ -338,7 +338,7 @@ select:focus-visible,
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--r-accent);
+  background: var(--r-accent-text);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--r-accent) 14%, transparent);
 }
 
@@ -511,9 +511,9 @@ select:focus-visible,
 }
 
 .r-button--danger {
-  color: #fff;
-  border-color: #8e2e2e;
-  background: #a63a3a;
+  color: var(--r-danger-foreground);
+  border-color: var(--r-danger-border);
+  background: var(--r-danger-fill);
 }
 
 .r-icon-button {
@@ -526,7 +526,7 @@ select:focus-visible,
 
 .r-icon-button.is-selected {
   color: var(--r-accent-foreground);
-  border-color: var(--r-accent);
+  border-color: var(--r-accent-text);
   background: var(--r-accent);
 }
 
@@ -571,7 +571,7 @@ select:focus-visible,
 }
 
 .r-switch.is-on {
-  border-color: color-mix(in srgb, var(--r-accent) 78%, #000);
+  border-color: color-mix(in srgb, var(--r-accent-text) 78%, #000);
   background: var(--r-accent);
 }
 
@@ -614,15 +614,15 @@ select:focus-visible,
 }
 
 .r-badge--accent {
-  color: var(--r-accent);
-  border-color: color-mix(in srgb, var(--r-accent) 48%, var(--r-border));
+  color: var(--r-accent-text);
+  border-color: color-mix(in srgb, var(--r-accent-text) 48%, var(--r-border));
   background: color-mix(in srgb, var(--r-accent) 10%, var(--r-surface-2));
 }
 
 .r-badge--warning {
-  color: #f3b34d;
-  border-color: #7b5b2a;
-  background: color-mix(in srgb, #f3b34d 10%, var(--r-surface-2));
+  color: var(--r-warning-text);
+  border-color: var(--r-warning-border);
+  background: var(--r-warning-surface);
 }
 
 .r-field {
@@ -664,7 +664,7 @@ select:focus-visible,
 .r-native-select:focus,
 .r-text-input:focus,
 .buffer-toolbar select:focus,
-.buffer-track__editor:focus { border-color: var(--r-accent); }
+.buffer-track__editor:focus { border-color: var(--r-accent-text); }
 
 .r-text-input,
 .r-range { width: 100%; }
