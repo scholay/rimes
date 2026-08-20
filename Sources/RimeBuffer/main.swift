@@ -5096,10 +5096,11 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
     shelf.translatesAutoresizingMaskIntoConstraints = false
     host.addSubview(shelf)
 
-    let status = NSTextField(labelWithString: "可发送")
+    let status = NSTextField(labelWithString: "")
     status.lineBreakMode = .byTruncatingTail
     status.setContentHuggingPriority(.defaultLow, for: .horizontal)
     status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    status.isHidden = true
 
     let selector = NSView()
     selector.translatesAutoresizingMaskIntoConstraints = false
@@ -5168,6 +5169,7 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
     let baseline = positions()
 
     status.stringValue = "可生成 · 发送前点选输入框"
+    status.isHidden = false
     selectorWidth.constant = 108
     spinner.isHidden = false
     let option = NSView()
@@ -5182,13 +5184,27 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
     actionRow.addArrangedSubview(action)
     let dynamic = positions()
 
+    status.stringValue = ""
+    status.isHidden = true
+    let restoredEmpty = positions()
+
     let epsilon: CGFloat = 0.5
-    let stable = abs(baseline.selector - dynamic.selector) <= epsilon
+    let expectedEmptySelectorX = BufferWorkbenchMetrics.shelfHorizontalInset
+        + pluginActions.edgeInsets.left
+    let expectedStatusShift = BufferWorkbenchMetrics.shelfStatusWidth
+        + BufferWorkbenchMetrics.shelfSpacing
+    let stable = abs(baseline.selector - expectedEmptySelectorX) <= epsilon
+        && abs(dynamic.selector - baseline.selector - expectedStatusShift) <= epsilon
+        && abs(restoredEmpty.selector - baseline.selector) <= epsilon
         && abs(baseline.refresh - dynamic.refresh) <= epsilon
+        && abs(baseline.refresh - restoredEmpty.refresh) <= epsilon
         && abs(baseline.close - dynamic.close) <= epsilon
+        && abs(baseline.close - restoredEmpty.close) <= epsilon
     if !stable {
         print("FAILED: workbench shelf alignment moved",
-              "baseline=\(baseline)", "dynamic=\(dynamic)")
+              "baseline=\(baseline)",
+              "dynamic=\(dynamic)",
+              "restored=\(restoredEmpty)")
     }
     return stable
 }
@@ -5547,8 +5563,10 @@ func runBufferWindowSmokeTest() -> Bool {
           BufferWorkbenchPointerRules.cursor(enabled: true) == .pointingHand,
           BufferWorkbenchPointerRules.cursor(enabled: false) == .arrow,
           BufferWorkbenchMetrics.controlSize == 22,
-          BufferWorkbenchMetrics.primaryControlWidth == 58,
-          BufferWorkbenchMetrics.primaryControlHeight == 30,
+          BufferWorkbenchMetrics.primaryControlWidth
+              == BufferWorkbenchMetrics.controlSize,
+          BufferWorkbenchMetrics.primaryControlHeight
+              == BufferWorkbenchMetrics.controlSize,
           BufferWorkbenchLayoutMode.derived(targetRows: 99).targetRows == 5,
           BufferAlternativePagerRules.maximumCount == 5,
           ProductIdentity.displayName == "RIMES",
@@ -8357,6 +8375,71 @@ func runBufferWindowSmokeTest() -> Bool {
           tiny.contains(tinyOpening.frame),
           tinyOpening.side != .bottomFallback else {
         print("FAILED: tiny visible frame clamp", tinyFitted, tinyOpening)
+        return false
+    }
+
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    app.finishLaunching()
+    let transitionOverride = ProcessInfo.processInfo.environment[
+        "RIMEBUFFER_LAYOUT_TRANSITION_RENDER_DIR"
+    ]
+    let transitionRoot: URL
+    let removesTransitionRoot: Bool
+    if let transitionOverride, !transitionOverride.isEmpty {
+        transitionRoot = URL(fileURLWithPath: transitionOverride,
+                             isDirectory: true)
+        removesTransitionRoot = false
+    } else {
+        transitionRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "rimebuffer-layout-transition-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        removesTransitionRoot = true
+    }
+    do {
+        try FileManager.default.createDirectory(
+            at: transitionRoot,
+            withIntermediateDirectories: true
+        )
+    } catch {
+        print("FAILED: cannot create workbench transition render directory")
+        return false
+    }
+    defer {
+        if removesTransitionRoot {
+            try? FileManager.default.removeItem(at: transitionRoot)
+        }
+    }
+    let transition = BufferWindowController.shared
+        .exerciseLayoutTransitionForSmoke(
+            standardBeforePath: transitionRoot
+                .appendingPathComponent("01-standard-before.png").path,
+            derivedPath: transitionRoot
+                .appendingPathComponent("02-derived.png").path,
+            standardAfterPath: transitionRoot
+                .appendingPathComponent("03-standard-after.png").path
+        )
+    let transitionEpsilon: CGFloat = 0.5
+    guard transition.renderedAllFrames,
+          abs(transition.standardBefore.height
+              - transition.expectedStandardHeight) <= transitionEpsilon,
+          abs(transition.derived.height
+              - transition.expectedDerivedHeight) <= transitionEpsilon,
+          abs(transition.standardAfter.height
+              - transition.expectedStandardHeight) <= transitionEpsilon,
+          abs(transition.repairedStandard.height
+              - transition.expectedStandardHeight) <= transitionEpsilon,
+          abs(transition.standardAfter.minY
+              - transition.standardBefore.minY) <= transitionEpsilon,
+          abs(transition.standardAfter.width
+              - transition.standardBefore.width) <= transitionEpsilon else {
+        print("FAILED: live workbench layout transition",
+              "before=\(transition.standardBefore)",
+              "derived=\(transition.derived)",
+              "after=\(transition.standardAfter)",
+              "repaired=\(transition.repairedStandard)")
         return false
     }
 

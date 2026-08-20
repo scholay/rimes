@@ -30,6 +30,19 @@ enum BufferWorkbenchLayoutMode: Equatable {
     }
 }
 
+/// AppKit-backed transition evidence used by `buffer-window-smoke`. Keeping
+/// this as frame data (rather than repeating the pure geometry helper) catches
+/// an `NSPanel` or Auto Layout refusal to shrink after a live two-rail state.
+struct BufferWindowLayoutTransitionSmokeResult {
+    let standardBefore: NSRect
+    let derived: NSRect
+    let standardAfter: NSRect
+    let repairedStandard: NSRect
+    let expectedStandardHeight: CGFloat
+    let expectedDerivedHeight: CGFloat
+    let renderedAllFrames: Bool
+}
+
 /// React's Buffer master has two presentation grammars. Live workspaces keep
 /// source and result visible together, while explicit generators may exchange
 /// the one visible rail after a request. This is presentation only: the
@@ -543,8 +556,11 @@ enum BufferWorkbenchPointerRules {
 
 enum BufferWorkbenchMetrics {
     static let controlSize: CGFloat = 22
-    static let primaryControlWidth: CGFloat = 58
-    static let primaryControlHeight: CGFloat = 30
+    // The delivery/generation surface is deliberately the same compact,
+    // icon-only control as the utility actions. Its tooltip and accessibility
+    // label carry the verb without spending rail width on a visible title.
+    static let primaryControlWidth: CGFloat = controlSize
+    static let primaryControlHeight: CGFloat = controlSize
     static let mainSpacing: CGFloat = 3
     static let shelfSpacing: CGFloat = 4
     static let mainHorizontalInset: CGFloat = 5
@@ -579,10 +595,10 @@ enum BufferWorkbenchMetrics {
     }
 }
 
-/// Pins the status and plugin controls to the leading edge while one dedicated
-/// spacer absorbs every width change. Without that spacer, AppKit alternates
-/// between stretching the empty plugin row and stretching the status label,
-/// which makes the plugin menu jump between the left and right sides.
+/// Pins the plugin controls to the leading edge while one dedicated spacer
+/// absorbs every width change. The status column participates only while it
+/// has actionable text; an empty 88pt reservation made the normal selector
+/// look accidentally centered instead of aligned with the toolbar inset.
 enum BufferWorkbenchShelfLayout {
     static let flexiblePriority = NSLayoutConstraint.Priority(rawValue: 1)
     static let statusWidthPriority = NSLayoutConstraint.Priority(rawValue: 749)
@@ -599,7 +615,7 @@ enum BufferWorkbenchShelfLayout {
         shelf.alignment = .centerY
         shelf.distribution = .fill
         shelf.spacing = BufferWorkbenchMetrics.shelfSpacing
-        shelf.detachesHiddenViews = false
+        shelf.detachesHiddenViews = true
         shelf.userInterfaceLayoutDirection = .leftToRight
         shelf.edgeInsets = NSEdgeInsets(
             top: 4,
@@ -713,10 +729,10 @@ enum BufferWorkbenchStatusPresentation {
         case danger
     }
 
-    /// The React master reserves this column but leaves routine ready/idle
-    /// prose blank; the rail and primary action already communicate those
-    /// states. Failures, protection, focus blockers, and active work remain
-    /// visible so the compact styling never hides an actionable condition.
+    /// Routine ready/idle prose is blank and detaches the status column; the
+    /// rail and primary action already communicate those states. Failures,
+    /// protection, focus blockers, and active work restore the 88pt column so
+    /// compact styling never hides an actionable condition.
     static func text(
         fallback: String,
         snapshot: TranslationRailSnapshot?
@@ -1178,6 +1194,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var renderedBuiltInActionHasOptions: Bool?
     private var renderedTranslationLanguages: [TranslationLanguageOption] = []
     private var renderedBuiltInActionOptions: [BuiltInBufferActionOption] = []
+    private var sendButtonUsesAccent = false
     private var openingSide: BufferOpeningSide = .bottomFallback
     private var openingFocusToken: FocusToken?
     private var transientOpeningOrigin = false
@@ -1541,12 +1558,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                        display: false)
         adjustingFrame = false
         if let translationSnapshot {
-            statusLabel.stringValue = BufferWorkbenchStatusPresentation.text(
+            setWorkbenchStatusText(BufferWorkbenchStatusPresentation.text(
                 fallback: translationSnapshot.showsSourceRail
                     ? "译文可发送"
                     : translationSnapshot.targetEmptyText,
                 snapshot: translationSnapshot
-            )
+            ))
             _ = bufferRail.renderTranslationForPreview(
                 translationSnapshot,
                 presentationStyle: previewStyle
@@ -1559,6 +1576,111 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             reconcileContextualStatusIndicators(statusIndicators)
         }
         applyPreviewPointerState(hoveredControl)
+        return renderCurrentContent(to: path, scale: scale)
+    }
+
+    /// Exercises one real `NSPanel` and its existing constraints through the
+    /// exact compact -> live-derived -> compact lifecycle. The optional PNGs
+    /// make a failed geometry assertion directly inspectable without adding a
+    /// second preview implementation.
+    func exerciseLayoutTransitionForSmoke(
+        standardBeforePath: String? = nil,
+        derivedPath: String? = nil,
+        standardAfterPath: String? = nil,
+        scale: CGFloat = 2
+    ) -> BufferWindowLayoutTransitionSmokeResult {
+        let standardMode = BufferWorkbenchLayoutMode.standard
+        let derivedMode = BufferWorkbenchLayoutMode.translation
+        let expectedStandardHeight = BufferWindowGeometry.height(
+            expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
+            mode: standardMode,
+            clipboardRailEnabled: clipboardRailEnabled
+        )
+        let expectedDerivedHeight = BufferWindowGeometry.height(
+            expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
+            mode: derivedMode,
+            clipboardRailEnabled: clipboardRailEnabled
+        )
+
+        func reconcile(
+            mode: BufferWorkbenchLayoutMode,
+            render: () -> Void
+        ) {
+            let grows = BufferWorkbenchMetrics.railHeight(for: mode)
+                > BufferWorkbenchMetrics.railHeight(for: layoutMode)
+            if mode != layoutMode, grows {
+                syncLayoutMode(mode)
+                panel.contentView?.layoutSubtreeIfNeeded()
+            }
+            render()
+            if mode != layoutMode {
+                syncLayoutMode(mode)
+            }
+            panel.contentView?.layoutSubtreeIfNeeded()
+            bufferRail.reconcileTranslationDocumentGeometry()
+        }
+
+        reconcile(mode: standardMode) {
+            _ = bufferRail.renderStandardForPreview()
+        }
+        let standardBefore = panel.frame
+        let renderedStandardBefore = standardBeforePath.map {
+            renderCurrentContent(to: $0, scale: scale)
+        } ?? true
+
+        let derivedSnapshot = TranslationRailSnapshot(
+            sourceText: "同一窗口先展开为双轨",
+            outputBlocks: [
+                TranslationOutputBlock(
+                    id: UUID(),
+                    text: "再验证它能缩回单轨"
+                ),
+            ],
+            phase: .ready
+        )
+        reconcile(mode: derivedMode) {
+            _ = bufferRail.renderTranslationForPreview(derivedSnapshot)
+        }
+        let derived = panel.frame
+        let renderedDerived = derivedPath.map {
+            renderCurrentContent(to: $0, scale: scale)
+        } ?? true
+
+        reconcile(mode: standardMode) {
+            _ = bufferRail.renderStandardForPreview()
+        }
+        let standardAfter = panel.frame
+        let renderedStandardAfter = standardAfterPath.map {
+            renderCurrentContent(to: $0, scale: scale)
+        } ?? true
+
+        // Reproduce the delayed AppKit case that motivated the repair: the
+        // enum and constraints have already returned to standard, but the
+        // window receives one stale derived-sized frame on the following
+        // layout turn. A same-mode sync must still restore compact geometry.
+        var staleFrame = panel.frame
+        staleFrame.size.height = expectedDerivedHeight
+        adjustingFrame = true
+        panel.setFrame(staleFrame, display: false)
+        adjustingFrame = false
+        syncLayoutMode(standardMode)
+        panel.contentView?.layoutSubtreeIfNeeded()
+        let repairedStandard = panel.frame
+
+        return BufferWindowLayoutTransitionSmokeResult(
+            standardBefore: standardBefore,
+            derived: derived,
+            standardAfter: standardAfter,
+            repairedStandard: repairedStandard,
+            expectedStandardHeight: expectedStandardHeight,
+            expectedDerivedHeight: expectedDerivedHeight,
+            renderedAllFrames: renderedStandardBefore
+                && renderedDerived
+                && renderedStandardAfter
+        )
+    }
+
+    private func renderCurrentContent(to path: String, scale: CGFloat) -> Bool {
         guard let contentView = panel.contentView else { return false }
         contentView.layoutSubtreeIfNeeded()
         let bounds = contentView.bounds
@@ -1677,10 +1799,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                 canGenerateWithoutFocus: canGenerateWithoutFocus
             )
         }
-        statusLabel.stringValue = BufferWorkbenchStatusPresentation.text(
+        setWorkbenchStatusText(BufferWorkbenchStatusPresentation.text(
             fallback: rawStatusText,
             snapshot: contentProtected ? nil : derivedSnapshot
-        )
+        ))
         statusLabel.toolTip = !contentProtected
             && (derivedWorkspaceSelected || builtInActionWorkspaceSelected)
             ? rawStatusText
@@ -1723,6 +1845,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         let indicators = (workspace as? any WorkbenchStatusIndicatorProviding)?
             .workbenchStatusIndicators ?? []
         reconcileContextualStatusIndicators(indicators)
+    }
+
+    private func setWorkbenchStatusText(_ text: String) {
+        statusLabel.stringValue = text
+        statusLabel.isHidden = text.isEmpty
     }
 
     private func refreshExchangeActions(
@@ -1885,7 +2012,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         configurePrimaryButton(
             sendButton,
             "paperplane.fill",
-            "发送",
             "发送下一块（\(deliveryShortcutTitle)）",
             #selector(sendTapped)
         )
@@ -1918,6 +2044,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         statusLabel.userInterfaceLayoutDirection = .leftToRight
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        statusLabel.isHidden = true
 
         pluginSelector.controlSize = .mini
         pluginSelector.font = .systemFont(ofSize: 10, weight: .semibold)
@@ -2140,15 +2267,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func configurePrimaryButton(_ button: FirstMouseButton,
                                         _ symbol: String,
-                                        _ title: String,
                                         _ toolTip: String,
                                         _ action: Selector) {
-        button.usesPrimarySurface = true
-        button.image = RimeUI.symbol(symbol, pointSize: 10, weight: .semibold)
+        button.image = RimeUI.symbol(symbol, pointSize: 11, weight: .semibold)
         button.image?.isTemplate = true
-        button.imagePosition = .imageLeading
-        button.title = title
-        button.font = .systemFont(ofSize: 10, weight: .semibold)
+        button.imagePosition = .imageOnly
+        button.title = ""
         button.isBordered = false
         button.focusRingType = .none
         button.toolTip = toolTip
@@ -2184,18 +2308,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             $0.contentTintColor = RimeUI.textSecondary
             $0.refreshInteractionAppearance()
         }
-        sendButton.contentTintColor = sendButton.isEnabled
-            ? RimeUI.accentForegroundColor
+        sendButton.contentTintColor = sendButtonUsesAccent && sendButton.isEnabled
+            ? RimeUI.accentBlue
             : RimeUI.textSecondary
-        sendButton.attributedTitle = NSAttributedString(
-            string: sendButton.title,
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
-                .foregroundColor: sendButton.isEnabled
-                    ? RimeUI.accentForegroundColor
-                    : RimeUI.textMuted,
-            ]
-        )
         translationSwapButton.contentTintColor = RimeUI.textSecondary
         translationSwapButton.refreshInteractionAppearance()
         pluginActionButtons.values.forEach {
@@ -2246,11 +2361,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         availability: BufferDeliveryCoordinator.Availability,
         contentProtected: Bool
     ) {
-        sendButton.imagePosition = .imageLeading
+        sendButton.imagePosition = .imageOnly
+        sendButton.title = ""
+        sendButtonUsesAccent = false
         guard let controls else {
             setSendButtonGenerating(false)
             setSendButtonSymbol("paperplane.fill")
-            sendButton.title = "发送"
             sendButton.isEnabled = availability.canSend && !contentProtected
             sendButton.toolTip = availability.canSend
                 ? "发送下一块（\(deliveryShortcutTitle)）"
@@ -2263,7 +2379,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         case .disabled:
             setSendButtonGenerating(false)
             setSendButtonSymbol("sparkles")
-            sendButton.title = "生成"
             sendButton.isEnabled = false
             sendButton.toolTip = contentProtected
                 ? "安全输入已开启，AI 已暂停"
@@ -2272,7 +2387,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         case .requestGeneration:
             setSendButtonGenerating(false)
             setSendButtonSymbol("sparkles")
-            sendButton.title = "生成"
             sendButton.isEnabled = !contentProtected
                 && controls.canGenerate
                 && !availability.blocksManualGenerationRequest
@@ -2282,9 +2396,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                     ? availability.label
                     : controls.generationStatusText)
             sendButton.setAccessibilityLabel("请求 AI 生成")
+            sendButtonUsesAccent = true
         case .generating:
             sendButton.image = nil
-            sendButton.title = ""
             sendButton.isEnabled = false
             sendButton.toolTip = controls.generationStatusText
             sendButton.setAccessibilityLabel("AI 正在生成")
@@ -2292,12 +2406,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         case .deliver:
             setSendButtonGenerating(false)
             setSendButtonSymbol("paperplane.fill")
-            sendButton.title = "发送"
             sendButton.isEnabled = availability.canSend && !contentProtected
             sendButton.toolTip = availability.canSend
                 ? "发送下一块（\(deliveryShortcutTitle)）"
                 : availability.label
             sendButton.setAccessibilityLabel("发送下一块 AI 内容")
+            sendButtonUsesAccent = true
         }
     }
 
@@ -2716,15 +2830,40 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func syncLayoutMode(_ nextMode: BufferWorkbenchLayoutMode) {
         updateMainControlAlignment(for: nextMode)
-        guard layoutMode != nextMode else { return }
-        layoutMode = nextMode
-        mainBarHeightConstraint?.constant = BufferWorkbenchMetrics.mainBarHeight(for: nextMode)
-        bufferRailHeightConstraint?.constant = BufferWorkbenchMetrics.railHeight(for: nextMode)
+        let modeChanged = layoutMode != nextMode
+        if modeChanged {
+            layoutMode = nextMode
+            mainBarHeightConstraint?.constant = BufferWorkbenchMetrics.mainBarHeight(
+                for: nextMode
+            )
+            bufferRailHeightConstraint?.constant = BufferWorkbenchMetrics.railHeight(
+                for: nextMode
+            )
+        }
         let desiredHeight = BufferWindowGeometry.height(
             expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
             mode: nextMode,
             clipboardRailEnabled: clipboardRailEnabled
         )
+        let fallback = panel.screen?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let verticalMargin = min(
+            BufferWindowGeometry.screenSafetyMargin,
+            max(0, (fallback.height - 1) / 2)
+        )
+        let expectedHeight = min(
+            desiredHeight,
+            max(1, fallback.height - verticalMargin * 2)
+        )
+        let needsHeightRepair = abs(panel.frame.height - expectedHeight) >= 0.5
+        guard modeChanged || needsHeightRepair else { return }
+
+        // `layoutMode` can already be correct while AppKit still holds the
+        // previous derived frame (for example after constraints settle on the
+        // next run-loop turn). Reassert the canonical height in that case;
+        // returning solely on enum equality leaves a permanently tall empty
+        // workbench after switching back to Default.
         var proposed = panel.frame
         if transientOpeningOrigin, openingSide != .bottomFallback {
             proposed = BufferWindowGeometry.resizedOutward(
@@ -2735,9 +2874,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         } else {
             proposed.size.height = desiredHeight
         }
-        let fallback = panel.screen?.visibleFrame
-            ?? NSScreen.main?.visibleFrame
-            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         applyClampedFrame(proposed,
                           visibleFrames: NSScreen.screens.map(\.visibleFrame),
                           fallback: fallback,

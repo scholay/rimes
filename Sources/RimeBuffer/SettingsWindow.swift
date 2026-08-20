@@ -105,9 +105,14 @@ private final class SettingsPageDocumentView: NSView {
 }
 
 private final class SettingsBackgroundView: NSView {
+    override var isOpaque: Bool { true }
+
     override func draw(_ dirtyRect: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSBezierPath(rect: bounds).addClip()
         SettingsVisualStyle.background.setFill()
-        dirtyRect.fill()
+        bounds.fill()
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -139,10 +144,21 @@ private final class SettingsChromeView: NSView {
 
     required init?(coder: NSCoder) { nil }
 
+    override var isOpaque: Bool { true }
+
     override func draw(_ dirtyRect: NSRect) {
+        // `dirtyRect` is not guaranteed to be clipped to this arranged
+        // subview's bounds while AppKit is snapshotting a layer-backed stack.
+        // Filling it directly lets the last chrome band (the status bar) paint
+        // over the complete window, although accessibility still sees every
+        // control at its correct frame. Establish our own clip so live windows
+        // and off-screen settings renders share the same compositing contract.
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSBezierPath(rect: bounds).addClip()
         let fillColor = fill == .settings ? SettingsVisualStyle.background : RimeUI.surface2
         fillColor.setFill()
-        dirtyRect.fill()
+        bounds.fill()
         guard border != .none else { return }
         (fill == .settings ? SettingsVisualStyle.separator : RimeUI.border).setStroke()
         let y = border == .top
@@ -168,8 +184,11 @@ private final class SettingsSeparatorView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSBezierPath(rect: bounds).addClip()
         SettingsVisualStyle.separator.setFill()
-        dirtyRect.fill()
+        bounds.fill()
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -538,6 +557,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     func show() {
+        // `settings-preview` reaches this method before `app.run()`; the live
+        // IMK process is already running, so this branch is a preview-only
+        // launch prerequisite and a no-op in production.
+        if !NSApp.isRunning {
+            NSApp.finishLaunching()
+        }
         if window == nil { build() }
         rebuildRouteCatalog()
         reload()
@@ -545,6 +570,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         NSApp.activate(ignoringOtherApps: true)
         window?.center()
         window?.makeKeyAndOrderFront(nil)
+        window?.contentView?.layoutSubtreeIfNeeded()
+        window?.contentView?.display()
     }
 
     /// Dev-only: render one settings page to a PNG by drawing the window's own
@@ -638,10 +665,11 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         content.display()
         guard let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return false }
         content.cacheDisplay(in: content.bounds, to: rep)
+        let pixelsAreValid = validatePreviewPixels(in: content, bitmap: rep)
         guard let data = rep.representation(using: .png, properties: [:]) else { return false }
         do {
             try data.write(to: URL(fileURLWithPath: path), options: .atomic)
-            return true
+            return pixelsAreValid
         } catch {
             print("settings render failed \(path): \(error.localizedDescription)")
             return false
@@ -682,6 +710,132 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             return false
         }
         return true
+    }
+
+    /// Catch compositing failures that leave a structurally complete AppKit
+    /// hierarchy covered by one flat fill. AX/frame validation alone cannot
+    /// distinguish that state from a correctly rendered settings page.
+    private func validatePreviewPixels(in content: NSView,
+                                       bitmap: NSBitmapImageRep) -> Bool {
+        guard bitmap.pixelsWide > 0,
+              bitmap.pixelsHigh > 0,
+              content.bounds.width > 0,
+              content.bounds.height > 0 else {
+            print("settings render produced an empty bitmap")
+            return false
+        }
+
+        let regionIDs = [
+            "settings.sidebar",
+            "settings.subpage-bar",
+            "settings.page-heading",
+            "settings.page-scroll",
+        ]
+        let scaleX = CGFloat(bitmap.pixelsWide) / content.bounds.width
+        let scaleY = CGFloat(bitmap.pixelsHigh) / content.bounds.height
+
+        func rgb(_ color: NSColor?) -> (CGFloat, CGFloat, CGFloat)? {
+            guard let value = color?.usingColorSpace(.sRGB) else { return nil }
+            return (value.redComponent, value.greenComponent, value.blueComponent)
+        }
+
+        func colorDistance(_ lhs: (CGFloat, CGFloat, CGFloat)?,
+                           _ rhs: NSColor) -> CGFloat {
+            guard let lhs, let rhs = rgb(rhs) else { return .greatestFiniteMagnitude }
+            let dr = lhs.0 - rhs.0
+            let dg = lhs.1 - rhs.1
+            let db = lhs.2 - rhs.2
+            return sqrt(dr * dr + dg * dg + db * db)
+        }
+
+        func pixel(at point: NSPoint, bitmapYFlipped: Bool) -> NSColor? {
+            let rawX = Int((point.x - content.bounds.minX) * scaleX)
+            let rawY = Int((point.y - content.bounds.minY) * scaleY)
+            let x = min(max(rawX, 0), bitmap.pixelsWide - 1)
+            let lowerY = min(max(rawY, 0), bitmap.pixelsHigh - 1)
+            let y = bitmapYFlipped ? bitmap.pixelsHigh - 1 - lowerY : lowerY
+            return bitmap.colorAt(x: x, y: y)
+        }
+
+        // NSBitmapImageRep storage orientation depends on the backing path.
+        // Resolve it from two known chrome fills instead of assuming it.
+        var bitmapYFlipped = false
+        if let status = descendant(
+            identifiedBy: NSUserInterfaceItemIdentifier("settings.status-bar"),
+            in: content
+        ), let tabs = descendant(
+            identifiedBy: NSUserInterfaceItemIdentifier("settings.subpage-bar"),
+            in: content
+        ) {
+            let statusRect = status.convert(status.bounds, to: content)
+            let tabsRect = tabs.convert(tabs.bounds, to: content)
+            let statusPoint = NSPoint(x: statusRect.midX, y: statusRect.midY)
+            let tabsPoint = NSPoint(x: tabsRect.maxX - 12, y: tabsRect.midY)
+            let normalScore = colorDistance(rgb(pixel(at: statusPoint,
+                                                      bitmapYFlipped: false)),
+                                            RimeUI.surface2)
+                + colorDistance(rgb(pixel(at: tabsPoint, bitmapYFlipped: false)),
+                                SettingsVisualStyle.background)
+            let flippedScore = colorDistance(rgb(pixel(at: statusPoint,
+                                                       bitmapYFlipped: true)),
+                                             RimeUI.surface2)
+                + colorDistance(rgb(pixel(at: tabsPoint, bitmapYFlipped: true)),
+                                SettingsVisualStyle.background)
+            bitmapYFlipped = flippedScore < normalScore
+        }
+
+        var allRegionsVisible = true
+        for identifier in regionIDs {
+            guard let view = descendant(
+                identifiedBy: NSUserInterfaceItemIdentifier(identifier),
+                in: content
+            ) else {
+                allRegionsVisible = false
+                continue
+            }
+            let rect = view.convert(view.bounds, to: content)
+                .intersection(content.bounds)
+                .insetBy(dx: 3, dy: 3)
+            guard !rect.isEmpty else {
+                print("settings render pixel region is empty: \(identifier)")
+                allRegionsVisible = false
+                continue
+            }
+
+            var minimumLuminance: CGFloat = 1
+            var maximumLuminance: CGFloat = 0
+            var colorBuckets = Set<Int>()
+            var y = rect.minY
+            while y < rect.maxY {
+                var x = rect.minX
+                while x < rect.maxX {
+                    if let (red, green, blue) = rgb(pixel(
+                        at: NSPoint(x: x, y: y),
+                        bitmapYFlipped: bitmapYFlipped
+                    )) {
+                        let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+                        minimumLuminance = min(minimumLuminance, luminance)
+                        maximumLuminance = max(maximumLuminance, luminance)
+                        let bucket = (Int(red * 15) << 8)
+                            | (Int(green * 15) << 4)
+                            | Int(blue * 15)
+                        colorBuckets.insert(bucket)
+                    }
+                    x += 2
+                }
+                y += 2
+            }
+
+            let luminanceSpan = maximumLuminance - minimumLuminance
+            if colorBuckets.count < 4 || luminanceSpan < 0.08 {
+                print(
+                    "settings render region is visually blank: \(identifier) "
+                        + "(colors=\(colorBuckets.count), luminanceSpan=\(luminanceSpan))"
+                )
+                allRegionsVisible = false
+            }
+        }
+        return allRegionsVisible
     }
 
     private func descendant(identifiedBy identifier: NSUserInterfaceItemIdentifier,
