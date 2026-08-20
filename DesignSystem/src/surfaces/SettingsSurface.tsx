@@ -299,6 +299,10 @@ export function SettingsSurface({
     ?? "";
 
   useEffect(() => {
+    setCurrentRouteID(initialRouteID);
+  }, [initialRouteID]);
+
+  useEffect(() => {
     if (!routes.some((route) => route.id === currentRouteID)) {
       setCurrentRouteID("core.plugins");
     }

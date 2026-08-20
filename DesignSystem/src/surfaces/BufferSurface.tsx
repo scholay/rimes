@@ -177,31 +177,17 @@ const DEFAULT_LANGUAGES: readonly BufferLanguage[] = [
 
 const DEFAULT_SOURCE = "请把这段缓冲内容整理为一段清晰的产品说明。";
 
-function defaultTargetsFor(mode: BufferMode): readonly string[] {
-  switch (mode) {
-    case "normal":
-      return [];
-    case "translation":
-      return ["Turn this buffered text into a clear product description."];
-    case "ai":
-      return ["这是一段结构清楚、可以直接发送的产品说明。"];
-    case "prompt":
-      return [
-        "产品说明写作模板",
-        "功能发布说明模板",
-        "设计评审提示词",
-      ];
-    case "stream":
-      return [
-        "请把这段缓冲内容整理成清晰的产品说明。",
-        "请将缓冲内容改写为简洁的产品介绍。",
-        "把当前内容整理成一段易读的说明。",
-      ];
-    case "remarkable":
-      return ["已在本机识别当前 reMarkable 页面，可检查后加入缓冲区。"];
-    case "marine":
-      return ["已根据当前页面和缓冲正文生成可发送的回复。"];
-  }
+function defaultTargetsFor(_mode: BufferMode): readonly string[] {
+  // All plugins open on the writing rail. Live-expand fills the lower rail
+  // after typed content arrives; exchange plugins swap this rail after request.
+  return [];
+}
+
+function bufferLayoutFor(mode: BufferMode): "single-exchange" | "live-expand" {
+  // Live retrieval / parallel drafting: grow a lower rail while typing.
+  return mode === "translation" || mode === "stream" || mode === "prompt"
+    ? "live-expand"
+    : "single-exchange";
 }
 
 function generatedTargetsFor(mode: BufferMode, source: string): readonly string[] {
@@ -218,12 +204,16 @@ function generatedTargetsFor(mode: BufferMode, source: string): readonly string[
         `${conciseSource} · 产品说明模板`,
         `${conciseSource} · 设计评审提示词`,
         `${conciseSource} · 发布检查清单`,
+        `${conciseSource} · 用户调研提纲`,
+        `${conciseSource} · 竞品对比框架`,
       ];
     case "stream":
       return [
         `${conciseSource}`,
         `${conciseSource}，并保持表达简洁。`,
         `请整理：${conciseSource}`,
+        `把“${conciseSource}”改成可直接发送的说明。`,
+        `基于“${conciseSource}”给出更口语的版本。`,
       ];
     case "remarkable":
       return [`已在 Mac 本地识别当前页：${conciseSource}`];
@@ -248,7 +238,9 @@ function useControllableState<T>(
   return [resolvedValue, setValue] as const;
 }
 
-function statusFor(mode: BufferMode, phase: BufferPhase, hasContent: boolean) {
+/** Only surface status when it changes what the user should do next.
+ *  Idle "可发送" / "等待内容" is redundant with the send button and rails. */
+function statusFor(mode: BufferMode, phase: BufferPhase, _hasContent: boolean): string | null {
   if (phase === "protected") return "安全输入，内容已隐藏";
   if (phase === "loading") {
     if (mode === "translation") return "正在翻译";
@@ -259,8 +251,7 @@ function statusFor(mode: BufferMode, phase: BufferPhase, hasContent: boolean) {
     return mode === "normal" ? "正在发送" : "插件正在生成";
   }
   if (phase === "error") return "处理失败";
-  if (!hasContent) return "等待内容";
-  return phase === "ready" ? "可发送" : "等待内容";
+  return null;
 }
 
 function BufferTrack({
@@ -271,7 +262,8 @@ function BufferTrack({
   loading,
   sourceValue,
   targets,
-  selectedTarget,
+  selectedTarget = 0,
+  emptyLabel,
   onSourceChange,
   onTargetSelect,
 }: {
@@ -283,9 +275,22 @@ function BufferTrack({
   sourceValue?: string;
   targets?: readonly string[];
   selectedTarget?: number;
+  emptyLabel?: string;
   onSourceChange?: (text: string) => void;
   onTargetSelect?: (index: number) => void;
 }) {
+  const targetCount = targets?.length ?? 0;
+  const activeIndex = targetCount === 0
+    ? 0
+    : Math.min(Math.max(selectedTarget, 0), targetCount - 1);
+  const activeTarget = targetCount > 0 ? targets![activeIndex] : "";
+
+  const stepTarget = (delta: number) => {
+    if (targetCount <= 1) return;
+    const next = (activeIndex + delta + targetCount) % targetCount;
+    onTargetSelect?.(next);
+  };
+
   return (
     <div
       aria-label={`${kind === "source" ? "源" : "目标"}缓冲轨道`}
@@ -317,27 +322,43 @@ function BufferTrack({
             <Icon className="is-spinning" name="refresh" size={13} />
             正在处理…
           </span>
-        ) : targets && targets.length > 0 ? (
-          <div className="buffer-track__target-list" role="listbox">
-            {targets.map((target, index) => (
-              <button
-                aria-selected={selectedTarget === index}
-                className={`buffer-target${selectedTarget === index ? " is-selected" : ""}`}
-                key={`${target}-${index}`}
-                onClick={() => onTargetSelect?.(index)}
-                role="option"
-                title={target}
-                type="button"
-              >
-                <span className="buffer-target__index">
-                  {selectedTarget === index ? "✓ " : ""}{index + 1} ·
+        ) : targetCount > 0 ? (
+          <div
+            aria-label={`候选 ${activeIndex + 1} / ${targetCount}`}
+            className="buffer-track__pager"
+            role="group"
+          >
+            <span className="buffer-track__pager-stepper">
+              <span className="buffer-track__pager-count" title={`${targetCount} 条候选`}>
+                {activeIndex + 1}/{targetCount}
+              </span>
+              {targetCount > 1 ? (
+                <span className="buffer-track__pager-controls">
+                  <button
+                    aria-label="上一条候选"
+                    className="buffer-track__pager-button"
+                    onClick={() => stepTarget(-1)}
+                    type="button"
+                  >
+                    <Icon name="up" size={11} weight="bold" />
+                  </button>
+                  <button
+                    aria-label="下一条候选"
+                    className="buffer-track__pager-button"
+                    onClick={() => stepTarget(1)}
+                    type="button"
+                  >
+                    <Icon name="down" size={11} weight="bold" />
+                  </button>
                 </span>
-                <span className="buffer-target__text">{target}</span>
-              </button>
-            ))}
+              ) : null}
+            </span>
+            <span className="buffer-track__pager-text" title={activeTarget}>
+              {activeTarget}
+            </span>
           </div>
         ) : (
-          <span className="buffer-track__empty">等待译文</span>
+          <span className="buffer-track__empty">{emptyLabel ?? "等待结果"}</span>
         )}
       </div>
     </div>
@@ -375,7 +396,6 @@ export function BufferSurface({
   onLanguageChange,
   onGenerate,
   onSend,
-  onRefresh,
   onClose,
 }: BufferSurfaceProps) {
   const initialMode = controlledMode ?? defaultMode;
@@ -419,12 +439,25 @@ export function BufferSurface({
   const modeIsAvailable = availableModeSet.has(mode);
   const effectiveMode: BufferMode = modeIsAvailable ? mode : "normal";
   const descriptor = MODE_DESCRIPTORS[effectiveMode];
-  const derived = effectiveMode !== "normal";
+  const layout = bufferLayoutFor(effectiveMode);
+  const liveExpand = layout === "live-expand";
+  const exchange = layout === "single-exchange" && effectiveMode !== "normal";
   const protectedContent = phase === "protected";
   const loading = phase === "loading";
-  const selectedOutput = derived ? targets[selectedTarget] ?? "" : sourceText;
+  const hasSource = sourceText.trim().length > 0;
+  const showLiveTargetRail = liveExpand && !protectedContent && hasSource;
+  // Exchange plugins keep one rail: write first, then swap to waiting/results.
+  const exchangeDecision = exchange && !protectedContent && (loading || targets.length > 0);
+  const selectedOutput = (liveExpand || exchangeDecision)
+    ? targets[selectedTarget] ?? ""
+    : sourceText;
   const canSend = !protectedContent && !loading && selectedOutput.trim().length > 0;
-  const status = deliveryNote || statusFor(effectiveMode, phase, sourceText.trim().length > 0);
+  const canRequest = !protectedContent && !loading && (
+    effectiveMode === "remarkable"
+    || effectiveMode === "marine"
+    || hasSource
+  );
+  const status = deliveryNote || statusFor(effectiveMode, phase, hasSource);
   const generationContext = useRef({
     mode: effectiveMode,
     protectedContent,
@@ -450,6 +483,42 @@ export function BufferSurface({
     generationTimer.current = undefined;
   }, []);
 
+  const runGeneration = useCallback((requestMode: BufferMode, requestSource: string) => {
+    if (protectedContent) return;
+    cancelPendingGeneration();
+    const requestRevision = generationRevision.current;
+    setDeliveryNote("");
+    setPhase("loading");
+    onGenerate?.(requestMode, requestSource);
+
+    if (controlledPhase === undefined) {
+      const timerID = window.setTimeout(() => {
+        if (generationTimer.current === timerID) generationTimer.current = undefined;
+        const currentContext = generationContext.current;
+        if (
+          generationRevision.current !== requestRevision
+          || currentContext.mode !== requestMode
+          || currentContext.sourceText !== requestSource
+          || currentContext.protectedContent
+        ) return;
+        const nextTargets = generatedTargetsFor(requestMode, requestSource);
+        setTargets(nextTargets);
+        setSelectedTarget(0);
+        setPhase("ready");
+      }, liveExpand ? 420 : 700);
+      generationTimer.current = timerID;
+    }
+  }, [
+    cancelPendingGeneration,
+    controlledPhase,
+    liveExpand,
+    onGenerate,
+    protectedContent,
+    setPhase,
+    setSelectedTarget,
+    setTargets,
+  ]);
+
   // Render the safe fallback immediately, then persist it through either the
   // uncontrolled state or the controlled owner's onModeChange callback.
   useEffect(() => {
@@ -462,12 +531,52 @@ export function BufferSurface({
     if (!protectedContent) setPhase(sourceText.trim() ? "ready" : "idle");
   }, [cancelPendingGeneration, mode, modeIsAvailable]);
 
-  // Controlled props can change without passing through this component's event
-  // handlers. Invalidate on every generation input as a second line of defence
-  // so a timer created for an older owner/source/privacy state cannot publish.
   useEffect(() => {
     cancelPendingGeneration();
-  }, [cancelPendingGeneration, effectiveMode, protectedContent, sourceText]);
+  }, [cancelPendingGeneration, effectiveMode, protectedContent]);
+
+  // Live-expand plugins grow a lower rail as soon as the user has typed something.
+  useEffect(() => {
+    if (!liveExpand || protectedContent) return;
+    if (!hasSource) {
+      cancelPendingGeneration();
+      setTargets([]);
+      if (phase !== "idle") setPhase("idle");
+      return;
+    }
+    if (controlledPhase !== undefined) return;
+    const requestMode = effectiveMode;
+    const requestSource = sourceText;
+    cancelPendingGeneration();
+    const requestRevision = generationRevision.current;
+    setPhase("loading");
+    onGenerate?.(requestMode, requestSource);
+    const timerID = window.setTimeout(() => {
+      if (generationTimer.current === timerID) generationTimer.current = undefined;
+      const currentContext = generationContext.current;
+      if (
+        generationRevision.current !== requestRevision
+        || currentContext.mode !== requestMode
+        || currentContext.sourceText !== requestSource
+        || currentContext.protectedContent
+      ) return;
+      setTargets(generatedTargetsFor(requestMode, requestSource));
+      setSelectedTarget(0);
+      setPhase("ready");
+    }, 420);
+    generationTimer.current = timerID;
+  }, [
+    cancelPendingGeneration,
+    controlledPhase,
+    effectiveMode,
+    hasSource,
+    liveExpand,
+    onGenerate,
+    protectedContent,
+    sourceLanguage,
+    sourceText,
+    targetLanguage,
+  ]);
 
   useEffect(() => () => {
     cancelPendingGeneration();
@@ -485,17 +594,17 @@ export function BufferSurface({
     setMode(nextMode);
     setDeliveryNote("");
     setSelectedTarget(0);
-    setTargets(defaultTargetsFor(nextMode));
-    if (phase !== "protected") setPhase("ready");
+    setTargets([]);
+    if (phase !== "protected") setPhase(sourceText.trim() ? "ready" : "idle");
   };
 
   const changeSourceLanguage = (event: ChangeEvent<HTMLSelectElement>) => {
     const next = event.target.value;
     cancelPendingGeneration();
     setSourceLanguage(next);
-    if (!protectedContent && effectiveMode === "translation") {
+    if (!protectedContent && liveExpand) {
       setTargets([]);
-      setPhase("idle");
+      setPhase(hasSource ? "ready" : "idle");
     }
     onLanguageChange?.(next, targetLanguage);
   };
@@ -504,9 +613,9 @@ export function BufferSurface({
     const next = event.target.value;
     cancelPendingGeneration();
     setTargetLanguage(next);
-    if (!protectedContent && effectiveMode === "translation") {
+    if (!protectedContent && liveExpand) {
       setTargets([]);
-      setPhase("idle");
+      setPhase(hasSource ? "ready" : "idle");
     }
     onLanguageChange?.(sourceLanguage, next);
   };
@@ -517,58 +626,16 @@ export function BufferSurface({
     cancelPendingGeneration();
     setSourceLanguage(nextSource);
     setTargetLanguage(nextTarget);
-    if (!protectedContent && effectiveMode === "translation") {
+    if (!protectedContent && liveExpand) {
       setTargets([]);
-      setPhase("idle");
+      setPhase(hasSource ? "ready" : "idle");
     }
     onLanguageChange?.(nextSource, nextTarget);
   };
 
   const generate = () => {
-    if (protectedContent || loading || effectiveMode === "normal") return;
-    cancelPendingGeneration();
-    const requestRevision = generationRevision.current;
-    const requestMode = effectiveMode;
-    const requestSource = sourceText;
-    setDeliveryNote("");
-    setPhase("loading");
-    onGenerate?.(requestMode, requestSource);
-
-    // In uncontrolled demos, finish automatically so every phase is explorable.
-    if (controlledPhase === undefined) {
-      const timerID = window.setTimeout(() => {
-        if (generationTimer.current === timerID) generationTimer.current = undefined;
-        const currentContext = generationContext.current;
-        if (
-          generationRevision.current !== requestRevision
-          || currentContext.mode !== requestMode
-          || currentContext.sourceText !== requestSource
-          || currentContext.protectedContent
-        ) return;
-        const nextTargets = generatedTargetsFor(requestMode, requestSource);
-        setTargets(nextTargets);
-        setSelectedTarget(0);
-        setPhase("ready");
-      }, 700);
-      generationTimer.current = timerID;
-    }
-  };
-
-  const refresh = () => {
-    cancelPendingGeneration();
-    setDeliveryNote("");
-    if (effectiveMode !== "normal") setTargets([]);
-    if (phase !== "protected") setPhase("idle");
-    onRefresh?.(effectiveMode);
-  };
-
-  const toggleProtection = () => {
-    cancelPendingGeneration();
-    const nextPhase: BufferPhase = protectedContent
-      ? (sourceText.trim() || targets.length > 0 ? "ready" : "idle")
-      : "protected";
-    setDeliveryNote("");
-    setPhase(nextPhase);
+    if (!canRequest || effectiveMode === "normal" || liveExpand) return;
+    runGeneration(effectiveMode, sourceText);
   };
 
   const selectTarget = (index: number) => {
@@ -582,34 +649,59 @@ export function BufferSurface({
     if (!canSend) return;
     setDeliveryNote("已发送");
     onSend?.(selectedOutput, effectiveMode);
+    if (exchange) {
+      setTargets([]);
+      setPhase(hasSource ? "ready" : "idle");
+    }
   };
 
-  const primaryAction = derived && (phase === "idle" || phase === "error")
-    ? generate
-    : send;
-  const primaryLabel = derived && (phase === "idle" || phase === "error")
-    ? descriptor.action
-    : loading
-      ? descriptor.loadingAction
+  const awaitingExchangeRequest = exchange && !exchangeDecision;
+  const primaryAction = awaitingExchangeRequest ? generate : send;
+  const primaryLabel = loading
+    ? descriptor.loadingAction
+    : awaitingExchangeRequest
+      ? descriptor.action
       : "发送";
   const primaryIcon: IconName = loading
     ? "refresh"
-    : derived && (phase === "idle" || phase === "error")
+    : awaitingExchangeRequest
       ? descriptor.icon
       : "send";
+
+  const onSourceEdit = (text: string) => {
+    cancelPendingGeneration();
+    setDeliveryNote("");
+    setSourceText(text);
+    if (!protectedContent && exchange && targets.length > 0) {
+      // Editing source abandons the previous decision set and returns to writing.
+      setTargets([]);
+    }
+    if (!protectedContent && phase !== "loading") {
+      setPhase(text.trim() ? "ready" : "idle");
+    }
+  };
+
+  const workbenchClass = [
+    "buffer-workbench",
+    showLiveTargetRail ? "buffer-workbench--live-expand" : "",
+    exchangeDecision ? "buffer-workbench--exchange-decision" : "",
+  ].filter(Boolean).join(" ");
 
   return (
     <section
       aria-label="缓冲工作台"
       className={`buffer-surface buffer-surface--${effectiveMode}${className ? ` ${className}` : ""}`}
+      data-layout={layout}
       data-mode={effectiveMode}
       data-phase={phase}
     >
       <header className="buffer-toolbar">
-        <span aria-live="polite" className={`buffer-toolbar__status buffer-status--${phase}`}>
-          {protectedContent ? <Icon name="lock" size={13} weight="bold" /> : null}
-          {status}
-        </span>
+        {status ? (
+          <span aria-live="polite" className={`buffer-toolbar__status buffer-status--${phase}`}>
+            {protectedContent ? <Icon name="lock" size={13} weight="bold" /> : null}
+            {status}
+          </span>
+        ) : null}
 
         <label className="buffer-toolbar__plugin-select">
           <Icon name={descriptor.icon} size={14} weight="bold" />
@@ -654,49 +746,44 @@ export function BufferSurface({
           </div>
         ) : null}
 
-        {derived ? (
-          <Button
-            disabled={protectedContent || loading || !sourceText.trim()}
-            icon={descriptor.icon}
-            kind="ghost"
-            onClick={generate}
-          >
-            {loading ? descriptor.loadingAction : descriptor.action}
-          </Button>
-        ) : null}
-
         <span className="buffer-toolbar__spacer" />
-        <IconButton
-          icon="lock"
-          label={protectedContent ? "关闭安全输入预览" : "模拟安全输入"}
-          onClick={toggleProtection}
-          selected={protectedContent}
-        />
-        <IconButton icon="refresh" label="刷新或重置当前插件（保留缓冲正文）" onClick={refresh} />
         <IconButton icon="close" label="关闭并暂停缓冲（保留内容）" onClick={onClose} />
       </header>
 
-      <div className={`buffer-workbench${derived ? " buffer-workbench--derived" : ""}`}>
+      <div className={workbenchClass}>
         <div className="buffer-workbench__rails">
-          <BufferTrack
-            icon={descriptor.sourceIcon}
-            kind="source"
-            loading={false}
-            onSourceChange={(text) => {
-              cancelPendingGeneration();
-              setDeliveryNote("");
-              setSourceText(text);
-              if (!protectedContent && derived) {
-                setTargets([]);
-                setPhase("idle");
-              }
-            }}
-            protectedContent={protectedContent}
-            role={descriptor.sourceRole}
-            sourceValue={sourceText}
-          />
-          {derived ? (
+          {exchangeDecision ? (
             <BufferTrack
+              emptyLabel="等待返回结果"
+              icon={descriptor.targetIcon ?? "sparkle"}
+              kind="target"
+              loading={loading}
+              onTargetSelect={selectTarget}
+              protectedContent={protectedContent}
+              role={descriptor.targetRole ?? "答"}
+              selectedTarget={selectedTarget}
+              targets={targets}
+            />
+          ) : (
+            <BufferTrack
+              icon={descriptor.sourceIcon}
+              kind="source"
+              loading={false}
+              onSourceChange={onSourceEdit}
+              protectedContent={protectedContent}
+              role={descriptor.sourceRole}
+              sourceValue={sourceText}
+            />
+          )}
+          {showLiveTargetRail ? (
+            <BufferTrack
+              emptyLabel={
+                effectiveMode === "stream"
+                  ? "等待推测结果"
+                  : effectiveMode === "prompt"
+                    ? "等待检索结果"
+                    : "等待译文"
+              }
               icon={descriptor.targetIcon ?? "sparkle"}
               kind="target"
               loading={loading}
@@ -710,7 +797,12 @@ export function BufferSurface({
         </div>
 
         <Button
-          disabled={protectedContent || loading || (primaryAction === send && !canSend) || (!sourceText.trim() && primaryAction === generate)}
+          disabled={
+            protectedContent
+            || loading
+            || (primaryAction === send && !canSend)
+            || (primaryAction === generate && !canRequest)
+          }
           icon={primaryIcon}
           kind="primary"
           onClick={primaryAction}

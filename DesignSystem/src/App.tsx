@@ -24,7 +24,7 @@ import type {
   PluginConfiguration,
   PluginConfigurationMap,
 } from "./surfaces/ExtensionsSurface";
-import { SettingsSurface } from "./surfaces/SettingsSurface";
+import { SettingsSurface, type SettingsRouteID } from "./surfaces/SettingsSurface";
 
 const themeOptions = (Object.entries(themes) as [ThemeID, ThemeTokens][]).map(
   ([value, theme]) => ({ value, label: theme.title }),
@@ -62,6 +62,7 @@ export function App() {
   const query = useMemo(initialQueryState, []);
   const [surfaceID, setSurfaceID] = useState<SurfaceID>(query.surface);
   const [themeID, setThemeID] = useState<ThemeID>(query.theme);
+  const [settingsRouteID, setSettingsRouteID] = useState<SettingsRouteID>("core.appearance");
   const [plugins, setPlugins] = useState<PluginRecord[]>(copyPluginFixtures);
   const [pluginConfigurations, setPluginConfigurations] = useState<PluginConfigurationMap>({});
   const [zoom, setZoom] = useState<"75" | "90" | "100">("90");
@@ -136,11 +137,27 @@ export function App() {
     setNotice(`${plugin.name} 配置已同步到全部设计场景`);
   };
 
+  const openSettings = (routeID: string = "core.appearance") => {
+    const nextRoute = (
+      routeID === "core.maintenance"
+      || routeID === "core.appearance"
+      || routeID === "core.buffer"
+      || routeID === "core.connectors"
+      || routeID === "core.plugins"
+      || routeID === "core.input-method"
+      || routeID.startsWith("extension.")
+    ) ? routeID as SettingsRouteID : "core.appearance";
+    setSettingsRouteID(nextRoute);
+    setSurfaceID("settings");
+    setNotice(nextRoute === "core.maintenance" ? "已打开设置 › 维护" : "已打开设置后台");
+  };
+
   const renderSurface = () => {
     switch (surfaceID) {
       case "settings":
         return (
           <SettingsSurface
+            initialRouteID={settingsRouteID}
             onThemeChange={setThemeID}
             onPluginConfigurationChange={savePluginConfiguration}
             pluginConfigurations={pluginConfigurations}
@@ -152,7 +169,7 @@ export function App() {
       case "extensions":
         return (
           <ExtensionsSurface
-            onOpenSettings={() => setSurfaceID("settings")}
+            onOpenSettings={openSettings}
             onPluginConfigurationChange={savePluginConfiguration}
             pluginConfigurations={pluginConfigurations}
             plugins={plugins}
@@ -167,7 +184,7 @@ export function App() {
               setNotice("已打开 Buffer 设计场景");
             }}
             onCommit={(candidate) => setNotice(`候选“${candidate.text}”已提交到模拟状态`)}
-            onOpenSettings={() => setSurfaceID("settings")}
+            onOpenSettings={() => openSettings()}
           />
         );
       case "buffer":

@@ -406,7 +406,7 @@ export type ExtensionsSurfaceProps = {
     plugin: PluginRecord,
     configuration: PluginConfiguration,
   ) => void;
-  onOpenSettings?: () => void;
+  onOpenSettings?: (routeID?: string) => void;
   defaultMenuOpen?: boolean;
 };
 
@@ -419,8 +419,6 @@ export function ExtensionsSurface({
   defaultMenuOpen = true,
 }: ExtensionsSurfaceProps) {
   const [menuOpen, setMenuOpen] = useState(defaultMenuOpen);
-  const [bufferVisible, setBufferVisible] = useState(true);
-  const [pinned, setPinned] = useState(true);
   const [engineHealthy, setEngineHealthy] = useState(true);
   const [selectedPlugin, setSelectedPlugin] = useState<PluginRecord | null>(null);
   const [activity, setActivity] = useState("等待操作");
@@ -501,96 +499,15 @@ export function ExtensionsSurface({
                 </button>
                 <button
                   className="native-input-menu__item"
-                  onClick={() => setActivity("已打开外部来源收件箱")}
-                  role="menuitem"
-                  type="button"
-                >
-                  <Icon name="tray" size={15} />
-                  <span>外部来源收件箱…</span>
-                </button>
-                <button
-                  className="native-input-menu__item"
                   onClick={() => {
-                    setBufferVisible((visible) => !visible);
-                    setActivity(bufferVisible ? "缓冲工作台已隐藏，内容保留" : "缓冲工作台已显示");
+                    onOpenSettings?.("core.maintenance");
+                    setActivity("已打开设置 › 维护");
                   }}
                   role="menuitem"
                   type="button"
                 >
-                  <Icon name="tray" size={15} />
-                  <span>{bufferVisible ? "关闭缓冲工作台（保留内容）" : "显示缓冲工作台"}</span>
-                </button>
-                <button
-                  aria-checked={pinned}
-                  className="native-input-menu__item"
-                  onClick={() => {
-                    setPinned((value) => !value);
-                    setActivity(pinned ? "已取消跨桌面常显" : "已设为跨桌面常显");
-                  }}
-                  role="menuitemcheckbox"
-                  type="button"
-                >
-                  <span className="native-input-menu__check">
-                    {pinned ? <Icon name="check" size={13} weight="bold" /> : null}
-                  </span>
-                  <span>常显于所有桌面与全屏空间</span>
-                </button>
-                <button
-                  className="native-input-menu__item"
-                  onClick={() => setActivity("缓冲工作台已移到当前屏幕")}
-                  role="menuitem"
-                  type="button"
-                >
-                  <Icon name="export" size={15} />
-                  <span>把缓冲工作台移到当前屏幕</span>
-                </button>
-
-                <div className="native-input-menu__separator" role="separator" />
-
-                <button
-                  className="native-input-menu__item"
-                  onClick={() => setActivity("已经是最新版本")}
-                  role="menuitem"
-                  type="button"
-                >
-                  <Icon name="refresh" size={15} />
-                  <span>检查更新…</span>
-                </button>
-                <button
-                  className="native-input-menu__item"
-                  onClick={() => setActivity("已打开 ~/rimebuffer.log")}
-                  role="menuitem"
-                  type="button"
-                >
-                  <Icon name="fileSearch" size={15} />
-                  <span>打开日志 (~/rimebuffer.log)</span>
-                </button>
-                <button
-                  className="native-input-menu__item"
-                  onClick={() => setActivity("已请求重新部署并重启")}
-                  role="menuitem"
-                  type="button"
-                >
-                  <Icon name="code" size={15} />
-                  <span>重新部署并重启</span>
-                </button>
-                <button
-                  className="native-input-menu__item"
-                  onClick={() => setActivity("已进入重新安装确认流程")}
-                  role="menuitem"
-                  type="button"
-                >
-                  <Icon name="download" size={15} />
-                  <span>重新安装输入法…</span>
-                </button>
-                <button
-                  className="native-input-menu__item"
-                  onClick={() => setActivity("已请求重启输入法进程")}
-                  role="menuitem"
-                  type="button"
-                >
-                  <Icon name="refresh" size={15} />
-                  <span>重启输入法进程</span>
+                  <Icon name="tools" size={15} />
+                  <span>维护…</span>
                 </button>
               </div>
             ) : null}

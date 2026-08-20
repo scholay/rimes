@@ -1142,9 +1142,7 @@
   box-shadow: 0 10px 28px rgb(0 0 0 / 30%), inset 0 1px 0 rgb(255 255 255 / 5%);
 }
 
-.buffer-surface:has(.buffer-workbench--derived) { height: 112px; }
-.buffer-surface:has(.buffer-target:nth-child(2)) { height: 143px; }
-.buffer-surface:has(.buffer-target:nth-child(3)) { height: 174px; }
+.buffer-surface:has(.buffer-workbench--live-expand) { height: 112px; }
 
 .buffer-surface--normal .buffer-toolbar__plugin-select > svg { color: var(--r-text-2); }
 
@@ -1378,6 +1376,80 @@
 }
 
 .buffer-track__protected-message { color: var(--r-warning-text); }
+
+.buffer-track__pager {
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.buffer-track__pager-stepper {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 2px 1px 5px;
+  border: 1px solid var(--r-border);
+  border-radius: 5px;
+  background: var(--r-surface-2);
+}
+
+.buffer-track__pager-count {
+  flex: 0 0 auto;
+  min-width: 26px;
+  color: var(--r-accent-text);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+.buffer-track__pager-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--r-text);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.buffer-track__pager-controls {
+  flex: 0 0 auto;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+
+.buffer-track__pager-button {
+  width: 16px;
+  height: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--r-text-2);
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.buffer-track__pager-button:hover,
+.buffer-track__pager-button:focus-visible {
+  color: var(--r-accent-text);
+  background: var(--r-buffer-chip-selected);
+  outline: none;
+}
+
+.buffer-track__pager-button:active {
+  color: var(--r-accent-text);
+}
 
 .buffer-track__target-list {
   min-width: 0;
