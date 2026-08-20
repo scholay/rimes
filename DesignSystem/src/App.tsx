@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "./design-system/Icon";
 import {
   initialPlugins,
@@ -16,11 +16,15 @@ import {
   type ThemeID,
   type ThemeTokens,
 } from "./design-system/tokens";
-import { BufferSurface } from "./surfaces/BufferSurface";
+import {
+  BufferSurface,
+  type BufferExternalSource,
+} from "./surfaces/BufferSurface";
 import { CandidateSurface } from "./surfaces/CandidateSurface";
 import { ClipboardSurface } from "./surfaces/ClipboardSurface";
 import { ExtensionsSurface } from "./surfaces/ExtensionsSurface";
 import type {
+  InboxItem,
   PluginConfiguration,
   PluginConfigurationMap,
 } from "./surfaces/ExtensionsSurface";
@@ -71,6 +75,8 @@ export function App() {
   const [themeOverrides, setThemeOverrides] = useState<Partial<ThemeTokens>>({});
   const [metricOverrides, setMetricOverrides] = useState<Partial<MetricTokens>>({});
   const [notice, setNotice] = useState("设计场景已就绪");
+  const [bufferExternalSource, setBufferExternalSource] = useState<BufferExternalSource>();
+  const [bufferPaused, setBufferPaused] = useState(query.surface !== "buffer");
 
   const activeTheme = { ...themes[themeID], ...themeOverrides } as ThemeTokens;
   const activeSurface = surfaces.find((surface) => surface.id === surfaceID) ?? surfaces[0];
@@ -81,6 +87,27 @@ export function App() {
       && (plugin.installState === "bundled" || plugin.installState === "installed")
     ))
     .map((plugin) => plugin.id), [plugins]);
+  const translationConfiguration = pluginConfigurations["builtin.apple-translation"] ?? {};
+  const streamConfiguration = pluginConfigurations["builtin.stream-input"] ?? {};
+  const bufferSourceLanguage = typeof translationConfiguration.sourceLanguage === "string"
+    ? translationConfiguration.sourceLanguage
+    : "auto";
+  const bufferTargetLanguage = typeof translationConfiguration.targetLanguage === "string"
+    && translationConfiguration.targetLanguage !== "auto"
+    ? translationConfiguration.targetLanguage
+    : "zh-Hans";
+  const translateContinuously = typeof translationConfiguration.translateContinuously === "boolean"
+    ? translationConfiguration.translateContinuously
+    : true;
+  const translationProvider = translationConfiguration.provider === "ai" ? "ai" : "apple";
+  const streamCandidateCount = typeof streamConfiguration.candidateCount === "number"
+    && Number.isFinite(streamConfiguration.candidateCount)
+    ? Math.min(5, Math.max(1, Math.trunc(streamConfiguration.candidateCount)))
+    : 5;
+  const streamLatency = streamConfiguration.latency === "fast"
+    || streamConfiguration.latency === "stable"
+    ? streamConfiguration.latency
+    : "balanced";
   const draft = serializeDraft(themeID, activeTheme, metricOverrides);
   const rootStyle = {
     ...themeCSSVariables(themes[themeID], themeOverrides, metricOverrides),
@@ -137,6 +164,34 @@ export function App() {
     setNotice(`${plugin.name} 配置已同步到全部设计场景`);
   };
 
+  const sendFromBuffer = useCallback(async () => true, []);
+
+  const closeBuffer = useCallback(() => {
+    setBufferPaused(true);
+    setSurfaceID("settings");
+    setNotice("Buffer 已关闭；设计状态仍保留在当前会话");
+  }, []);
+
+  const updateBufferLanguages = useCallback((sourceLanguage: string, targetLanguage: string) => {
+    setPluginConfigurations((current) => ({
+      ...current,
+      "builtin.apple-translation": {
+        ...current["builtin.apple-translation"],
+        sourceLanguage,
+        targetLanguage,
+      },
+    }));
+    setNotice("实时翻译语言已同步到插件设置");
+  }, []);
+
+  const acceptInboxItem = useCallback((item: InboxItem) => {
+    setBufferExternalSource((current) => ({
+      revision: (current?.revision ?? 0) + 1,
+      sourceLabel: item.source,
+      text: item.preview,
+    }));
+  }, []);
+
   const openSettings = (routeID: string = "core.appearance") => {
     const nextRoute = (
       routeID === "core.maintenance"
@@ -148,6 +203,7 @@ export function App() {
       || routeID.startsWith("extension.")
     ) ? routeID as SettingsRouteID : "core.appearance";
     setSettingsRouteID(nextRoute);
+    setBufferPaused(true);
     setSurfaceID("settings");
     setNotice(nextRoute === "core.maintenance" ? "已打开设置 › 维护" : "已打开设置后台");
   };
@@ -167,19 +223,12 @@ export function App() {
           />
         );
       case "extensions":
-        return (
-          <ExtensionsSurface
-            onOpenSettings={openSettings}
-            onPluginConfigurationChange={savePluginConfiguration}
-            pluginConfigurations={pluginConfigurations}
-            plugins={plugins}
-            setPlugins={setPlugins}
-          />
-        );
+        return null;
       case "candidate":
         return (
           <CandidateSurface
             onActivateBuffer={() => {
+              setBufferPaused(false);
               setSurfaceID("buffer");
               setNotice("已打开 Buffer 设计场景");
             }}
@@ -188,17 +237,7 @@ export function App() {
           />
         );
       case "buffer":
-        return (
-          <BufferSurface
-            availablePluginIDs={availableBufferPluginIDs}
-            onGenerate={(mode) => setNotice(`${mode} 已开始生成`)}
-            onClose={() => {
-              setSurfaceID("settings");
-              setNotice("Buffer 已关闭；设计状态仍保留在当前会话");
-            }}
-            onSend={(_, mode) => setNotice(`${mode} 内容已发送到模拟目标`)}
-          />
-        );
+        return null;
       case "clipboard":
         return <ClipboardSurface onFeedback={(feedback) => setNotice(feedback.message)} />;
     }
@@ -246,7 +285,11 @@ export function App() {
               aria-current={surface.id === surfaceID ? "page" : undefined}
               className={`studio-nav-item${surface.id === surfaceID ? " is-selected" : ""}`}
               key={surface.id}
-              onClick={() => setSurfaceID(surface.id)}
+              onClick={() => {
+                setBufferPaused(surface.id !== "buffer");
+                setSurfaceID(surface.id);
+                setNotice(`${surface.title}设计场景已打开`);
+              }}
               type="button"
             >
               <span className="studio-nav-item__icon"><Icon name={surface.icon} size={18} weight="duotone" /></span>
@@ -295,7 +338,35 @@ export function App() {
 
         <div className={`studio-canvas${showGrid ? " is-grid-visible" : ""}`}>
           <div className="studio-canvas__viewport">
-            <div className="studio-canvas__zoom">{renderSurface()}</div>
+            <div className="studio-canvas__zoom">
+              <div hidden={surfaceID !== "extensions"}>
+                <ExtensionsSurface
+                  onAcceptInboxItem={acceptInboxItem}
+                  onOpenSettings={openSettings}
+                  onPluginConfigurationChange={savePluginConfiguration}
+                  pluginConfigurations={pluginConfigurations}
+                  plugins={plugins}
+                  setPlugins={setPlugins}
+                />
+              </div>
+              <div hidden={surfaceID !== "buffer"}>
+                <BufferSurface
+                  availablePluginIDs={availableBufferPluginIDs}
+                  externalSource={bufferExternalSource}
+                  onClose={closeBuffer}
+                  onLanguageChange={updateBufferLanguages}
+                  onSend={sendFromBuffer}
+                  paused={bufferPaused}
+                  sourceLanguage={bufferSourceLanguage}
+                  streamCandidateCount={streamCandidateCount}
+                  streamLatency={streamLatency}
+                  targetLanguage={bufferTargetLanguage}
+                  translationContinuously={translateContinuously}
+                  translationProvider={translationProvider}
+                />
+              </div>
+              {surfaceID === "buffer" ? null : renderSurface()}
+            </div>
           </div>
         </div>
 

@@ -13,6 +13,14 @@ Before making substantial visual changes, use the Product Design plugin's `get-c
 - Every primary control in the five showcase surfaces should work with realistic local state. No network, clipboard, or input-field access is required in the design lab.
 - Preserve the Sites-ready worker/build files so the design lab can be previewed locally or shared later without restructuring it.
 
+## Confirmed Product Decisions
+
+- Keep the input-source menu limited to exactly three destinations: Settings, External Source Inbox, and Maintenance. Do not restore the former Buffer visibility, pinning, movement, update, deployment, reinstall, restart, or log actions in this menu.
+- The Buffer result-count contract is 1–5, the current design defaults to five results, and five-result presentation uses an in-rail pager. Do not reduce the range or default merely to match an older native configuration; the native runtime has not yet been synchronized to this design-branch contract.
+- The Buffer design master may remain fixed at 760 logical points wide. Responsive width behavior is not required for this prototype unless the user revises this decision.
+- Single-exchange is an accepted Buffer interaction pattern: a source rail may visually exchange into a result rail. Preserve both source and result state until delivery has been confirmed successful; a request or delivery failure must not discard either state.
+- Controlled Buffer hosts must round-trip the `requestID` and `contextKey` emitted by `onGenerate`, keep `activeRequestID` aligned with the displayed result, honor generation/delivery `AbortSignal`s, and treat only an explicit `true` send acknowledgement as delivery success.
+
 When implementing from a selected generated mock, treat that image as the source of truth for layout, component anatomy, density, spacing, color, typography, visible content, and hierarchy.
 
 Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts/prepare-sites-build.mjs`, and `tests/sites-worker.test.mjs` intact so the same local prototype can be handed to Sites. Before a Sites handoff, run `npm run build` and `npm run test:sites`; the build must leave `dist/client/index.html`, `dist/server/index.js`, and `dist/.openai/hosting.json`.

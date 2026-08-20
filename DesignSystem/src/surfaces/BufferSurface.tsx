@@ -25,6 +25,25 @@ export type BufferLanguage = {
   label: string;
 };
 
+export type BufferSendAcknowledgement = boolean;
+
+export type BufferTargetContext = {
+  requestID: string | number;
+  contextKey: string;
+};
+
+export type BufferExternalSource = {
+  revision: number;
+  sourceLabel: string;
+  text: string;
+};
+
+export type BufferGenerationContext = {
+  requestID: number;
+  contextKey: string;
+  signal: AbortSignal;
+};
+
 export type BufferSurfaceProps = {
   mode?: BufferMode;
   defaultMode?: BufferMode;
@@ -34,12 +53,20 @@ export type BufferSurfaceProps = {
   defaultSourceText?: string;
   targets?: readonly string[];
   defaultTargets?: readonly string[];
+  activeRequestID?: string | number;
+  targetContext?: BufferTargetContext;
   selectedTarget?: number;
   defaultSelectedTarget?: number;
   sourceLanguage?: string;
   defaultSourceLanguage?: string;
   targetLanguage?: string;
   defaultTargetLanguage?: string;
+  translationContinuously?: boolean;
+  translationProvider?: "apple" | "ai";
+  streamCandidateCount?: number;
+  streamLatency?: "fast" | "balanced" | "stable";
+  externalSource?: BufferExternalSource;
+  paused?: boolean;
   languages?: readonly BufferLanguage[];
   availablePluginIDs?: readonly string[];
   className?: string;
@@ -49,9 +76,16 @@ export type BufferSurfaceProps = {
   onTargetsChange?: (targets: readonly string[]) => void;
   onTargetSelect?: (index: number, target: string) => void;
   onLanguageChange?: (sourceLanguage: string, targetLanguage: string) => void;
-  onGenerate?: (mode: BufferMode, sourceText: string) => void;
-  onSend?: (text: string, mode: BufferMode) => void;
-  onRefresh?: (mode: BufferMode) => void;
+  onGenerate?: (
+    mode: BufferMode,
+    sourceText: string,
+    context: BufferGenerationContext,
+  ) => void;
+  onSend?: (
+    text: string,
+    mode: BufferMode,
+    signal: AbortSignal,
+  ) => BufferSendAcknowledgement | Promise<BufferSendAcknowledgement>;
   onClose?: () => void;
 };
 
@@ -109,7 +143,7 @@ const MODE_DESCRIPTORS: Record<BufferMode, ModeDescriptor> = {
     sourceIcon: "textbox",
     targetRole: "译",
     targetIcon: "globe",
-    action: "重新翻译",
+    action: "翻译",
     loadingAction: "翻译中…",
   },
   ai: {
@@ -165,6 +199,7 @@ const MODE_DESCRIPTORS: Record<BufferMode, ModeDescriptor> = {
 };
 
 const DEFAULT_LANGUAGES: readonly BufferLanguage[] = [
+  { value: "auto", label: "自动检测" },
   { value: "zh-Hans", label: "简体中文" },
   { value: "zh-Hant", label: "繁体中文" },
   { value: "en", label: "英语" },
@@ -176,6 +211,14 @@ const DEFAULT_LANGUAGES: readonly BufferLanguage[] = [
 ];
 
 const DEFAULT_SOURCE = "请把这段缓冲内容整理为一段清晰的产品说明。";
+const LIVE_GENERATION_DEBOUNCE_MS = 420;
+const LIVE_GENERATION_PREVIEW_MS = 420;
+const EXCHANGE_GENERATION_PREVIEW_MS = 700;
+
+function clampTargetIndex(index: number, targetCount: number): number {
+  if (targetCount <= 0 || !Number.isFinite(index)) return 0;
+  return Math.min(Math.max(Math.trunc(index), 0), targetCount - 1);
+}
 
 function defaultTargetsFor(_mode: BufferMode): readonly string[] {
   // All plugins open on the writing rail. Live-expand fills the lower rail
@@ -190,13 +233,44 @@ function bufferLayoutFor(mode: BufferMode): "single-exchange" | "live-expand" {
     : "single-exchange";
 }
 
-function generatedTargetsFor(mode: BufferMode, source: string): readonly string[] {
+export function bufferInputContextKey(
+  mode: BufferMode,
+  sourceText: string,
+  sourceLanguage: string,
+  targetLanguage: string,
+  translationProvider: "apple" | "ai",
+  streamCandidateCount: number,
+  streamLatency: "fast" | "balanced" | "stable",
+): string {
+  if (mode === "translation") {
+    return JSON.stringify([
+      mode,
+      sourceText,
+      sourceLanguage,
+      targetLanguage,
+      translationProvider,
+    ]);
+  }
+  if (mode === "stream") {
+    return JSON.stringify([mode, sourceText, streamCandidateCount, streamLatency]);
+  }
+  return JSON.stringify([mode, sourceText]);
+}
+
+function generatedTargetsFor(
+  mode: BufferMode,
+  source: string,
+  streamCandidateCount = 5,
+  translationProvider: "apple" | "ai" = "apple",
+): readonly string[] {
   const conciseSource = source.trim() || "当前缓冲内容";
   switch (mode) {
     case "normal":
       return [];
     case "translation":
-      return [`Translation: ${conciseSource}`];
+      return [
+        `${translationProvider === "ai" ? "AI 通道" : "Apple 本地"}译文：${conciseSource}`,
+      ];
     case "ai":
       return [`已根据“${conciseSource}”生成一段可直接发送的内容。`];
     case "prompt":
@@ -214,7 +288,7 @@ function generatedTargetsFor(mode: BufferMode, source: string): readonly string[
         `请整理：${conciseSource}`,
         `把“${conciseSource}”改成可直接发送的说明。`,
         `基于“${conciseSource}”给出更口语的版本。`,
-      ];
+      ].slice(0, Math.min(5, Math.max(1, Math.trunc(streamCandidateCount))));
     case "remarkable":
       return [`已在 Mac 本地识别当前页：${conciseSource}`];
     case "marine":
@@ -266,6 +340,7 @@ function BufferTrack({
   emptyLabel,
   onSourceChange,
   onTargetSelect,
+  interactionDisabled = false,
 }: {
   role: string;
   icon: IconName;
@@ -278,15 +353,14 @@ function BufferTrack({
   emptyLabel?: string;
   onSourceChange?: (text: string) => void;
   onTargetSelect?: (index: number) => void;
+  interactionDisabled?: boolean;
 }) {
   const targetCount = targets?.length ?? 0;
-  const activeIndex = targetCount === 0
-    ? 0
-    : Math.min(Math.max(selectedTarget, 0), targetCount - 1);
+  const activeIndex = clampTargetIndex(selectedTarget, targetCount);
   const activeTarget = targetCount > 0 ? targets![activeIndex] : "";
 
   const stepTarget = (delta: number) => {
-    if (targetCount <= 1) return;
+    if (interactionDisabled || targetCount <= 1) return;
     const next = (activeIndex + delta + targetCount) % targetCount;
     onTargetSelect?.(next);
   };
@@ -311,6 +385,7 @@ function BufferTrack({
           <input
             aria-label="缓冲正文"
             className="buffer-track__editor"
+            disabled={interactionDisabled}
             onChange={(event) => onSourceChange?.(event.target.value)}
             placeholder="等待暂存内容"
             spellCheck={false}
@@ -318,7 +393,7 @@ function BufferTrack({
             value={sourceValue ?? ""}
           />
         ) : loading ? (
-          <span aria-live="polite" className="buffer-track__loading">
+          <span className="buffer-track__loading">
             <Icon className="is-spinning" name="refresh" size={13} />
             正在处理…
           </span>
@@ -328,31 +403,31 @@ function BufferTrack({
             className="buffer-track__pager"
             role="group"
           >
-            <span className="buffer-track__pager-stepper">
+            {targetCount > 1 ? <span className="buffer-track__pager-stepper">
               <span className="buffer-track__pager-count" title={`${targetCount} 条候选`}>
                 {activeIndex + 1}/{targetCount}
               </span>
-              {targetCount > 1 ? (
-                <span className="buffer-track__pager-controls">
-                  <button
-                    aria-label="上一条候选"
-                    className="buffer-track__pager-button"
-                    onClick={() => stepTarget(-1)}
-                    type="button"
-                  >
-                    <Icon name="up" size={11} weight="bold" />
-                  </button>
-                  <button
-                    aria-label="下一条候选"
-                    className="buffer-track__pager-button"
-                    onClick={() => stepTarget(1)}
-                    type="button"
-                  >
-                    <Icon name="down" size={11} weight="bold" />
-                  </button>
-                </span>
-              ) : null}
-            </span>
+              <span className="buffer-track__pager-controls">
+                <button
+                  aria-label="上一条候选"
+                  className="buffer-track__pager-button"
+                  disabled={interactionDisabled}
+                  onClick={() => stepTarget(-1)}
+                  type="button"
+                >
+                  <Icon name="up" size={11} weight="bold" />
+                </button>
+                <button
+                  aria-label="下一条候选"
+                  className="buffer-track__pager-button"
+                  disabled={interactionDisabled}
+                  onClick={() => stepTarget(1)}
+                  type="button"
+                >
+                  <Icon name="down" size={11} weight="bold" />
+                </button>
+              </span>
+            </span> : null}
             <span className="buffer-track__pager-text" title={activeTarget}>
               {activeTarget}
             </span>
@@ -379,12 +454,20 @@ export function BufferSurface({
   defaultSourceText = DEFAULT_SOURCE,
   targets: controlledTargets,
   defaultTargets,
+  activeRequestID,
+  targetContext,
   selectedTarget: controlledSelectedTarget,
   defaultSelectedTarget = 0,
   sourceLanguage: controlledSourceLanguage,
   defaultSourceLanguage = "zh-Hans",
   targetLanguage: controlledTargetLanguage,
   defaultTargetLanguage = "en",
+  translationContinuously = true,
+  translationProvider = "apple",
+  streamCandidateCount = 5,
+  streamLatency = "balanced",
+  externalSource,
+  paused = false,
   languages = DEFAULT_LANGUAGES,
   availablePluginIDs,
   className = "",
@@ -406,10 +489,14 @@ export function BufferSurface({
     defaultSourceText,
     onSourceChange,
   );
-  const [targets, setTargets] = useControllableState<readonly string[]>(
+  const [unboundedTargets, setTargets] = useControllableState<readonly string[]>(
     controlledTargets,
     defaultTargets ?? defaultTargetsFor(initialMode),
     onTargetsChange,
+  );
+  const targets = useMemo(
+    () => unboundedTargets.slice(0, 5),
+    [unboundedTargets],
   );
   const [selectedTarget, setSelectedTarget] = useControllableState(
     controlledSelectedTarget,
@@ -424,8 +511,34 @@ export function BufferSurface({
     defaultTargetLanguage,
   );
   const [deliveryNote, setDeliveryNote] = useState("");
+  const [deliveryTone, setDeliveryTone] = useState<BufferPhase>("ready");
+  const [sending, setSending] = useState(false);
+  const [targetsAreCurrent, setTargetsAreCurrent] = useState(
+    () => (controlledTargets ?? defaultTargets ?? []).length > 0,
+  );
   const generationTimer = useRef<number | undefined>(undefined);
   const generationRevision = useRef(0);
+  const generationAbortController = useRef<AbortController | null>(null);
+  const [managedGenerationRequest, setManagedGenerationRequest] = useState<
+    BufferTargetContext | null | undefined
+  >(undefined);
+  const managedGenerationRequestRef = useRef<BufferTargetContext | null | undefined>(undefined);
+  const [settledGenerationRequest, setSettledGenerationRequest] = useState<
+    BufferTargetContext | null
+  >(null);
+  const settledGenerationRequestRef = useRef<BufferTargetContext | null>(null);
+  const deliveryRevision = useRef(0);
+  const deliveryAbortController = useRef<AbortController | null>(null);
+  const onGenerateRef = useRef(onGenerate);
+  const onSendRef = useRef(onSend);
+  const onTargetSelectRef = useRef(onTargetSelect);
+  const controlledPhaseRef = useRef(controlledPhase);
+  const sendingRef = useRef(sending);
+  onGenerateRef.current = onGenerate;
+  onSendRef.current = onSend;
+  onTargetSelectRef.current = onTargetSelect;
+  controlledPhaseRef.current = controlledPhase;
+  sendingRef.current = sending;
 
   const availableModes = useMemo<readonly BufferMode[]>(() => {
     if (availablePluginIDs === undefined) return MODE_ORDER;
@@ -448,25 +561,107 @@ export function BufferSurface({
   const showLiveTargetRail = liveExpand && !protectedContent && hasSource;
   // Exchange plugins keep one rail: write first, then swap to waiting/results.
   const exchangeDecision = exchange && !protectedContent && (loading || targets.length > 0);
+  const inputContextKey = bufferInputContextKey(
+    effectiveMode,
+    sourceText,
+    sourceLanguage,
+    targetLanguage,
+    translationProvider,
+    streamCandidateCount,
+    streamLatency,
+  );
+  const [internalTargetContextKey, setInternalTargetContextKey] = useState<string | null>(
+    () => controlledTargets === undefined && targets.length > 0 ? inputContextKey : null,
+  );
+  const resolvedSelectedTarget = clampTargetIndex(selectedTarget, targets.length);
   const selectedOutput = (liveExpand || exchangeDecision)
-    ? targets[selectedTarget] ?? ""
+    ? targets[resolvedSelectedTarget] ?? ""
     : sourceText;
-  const canSend = !protectedContent && !loading && selectedOutput.trim().length > 0;
-  const canRequest = !protectedContent && !loading && (
+  const sendingTargetResult = liveExpand || exchangeDecision;
+  const targetMatchesManagedRequest = targetContext !== undefined
+    && managedGenerationRequest !== null
+    && managedGenerationRequest !== undefined
+    && targetContext.requestID === managedGenerationRequest.requestID
+    && targetContext.contextKey === managedGenerationRequest.contextKey;
+  const targetMatchesSettledRequest = targetContext !== undefined
+    && settledGenerationRequest !== null
+    && targetContext.requestID === settledGenerationRequest.requestID
+    && targetContext.contextKey === settledGenerationRequest.contextKey;
+  const outputIsCurrent = !sendingTargetResult || (
+    (controlledTargets === undefined
+      ? targetsAreCurrent
+        && internalTargetContextKey === inputContextKey
+      : activeRequestID !== undefined
+        && targetContext !== undefined
+        && targetContext.requestID === activeRequestID
+        && targetContext.contextKey === inputContextKey
+        && (
+          managedGenerationRequest === undefined
+          || targetMatchesManagedRequest
+          || targetMatchesSettledRequest
+        ))
+    && targets[resolvedSelectedTarget] !== undefined
+  );
+  const canSend = !paused
+    && !protectedContent
+    && !loading
+    && !sending
+    && (phase === "ready" || phase === "error")
+    && outputIsCurrent
+    && selectedOutput.trim().length > 0;
+  const canRequest = !paused && !protectedContent && !loading && !sending && (
     effectiveMode === "remarkable"
     || effectiveMode === "marine"
     || hasSource
   );
-  const status = deliveryNote || statusFor(effectiveMode, phase, hasSource);
+  const phaseStatus = effectiveMode === "translation" && phase === "loading"
+    ? translationProvider === "ai" ? "正在通过 AI 通道翻译" : "正在使用 Apple 本地翻译"
+    : statusFor(effectiveMode, phase, hasSource);
+  const phaseOverridesDelivery = phase === "protected"
+    || phase === "loading"
+    || (phase === "error" && deliveryNote.length === 0);
+  const status = phaseOverridesDelivery ? phaseStatus : deliveryNote || phaseStatus;
+  const statusTone = phaseOverridesDelivery ? phase : deliveryNote ? deliveryTone : phase;
+  const retainedErrorAssistiveStatus = phase === "error"
+    && deliveryNote.length === 0
+    && outputIsCurrent
+    && targets.length > 0
+    ? `处理失败，已保留上次结果。候选 ${resolvedSelectedTarget + 1} / ${targets.length}：${selectedOutput}`
+    : null;
+  const assistiveStatus = retainedErrorAssistiveStatus ?? status ?? (
+    phase === "ready" && outputIsCurrent && targets.length > 0
+      ? `已生成，候选 ${resolvedSelectedTarget + 1} / ${targets.length}：${selectedOutput}`
+      : ""
+  );
   const generationContext = useRef({
     mode: effectiveMode,
+    paused,
     protectedContent,
     sourceText,
   });
+  const lastExternalSourceRevision = useRef(externalSource?.revision);
+  const resultSnapshot = useRef({ current: outputIsCurrent, count: targets.length });
+  const previousInputContextKey = useRef(inputContextKey);
+  const deliveryContext = useRef({
+    inputContextKey,
+    mode: effectiveMode,
+    output: selectedOutput,
+    paused,
+    protectedContent,
+  });
   generationContext.current = {
     mode: effectiveMode,
+    paused,
     protectedContent,
     sourceText,
+  };
+  resultSnapshot.current = { current: outputIsCurrent, count: targets.length };
+  deliveryContext.current = {
+    inputContextKey,
+    mode: effectiveMode,
+    output: selectedOutput,
+    paused,
+    protectedContent,
   };
   const languageOptions = useMemo(() => {
     const values = new Set(languages.map((language) => language.value));
@@ -475,48 +670,124 @@ export function BufferSurface({
     if (!values.has(targetLanguage)) additions.push({ value: targetLanguage, label: targetLanguage });
     return [...languages, ...additions];
   }, [languages, sourceLanguage, targetLanguage]);
+  const targetLanguageOptions = useMemo(
+    () => languageOptions.filter((language) => language.value !== "auto"),
+    [languageOptions],
+  );
 
-  const cancelPendingGeneration = useCallback(() => {
+  const cancelGenerationWork = useCallback(() => {
     generationRevision.current += 1;
+    generationAbortController.current?.abort();
+    generationAbortController.current = null;
     if (generationTimer.current === undefined) return;
     window.clearTimeout(generationTimer.current);
     generationTimer.current = undefined;
   }, []);
 
-  const runGeneration = useCallback((requestMode: BufferMode, requestSource: string) => {
-    if (protectedContent) return;
-    cancelPendingGeneration();
-    const requestRevision = generationRevision.current;
-    setDeliveryNote("");
-    setPhase("loading");
-    onGenerate?.(requestMode, requestSource);
+  const cancelPendingGeneration = useCallback((preserveSettledResult = false) => {
+    cancelGenerationWork();
+    if (managedGenerationRequestRef.current !== undefined) {
+      managedGenerationRequestRef.current = null;
+      setManagedGenerationRequest(null);
+    }
+    if (!preserveSettledResult && settledGenerationRequestRef.current !== null) {
+      settledGenerationRequestRef.current = null;
+      setSettledGenerationRequest(null);
+    }
+  }, [cancelGenerationWork]);
 
-    if (controlledPhase === undefined) {
+  const issueGenerationRequest = useCallback((requestID: number, contextKey: string) => {
+    const abortController = new AbortController();
+    generationAbortController.current?.abort();
+    generationAbortController.current = abortController;
+    const request = { requestID, contextKey } satisfies BufferTargetContext;
+    managedGenerationRequestRef.current = request;
+    setManagedGenerationRequest(request);
+    return { ...request, signal: abortController.signal } satisfies BufferGenerationContext;
+  }, []);
+
+  const clearDeliveryStatus = useCallback(() => {
+    deliveryAbortController.current?.abort();
+    deliveryAbortController.current = null;
+    deliveryRevision.current += 1;
+    sendingRef.current = false;
+    setSending(false);
+    setDeliveryNote("");
+    setDeliveryTone("ready");
+  }, []);
+
+  const runGeneration = useCallback((requestMode: BufferMode, requestSource: string) => {
+    if (paused || protectedContent) return;
+    const preservesPriorResult = targets.length > 0 && outputIsCurrent;
+    cancelPendingGeneration(preservesPriorResult);
+    const requestRevision = generationRevision.current;
+    const requestContextKey = bufferInputContextKey(
+      requestMode,
+      requestSource,
+      sourceLanguage,
+      targetLanguage,
+      translationProvider,
+      streamCandidateCount,
+      streamLatency,
+    );
+    clearDeliveryStatus();
+    if (!preservesPriorResult) {
+      setTargetsAreCurrent(false);
+      setTargets([]);
+      setSelectedTarget(0);
+    }
+    setPhase("loading");
+    onGenerateRef.current?.(
+      requestMode,
+      requestSource,
+      issueGenerationRequest(requestRevision, requestContextKey),
+    );
+
+    if (controlledPhaseRef.current === undefined) {
       const timerID = window.setTimeout(() => {
         if (generationTimer.current === timerID) generationTimer.current = undefined;
         const currentContext = generationContext.current;
         if (
           generationRevision.current !== requestRevision
           || currentContext.mode !== requestMode
+          || currentContext.paused
           || currentContext.sourceText !== requestSource
           || currentContext.protectedContent
         ) return;
-        const nextTargets = generatedTargetsFor(requestMode, requestSource);
+        const nextTargets = generatedTargetsFor(
+          requestMode,
+          requestSource,
+          streamCandidateCount,
+          translationProvider,
+        );
         setTargets(nextTargets);
         setSelectedTarget(0);
+        setTargetsAreCurrent(nextTargets.length > 0);
+        setInternalTargetContextKey(nextTargets.length > 0 ? requestContextKey : null);
+        const firstTarget = nextTargets[0];
+        if (firstTarget !== undefined) onTargetSelectRef.current?.(0, firstTarget);
         setPhase("ready");
-      }, liveExpand ? 420 : 700);
+      }, bufferLayoutFor(requestMode) === "live-expand"
+        ? LIVE_GENERATION_PREVIEW_MS
+        : EXCHANGE_GENERATION_PREVIEW_MS);
       generationTimer.current = timerID;
     }
   }, [
     cancelPendingGeneration,
-    controlledPhase,
-    liveExpand,
-    onGenerate,
+    clearDeliveryStatus,
+    issueGenerationRequest,
+    paused,
     protectedContent,
     setPhase,
     setSelectedTarget,
     setTargets,
+    streamCandidateCount,
+    streamLatency,
+    sourceLanguage,
+    targetLanguage,
+    targets.length,
+    outputIsCurrent,
+    translationProvider,
   ]);
 
   // Render the safe fallback immediately, then persist it through either the
@@ -524,83 +795,249 @@ export function BufferSurface({
   useEffect(() => {
     if (modeIsAvailable) return;
     cancelPendingGeneration();
-    setDeliveryNote("");
+    clearDeliveryStatus();
+    setTargetsAreCurrent(false);
     setSelectedTarget(0);
     setTargets([]);
     setMode("normal");
     if (!protectedContent) setPhase(sourceText.trim() ? "ready" : "idle");
-  }, [cancelPendingGeneration, mode, modeIsAvailable]);
+  }, [cancelPendingGeneration, clearDeliveryStatus, mode, modeIsAvailable]);
 
   useEffect(() => {
-    cancelPendingGeneration();
-  }, [cancelPendingGeneration, effectiveMode, protectedContent]);
-
-  // Live-expand plugins grow a lower rail as soon as the user has typed something.
-  useEffect(() => {
-    if (!liveExpand || protectedContent) return;
-    if (!hasSource) {
-      cancelPendingGeneration();
-      setTargets([]);
-      if (phase !== "idle") setPhase("idle");
+    if (controlledTargets === undefined) return;
+    const shouldRetireSettledResult = targets.length === 0
+      || targetContext === undefined
+      || targetContext.contextKey !== inputContextKey;
+    if (shouldRetireSettledResult) {
+      if (settledGenerationRequestRef.current !== null) {
+        settledGenerationRequestRef.current = null;
+        setSettledGenerationRequest(null);
+      }
       return;
     }
-    if (controlledPhase !== undefined) return;
+    if (paused || protectedContent || phase !== "ready" || !outputIsCurrent) return;
+    const currentSettledRequest = settledGenerationRequestRef.current;
+    if (
+      currentSettledRequest?.requestID === targetContext.requestID
+      && currentSettledRequest.contextKey === targetContext.contextKey
+    ) return;
+    const nextSettledRequest = {
+      requestID: targetContext.requestID,
+      contextKey: targetContext.contextKey,
+    } satisfies BufferTargetContext;
+    settledGenerationRequestRef.current = nextSettledRequest;
+    setSettledGenerationRequest(nextSettledRequest);
+  }, [
+    controlledTargets,
+    inputContextKey,
+    outputIsCurrent,
+    paused,
+    phase,
+    protectedContent,
+    targetContext,
+    targets.length,
+  ]);
+
+  useEffect(() => {
+    if (previousInputContextKey.current === inputContextKey) return;
+    previousInputContextKey.current = inputContextKey;
+    cancelPendingGeneration();
+    clearDeliveryStatus();
+    setTargetsAreCurrent(false);
+  }, [cancelPendingGeneration, clearDeliveryStatus, inputContextKey]);
+
+  useEffect(() => {
+    // Active renders routinely change phase while a debounce/preview timer is
+    // live. Only the two suspension states are allowed to cancel that work;
+    // otherwise this effect would invalidate the request it just scheduled.
+    if (!paused && !protectedContent) return;
+    cancelPendingGeneration(true);
+    if (protectedContent) {
+      clearDeliveryStatus();
+      return;
+    }
+    const interruptedDelivery = sendingRef.current;
+    deliveryAbortController.current?.abort();
+    deliveryAbortController.current = null;
+    deliveryRevision.current += 1;
+    sendingRef.current = false;
+    setSending(false);
+    if (interruptedDelivery) {
+      setDeliveryNote("发送已暂停，请确认目标状态后重试");
+      setDeliveryTone("error");
+    }
+    if (phase === "loading") setPhase(hasSource ? "ready" : "idle");
+  }, [
+    cancelPendingGeneration,
+    clearDeliveryStatus,
+    effectiveMode,
+    hasSource,
+    paused,
+    phase,
+    protectedContent,
+    setPhase,
+  ]);
+
+  useEffect(() => {
+    if (phase === "loading") clearDeliveryStatus();
+  }, [clearDeliveryStatus, phase]);
+
+  // Live-expand plugins wait for a quiet typing window before asking the host.
+  // Callback refs deliberately stay outside the dependency list so parent-only
+  // renders (theme, notices, inspector state) cannot restart a request.
+  useEffect(() => {
+    if (!liveExpand) return;
+    if (paused || protectedContent) return;
+    if (resultSnapshot.current.current && resultSnapshot.current.count > 0) return;
+    cancelPendingGeneration();
+    clearDeliveryStatus();
+    setTargetsAreCurrent(false);
+    setTargets([]);
+    setSelectedTarget(0);
+
+    if (!hasSource) {
+      setPhase("idle");
+      return;
+    }
+
+    if (effectiveMode === "translation" && !translationContinuously) {
+      setPhase("ready");
+      return;
+    }
+
     const requestMode = effectiveMode;
     const requestSource = sourceText;
-    cancelPendingGeneration();
     const requestRevision = generationRevision.current;
-    setPhase("loading");
-    onGenerate?.(requestMode, requestSource);
-    const timerID = window.setTimeout(() => {
-      if (generationTimer.current === timerID) generationTimer.current = undefined;
+    const requestContextKey = inputContextKey;
+    const debounceDelay = effectiveMode === "stream"
+      ? streamLatency === "fast" ? 260 : streamLatency === "stable" ? 620 : LIVE_GENERATION_DEBOUNCE_MS
+      : LIVE_GENERATION_DEBOUNCE_MS;
+    const debounceTimerID = window.setTimeout(() => {
+      if (generationTimer.current === debounceTimerID) generationTimer.current = undefined;
       const currentContext = generationContext.current;
       if (
         generationRevision.current !== requestRevision
         || currentContext.mode !== requestMode
+        || currentContext.paused
         || currentContext.sourceText !== requestSource
         || currentContext.protectedContent
       ) return;
-      setTargets(generatedTargetsFor(requestMode, requestSource));
-      setSelectedTarget(0);
-      setPhase("ready");
-    }, 420);
-    generationTimer.current = timerID;
+
+      setPhase("loading");
+      onGenerateRef.current?.(
+        requestMode,
+        requestSource,
+        issueGenerationRequest(requestRevision, requestContextKey),
+      );
+      if (controlledPhaseRef.current !== undefined) return;
+
+      const previewTimerID = window.setTimeout(() => {
+        if (generationTimer.current === previewTimerID) generationTimer.current = undefined;
+        const latestContext = generationContext.current;
+        if (
+          generationRevision.current !== requestRevision
+          || latestContext.mode !== requestMode
+          || latestContext.paused
+          || latestContext.sourceText !== requestSource
+          || latestContext.protectedContent
+        ) return;
+        const nextTargets = generatedTargetsFor(
+          requestMode,
+          requestSource,
+          streamCandidateCount,
+          translationProvider,
+        );
+        setTargets(nextTargets);
+        setSelectedTarget(0);
+        setTargetsAreCurrent(nextTargets.length > 0);
+        setInternalTargetContextKey(nextTargets.length > 0 ? requestContextKey : null);
+        const firstTarget = nextTargets[0];
+        if (firstTarget !== undefined) onTargetSelectRef.current?.(0, firstTarget);
+        setPhase("ready");
+      }, LIVE_GENERATION_PREVIEW_MS);
+      generationTimer.current = previewTimerID;
+    }, debounceDelay);
+    generationTimer.current = debounceTimerID;
   }, [
     cancelPendingGeneration,
-    controlledPhase,
+    clearDeliveryStatus,
     effectiveMode,
     hasSource,
     liveExpand,
-    onGenerate,
+    inputContextKey,
+    issueGenerationRequest,
+    paused,
     protectedContent,
     sourceLanguage,
     sourceText,
+    streamCandidateCount,
+    streamLatency,
     targetLanguage,
+    translationContinuously,
+    translationProvider,
   ]);
 
   useEffect(() => () => {
-    cancelPendingGeneration();
-  }, [cancelPendingGeneration]);
+    cancelGenerationWork();
+    deliveryAbortController.current?.abort();
+    deliveryRevision.current += 1;
+  }, [cancelGenerationWork]);
 
   useEffect(() => {
-    if (targets.length === 0) return;
-    if (selectedTarget >= targets.length) setSelectedTarget(0);
-  }, [selectedTarget, setSelectedTarget, targets.length]);
+    if (selectedTarget === resolvedSelectedTarget) return;
+    setSelectedTarget(resolvedSelectedTarget);
+    const resolvedTarget = targets[resolvedSelectedTarget];
+    if (resolvedTarget !== undefined) {
+      onTargetSelectRef.current?.(resolvedSelectedTarget, resolvedTarget);
+    }
+  }, [resolvedSelectedTarget, selectedTarget, targets]);
+
+  useEffect(() => {
+    if (externalSource === undefined) return;
+    if (lastExternalSourceRevision.current === externalSource.revision) return;
+    lastExternalSourceRevision.current = externalSource.revision;
+    cancelPendingGeneration();
+    clearDeliveryStatus();
+    setTargetsAreCurrent(false);
+    setTargets([]);
+    setSelectedTarget(0);
+    const incomingBlock = `[${externalSource.sourceLabel}] ${externalSource.text.trim()}`;
+    const nextSource = sourceText.trim()
+      ? `${sourceText.trimEnd()} · ${incomingBlock}`
+      : incomingBlock;
+    setSourceText(nextSource);
+    if (!protectedContent) setPhase(nextSource.trim() ? "ready" : "idle");
+  }, [
+    cancelPendingGeneration,
+    clearDeliveryStatus,
+    externalSource,
+    protectedContent,
+    setPhase,
+    setSelectedTarget,
+    setSourceText,
+    setTargets,
+    sourceText,
+  ]);
 
   const changeMode = (event: ChangeEvent<HTMLSelectElement>) => {
+    if (paused || sending) return;
     const nextMode = event.target.value as BufferMode;
     if (!availableModeSet.has(nextMode)) return;
     cancelPendingGeneration();
+    clearDeliveryStatus();
     setMode(nextMode);
-    setDeliveryNote("");
+    setTargetsAreCurrent(false);
     setSelectedTarget(0);
     setTargets([]);
     if (phase !== "protected") setPhase(sourceText.trim() ? "ready" : "idle");
   };
 
   const changeSourceLanguage = (event: ChangeEvent<HTMLSelectElement>) => {
+    if (paused || sending) return;
     const next = event.target.value;
     cancelPendingGeneration();
+    clearDeliveryStatus();
+    setTargetsAreCurrent(false);
     setSourceLanguage(next);
     if (!protectedContent && liveExpand) {
       setTargets([]);
@@ -610,8 +1047,11 @@ export function BufferSurface({
   };
 
   const changeTargetLanguage = (event: ChangeEvent<HTMLSelectElement>) => {
+    if (paused || sending) return;
     const next = event.target.value;
     cancelPendingGeneration();
+    clearDeliveryStatus();
+    setTargetsAreCurrent(false);
     setTargetLanguage(next);
     if (!protectedContent && liveExpand) {
       setTargets([]);
@@ -621,9 +1061,12 @@ export function BufferSurface({
   };
 
   const swapLanguages = () => {
+    if (paused || sending) return;
     const nextSource = targetLanguage;
-    const nextTarget = sourceLanguage;
+    const nextTarget = sourceLanguage === "auto" ? "en" : sourceLanguage;
     cancelPendingGeneration();
+    clearDeliveryStatus();
+    setTargetsAreCurrent(false);
     setSourceLanguage(nextSource);
     setTargetLanguage(nextTarget);
     if (!protectedContent && liveExpand) {
@@ -634,49 +1077,144 @@ export function BufferSurface({
   };
 
   const generate = () => {
-    if (!canRequest || effectiveMode === "normal" || liveExpand) return;
+    const manualLiveRequest = liveExpand && (
+      phase === "error"
+      || (effectiveMode === "translation" && !translationContinuously)
+    );
+    if (paused || !canRequest || effectiveMode === "normal" || (liveExpand && !manualLiveRequest)) return;
     runGeneration(effectiveMode, sourceText);
   };
 
   const selectTarget = (index: number) => {
-    const target = targets[index];
+    if (paused || sending) return;
+    const nextIndex = clampTargetIndex(index, targets.length);
+    const target = targets[nextIndex];
     if (target === undefined) return;
-    setSelectedTarget(index);
-    onTargetSelect?.(index, target);
+    clearDeliveryStatus();
+    setSelectedTarget(nextIndex);
+    onTargetSelectRef.current?.(nextIndex, target);
   };
 
-  const send = () => {
+  const send = async () => {
     if (!canSend) return;
+    const requestInputContextKey = inputContextKey;
+    const requestMode = effectiveMode;
+    const requestOutput = selectedOutput;
+    const requestRevision = deliveryRevision.current + 1;
+    deliveryRevision.current = requestRevision;
+    const abortController = new AbortController();
+    deliveryAbortController.current?.abort();
+    deliveryAbortController.current = abortController;
+    sendingRef.current = true;
+    setSending(true);
+    setDeliveryNote("正在发送");
+    setDeliveryTone("loading");
+
+    let acknowledgement: BufferSendAcknowledgement | undefined;
+    try {
+      acknowledgement = await onSendRef.current?.(
+        requestOutput,
+        requestMode,
+        abortController.signal,
+      );
+    } catch {
+      acknowledgement = false;
+    }
+
+    const latestContext = deliveryContext.current;
+    const deliveryBecameUnsafe = abortController.signal.aborted
+      || latestContext.paused
+      || latestContext.protectedContent
+      || latestContext.inputContextKey !== requestInputContextKey
+      || latestContext.mode !== requestMode
+      || latestContext.output !== requestOutput;
+    if (deliveryRevision.current !== requestRevision) return;
+    if (deliveryBecameUnsafe) {
+      abortController.abort();
+      if (deliveryAbortController.current === abortController) {
+        deliveryAbortController.current = null;
+      }
+      deliveryRevision.current += 1;
+      sendingRef.current = false;
+      setSending(false);
+      setDeliveryNote(latestContext.paused || latestContext.protectedContent
+        ? "发送已暂停，请确认目标状态后重试"
+        : "发送上下文已变化，请重试");
+      setDeliveryTone("error");
+      return;
+    }
+    if (deliveryAbortController.current === abortController) {
+      deliveryAbortController.current = null;
+    }
+    sendingRef.current = false;
+    setSending(false);
+    if (acknowledgement !== true) {
+      setDeliveryNote("发送失败，请重试");
+      setDeliveryTone("error");
+      return;
+    }
+
     setDeliveryNote("已发送");
-    onSend?.(selectedOutput, effectiveMode);
+    setDeliveryTone("ready");
     if (exchange) {
+      cancelPendingGeneration();
+      setTargetsAreCurrent(false);
       setTargets([]);
+      setSelectedTarget(0);
       setPhase(hasSource ? "ready" : "idle");
     }
   };
 
+  const returnToExchangeSource = () => {
+    if (!exchange || paused || sending) return;
+    cancelPendingGeneration();
+    clearDeliveryStatus();
+    setTargetsAreCurrent(false);
+    setTargets([]);
+    setSelectedTarget(0);
+    setPhase(hasSource ? "ready" : "idle");
+  };
+
+  const retryExchangeGeneration = () => {
+    if (!exchange || paused || !canRequest) return;
+    runGeneration(effectiveMode, sourceText);
+  };
+
   const awaitingExchangeRequest = exchange && !exchangeDecision;
-  const primaryAction = awaitingExchangeRequest ? generate : send;
-  const primaryLabel = loading
+  const awaitingLiveRequest = liveExpand && hasSource && (
+    (phase === "error" && !outputIsCurrent)
+    || (
+      !translationContinuously
+      && effectiveMode === "translation"
+      && (targets.length === 0 || !outputIsCurrent)
+    )
+  );
+  const awaitingRequest = awaitingExchangeRequest || awaitingLiveRequest;
+  const primaryAction = awaitingRequest ? generate : send;
+  const primaryLabel = sending
+    ? "发送中…"
+    : loading
     ? descriptor.loadingAction
-    : awaitingExchangeRequest
+    : awaitingRequest
       ? descriptor.action
       : "发送";
-  const primaryIcon: IconName = loading
+  const primaryIcon: IconName = loading || sending
     ? "refresh"
-    : awaitingExchangeRequest
+    : awaitingRequest
       ? descriptor.icon
       : "send";
 
   const onSourceEdit = (text: string) => {
+    if (paused || sending) return;
     cancelPendingGeneration();
-    setDeliveryNote("");
+    clearDeliveryStatus();
+    setTargetsAreCurrent(false);
     setSourceText(text);
-    if (!protectedContent && exchange && targets.length > 0) {
-      // Editing source abandons the previous decision set and returns to writing.
+    if (!protectedContent && (exchange || liveExpand) && targets.length > 0) {
+      // Editing source abandons the previous result set before another request.
       setTargets([]);
     }
-    if (!protectedContent && phase !== "loading") {
+    if (!protectedContent) {
       setPhase(text.trim() ? "ready" : "idle");
     }
   };
@@ -696,17 +1234,22 @@ export function BufferSurface({
       data-phase={phase}
     >
       <header className="buffer-toolbar">
-        {status ? (
-          <span aria-live="polite" className={`buffer-toolbar__status buffer-status--${phase}`}>
-            {protectedContent ? <Icon name="lock" size={13} weight="bold" /> : null}
-            {status}
-          </span>
-        ) : null}
+        <span
+          className={`buffer-toolbar__status buffer-status--${statusTone}`}
+        >
+          {protectedContent && status ? <Icon name="lock" size={13} weight="bold" /> : null}
+          {status}
+        </span>
 
         <label className="buffer-toolbar__plugin-select">
           <Icon name={descriptor.icon} size={14} weight="bold" />
           <span className="sr-only">工作台插件</span>
-          <select aria-label="工作台插件" onChange={changeMode} value={effectiveMode}>
+          <select
+            aria-label="工作台插件"
+            disabled={paused || sending}
+            onChange={changeMode}
+            value={effectiveMode}
+          >
             {availableModes.map((pluginMode) => (
               <option key={pluginMode} value={pluginMode}>
                 {MODE_DESCRIPTORS[pluginMode].label}
@@ -719,7 +1262,7 @@ export function BufferSurface({
           <div aria-label="翻译语言" className="buffer-toolbar__translation-controls" role="group">
             <select
               aria-label="源语言"
-              disabled={protectedContent || loading}
+              disabled={paused || protectedContent || loading || sending}
               onChange={changeSourceLanguage}
               value={sourceLanguage}
             >
@@ -728,18 +1271,18 @@ export function BufferSurface({
               ))}
             </select>
             <IconButton
-              disabled={protectedContent || loading}
+              disabled={paused || protectedContent || loading || sending}
               icon="swap"
               label="交换源语言和目标语言"
               onClick={swapLanguages}
             />
             <select
               aria-label="目标语言"
-              disabled={protectedContent || loading}
+              disabled={paused || protectedContent || loading || sending}
               onChange={changeTargetLanguage}
               value={targetLanguage}
             >
-              {languageOptions.map((language) => (
+              {targetLanguageOptions.map((language) => (
                 <option key={`target-${language.value}`} value={language.value}>{language.label}</option>
               ))}
             </select>
@@ -747,8 +1290,36 @@ export function BufferSurface({
         ) : null}
 
         <span className="buffer-toolbar__spacer" />
+        {exchange && !loading && targets.length > 0 ? (
+          <>
+            <IconButton
+              disabled={paused || sending}
+              icon="textbox"
+              label="返回编辑原文"
+              onClick={returnToExchangeSource}
+            />
+            <IconButton
+              disabled={paused || !canRequest}
+              icon="refresh"
+              label="重新生成"
+              onClick={retryExchangeGeneration}
+            />
+          </>
+        ) : null}
+        {liveExpand && phase === "error" && outputIsCurrent && targets.length > 0 ? (
+          <IconButton
+            disabled={paused || !canRequest}
+            icon="refresh"
+            label="重新生成"
+            onClick={generate}
+          />
+        ) : null}
         <IconButton icon="close" label="关闭并暂停缓冲（保留内容）" onClick={onClose} />
       </header>
+
+      <span aria-atomic="true" aria-live="polite" className="sr-only">
+        {assistiveStatus}
+      </span>
 
       <div className={workbenchClass}>
         <div className="buffer-workbench__rails">
@@ -758,10 +1329,11 @@ export function BufferSurface({
               icon={descriptor.targetIcon ?? "sparkle"}
               kind="target"
               loading={loading}
+              interactionDisabled={paused || sending}
               onTargetSelect={selectTarget}
               protectedContent={protectedContent}
               role={descriptor.targetRole ?? "答"}
-              selectedTarget={selectedTarget}
+              selectedTarget={resolvedSelectedTarget}
               targets={targets}
             />
           ) : (
@@ -769,6 +1341,7 @@ export function BufferSurface({
               icon={descriptor.sourceIcon}
               kind="source"
               loading={false}
+              interactionDisabled={paused || sending}
               onSourceChange={onSourceEdit}
               protectedContent={protectedContent}
               role={descriptor.sourceRole}
@@ -787,10 +1360,11 @@ export function BufferSurface({
               icon={descriptor.targetIcon ?? "sparkle"}
               kind="target"
               loading={loading}
+              interactionDisabled={paused || sending}
               onTargetSelect={selectTarget}
               protectedContent={protectedContent}
               role={descriptor.targetRole ?? "答"}
-              selectedTarget={selectedTarget}
+              selectedTarget={resolvedSelectedTarget}
               targets={targets}
             />
           ) : null}
@@ -799,6 +1373,7 @@ export function BufferSurface({
         <Button
           disabled={
             protectedContent
+            || paused
             || loading
             || (primaryAction === send && !canSend)
             || (primaryAction === generate && !canRequest)

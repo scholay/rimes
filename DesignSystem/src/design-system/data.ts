@@ -94,8 +94,8 @@ export const initialPlugins: PluginRecord[] = [
   {
     id: "builtin.stream-input",
     name: "意识流输入",
-    version: "1.1",
-    summary: "连续输入不分词的全拼，实时给出一至三个完整猜测。",
+    version: "Next",
+    summary: "下一版本设计目标：连续全拼实时给出一至五个完整猜测。",
     icon: "waveform",
     category: "buffer",
     installState: "bundled",

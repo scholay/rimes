@@ -10,9 +10,10 @@
     "dev": "vite",
     "build": "vite build && node scripts/prepare-sites-build.mjs",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run test:colors && npm run build && npm run test:sites",
+    "check": "npm run typecheck && npm run test:unit && npm run test:colors && npm run build && npm run test:sites",
     "tokens:swift": "node scripts/generate-swift-tokens.mjs",
     "preview": "vite preview",
+    "test:unit": "vitest run",
     "test:colors": "node scripts/check-color-contrast.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs"
   },
@@ -24,8 +25,11 @@
     "vite": "6.4.2"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
-    "typescript": "^7.0.2"
+    "jsdom": "^26.1.0",
+    "typescript": "^7.0.2",
+    "vitest": "^3.2.4"
   }
 }

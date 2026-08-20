@@ -1,8 +1,10 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type Dispatch,
+  type FocusEvent,
   type KeyboardEvent,
   type SetStateAction,
 } from "react";
@@ -33,6 +35,33 @@ const sourceLanguages: readonly { value: TranslationLanguage; label: string }[] 
 ];
 
 const targetLanguages = sourceLanguages.filter((language) => language.value !== "auto");
+
+export type InboxItem = {
+  id: string;
+  source: string;
+  context: string;
+  preview: string;
+  receivedAt: string;
+};
+
+const demoInboxItems: readonly InboxItem[] = [
+  {
+    id: "marine-chrome-brief",
+    source: "Marine Chrome",
+    context: "网页摘录",
+    preview: "把这一段加入 Buffer，稍后继续整理成产品更新说明。",
+    receivedAt: "刚刚",
+  },
+  {
+    id: "paired-iphone-note",
+    source: "配对设备 · iPhone",
+    context: "文本传入",
+    preview: "下次迭代优先检查候选框切换应用后的可见性。",
+    receivedAt: "2 分钟前",
+  },
+];
+
+const copyDemoInboxItems = (): InboxItem[] => demoInboxItems.map((item) => ({ ...item }));
 
 const pluginStatusLabel = (plugin: PluginRecord) => {
   switch (plugin.installState) {
@@ -70,7 +99,7 @@ export function PluginConfigurationDialog({
   const [connector, setConnector] = useState("codex");
   const [promptDirectory, setPromptDirectory] = useState("~/Documents/Prompts");
   const [syncRemotePrompts, setSyncRemotePrompts] = useState(true);
-  const [streamCandidates, setStreamCandidates] = useState("3");
+  const [streamCandidates, setStreamCandidates] = useState("5");
   const [streamLatency, setStreamLatency] = useState("balanced");
   const [saved, setSaved] = useState(false);
   const dialogRef = useRef<HTMLElement | null>(null);
@@ -110,8 +139,10 @@ export function PluginConfigurationDialog({
     );
     setStreamCandidates(
       typeof configuration.candidateCount === "number"
+        && configuration.candidateCount >= 1
+        && configuration.candidateCount <= 5
         ? String(configuration.candidateCount)
-        : "3",
+        : "5",
     );
     setStreamLatency(
       typeof configuration.latency === "string" ? configuration.latency : "balanced",
@@ -340,7 +371,7 @@ export function PluginConfigurationDialog({
 
           {plugin.id === "builtin.stream-input" ? (
             <>
-              <Field label="候选数量" hint="连续全拼最多展示三个完整猜测。">
+              <Field label="候选数量" hint="连续全拼可展示一至五个完整猜测，多项结果使用分页切换。">
                 <Segmented
                   ariaLabel="意识流候选数量"
                   onChange={(value) => {
@@ -351,6 +382,8 @@ export function PluginConfigurationDialog({
                     { value: "1", label: "1 个" },
                     { value: "2", label: "2 个" },
                     { value: "3", label: "3 个" },
+                    { value: "4", label: "4 个" },
+                    { value: "5", label: "5 个" },
                   ]}
                   value={streamCandidates}
                 />
@@ -407,6 +440,7 @@ export type ExtensionsSurfaceProps = {
     configuration: PluginConfiguration,
   ) => void;
   onOpenSettings?: (routeID?: string) => void;
+  onAcceptInboxItem?: (item: InboxItem) => void;
   defaultMenuOpen?: boolean;
 };
 
@@ -416,12 +450,208 @@ export function ExtensionsSurface({
   pluginConfigurations = {},
   onPluginConfigurationChange,
   onOpenSettings,
+  onAcceptInboxItem,
   defaultMenuOpen = true,
 }: ExtensionsSurfaceProps) {
   const [menuOpen, setMenuOpen] = useState(defaultMenuOpen);
   const [engineHealthy, setEngineHealthy] = useState(true);
   const [selectedPlugin, setSelectedPlugin] = useState<PluginRecord | null>(null);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const [gatewayOnline, setGatewayOnline] = useState(true);
+  const [inboxItems, setInboxItems] = useState<InboxItem[]>(copyDemoInboxItems);
+  const [acceptedInboxCount, setAcceptedInboxCount] = useState(0);
+  const [rejectedInboxCount, setRejectedInboxCount] = useState(0);
   const [activity, setActivity] = useState("等待操作");
+  const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const pendingMenuFocusRef = useRef<"first" | "last" | null>(null);
+  const inboxDialogRef = useRef<HTMLElement | null>(null);
+  const pendingInboxReviewFocusRef = useRef<{
+    index: number;
+    outcome: "accepted" | "rejected";
+  } | null>(null);
+  const inboxDialogTitleID = useId();
+  const inboxDialogDescriptionID = useId();
+
+  const getMenuItems = () => Array.from(
+    menuRef.current?.querySelectorAll<HTMLButtonElement>("[role='menuitem']") ?? [],
+  );
+
+  const focusMenuEdge = (edge: "first" | "last") => {
+    window.requestAnimationFrame(() => {
+      const items = getMenuItems();
+      items[edge === "first" ? 0 : items.length - 1]?.focus();
+    });
+  };
+
+  const openMenuFromKeyboard = (edge: "first" | "last") => {
+    if (menuOpen) {
+      focusMenuEdge(edge);
+      return;
+    }
+    pendingMenuFocusRef.current = edge;
+    setMenuOpen(true);
+  };
+
+  const closeMenu = (restoreFocus = false) => {
+    pendingMenuFocusRef.current = null;
+    setMenuOpen(false);
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => menuTriggerRef.current?.focus());
+    }
+  };
+
+  useEffect(() => {
+    if (!menuOpen || pendingMenuFocusRef.current === null) return;
+    const edge = pendingMenuFocusRef.current;
+    pendingMenuFocusRef.current = null;
+    focusMenuEdge(edge);
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (menuRef.current?.contains(target) || menuTriggerRef.current?.contains(target)) return;
+      closeMenu();
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!inboxOpen) return;
+    const frame = window.requestAnimationFrame(() => {
+      inboxDialogRef.current
+        ?.querySelector<HTMLElement>(
+          "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])",
+        )
+        ?.focus();
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.requestAnimationFrame(() => menuTriggerRef.current?.focus());
+    };
+  }, [inboxOpen]);
+
+  useEffect(() => {
+    const pendingFocus = pendingInboxReviewFocusRef.current;
+    if (!inboxOpen || pendingFocus === null) return;
+    pendingInboxReviewFocusRef.current = null;
+    const matchingActions = Array.from(
+      inboxDialogRef.current?.querySelectorAll<HTMLButtonElement>(
+        `[data-inbox-review-action="${pendingFocus.outcome}"]`,
+      ) ?? [],
+    );
+    const nextAction = matchingActions[
+      Math.min(pendingFocus.index, matchingActions.length - 1)
+    ];
+    const fallback = inboxDialogRef.current?.querySelector<HTMLButtonElement>(
+      "[data-inbox-empty-action], [data-inbox-finish-action]",
+    );
+    (nextAction ?? fallback)?.focus();
+  }, [inboxItems, inboxOpen]);
+
+  const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Tab") {
+      event.preventDefault();
+      const menu = menuRef.current;
+      const destination = event.shiftKey
+        ? menuTriggerRef.current
+        : Array.from(document.querySelectorAll<HTMLElement>(
+          "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])",
+        )).find((candidate) => (
+          menu !== null
+          && !menu.contains(candidate)
+          && (menu.compareDocumentPosition(candidate) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+        ));
+      closeMenu();
+      window.requestAnimationFrame(() => destination?.focus());
+      return;
+    }
+    const items = getMenuItems();
+    if (items.length === 0) return;
+    const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+    let nextIndex: number | null = null;
+    switch (event.key) {
+      case "ArrowDown":
+        nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length;
+        break;
+      case "ArrowUp":
+        nextIndex = currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length;
+        break;
+      case "Home":
+        nextIndex = 0;
+        break;
+      case "End":
+        nextIndex = items.length - 1;
+        break;
+      case "Escape":
+        event.preventDefault();
+        event.stopPropagation();
+        closeMenu(true);
+        return;
+      default:
+        return;
+    }
+    event.preventDefault();
+    items[nextIndex]?.focus();
+  };
+
+  const handleMenuBlur = (event: FocusEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && menuRef.current?.contains(nextTarget)) return;
+    closeMenu();
+  };
+
+  const handleInboxDialogKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setInboxOpen(false);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(inboxDialogRef.current?.querySelectorAll<HTMLElement>(
+      "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])",
+    ) ?? []);
+    if (focusable.length === 0) return;
+    const currentIndex = focusable.indexOf(document.activeElement as HTMLElement);
+    const nextIndex = event.shiftKey
+      ? (currentIndex <= 0 ? focusable.length - 1 : currentIndex - 1)
+      : (currentIndex < 0 || currentIndex === focusable.length - 1 ? 0 : currentIndex + 1);
+    event.preventDefault();
+    focusable[nextIndex]?.focus();
+  };
+
+  const openInbox = () => {
+    closeMenu();
+    setInboxOpen(true);
+    setActivity(`已打开外部来源收件箱 · ${inboxItems.length} 项待审`);
+  };
+
+  const reviewInboxItem = (item: InboxItem, outcome: "accepted" | "rejected") => {
+    setInboxItems((current) => {
+      const itemIndex = current.findIndex((candidate) => candidate.id === item.id);
+      if (itemIndex < 0) return current;
+      pendingInboxReviewFocusRef.current = { index: itemIndex, outcome };
+      return current.filter((candidate) => candidate.id !== item.id);
+    });
+    if (outcome === "accepted") {
+      onAcceptInboxItem?.(item);
+      setAcceptedInboxCount((count) => count + 1);
+      setActivity(`已接受来自 ${item.source} 的内容到 Buffer（本地模拟）`);
+    } else {
+      setRejectedInboxCount((count) => count + 1);
+      setActivity(`已拒绝来自 ${item.source} 的内容（本地模拟）`);
+    }
+  };
+
+  const refillInbox = () => {
+    pendingInboxReviewFocusRef.current = { index: 0, outcome: "accepted" };
+    setInboxItems(copyDemoInboxItems());
+    setActivity("已加入 2 项本地模拟待审内容");
+  };
 
   const configurePlugin = (plugin: PluginRecord) => {
     setSelectedPlugin(plugin);
@@ -458,7 +688,20 @@ export function ExtensionsSurface({
                 aria-expanded={menuOpen}
                 aria-haspopup="menu"
                 className={`input-source-trigger${menuOpen ? " is-active" : ""}`}
-                onClick={() => setMenuOpen((open) => !open)}
+                onClick={() => {
+                  pendingMenuFocusRef.current = null;
+                  setMenuOpen((open) => !open);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                    event.preventDefault();
+                    openMenuFromKeyboard(event.key === "ArrowDown" ? "first" : "last");
+                  } else if (event.key === "Escape" && menuOpen) {
+                    event.preventDefault();
+                    closeMenu(true);
+                  }
+                }}
+                ref={menuTriggerRef}
                 type="button"
               >
                 <Icon name="keyboard" size={17} weight="bold" />
@@ -467,8 +710,15 @@ export function ExtensionsSurface({
             </div>
 
             {menuOpen ? (
-              <div aria-label="RIMES 输入法菜单" className="native-input-menu" role="menu">
-                <header className="native-input-menu__header">
+              <div
+                aria-label="RIMES 输入法菜单"
+                className="native-input-menu"
+                onBlur={handleMenuBlur}
+                onKeyDown={handleMenuKeyDown}
+                ref={menuRef}
+                role="menu"
+              >
+                <header className="native-input-menu__header" role="presentation">
                   <span>
                     <strong>RIMES</strong>
                     <small>雾凇拼音 · 双拼</small>
@@ -488,6 +738,7 @@ export function ExtensionsSurface({
                 <button
                   className="native-input-menu__item"
                   onClick={() => {
+                    closeMenu();
                     onOpenSettings?.();
                     setActivity("已打开设置后台");
                   }}
@@ -498,8 +749,22 @@ export function ExtensionsSurface({
                   <span>设置…</span>
                 </button>
                 <button
+                  aria-label={`外部来源收件箱，${inboxItems.length} 项待审`}
+                  className="native-input-menu__item"
+                  onClick={openInbox}
+                  role="menuitem"
+                  type="button"
+                >
+                  <Icon name="tray" size={15} />
+                  <span>外部来源收件箱…</span>
+                  <span aria-hidden="true" className="native-input-menu__meta">
+                    {inboxItems.length}
+                  </span>
+                </button>
+                <button
                   className="native-input-menu__item"
                   onClick={() => {
+                    closeMenu();
                     onOpenSettings?.("core.maintenance");
                     setActivity("已打开设置 › 维护");
                   }}
@@ -566,7 +831,7 @@ export function ExtensionsSurface({
 
         <footer className="extensions-status-bar">
           <Icon name="info" size={15} />
-          <span aria-live="polite">{activity}</span>
+          <span aria-live={inboxOpen ? "off" : "polite"}>{activity}</span>
           <span>{installedPlugins.length} 个插件可用</span>
         </footer>
       </MacWindow>
@@ -580,6 +845,131 @@ export function ExtensionsSurface({
         }}
         plugin={selectedPlugin}
       />
+
+      {inboxOpen ? (
+        <div className="inbox-dialog-backdrop" onMouseDown={() => setInboxOpen(false)}>
+          <section
+            aria-describedby={inboxDialogDescriptionID}
+            aria-labelledby={inboxDialogTitleID}
+            aria-modal="true"
+            className="inbox-dialog"
+            onKeyDown={handleInboxDialogKeyDown}
+            onMouseDown={(event) => event.stopPropagation()}
+            ref={inboxDialogRef}
+            role="dialog"
+          >
+            <header className="inbox-dialog__header">
+              <span className="inbox-dialog__icon">
+                <Icon name="tray" size={22} weight="duotone" />
+              </span>
+              <span className="inbox-dialog__heading">
+                <strong id={inboxDialogTitleID}>外部来源收件箱</strong>
+                <small id={inboxDialogDescriptionID}>审核外部传入内容后，再明确加入 Buffer。</small>
+              </span>
+              <Badge tone={inboxItems.length > 0 ? "accent" : "neutral"}>
+                {inboxItems.length} 项待审
+              </Badge>
+              <IconButton
+                icon="close"
+                label="关闭外部来源收件箱"
+                onClick={() => setInboxOpen(false)}
+              />
+            </header>
+
+            <div className="inbox-dialog__body">
+              <section className="inbox-gateway" aria-label="外部传字网关状态">
+                <span
+                  aria-hidden="true"
+                  className={`inbox-gateway__indicator${gatewayOnline ? " is-online" : ""}`}
+                />
+                <span className="inbox-gateway__copy">
+                  <strong>外部传字网关</strong>
+                  <small>仅接收明确配对的外部来源；不读取或保存系统剪贴板。</small>
+                </span>
+                <Badge tone={gatewayOnline ? "accent" : "warning"}>
+                  {gatewayOnline ? "在线" : "离线"}
+                </Badge>
+                <Button
+                  kind="ghost"
+                  onClick={() => {
+                    setGatewayOnline((online) => {
+                      setActivity(online ? "外部传字网关已切换为离线模拟" : "外部传字网关已恢复在线模拟");
+                      return !online;
+                    });
+                  }}
+                >
+                  {gatewayOnline ? "模拟离线" : "恢复在线"}
+                </Button>
+              </section>
+
+              {inboxItems.length > 0 ? (
+                <div aria-label="待审外部内容" className="inbox-review-list" role="list">
+                  {inboxItems.map((item) => (
+                    <article className="inbox-review-item" key={item.id} role="listitem">
+                      <span className="inbox-review-item__icon">
+                        <Icon name={item.source === "Marine Chrome" ? "network" : "textbox"} size={18} weight="duotone" />
+                      </span>
+                      <span className="inbox-review-item__content">
+                        <span className="inbox-review-item__meta">
+                          <strong>{item.source}</strong>
+                          <small>{item.context} · {item.receivedAt}</small>
+                        </span>
+                        <span className="inbox-review-item__preview">{item.preview}</span>
+                      </span>
+                      <span className="inbox-review-item__actions">
+                        <Button
+                          aria-label={`拒绝 ${item.source} 内容`}
+                          data-inbox-review-action="rejected"
+                          kind="ghost"
+                          onClick={() => reviewInboxItem(item, "rejected")}
+                        >
+                          拒绝
+                        </Button>
+                        <Button
+                          aria-label={`接受 ${item.source} 内容并加入 Buffer`}
+                          data-inbox-review-action="accepted"
+                          icon="check"
+                          kind="primary"
+                          onClick={() => reviewInboxItem(item, "accepted")}
+                        >
+                          接受并加入 Buffer
+                        </Button>
+                      </span>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="inbox-empty" role="status">
+                  <span className="inbox-empty__icon"><Icon name="check" size={22} weight="bold" /></span>
+                  <strong>没有等待审核的外部内容</strong>
+                  <small>新内容到达时会留在这里，除非你明确接受，否则不会进入 Buffer。</small>
+                  <Button
+                    data-inbox-empty-action
+                    icon="plus"
+                    kind="secondary"
+                    onClick={refillInbox}
+                  >
+                    加入模拟待审项
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            <footer className="inbox-dialog__footer">
+              <span aria-live="polite">
+                待审 {inboxItems.length} · 已接受 {acceptedInboxCount} · 已拒绝 {rejectedInboxCount}
+              </span>
+              <Button
+                data-inbox-finish-action
+                kind="primary"
+                onClick={() => setInboxOpen(false)}
+              >
+                完成
+              </Button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
