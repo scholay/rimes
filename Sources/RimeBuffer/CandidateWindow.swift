@@ -233,9 +233,17 @@ enum CandidateLayout {
     static let candidateSeparatorWidth: CGFloat = 8
     static let candidateSeparatorRunWidth = candidateSeparatorWidth + candidateSpacing * 2
     static let barSpacing: CGFloat = 4
-    static let barHorizontalPadding: CGFloat = 5
-    static let compactCandidateHorizontalPadding: CGFloat = 6
+    /// CandidateSurface uses a 4pt strip inset (`space1`). Keep this separate
+    /// from the 6pt pill padding so the AppKit window follows the same rhythm.
+    static let barHorizontalPadding: CGFloat = 4
+    /// CSS specifies `padding-inline: 6px`; the native width helper stores the
+    /// combined inset because CoreText reports glyph width without padding.
+    static let compactCandidateHorizontalPadding: CGFloat = 12
     static let selectedCandidateCornerRadius: CGFloat = 6
+    static let stripCornerRadius: CGFloat = 6
+    static let preeditCornerRadius: CGFloat = 5
+    static let preeditHorizontalPadding: CGFloat = 6
+    static let annotationFontSize: CGFloat = 9
     static let bufferActionMinWidth: CGFloat = 38
     static let rootSpacing: CGFloat = 5
 
@@ -416,6 +424,7 @@ final class CandidateWindow {
     private let panel: NSPanel
     private let content = NSView()
     private let root = NSStackView()
+    private let preeditPill = NSView()
     private let preeditLabel = NSTextField(labelWithString: "")
     private let strip = NSView()
     private let candidateScroll = NSScrollView()
@@ -425,6 +434,7 @@ final class CandidateWindow {
     private var stripHeightConstraint: NSLayoutConstraint!
     private var candidateHeightConstraint: NSLayoutConstraint!
     private var preeditHeightConstraint: NSLayoutConstraint!
+    private var preeditWidthConstraint: NSLayoutConstraint!
     private var dividerHeightConstraint: NSLayoutConstraint!
     private var barTopConstraint: NSLayoutConstraint!
     private var barBottomConstraint: NSLayoutConstraint!
@@ -551,15 +561,41 @@ final class CandidateWindow {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
-        preeditLabel.font = .monospacedSystemFont(ofSize: max(12, metrics.preeditHeight - 5),
-                                                  weight: .regular)
+        // React CandidateSurface treats preedit as an independent 20pt pill,
+        // not as a full-width row painted by the candidate strip. Preserve the
+        // native label (and therefore IMK-safe, non-WebView rendering), while
+        // mirroring its 12pt monospace typography and 6pt horizontal padding.
+        preeditPill.wantsLayer = true
+        preeditPill.layer?.cornerRadius = CandidateLayout.preeditCornerRadius
+        preeditPill.layer?.borderWidth = 1
+        preeditPill.layer?.masksToBounds = true
+        preeditPill.translatesAutoresizingMaskIntoConstraints = false
+        preeditPill.isHidden = true
+
+        preeditLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         preeditLabel.lineBreakMode = .byTruncatingTail
-        preeditLabel.isHidden = true
-        preeditHeightConstraint = preeditLabel.heightAnchor.constraint(equalToConstant: metrics.preeditHeight)
-        preeditHeightConstraint.isActive = true
+        preeditLabel.translatesAutoresizingMaskIntoConstraints = false
+        preeditPill.addSubview(preeditLabel)
+        preeditHeightConstraint = preeditPill.heightAnchor.constraint(equalToConstant: metrics.preeditHeight)
+        preeditWidthConstraint = preeditPill.widthAnchor.constraint(
+            equalToConstant: CandidateLayout.preeditHorizontalPadding * 2
+        )
+        NSLayoutConstraint.activate([
+            preeditHeightConstraint,
+            preeditWidthConstraint,
+            preeditLabel.leadingAnchor.constraint(
+                equalTo: preeditPill.leadingAnchor,
+                constant: CandidateLayout.preeditHorizontalPadding
+            ),
+            preeditLabel.trailingAnchor.constraint(
+                equalTo: preeditPill.trailingAnchor,
+                constant: -CandidateLayout.preeditHorizontalPadding
+            ),
+            preeditLabel.centerYAnchor.constraint(equalTo: preeditPill.centerYAnchor),
+        ])
 
         strip.wantsLayer = true
-        strip.layer?.cornerRadius = 6
+        strip.layer?.cornerRadius = CandidateLayout.stripCornerRadius
         strip.layer?.borderWidth = 1
         strip.layer?.masksToBounds = true
         stripHeightConstraint = strip.heightAnchor.constraint(equalToConstant: metrics.compactStripHeight)
@@ -596,6 +632,9 @@ final class CandidateWindow {
         settingsButton.target = self
         settingsButton.action = #selector(settingsTapped)
         settingsButton.toolTip = "打开设置"
+        settingsButton.setAccessibilityElement(true)
+        settingsButton.setAccessibilityRole(.button)
+        settingsButton.setAccessibilityLabel("打开设置")
         settingsButton.widthAnchor.constraint(equalToConstant: Self.actionButtonSize).isActive = true
         settingsButton.heightAnchor.constraint(equalToConstant: Self.actionButtonSize).isActive = true
 
@@ -617,14 +656,13 @@ final class CandidateWindow {
 
         root.orientation = .vertical
         root.alignment = .leading
-        root.spacing = 5
+        root.spacing = CandidateLayout.rootSpacing
         root.translatesAutoresizingMaskIntoConstraints = false
-        root.addArrangedSubview(preeditLabel)
+        root.addArrangedSubview(preeditPill)
         root.addArrangedSubview(strip)
 
         content.wantsLayer = true
-        content.layer?.cornerRadius = 6
-        content.layer?.masksToBounds = true
+        content.layer?.backgroundColor = NSColor.clear.cgColor
         content.addSubview(root)
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: content.leadingAnchor),
@@ -633,8 +671,8 @@ final class CandidateWindow {
             root.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             strip.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             strip.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            preeditLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 2),
-            preeditLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -2),
+            preeditPill.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            preeditPill.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor),
         ])
         panel.contentView = content
 
@@ -705,7 +743,8 @@ final class CandidateWindow {
 
         projectionPreedit = showPreedit ? (ctx.preedit.isEmpty ? ctx.input : ctx.preedit) : ""
         preeditLabel.stringValue = projectionPreedit
-        preeditLabel.isHidden = preeditLabel.stringValue.isEmpty
+        preeditPill.isHidden = preeditLabel.stringValue.isEmpty
+        updatePreeditWidth()
         applyAppearance()
         renderCandidates()
         layoutAndShowAccordingToPresentation()
@@ -741,7 +780,7 @@ final class CandidateWindow {
         lastCaretRect = .zero
         lastBundleId = ""
         preeditLabel.stringValue = ""
-        preeditLabel.isHidden = true
+        preeditPill.isHidden = true
         strip.isHidden = false
     }
 
@@ -1003,7 +1042,7 @@ final class CandidateWindow {
     ) -> NSSize {
         let stripHeight = strip.isHidden ? 0 : stripHeightConstraint.constant
         let height = stripHeight
-            + (preeditLabel.isHidden ? 0 : metrics.preeditHeight + root.spacing)
+            + (preeditPill.isHidden ? 0 : metrics.preeditHeight + root.spacing)
         return NSSize(width: panelWidth(caretRect: caretRect), height: height)
     }
 
@@ -1265,9 +1304,6 @@ final class CandidateWindow {
         }
 
         if !BufferModel.shared.active {
-            if !indices.isEmpty {
-                candidateStack.addArrangedSubview(candidateSeparatorView())
-            }
             candidateStack.addArrangedSubview(bufferActionButton(width: min(bufferActionWidth(), available)))
         }
     }
@@ -1503,10 +1539,7 @@ final class CandidateWindow {
         if !candidate.comment.isEmpty {
             button.setAccessibilityHelp(candidate.comment)
         }
-        button.layer?.backgroundColor = highlighted
-            ? RimeUI.selectedCandidateBackgroundColor.cgColor
-            : NSColor.clear.cgColor
-        button.layer?.borderWidth = 0
+        button.applyAppearance(highlighted: highlighted)
         button.toolTip = candidate.comment.isEmpty
             ? candidate.text
             : "\(candidate.text)  \(candidate.comment)"
@@ -1542,8 +1575,14 @@ final class CandidateWindow {
                                                          weight: .semibold)
         let candidateFont = NSFont.systemFont(ofSize: metrics.candidateFontSize,
                                               weight: highlighted ? .semibold : .regular)
+        let annotationFont = NSFont.systemFont(ofSize: CandidateLayout.annotationFontSize,
+                                               weight: .regular)
         let baseline = CandidateLayout.centeredLabelBaselineOffset(
             labelFont: labelFont,
+            candidateFont: candidateFont
+        )
+        let annotationBaseline = CandidateLayout.centeredLabelBaselineOffset(
+            labelFont: annotationFont,
             candidateFont: candidateFont
         )
 
@@ -1558,6 +1597,18 @@ final class CandidateWindow {
             string: c.text,
             attributes: [.font: candidateFont,
                          .foregroundColor: textColor]))
+        if !c.comment.isEmpty {
+            line.append(NSAttributedString(
+                string: " \(c.comment)",
+                attributes: [
+                    .font: annotationFont,
+                    .foregroundColor: highlighted
+                        ? RimeUI.selectedCandidateTextColor
+                        : RimeUI.textMuted,
+                    .baselineOffset: annotationBaseline,
+                ]
+            ))
+        }
         return line
     }
 
@@ -1566,26 +1617,17 @@ final class CandidateWindow {
         button.tag = bufferActionTag
         button.target = self
         button.action = #selector(candidateTapped(_:))
-        button.setCandidateTitle(
-            candidateTitle(bufferActionCandidate(), highlighted: false),
-            accessibilityLabel: "开启缓冲区"
-        )
-        button.layer?.backgroundColor = NSColor.clear.cgColor
-        button.layer?.borderWidth = 0
         button.toolTip = "开启缓冲区"
         NSLayoutConstraint.activate([
             button.widthAnchor.constraint(equalToConstant: width),
-            button.heightAnchor.constraint(equalToConstant: compactCandidateButtonHeight(
-                for: CandidateWindowMetrics.current
-            )),
+            button.heightAnchor.constraint(equalToConstant: Self.actionButtonSize),
         ])
         return button
     }
 
     private func candidateSeparatorView() -> NSView {
         let label = NSTextField(labelWithString: "|")
-        label.font = .systemFont(ofSize: max(12, CandidateWindowMetrics.current.candidateFontSize - 1),
-                                 weight: .regular)
+        label.font = .systemFont(ofSize: 10, weight: .regular)
         label.textColor = RimeUI.borderStrong
         label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -1612,20 +1654,15 @@ final class CandidateWindow {
         return max(80, panelWidth - Self.barHorizontalPadding * 2 - sideControlsWidth)
     }
 
-    private func bufferActionCandidate() -> RimeCandidateModel {
-        RimeCandidateModel(text: "🅔", comment: "开启缓冲区", label: "0")
-    }
-
     private func bufferActionWidth() -> CGFloat {
-        max(CandidateLayout.bufferActionMinWidth,
-            ceil(measuredCandidateWidth(bufferActionCandidate(), highlighted: false, compact: true)))
+        CandidateLayout.bufferActionMinWidth
     }
 
     private func candidateMaxWidth(panelWidth: CGFloat) -> CGFloat {
         let available = candidateAvailableWidth(panelWidth: panelWidth)
         let bufferSpace = BufferModel.shared.active
             ? 0
-            : min(bufferActionWidth(), available) + separatorRunWidth()
+            : min(bufferActionWidth(), available) + Self.candidateSpacing
         let remaining = available - bufferSpace
         return max(64, remaining)
     }
@@ -1636,7 +1673,7 @@ final class CandidateWindow {
         let available = candidateAvailableWidth(panelWidth: panelWidth)
         let bufferSpace = BufferModel.shared.active
             ? 0
-            : min(bufferActionWidth(), available) + separatorRunWidth()
+            : min(bufferActionWidth(), available) + Self.candidateSpacing
         let remaining = available - bufferSpace
         let pageWidth = max(64, remaining)
         let maxItemWidth = max(64, pageWidth)
@@ -1715,25 +1752,39 @@ final class CandidateWindow {
 
     private func applyAppearance() {
         panel.appearance = RimeUI.appKitAppearance
-        content.layer?.backgroundColor = RimeUI.candidateBackgroundColor.cgColor
+        content.layer?.backgroundColor = NSColor.clear.cgColor
         preeditLabel.textColor = RimeUI.textPrimary
+        preeditPill.layer?.backgroundColor = RimeUI.candidateBackgroundColor
+            .withAlphaComponent(0.95).cgColor
+        preeditPill.layer?.borderColor = RimeUI.borderStrong
+            .withAlphaComponent(0.72).cgColor
         strip.layer?.backgroundColor = RimeUI.candidateBackgroundColor.cgColor
         strip.layer?.borderColor = RimeUI.borderStrong.cgColor
         divider.layer?.backgroundColor = RimeUI.borderStrong.cgColor
-        settingsButton.contentTintColor = RimeUI.textSecondary
+        settingsButton.applyAppearance()
     }
 
     private func applyMetrics() {
         let metrics = CandidateWindowMetrics.current
-        preeditLabel.font = .monospacedSystemFont(ofSize: max(12, metrics.preeditHeight - 5),
-                                                  weight: .regular)
+        preeditLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         preeditHeightConstraint.constant = metrics.preeditHeight
+        updatePreeditWidth()
         stripHeightConstraint.constant = effectiveStripHeight(for: metrics)
         candidateHeightConstraint.constant = candidateAreaHeight(for: metrics)
         dividerHeightConstraint.constant = dividerHeight(for: metrics)
         let padding = barVerticalPadding(for: metrics)
         barTopConstraint.constant = padding
         barBottomConstraint.constant = -padding
+    }
+
+    private func updatePreeditWidth() {
+        let panelWidth = max(1, activePanelWidth())
+        let naturalWidth = ceil(preeditLabel.intrinsicContentSize.width)
+            + CandidateLayout.preeditHorizontalPadding * 2
+        preeditWidthConstraint.constant = min(
+            panelWidth,
+            max(CandidateLayout.preeditHorizontalPadding * 2, naturalWidth)
+        )
     }
 
     private func dividerHeight(for metrics: CandidateWindowMetrics) -> CGFloat {
@@ -1752,7 +1803,9 @@ final class CandidateWindow {
 
     private func candidateAreaHeight(for metrics: CandidateWindowMetrics) -> CGFloat {
         let rowHeight = compactCandidateButtonHeight(for: metrics)
-        guard isExpanded, !isSingleCharacterSelectionActive else { return rowHeight }
+        guard isExpanded, !isSingleCharacterSelectionActive else {
+            return BufferModel.shared.active ? rowHeight : max(rowHeight, Self.actionButtonSize)
+        }
         return Self.matrixViewportHeight(rowHeight: rowHeight,
                                          rowCount: expandedPages.count)
     }
@@ -2003,12 +2056,17 @@ final class CandidateWindow {
     @objc private func candidateTapped(_ sender: NSButton) {
         guard let ownerToken,
               InputFocusCoordinator.shared.interactionTarget(expected: ownerToken) != nil,
-              hasInteractableCandidates else {
+              panel.isVisible,
+              panel.isOnActiveSpace else {
             hideAll()
             return
         }
         if sender.tag == bufferActionTag {
             performBufferAction()
+            return
+        }
+        guard hasInteractableCandidates else {
+            hideAll()
             return
         }
         if isSingleCharacterSelectionActive, sender.tag >= Self.characterSelectionTagBase {
@@ -2052,7 +2110,10 @@ private class CandidateTextButton: NSButton {
         alignment = .center
         wantsLayer = true
         layer?.cornerRadius = cornerRadius
-        layer?.masksToBounds = true
+        // CandidateSurface gives the selected pill a small exterior shadow.
+        // Do not mask the host layer; the CoreText title is already clipped to
+        // its own bounds and the layer's rounded background remains intact.
+        layer?.masksToBounds = false
         translatesAutoresizingMaskIntoConstraints = false
         setContentHuggingPriority(.required, for: .horizontal)
         setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -2079,19 +2140,158 @@ private class CandidateTextButton: NSButton {
 }
 
 private final class CandidatePillButton: CandidateTextButton {
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false
+    private var isSelectedCandidate = false
+
     init() {
         super.init(cornerRadius: CandidateLayout.selectedCandidateCornerRadius)
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    func applyAppearance(highlighted: Bool) {
+        isSelectedCandidate = highlighted
+        updateVisualState()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let replacement = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(replacement)
+        trackingArea = replacement
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        updateVisualState()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        updateVisualState()
+    }
+
+    private func updateVisualState() {
+        guard let layer else { return }
+        if isSelectedCandidate {
+            layer.backgroundColor = RimeUI.selectedCandidateBackgroundColor.cgColor
+            layer.borderColor = NSColor.clear.cgColor
+            layer.borderWidth = 1
+            layer.shadowColor = NSColor.black.cgColor
+            layer.shadowOpacity = 0.18
+            layer.shadowRadius = 2
+            layer.shadowOffset = CGSize(width: 0, height: -1)
+        } else if isHovered {
+            layer.backgroundColor = RimeUI.surface3.cgColor
+            layer.borderColor = RimeUI.border.cgColor
+            layer.borderWidth = 1
+            layer.shadowOpacity = 0
+        } else {
+            layer.backgroundColor = NSColor.clear.cgColor
+            layer.borderColor = NSColor.clear.cgColor
+            layer.borderWidth = 1
+            layer.shadowOpacity = 0
+        }
+    }
 }
 
-private final class BufferActionPillButton: CandidateTextButton {
+private final class BufferActionPillButton: NSButton {
+    private let countLabel = NSTextField(labelWithString: "0")
+    private let trayIcon = NSImageView()
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false
+
     init() {
-        super.init(cornerRadius: 0)
+        super.init(frame: .zero)
+        title = ""
+        isBordered = false
+        setButtonType(.momentaryChange)
+        focusRingType = .none
+        wantsLayer = true
+        layer?.cornerRadius = CandidateLayout.selectedCandidateCornerRadius
+        translatesAutoresizingMaskIntoConstraints = false
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        countLabel.font = .monospacedDigitSystemFont(
+            ofSize: CandidateLayout.annotationFontSize,
+            weight: .regular
+        )
+        countLabel.translatesAutoresizingMaskIntoConstraints = false
+        trayIcon.image = RimeUI.symbol("tray", pointSize: 13, weight: .bold)
+        trayIcon.image?.isTemplate = true
+        trayIcon.imageScaling = .scaleProportionallyDown
+        trayIcon.translatesAutoresizingMaskIntoConstraints = false
+
+        let contents = NSStackView(views: [countLabel, trayIcon])
+        contents.orientation = .horizontal
+        contents.alignment = .centerY
+        contents.spacing = 4
+        contents.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(contents)
+        NSLayoutConstraint.activate([
+            contents.centerXAnchor.constraint(equalTo: centerXAnchor),
+            contents.centerYAnchor.constraint(equalTo: centerYAnchor),
+            trayIcon.widthAnchor.constraint(equalToConstant: 13),
+            trayIcon.heightAnchor.constraint(equalToConstant: 13),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("开启缓冲区")
+        applyAppearance()
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let replacement = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(replacement)
+        trackingArea = replacement
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        applyAppearance()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        applyAppearance()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // The count label and template icon are visual-only; keep the whole
+        // 38×28 control as the button's first-click target.
+        super.hitTest(point) == nil ? nil : self
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    private func applyAppearance() {
+        countLabel.textColor = isHovered ? RimeUI.accentTextColor : RimeUI.textSecondary
+        trayIcon.contentTintColor = isHovered ? RimeUI.accentTextColor : RimeUI.textSecondary
+        layer?.backgroundColor = RimeUI.surface2.cgColor
+        layer?.borderWidth = 1
+        let hoverBorder = RimeUI.border.blended(
+            withFraction: 0.48,
+            of: RimeUI.accentTextColor
+        ) ?? RimeUI.accentTextColor
+        layer?.borderColor = (isHovered ? hoverBorder : RimeUI.border).cgColor
+    }
 }
 
 private final class CandidateTitleLabel: NSView {
@@ -2164,6 +2364,9 @@ private final class CandidateTitleLabel: NSView {
 }
 
 private final class CandidateActionButton: NSButton {
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false
+
     init(symbolName: String, title: String) {
         super.init(frame: .zero)
         self.title = title
@@ -2177,7 +2380,7 @@ private final class CandidateActionButton: NSButton {
         font = .systemFont(ofSize: 14, weight: .semibold)
         contentTintColor = RimeUI.textSecondary
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = CandidateLayout.selectedCandidateCornerRadius
         layer?.backgroundColor = NSColor.clear.cgColor
         translatesAutoresizingMaskIntoConstraints = false
         setContentHuggingPriority(.required, for: .horizontal)
@@ -2185,6 +2388,34 @@ private final class CandidateActionButton: NSButton {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    func applyAppearance() {
+        contentTintColor = isHovered ? RimeUI.textPrimary : RimeUI.textSecondary
+        layer?.backgroundColor = (isHovered ? RimeUI.surface3 : NSColor.clear).cgColor
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let replacement = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(replacement)
+        trackingArea = replacement
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        applyAppearance()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        applyAppearance()
+    }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
@@ -2211,6 +2442,7 @@ final class CandidatePreviewView: NSView {
     private let previewDocument = NSView()
     private let widthStatusLabel = NSTextField(labelWithString: "")
     private let windowMock = NSView()
+    private let preeditPill = NSView()
     private let preeditLabel = NSTextField(labelWithString: "")
     private let strip = NSView()
     private let candidateRow = NSStackView()
@@ -2262,11 +2494,18 @@ final class CandidatePreviewView: NSView {
         windowMock.translatesAutoresizingMaskIntoConstraints = false
         previewDocument.addSubview(windowMock)
 
+        preeditPill.wantsLayer = true
+        preeditPill.layer?.cornerRadius = CandidateLayout.preeditCornerRadius
+        preeditPill.layer?.borderWidth = 1
+        preeditPill.layer?.masksToBounds = true
+        preeditPill.translatesAutoresizingMaskIntoConstraints = false
+
         preeditLabel.lineBreakMode = .byTruncatingTail
         preeditLabel.translatesAutoresizingMaskIntoConstraints = false
+        preeditPill.addSubview(preeditLabel)
 
         strip.wantsLayer = true
-        strip.layer?.cornerRadius = 6
+        strip.layer?.cornerRadius = CandidateLayout.stripCornerRadius
         strip.layer?.borderWidth = 1
         strip.layer?.masksToBounds = true
         strip.translatesAutoresizingMaskIntoConstraints = false
@@ -2285,6 +2524,8 @@ final class CandidatePreviewView: NSView {
         gear.image?.isTemplate = true
         gear.imagePosition = .imageOnly
         gear.isEnabled = false
+        gear.wantsLayer = true
+        gear.layer?.cornerRadius = CandidateLayout.selectedCandidateCornerRadius
         gear.translatesAutoresizingMaskIntoConstraints = false
 
         let bar = NSStackView(views: [candidateRow, divider, gear])
@@ -2294,15 +2535,20 @@ final class CandidatePreviewView: NSView {
         bar.translatesAutoresizingMaskIntoConstraints = false
         strip.addSubview(bar)
 
-        windowMock.addSubview(preeditLabel)
+        windowMock.addSubview(preeditPill)
         windowMock.addSubview(strip)
 
         heightConstraint = heightAnchor.constraint(equalToConstant: 120)
-        preeditHeightConstraint = preeditLabel.heightAnchor.constraint(equalToConstant: metrics.preeditHeight)
-        stripTopConstraint = strip.topAnchor.constraint(equalTo: preeditLabel.bottomAnchor, constant: CandidateLayout.rootSpacing)
+        preeditHeightConstraint = preeditPill.heightAnchor.constraint(equalToConstant: metrics.preeditHeight)
+        stripTopConstraint = strip.topAnchor.constraint(equalTo: preeditPill.bottomAnchor, constant: CandidateLayout.rootSpacing)
         stripHeightConstraint = strip.heightAnchor.constraint(equalToConstant: CandidateLayout.compactStripHeight(metrics))
         windowWidthConstraint = windowMock.widthAnchor.constraint(equalToConstant: metrics.baseWidth)
-        candidateRowHeightConstraint = candidateRow.heightAnchor.constraint(equalToConstant: CandidateLayout.candidateButtonHeight(metrics))
+        candidateRowHeightConstraint = candidateRow.heightAnchor.constraint(
+            equalToConstant: max(
+                CandidateLayout.candidateButtonHeight(metrics),
+                CandidateLayout.actionButtonSize
+            )
+        )
         dividerHeightConstraint = divider.heightAnchor.constraint(equalToConstant: CandidateLayout.dividerHeight(metrics))
 
         NSLayoutConstraint.activate([
@@ -2331,9 +2577,18 @@ final class CandidatePreviewView: NSView {
             windowMock.topAnchor.constraint(equalTo: previewDocument.topAnchor,
                                             constant: canvasPadding),
 
-            preeditLabel.leadingAnchor.constraint(equalTo: windowMock.leadingAnchor, constant: 2),
-            preeditLabel.topAnchor.constraint(equalTo: windowMock.topAnchor),
-            preeditLabel.trailingAnchor.constraint(lessThanOrEqualTo: windowMock.trailingAnchor),
+            preeditPill.leadingAnchor.constraint(equalTo: windowMock.leadingAnchor),
+            preeditPill.topAnchor.constraint(equalTo: windowMock.topAnchor),
+            preeditPill.trailingAnchor.constraint(lessThanOrEqualTo: windowMock.trailingAnchor),
+            preeditLabel.leadingAnchor.constraint(
+                equalTo: preeditPill.leadingAnchor,
+                constant: CandidateLayout.preeditHorizontalPadding
+            ),
+            preeditLabel.trailingAnchor.constraint(
+                equalTo: preeditPill.trailingAnchor,
+                constant: -CandidateLayout.preeditHorizontalPadding
+            ),
+            preeditLabel.centerYAnchor.constraint(equalTo: preeditPill.centerYAnchor),
 
             strip.leadingAnchor.constraint(equalTo: windowMock.leadingAnchor),
             strip.trailingAnchor.constraint(equalTo: windowMock.trailingAnchor),
@@ -2366,14 +2621,18 @@ final class CandidatePreviewView: NSView {
         appearance = RimeUI.appKitAppearance
         backdrop.layer?.backgroundColor = RimeUI.surface3.cgColor
         windowMock.layer?.backgroundColor = NSColor.clear.cgColor
+        preeditPill.layer?.backgroundColor = RimeUI.candidateBackgroundColor
+            .withAlphaComponent(0.95).cgColor
+        preeditPill.layer?.borderColor = RimeUI.borderStrong
+            .withAlphaComponent(0.72).cgColor
         strip.layer?.backgroundColor = RimeUI.candidateBackgroundColor.cgColor
         strip.layer?.borderColor = RimeUI.borderStrong.cgColor
         divider.layer?.backgroundColor = RimeUI.borderStrong.cgColor
         gear.contentTintColor = RimeUI.textSecondary
 
         // Preedit.
-        preeditLabel.font = .monospacedSystemFont(ofSize: max(12, m.preeditHeight - 5), weight: .regular)
-        preeditLabel.textColor = RimeUI.textSecondary
+        preeditLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        preeditLabel.textColor = RimeUI.textPrimary
         preeditLabel.stringValue = samplePreedit
 
         // Geometry (identical to the live window).
@@ -2388,7 +2647,7 @@ final class CandidatePreviewView: NSView {
 
         preeditHeightConstraint.constant = m.preeditHeight
         stripHeightConstraint.constant = stripHeight
-        candidateRowHeightConstraint.constant = buttonHeight
+        candidateRowHeightConstraint.constant = max(buttonHeight, CandidateLayout.actionButtonSize)
         dividerHeightConstraint.constant = CandidateLayout.dividerHeight(m)
         windowWidthConstraint.constant = windowWidth
         previewDocument.frame = NSRect(x: 0, y: 0, width: documentWidth, height: scrollHeight)
@@ -2404,13 +2663,10 @@ final class CandidatePreviewView: NSView {
         }
         let gearArea = CandidateLayout.actionButtonSize + CandidateLayout.barSpacing * 2 + 1
         let available = windowWidth - 2 * CandidateLayout.barHorizontalPadding - gearArea
-        let bufferAttr = candidateAttr(label: "0", text: "🅔", highlighted: false, m: m)
-        let bufferWidth = max(CandidateLayout.bufferActionMinWidth,
-                              ceil(bufferAttr.size().width)
-                                  + CandidateLayout.compactCandidateHorizontalPadding)
+        let bufferWidth = CandidateLayout.bufferActionMinWidth
         let candidateAvailable = max(64,
                                      available - bufferWidth
-                                         - CandidateLayout.candidateSeparatorRunWidth)
+                                         - CandidateLayout.candidateSpacing)
         var used: CGFloat = 0
         for (i, item) in sampleCandidates.enumerated() {
             let attr = candidateAttr(label: item.label, text: item.text, highlighted: i == 0, m: m)
@@ -2420,7 +2676,7 @@ final class CandidatePreviewView: NSView {
             let next = hasCandidate ? used + separatorRun + w : w
             if hasCandidate, next > candidateAvailable { break }
             if hasCandidate {
-                candidateRow.addArrangedSubview(candidateSeparator(m: m))
+                candidateRow.addArrangedSubview(candidateSeparator())
             }
             used = next
             candidateRow.addArrangedSubview(candidatePill(attr,
@@ -2428,13 +2684,10 @@ final class CandidatePreviewView: NSView {
                                                           width: w,
                                                           height: buttonHeight))
         }
-        if !candidateRow.arrangedSubviews.isEmpty {
-            candidateRow.addArrangedSubview(candidateSeparator(m: m))
-        }
-        candidateRow.addArrangedSubview(candidatePill(bufferAttr,
-                                                      highlighted: false,
-                                                      width: min(bufferWidth, available),
-                                                      height: buttonHeight))
+        candidateRow.addArrangedSubview(bufferActionPill(
+            width: min(bufferWidth, available),
+            height: CandidateLayout.actionButtonSize
+        ))
 
         heightConstraint.constant = scrollHeight + statusSpacing + statusHeight + 4
         let maxScrollX = max(0, documentWidth - maxWidth)
@@ -2456,6 +2709,14 @@ final class CandidatePreviewView: NSView {
         pill.layer?.backgroundColor = highlighted
             ? RimeUI.selectedCandidateBackgroundColor.cgColor
             : NSColor.clear.cgColor
+        pill.layer?.borderWidth = 1
+        pill.layer?.borderColor = NSColor.clear.cgColor
+        if highlighted {
+            pill.layer?.shadowColor = NSColor.black.cgColor
+            pill.layer?.shadowOpacity = 0.18
+            pill.layer?.shadowRadius = 2
+            pill.layer?.shadowOffset = CGSize(width: 0, height: -1)
+        }
         pill.translatesAutoresizingMaskIntoConstraints = false
         let label = NSTextField(labelWithAttributedString: title)
         label.alignment = .center
@@ -2470,9 +2731,45 @@ final class CandidatePreviewView: NSView {
         return pill
     }
 
-    private func candidateSeparator(m: CandidateWindowMetrics) -> NSView {
+    private func bufferActionPill(width: CGFloat, height: CGFloat) -> NSView {
+        let pill = NSView()
+        pill.wantsLayer = true
+        pill.layer?.cornerRadius = CandidateLayout.selectedCandidateCornerRadius
+        pill.layer?.backgroundColor = RimeUI.surface2.cgColor
+        pill.layer?.borderColor = RimeUI.border.cgColor
+        pill.layer?.borderWidth = 1
+        pill.translatesAutoresizingMaskIntoConstraints = false
+
+        let count = NSTextField(labelWithString: "0")
+        count.font = .monospacedDigitSystemFont(
+            ofSize: CandidateLayout.annotationFontSize,
+            weight: .regular
+        )
+        count.textColor = RimeUI.textSecondary
+        let icon = NSImageView()
+        icon.image = RimeUI.symbol("tray", pointSize: 13, weight: .bold)
+        icon.image?.isTemplate = true
+        icon.contentTintColor = RimeUI.textSecondary
+        let contents = NSStackView(views: [count, icon])
+        contents.orientation = .horizontal
+        contents.alignment = .centerY
+        contents.spacing = 4
+        contents.translatesAutoresizingMaskIntoConstraints = false
+        pill.addSubview(contents)
+        NSLayoutConstraint.activate([
+            pill.widthAnchor.constraint(equalToConstant: width),
+            pill.heightAnchor.constraint(equalToConstant: height),
+            contents.centerXAnchor.constraint(equalTo: pill.centerXAnchor),
+            contents.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 13),
+            icon.heightAnchor.constraint(equalToConstant: 13),
+        ])
+        return pill
+    }
+
+    private func candidateSeparator() -> NSView {
         let label = NSTextField(labelWithString: "|")
-        label.font = .systemFont(ofSize: max(12, m.candidateFontSize - 1), weight: .regular)
+        label.font = .systemFont(ofSize: 10, weight: .regular)
         label.textColor = RimeUI.borderStrong
         label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false

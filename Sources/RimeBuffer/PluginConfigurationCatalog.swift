@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 enum AITextPluginConfigurationFieldID {
@@ -6,8 +7,79 @@ enum AITextPluginConfigurationFieldID {
 
 enum StreamInputPluginConfigurationFieldID {
     static let connector = "connector"
+    static let candidateCount = "candidateCount"
+    static let responsePace = "latency"
+
+    // v1.1 persisted these two free-form timings. They are intentionally kept
+    // as migration-only identifiers so an existing profile can be projected
+    // onto one of the v1.2 response-pace presets without losing its connector.
     static let debounceSeconds = "debounceSeconds"
     static let maximumWaitSeconds = "maximumWaitSeconds"
+}
+
+enum StreamInputResponsePace: String, CaseIterable {
+    case fast
+    case balanced
+    case stable
+
+    static let defaultValue = StreamInputResponsePace.balanced
+
+    var displayName: String {
+        switch self {
+        case .fast: return "灵敏"
+        case .balanced: return "平衡"
+        case .stable: return "稳定"
+        }
+    }
+
+    var debounce: TimeInterval {
+        switch self {
+        case .fast: return 0.14
+        case .balanced: return 0.22
+        case .stable: return 0.35
+        }
+    }
+
+    var maximumWait: TimeInterval {
+        switch self {
+        case .fast: return 0.50
+        case .balanced: return 0.80
+        case .stable: return 1.20
+        }
+    }
+
+    /// Pick the nearest named preset for a v1.1 profile. Missing legacy values
+    /// do not outweigh the value that was actually saved.
+    static func migratedLegacyValue(
+        debounce: TimeInterval?,
+        maximumWait: TimeInterval?
+    ) -> StreamInputResponsePace {
+        guard debounce != nil || maximumWait != nil else {
+            return defaultValue
+        }
+        return allCases.min { lhs, rhs in
+            legacyDistance(lhs, debounce: debounce, maximumWait: maximumWait)
+                < legacyDistance(
+                    rhs,
+                    debounce: debounce,
+                    maximumWait: maximumWait
+                )
+        } ?? defaultValue
+    }
+
+    private static func legacyDistance(
+        _ pace: StreamInputResponsePace,
+        debounce: TimeInterval?,
+        maximumWait: TimeInterval?
+    ) -> Double {
+        let debounceDistance = debounce.map {
+            abs($0 - pace.debounce) / 0.21
+        } ?? 0
+        let waitDistance = maximumWait.map {
+            abs($0 - pace.maximumWait) / 0.70
+        } ?? 0
+        return debounceDistance + waitDistance
+    }
 }
 
 enum MyPromptPluginConfigurationFieldID {
@@ -49,9 +121,16 @@ enum RealtimeTranslationConfigurationKey {
 }
 
 struct StreamInputPluginSettings: Equatable {
+    static let minimumCandidateCount = 1
+    static let maximumCandidateCount = 5
+    static let defaultCandidateCount = 5
+
     let connectorKind: AITextProviderKind
-    let debounce: TimeInterval
-    let maximumWait: TimeInterval
+    let candidateCount: Int
+    let responsePace: StreamInputResponsePace
+
+    var debounce: TimeInterval { responsePace.debounce }
+    var maximumWait: TimeInterval { responsePace.maximumWait }
 }
 
 struct RealtimeTranslationPluginSettings: Equatable {
@@ -130,7 +209,7 @@ enum PluginConfigurationCatalog {
         let schema = PluginConfigurationSchema(
             pluginID: BuiltInPluginID.streamInput,
             title: "意识流输入",
-            summary: "为连续全拼猜测单独选择低延迟渠道，并调整停顿触发节奏。默认仍使用 OpenAI 兼容渠道。",
+            summary: "为连续全拼猜测单独选择 AI 渠道、候选数量和响应节奏。默认显示最多五个候选，并使用平衡节奏。",
             fields: [
                 .choice(
                     id: StreamInputPluginConfigurationFieldID.connector,
@@ -141,41 +220,45 @@ enum PluginConfigurationCatalog {
                         AITextProviderKind.openAICompatible.rawValue
                 ),
                 .number(
-                    id: StreamInputPluginConfigurationFieldID.debounceSeconds,
-                    title: "停顿触发",
-                    helpText: "最后一次输入后等待多久开始猜测。数值越小响应越快，也更容易产生重算。",
-                    defaultValue: 0.22,
-                    minimum: 0.10,
-                    maximum: 1.00,
-                    step: 0.01
-                ),
-                .number(
-                    id: StreamInputPluginConfigurationFieldID
-                        .maximumWaitSeconds,
-                    title: "最长等待",
-                    helpText: "连续输入不停顿时，最迟多久启动一次全局猜测。",
-                    defaultValue: 0.80,
-                    minimum: 0.30,
-                    maximum: 2.00,
-                    step: 0.05,
-                    validator: { value, snapshot in
-                        guard case let .number(maximumWait) = value,
-                              let debounce = snapshot.number(
-                                StreamInputPluginConfigurationFieldID
-                                    .debounceSeconds
-                              ),
-                              maximumWait >= debounce else {
-                            return "最长等待不能短于停顿触发"
+                    id: StreamInputPluginConfigurationFieldID.candidateCount,
+                    title: "候选数量",
+                    helpText: "连续全拼可展示一至五个完整猜测；工作台使用分页切换，不改变候选内容。",
+                    defaultValue: Double(
+                        StreamInputPluginSettings.defaultCandidateCount
+                    ),
+                    minimum: Double(
+                        StreamInputPluginSettings.minimumCandidateCount
+                    ),
+                    maximum: Double(
+                        StreamInputPluginSettings.maximumCandidateCount
+                    ),
+                    step: 1,
+                    validator: { value, _ in
+                        guard case let .number(candidateCount) = value,
+                              candidateCount.rounded() == candidateCount else {
+                            return "候选数量必须是 1–5 的整数"
                         }
                         return nil
                     }
+                ),
+                .choice(
+                    id: StreamInputPluginConfigurationFieldID.responsePace,
+                    title: "响应节奏",
+                    helpText: "灵敏会更快重算，稳定会等待更完整的输入，平衡适合日常使用。",
+                    options: StreamInputResponsePace.allCases.map {
+                        PluginConfigurationChoice(
+                            value: $0.rawValue,
+                            title: $0.displayName
+                        )
+                    },
+                    defaultValue:
+                        StreamInputResponsePace.defaultValue.rawValue
                 ),
             ]
         )
         return try PluginConfigurationModel(
             schema: schema,
-            store: PluginConfigurationUserDefaultsStore(
-                namespace: BuiltInPluginID.streamInput,
+            store: StreamInputConfigurationStore(
                 defaults: defaults
             ),
             notificationCenter: notificationCenter
@@ -379,22 +462,34 @@ enum PluginConfigurationCatalog {
               let snapshot = try? model.load() else {
             return StreamInputPluginSettings(
                 connectorKind: .openAICompatible,
-                debounce: 0.22,
-                maximumWait: 0.80
+                candidateCount:
+                    StreamInputPluginSettings.defaultCandidateCount,
+                responsePace: .defaultValue
             )
         }
+        let candidateCount = Int(
+            snapshot.number(
+                StreamInputPluginConfigurationFieldID.candidateCount
+            ) ?? Double(StreamInputPluginSettings.defaultCandidateCount)
+        )
         return StreamInputPluginSettings(
             connectorKind: AITextProviderKind(
                 rawValue: snapshot.string(
                     StreamInputPluginConfigurationFieldID.connector
                 ) ?? ""
             ) ?? .openAICompatible,
-            debounce: snapshot.number(
-                StreamInputPluginConfigurationFieldID.debounceSeconds
-            ) ?? 0.22,
-            maximumWait: snapshot.number(
-                StreamInputPluginConfigurationFieldID.maximumWaitSeconds
-            ) ?? 0.80
+            candidateCount: min(
+                max(
+                    candidateCount,
+                    StreamInputPluginSettings.minimumCandidateCount
+                ),
+                StreamInputPluginSettings.maximumCandidateCount
+            ),
+            responsePace: StreamInputResponsePace(
+                rawValue: snapshot.string(
+                    StreamInputPluginConfigurationFieldID.responsePace
+                ) ?? ""
+            ) ?? .defaultValue
         )
     }
 
@@ -636,6 +731,79 @@ enum PluginConfigurationCatalog {
         default:
             return value
         }
+    }
+}
+
+/// v1.2 stores a named response pace instead of exposing two timing numbers.
+/// Loading remains backward compatible with the v1.1 dictionary; the next
+/// explicit save rewrites it in the current schema and removes the legacy keys.
+private final class StreamInputConfigurationStore:
+    PluginConfigurationStoring {
+    let supportsSecureValues = false
+
+    private let defaults: UserDefaults
+    private let baseStore: PluginConfigurationUserDefaultsStore
+    private let storageKey: String
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+        baseStore = PluginConfigurationUserDefaultsStore(
+            namespace: BuiltInPluginID.streamInput,
+            defaults: defaults
+        )
+        storageKey =
+            "RimeBuffer.PluginConfiguration.\(BuiltInPluginID.streamInput)"
+    }
+
+    func validate(schema: PluginConfigurationSchema) throws {
+        try baseStore.validate(schema: schema)
+    }
+
+    func load(schema: PluginConfigurationSchema) throws
+        -> PluginConfigurationSnapshot? {
+        var snapshot = try baseStore.load(schema: schema)
+        guard snapshot?[StreamInputPluginConfigurationFieldID.responsePace]
+                == nil,
+              let raw = defaults.dictionary(forKey: storageKey) else {
+            return snapshot
+        }
+        let legacyDebounce = finiteNumber(
+            raw[StreamInputPluginConfigurationFieldID.debounceSeconds]
+        )
+        let legacyMaximumWait = finiteNumber(
+            raw[StreamInputPluginConfigurationFieldID.maximumWaitSeconds]
+        )
+        guard legacyDebounce != nil || legacyMaximumWait != nil else {
+            return snapshot
+        }
+        if snapshot == nil {
+            snapshot = PluginConfigurationSnapshot()
+        }
+        snapshot?[StreamInputPluginConfigurationFieldID.responsePace] = .string(
+            StreamInputResponsePace.migratedLegacyValue(
+                debounce: legacyDebounce,
+                maximumWait: legacyMaximumWait
+            ).rawValue
+        )
+        return snapshot
+    }
+
+    func save(_ snapshot: PluginConfigurationSnapshot,
+              schema: PluginConfigurationSchema) throws {
+        try baseStore.save(snapshot, schema: schema)
+    }
+
+    func delete(schema: PluginConfigurationSchema) throws {
+        try baseStore.delete(schema: schema)
+    }
+
+    private func finiteNumber(_ raw: Any?) -> Double? {
+        guard let number = raw as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite else {
+            return nil
+        }
+        return number.doubleValue
     }
 }
 

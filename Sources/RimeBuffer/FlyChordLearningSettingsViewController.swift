@@ -66,21 +66,21 @@ private enum FlyChordPageStyle {
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 24, right: 24)
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: 24, bottom: 22, right: 24)
         return stack
     }
 
     static func title(_ value: String) -> NSTextField {
         let label = NSTextField(labelWithString: value)
-        label.font = .systemFont(ofSize: 20, weight: .semibold)
-        label.textColor = RimeUI.textPrimary
+        label.font = .systemFont(ofSize: 12, weight: .semibold)
+        label.textColor = RimeUI.textSecondary
         return label
     }
 
     static func section(_ value: String) -> NSTextField {
         let label = NSTextField(labelWithString: value)
-        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
         label.textColor = RimeUI.textPrimary
         return label
     }
@@ -88,7 +88,7 @@ private enum FlyChordPageStyle {
     static func caption(_ value: String,
                         color: NSColor = RimeUI.textSecondary) -> NSTextField {
         let label = NSTextField(wrappingLabelWithString: value)
-        label.font = .systemFont(ofSize: 11)
+        label.font = .systemFont(ofSize: 10)
         label.textColor = color
         return label
     }
@@ -150,10 +150,10 @@ private final class FlyChordLessonsPageView: NSView {
         for course in curriculum.courses {
             let progress = snapshot.progress(for: course)
             let name = NSTextField(labelWithString: course.title)
-            name.font = .systemFont(ofSize: 13, weight: .semibold)
+            name.font = .systemFont(ofSize: 11, weight: .semibold)
             name.textColor = RimeUI.textPrimary
             let count = NSTextField(labelWithString: "\(course.mappings.count) 项")
-            count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+            count.font = .monospacedDigitSystemFont(ofSize: 9, weight: .medium)
             count.textColor = RimeUI.textMuted
             let header = NSStackView(views: [name, flexibleSpacer(), count])
             header.orientation = .horizontal
@@ -183,8 +183,8 @@ private final class FlyChordProgressPageView: NSView {
         super.init(frame: .zero)
         rows.orientation = .vertical
         rows.alignment = .leading
-        rows.spacing = 10
-        rows.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 24, right: 24)
+        rows.spacing = 8
+        rows.edgeInsets = NSEdgeInsets(top: 0, left: 24, bottom: 22, right: 24)
         addPinned(rows)
         refresh()
     }
@@ -210,7 +210,7 @@ private final class FlyChordProgressPageView: NSView {
                 ? Double(progress.correctAttempts) / Double(progress.attempts) * 100
                 : 0
             let name = NSTextField(labelWithString: course.title)
-            name.font = .systemFont(ofSize: 13, weight: .semibold)
+            name.font = .systemFont(ofSize: 11, weight: .semibold)
             name.textColor = RimeUI.textPrimary
             let detail = FlyChordPageStyle.caption(
                 "掌握 \(progress.masteredItems)/\(progress.totalItems) · 尝试 \(progress.attempts) 次 · 正确率 \(String(format: "%.0f", accuracy))%"
@@ -268,7 +268,7 @@ private final class FlyChordPracticePageView: NSView {
     required init?(coder: NSCoder) { nil }
 
     private func build() {
-        targetLabel.font = .systemFont(ofSize: 38, weight: .semibold)
+        targetLabel.font = .systemFont(ofSize: 34, weight: .semibold)
         targetLabel.alignment = .center
         targetLabel.textColor = RimeUI.textPrimary
         targetLabel.translatesAutoresizingMaskIntoConstraints = false

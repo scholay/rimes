@@ -32,7 +32,7 @@
 | 设置 | `⌘⇧S` 随时打开设置页面 |
 | 实时翻译 | 默认 Apple 本地翻译（macOS 15+），也可走 AI 渠道 |
 | AI 生成 | Codex CLI / Claude Code CLI / OpenAI 兼容 API |
-| 意识流输入 | 拼音/并击 → 最多 3 个互斥猜测 → 选定后投递 |
+| 意识流输入 | 拼音/并击 → 按配置给出最多 5 个互斥猜测 → 选定后投递 |
 | My Prompt | 本地优先检索 Fabric / Obsidian 等提示词库 |
 | Marine Chrome | Chrome 扩展提供页面上下文（如 B 站评论/回复），本地确认后生成 |
 | Remarkable | USB + 本地 OCR，把当前页识别进缓冲 |
@@ -48,7 +48,7 @@
 | AI 生成 | `builtin.ai-text` | 2.0 | 随 RIMES 预装 | 启用 |
 | My Prompt | `builtin.my-prompt` | 1.0 | 随 RIMES 预装 | 启用 |
 | 实时翻译 | `builtin.apple-translation` | 2.0 | 随 RIMES 预装 | 启用 |
-| 意识流输入 | `builtin.stream-input` | 1.1 | 随 RIMES 预装 | 启用 |
+| 意识流输入 | `builtin.stream-input` | 1.2 | 随 RIMES 预装 | 启用 |
 | Remarkable | `builtin.remarkable` | 2.0 | 设置中按需下载 | 禁用 |
 | Marine Chrome | `builtin.marine-chrome` | 0.2.3 | 设置中按需下载 | 禁用 |
 

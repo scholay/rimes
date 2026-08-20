@@ -1,17 +1,20 @@
 import Cocoa
 
-/// A standalone "外部来源收件箱" window: shows InboundBus pending items with
-/// accept/reject, plus the gateway connect info (port + token + a ready-to-paste
-/// `claude mcp add` line). This is a stepping stone — the same accept/reject
-/// belongs in the panel's inbound rail (delayed to the careful candidate-window
-/// integration), but the tray makes the whole MCP→buffer flow usable today.
+/// User-reviewed handoff for external text. Incoming content never opens or
+/// edits the workbench by itself; it becomes a Buffer block only after an
+/// explicit accept action in this window.
 final class InboundTrayWindow: NSObject {
     static let shared = InboundTrayWindow()
 
     private var window: NSWindow?
-    private let listStack = NSStackView()
-    private let emptyLabel = NSTextField(labelWithString: "还没有外部来源推送内容。")
+    private var listStack = NSStackView()
     private var appearanceObserver: NSObjectProtocol?
+    private var acceptedCount = 0
+    private var rejectedCount = 0
+    private var acceptButtons: [UUID: NSButton] = [:]
+    private let countLabel = NSTextField(labelWithString: "")
+    private let footerLabel = NSTextField(labelWithString: "")
+    private let doneButton = NSButton(title: "完成", target: nil, action: nil)
 
     deinit {
         if let appearanceObserver {
@@ -24,8 +27,7 @@ final class InboundTrayWindow: NSObject {
 
     func show() {
         if window == nil { build() }
-        window?.appearance = RimeUI.appKitAppearance
-        reload()
+        applyAppearance(rebuild: true)
         NSApp.activate(ignoringOtherApps: true)
         window?.center()
         window?.makeKeyAndOrderFront(nil)
@@ -37,215 +39,360 @@ final class InboundTrayWindow: NSObject {
     }
 
     private func build() {
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
-                           styleMask: [.titled, .closable, .resizable],
-                           backing: .buffered, defer: false)
+        let win = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 612, height: 440),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
         win.title = "外部来源收件箱"
         win.isReleasedWhenClosed = false
-        win.minSize = NSSize(width: 480, height: 360)
+        win.minSize = NSSize(width: 560, height: 380)
         win.appearance = RimeUI.appKitAppearance
-
-        let root = NSStackView(views: [connectBox(), divider(), listScroll()])
-        root.orientation = .vertical
-        root.alignment = .leading
-        root.spacing = 12
-        root.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
-        root.translatesAutoresizingMaskIntoConstraints = false
-
-        win.contentView = NSView()
-        win.contentView?.addSubview(root)
-        NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: win.contentView!.leadingAnchor),
-            root.trailingAnchor.constraint(equalTo: win.contentView!.trailingAnchor),
-            root.topAnchor.constraint(equalTo: win.contentView!.topAnchor),
-            root.bottomAnchor.constraint(equalTo: win.contentView!.bottomAnchor),
-        ])
         window = win
+        rebuildContent()
+
         appearanceObserver = NotificationCenter.default.addObserver(
             forName: .rimeAppearanceDidChange,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self else { return }
-            self.window?.appearance = RimeUI.appKitAppearance
-            self.reloadIfVisible()
+            self?.applyAppearance(rebuild: true)
         }
     }
 
-    // MARK: connect info
-
-    private func connectBox() -> NSView {
-        let running = LocalGateway.shared.running || LocalGateway.shared.enabled
-        let status = NSTextField(labelWithString:
-            running ? "网关运行中 · 127.0.0.1:\(LocalGateway.shared.port)" : "网关已关闭（在设置 › 连接里开启）")
-        status.font = .systemFont(ofSize: 13, weight: .semibold)
-
-        let cmd = "claude mcp add --transport http etinput http://127.0.0.1:\(LocalGateway.shared.port)/mcp --header \"Authorization: Bearer \(GatewayToken.current())\""
-        let field = NSTextField(string: cmd)
-        field.isEditable = false
-        field.isSelectable = true
-        field.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        field.lineBreakMode = .byCharWrapping
-        field.maximumNumberOfLines = 4
-        field.translatesAutoresizingMaskIntoConstraints = false
-        field.widthAnchor.constraint(equalToConstant: 528).isActive = true
-
-        let copyBtn = NSButton(title: "复制 Claude Code 命令", target: self, action: #selector(copyCommand))
-        let hint = NSTextField(wrappingLabelWithString:
-            "标准 MCP 端点，任何 MCP 客户端／智能体都能接入用 buffer_push 往这里推文字。"
-            + "上面这行是 Claude Code 的便捷写法；通用 JSON 配置见「设置 › 连接」。")
-        hint.font = .systemFont(ofSize: 11)
-        hint.textColor = .secondaryLabelColor
-        hint.preferredMaxLayoutWidth = 528
-
-        let box = NSStackView(views: [status, field, copyBtn, hint])
-        box.orientation = .vertical
-        box.alignment = .leading
-        box.spacing = 6
-        return box
+    private func applyAppearance(rebuild: Bool) {
+        window?.appearance = RimeUI.appKitAppearance
+        if rebuild { rebuildContent() }
     }
 
-    @objc private func copyCommand() {
-        let cmd = "claude mcp add --transport http etinput http://127.0.0.1:\(LocalGateway.shared.port)/mcp --header \"Authorization: Bearer \(GatewayToken.current())\""
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(cmd, forType: .string)
-    }
+    private func rebuildContent() {
+        guard let window else { return }
+        let content = NSView()
+        content.wantsLayer = true
+        content.layer?.backgroundColor = RimeUI.surface.cgColor
+        window.contentView = content
 
-    // MARK: pending list
-
-    private func listScroll() -> NSView {
-        listStack.orientation = .vertical
-        listStack.alignment = .leading
-        listStack.spacing = 8
-        listStack.translatesAutoresizingMaskIntoConstraints = false
-
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.drawsBackground = false
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        let doc = NSView()
-        doc.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(listStack)
+        listStack = NSStackView()
+        let root = NSStackView(views: [headerView(), gatewayCard(), listScroll(), footerView()])
+        root.orientation = .vertical
+        root.alignment = .width
+        root.spacing = 12
+        root.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 14, right: 16)
+        root.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(root)
         NSLayoutConstraint.activate([
-            listStack.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
-            listStack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
-            listStack.topAnchor.constraint(equalTo: doc.topAnchor),
-            listStack.bottomAnchor.constraint(lessThanOrEqualTo: doc.bottomAnchor),
+            root.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            root.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            root.topAnchor.constraint(equalTo: content.topAnchor),
+            root.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
-        scroll.documentView = doc
-        scroll.widthAnchor.constraint(equalToConstant: 528).isActive = true
-        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
-        doc.widthAnchor.constraint(equalTo: scroll.widthAnchor).isActive = true
-        return scroll
+        reload()
     }
 
-    private func reload() {
-        listStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let items = InboundBus.shared.pending
-        if items.isEmpty {
-            listStack.addArrangedSubview(emptyLabel)
-            return
-        }
-        for item in items { listStack.addArrangedSubview(row(for: item)) }
+    private func headerView() -> NSView {
+        let icon = NSImageView()
+        icon.image = RimeUI.symbol("tray", pointSize: 15, weight: .medium)
+        icon.contentTintColor = RimeUI.accentTextColor
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        icon.wantsLayer = true
+        icon.layer?.backgroundColor = RimeUI.accentGreen.withAlphaComponent(0.12).cgColor
+        icon.layer?.cornerRadius = 7
+
+        let title = NSTextField(labelWithString: "外部来源收件箱")
+        title.font = .systemFont(ofSize: 16, weight: .semibold)
+        title.textColor = RimeUI.textPrimary
+        let subtitle = NSTextField(labelWithString: "审核外部传入内容后，再明确加入 Buffer。")
+        subtitle.font = .systemFont(ofSize: 11)
+        subtitle.textColor = RimeUI.textMuted
+        let copy = NSStackView(views: [title, subtitle])
+        copy.orientation = .vertical
+        copy.alignment = .leading
+        copy.spacing = 2
+
+        countLabel.font = .systemFont(ofSize: 10, weight: .semibold)
+        countLabel.textColor = RimeUI.accentTextColor
+        countLabel.alignment = .center
+        countLabel.wantsLayer = true
+        countLabel.layer?.backgroundColor = RimeUI.accentGreen.withAlphaComponent(0.12).cgColor
+        countLabel.layer?.cornerRadius = 9
+        countLabel.translatesAutoresizingMaskIntoConstraints = false
+        countLabel.heightAnchor.constraint(equalToConstant: 20).isActive = true
+        countLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 58).isActive = true
+
+        let row = NSStackView(views: [icon, copy, flexibleSpacer(), countLabel])
+        row.alignment = .centerY
+        row.spacing = 10
+        return row
     }
 
-    private func row(for item: InboundItem) -> NSView {
+    private func gatewayCard() -> NSView {
         let dot = NSView()
         dot.wantsLayer = true
-        dot.layer?.backgroundColor = badgeColor(item.origin).cgColor
+        dot.layer?.backgroundColor = (LocalGateway.shared.running
+            ? RimeUI.accentGreen
+            : RimeUI.textMuted).cgColor
         dot.layer?.cornerRadius = 4
         dot.translatesAutoresizingMaskIntoConstraints = false
         dot.widthAnchor.constraint(equalToConstant: 8).isActive = true
         dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
 
-        let source = NSTextField(labelWithString:
-            "\(item.title ?? item.origin.tag)\(item.streaming ? " · 接收中…" : "")")
-        source.font = .systemFont(ofSize: 12, weight: .semibold)
-        let head = NSStackView(views: [dot, source])
-        head.spacing = 6; head.alignment = .centerY
+        let title = NSTextField(labelWithString: "外部传字网关")
+        title.font = .systemFont(ofSize: 12, weight: .semibold)
+        title.textColor = RimeUI.textPrimary
+        let detail = NSTextField(labelWithString:
+            "仅接收明确配对的外部来源；剪贴板历史由 Buffer 中的独立开关控制。")
+        detail.font = .systemFont(ofSize: 10)
+        detail.textColor = RimeUI.textMuted
+        let labels = NSStackView(views: [title, detail])
+        labels.orientation = .vertical
+        labels.alignment = .leading
+        labels.spacing = 2
 
-        var cardRows: [NSView] = [head]
-        if item.pluginMetadata?.stale == true {
-            var warningText = "原投放目标已经变化；接受后会降级为普通文本，只发送到你届时聚焦的输入框"
-            if let target = item.pluginMetadata?.targetSummary,
-               !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                warningText += " · 原目标：\(target)"
-            }
-            let warning = NSTextField(wrappingLabelWithString: warningText)
-            warning.font = .systemFont(ofSize: 11, weight: .semibold)
-            warning.textColor = .systemOrange
-            warning.maximumNumberOfLines = 2
-            cardRows.append(warning)
+        let state = NSTextField(labelWithString: LocalGateway.shared.running ? "在线" : "离线")
+        state.font = .systemFont(ofSize: 10, weight: .semibold)
+        state.textColor = LocalGateway.shared.running ? RimeUI.accentTextColor : RimeUI.textMuted
+
+        return card(views: [dot, labels, flexibleSpacer(), state], spacing: 10)
+    }
+
+    private func listScroll() -> NSView {
+        listStack.orientation = .vertical
+        listStack.alignment = .width
+        listStack.spacing = 8
+        listStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+
+        let document = NSView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(listStack)
+        NSLayoutConstraint.activate([
+            listStack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            listStack.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            listStack.topAnchor.constraint(equalTo: document.topAnchor),
+            listStack.bottomAnchor.constraint(lessThanOrEqualTo: document.bottomAnchor),
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+        ])
+        scroll.documentView = document
+        let height = scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 228)
+        height.priority = .defaultLow
+        height.isActive = true
+        return scroll
+    }
+
+    private func footerView() -> NSView {
+        footerLabel.font = .systemFont(ofSize: 10)
+        footerLabel.textColor = RimeUI.textMuted
+
+        doneButton.target = self
+        doneButton.action = #selector(doneTapped)
+        doneButton.bezelStyle = .rounded
+        doneButton.bezelColor = RimeUI.accentGreen
+        doneButton.contentTintColor = RimeUI.accentForegroundColor
+
+        let row = NSStackView(views: [footerLabel, flexibleSpacer(), doneButton])
+        row.alignment = .centerY
+        row.spacing = 8
+        return row
+    }
+
+    private func reload(focusIndex: Int? = nil) {
+        listStack.arrangedSubviews.forEach { view in
+            listStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        acceptButtons.removeAll()
+
+        let items = InboundBus.shared.pending
+        countLabel.stringValue = items.isEmpty ? "无待审" : "\(items.count) 项待审"
+        footerLabel.stringValue = "待审 \(items.count) · 已接受 \(acceptedCount) · 已拒绝 \(rejectedCount)"
+
+        if items.isEmpty {
+            let empty = NSTextField(labelWithString: "没有待审内容")
+            empty.font = .systemFont(ofSize: 13, weight: .medium)
+            empty.textColor = RimeUI.textSecondary
+            let hint = NSTextField(labelWithString: "新的外部内容会先出现在这里，不会自动写入 Buffer。")
+            hint.font = .systemFont(ofSize: 11)
+            hint.textColor = RimeUI.textMuted
+            let stack = NSStackView(views: [empty, hint])
+            stack.orientation = .vertical
+            stack.alignment = .centerX
+            stack.spacing = 4
+            stack.edgeInsets = NSEdgeInsets(top: 36, left: 12, bottom: 36, right: 12)
+            listStack.addArrangedSubview(stack)
+        } else {
+            for item in items { listStack.addArrangedSubview(row(for: item)) }
         }
 
+        guard let focusIndex else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let current = InboundBus.shared.pending
+            if current.isEmpty {
+                self.window?.makeFirstResponder(self.doneButton)
+            } else {
+                let next = current[min(focusIndex, current.count - 1)].id
+                self.window?.makeFirstResponder(self.acceptButtons[next])
+            }
+        }
+    }
+
+    private func row(for item: InboundItem) -> NSView {
+        let symbol = NSImageView()
+        symbol.image = RimeUI.symbol(symbolName(for: item.origin), pointSize: 13, weight: .medium)
+        symbol.contentTintColor = RimeUI.textSecondary
+        symbol.translatesAutoresizingMaskIntoConstraints = false
+        symbol.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        symbol.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        symbol.wantsLayer = true
+        symbol.layer?.backgroundColor = RimeUI.surface3.cgColor
+        symbol.layer?.cornerRadius = 7
+
+        let title = NSTextField(labelWithString: item.title ?? displayName(for: item.origin))
+        title.font = .systemFont(ofSize: 12, weight: .semibold)
+        title.textColor = RimeUI.textPrimary
+        let metadata = NSTextField(labelWithString: metadataText(for: item))
+        metadata.font = .systemFont(ofSize: 9)
+        metadata.textColor = RimeUI.textMuted
+        let titleRow = NSStackView(views: [title, metadata])
+        titleRow.alignment = .firstBaseline
+        titleRow.spacing = 8
+
         let preview = NSTextField(wrappingLabelWithString: item.text.isEmpty ? "（空）" : item.text)
-        preview.font = .systemFont(ofSize: 13)
-        preview.textColor = .labelColor
-        preview.translatesAutoresizingMaskIntoConstraints = false
-        preview.widthAnchor.constraint(equalToConstant: 380).isActive = true
+        preview.font = .systemFont(ofSize: 11)
+        preview.textColor = RimeUI.textSecondary
+        preview.maximumNumberOfLines = 2
+        preview.lineBreakMode = .byTruncatingTail
 
         let acceptTitle = item.pluginMetadata?.stale == true
-            ? "作为普通文本加入"
-            : "发送到缓冲区"
+            ? "作为普通文本加入 Buffer"
+            : "接受并加入 Buffer"
         let accept = NSButton(title: acceptTitle, target: self, action: #selector(acceptTapped(_:)))
+        accept.bezelStyle = .rounded
         accept.bezelColor = RimeUI.accentGreen
-        accept.tag = 0
+        accept.contentTintColor = RimeUI.accentForegroundColor
         accept.identifier = NSUserInterfaceItemIdentifier(item.id.uuidString)
+        accept.isEnabled = InboundBus.shared.canAccept(item.id)
+        accept.toolTip = item.streaming ? "等待接收完成后才能加入 Buffer" : nil
+        accept.setAccessibilityLabel(item.streaming
+            ? "\(title.stringValue) 内容仍在接收，暂不可加入 Buffer"
+            : "接受 \(title.stringValue) 内容并加入 Buffer")
+        acceptButtons[item.id] = accept
+
         let reject = NSButton(title: "拒绝", target: self, action: #selector(rejectTapped(_:)))
+        reject.bezelStyle = .inline
         reject.identifier = NSUserInterfaceItemIdentifier(item.id.uuidString)
-        let actions = NSStackView(views: [accept, reject])
-        actions.spacing = 6
+        reject.setAccessibilityLabel("拒绝 \(title.stringValue) 内容")
 
-        let body = NSStackView(views: [preview, flexSpacer(), actions])
-        body.spacing = 10; body.alignment = .centerY
-        body.translatesAutoresizingMaskIntoConstraints = false
-        body.widthAnchor.constraint(equalToConstant: 528).isActive = true
+        let actions = NSStackView(views: [flexibleSpacer(), reject, accept])
+        actions.alignment = .centerY
+        actions.spacing = 8
 
-        cardRows.append(body)
-        let card = NSStackView(views: cardRows)
-        card.orientation = .vertical
-        card.alignment = .leading
-        card.spacing = 5
-        card.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
-        card.wantsLayer = true
-        card.layer?.backgroundColor = RimeUI.surface2.cgColor
-        card.layer?.cornerRadius = 8
-        card.layer?.borderColor = RimeUI.border.cgColor
-        card.layer?.borderWidth = 1
-        return card
+        let body = NSStackView(views: [titleRow, preview, actions])
+        body.orientation = .vertical
+        body.alignment = .width
+        body.spacing = 5
+
+        if item.pluginMetadata?.stale == true {
+            let warning = NSTextField(labelWithString: "原目标已变化，接受后将按普通文本处理")
+            warning.font = .systemFont(ofSize: 9, weight: .medium)
+            warning.textColor = RimeUI.color(RimeUI.isDark ? 0xFF9230 : 0x8A4B00)
+            body.insertArrangedSubview(warning, at: 2)
+        }
+        return card(views: [symbol, body], spacing: 10)
+    }
+
+    private func card(views: [NSView], spacing: CGFloat) -> NSView {
+        let stack = NSStackView(views: views)
+        stack.alignment = .centerY
+        stack.spacing = spacing
+        stack.edgeInsets = NSEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
+        stack.wantsLayer = true
+        stack.layer?.backgroundColor = RimeUI.surface2.cgColor
+        stack.layer?.cornerRadius = 9
+        stack.layer?.borderColor = RimeUI.border.cgColor
+        stack.layer?.borderWidth = 1
+        return stack
     }
 
     @objc private func acceptTapped(_ sender: NSButton) {
-        if let id = sender.identifier.flatMap({ UUID(uuidString: $0.rawValue) }) {
-            InboundBus.shared.accept(id)
+        guard let id = sender.identifier.flatMap({ UUID(uuidString: $0.rawValue) }),
+              let index = InboundBus.shared.pending.firstIndex(where: { $0.id == id }) else { return }
+        guard InboundBus.shared.canAccept(id),
+              InboundBus.shared.accept(id) else {
+            reload(focusIndex: index)
+            return
         }
-        reload()
+        acceptedCount += 1
+        reload(focusIndex: index)
     }
 
     @objc private func rejectTapped(_ sender: NSButton) {
-        if let id = sender.identifier.flatMap({ UUID(uuidString: $0.rawValue) }) {
-            InboundBus.shared.reject(id)
-        }
-        reload()
+        guard let id = sender.identifier.flatMap({ UUID(uuidString: $0.rawValue) }),
+              let index = InboundBus.shared.pending.firstIndex(where: { $0.id == id }) else { return }
+        InboundBus.shared.reject(id)
+        rejectedCount += 1
+        reload(focusIndex: index)
     }
 
-    private func badgeColor(_ origin: Origin) -> NSColor {
+    @objc private func doneTapped() {
+        window?.close()
+    }
+
+    private func metadataText(for item: InboundItem) -> String {
+        let source: String
+        switch item.origin {
+        case .marine: source = "网页摘录"
+        case .remotePeer: source = "文本传入"
+        case .plugin: source = "插件结果"
+        case .mcp: source = "MCP"
+        case .http: source = "HTTP"
+        case .sse: source = "SSE"
+        case .ssh: source = "SSH"
+        case .processor: source = "处理器"
+        case .rime: source = "输入法"
+        }
+        let relative = RelativeDateTimeFormatter()
+        relative.unitsStyle = .short
+        let age = relative.localizedString(for: item.createdAt, relativeTo: Date())
+        return "\(source) · \(item.streaming ? "接收中" : age)"
+    }
+
+    private func displayName(for origin: Origin) -> String {
         switch origin {
-        case .remotePeer: return RimeUI.color(0x9B8CFF)
-        case .marine, .plugin, .processor, .mcp: return RimeUI.color(0xF59E0B)
-        case .http, .sse, .ssh: return RimeUI.color(0x4A9FD8)
-        case .rime: return .tertiaryLabelColor
+        case .marine: return "Marine Chrome"
+        case .remotePeer: return "配对设备"
+        case .plugin: return "插件"
+        case .mcp: return "MCP 客户端"
+        case .http: return "HTTP 来源"
+        case .sse: return "SSE 来源"
+        case .ssh: return "SSH 来源"
+        case .processor: return "处理器"
+        case .rime: return "RIMES"
         }
     }
 
-    private func flexSpacer() -> NSView {
-        let v = NSView(); v.setContentHuggingPriority(.init(1), for: .horizontal); return v
+    private func symbolName(for origin: Origin) -> String {
+        switch origin {
+        case .marine: return "network"
+        case .remotePeer: return "rectangle.connected.to.line.below"
+        case .plugin: return "puzzlepiece.extension"
+        case .mcp, .http, .sse, .ssh: return "point.3.connected.trianglepath.dotted"
+        case .processor: return "gearshape.2"
+        case .rime: return "keyboard"
+        }
     }
 
-    private func divider() -> NSView {
-        let d = NSBox(); d.boxType = .separator
-        d.translatesAutoresizingMaskIntoConstraints = false
-        d.widthAnchor.constraint(equalToConstant: 528).isActive = true
-        return d
+    private func flexibleSpacer() -> NSView {
+        let view = NSView()
+        view.setContentHuggingPriority(.init(1), for: .horizontal)
+        return view
     }
 }

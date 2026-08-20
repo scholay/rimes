@@ -10,6 +10,17 @@ final class RimeFixedAccentChoiceButton: NSControl {
 
     let style: Style
 
+    /// Settings choice cards render their title and detail as a richer sibling
+    /// label while retaining this control as the sole accessible/action
+    /// element. Other call sites keep the traditional indicator + title form.
+    var showsTitle = true {
+        didSet {
+            guard oldValue != showsTitle else { return }
+            invalidateIntrinsicContentSize()
+            needsDisplay = true
+        }
+    }
+
     var title: String {
         didSet {
             guard oldValue != title else { return }
@@ -28,6 +39,7 @@ final class RimeFixedAccentChoiceButton: NSControl {
             }
             guard oldValue != state else { return }
             needsDisplay = true
+            superview?.needsDisplay = true
             NSAccessibility.post(element: self, notification: .valueChanged)
         }
     }
@@ -40,9 +52,11 @@ final class RimeFixedAccentChoiceButton: NSControl {
 
     override var intrinsicContentSize: NSSize {
         let font = resolvedFont
-        let textWidth = ceil((title as NSString).size(withAttributes: [.font: font]).width)
+        let textWidth = showsTitle
+            ? ceil((title as NSString).size(withAttributes: [.font: font]).width)
+            : 0
         return NSSize(
-            width: indicatorSize + indicatorTextSpacing + textWidth,
+            width: indicatorSize + (showsTitle ? indicatorTextSpacing + textWidth : 0),
             height: max(indicatorSize, ceil(font.ascender - font.descender + font.leading))
         )
     }
@@ -164,24 +178,26 @@ final class RimeFixedAccentChoiceButton: NSControl {
             drawRadio(in: indicatorRect, alpha: alpha)
         }
 
-        let textRect = NSRect(
-            x: indicatorRect.maxX + indicatorTextSpacing,
-            y: 0,
-            width: max(0, bounds.maxX - indicatorRect.maxX - indicatorTextSpacing),
-            height: bounds.height
-        )
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineBreakMode = .byTruncatingTail
-        paragraph.alignment = .left
-        let textColor = isEnabled ? RimeUI.textPrimary : RimeUI.textMuted
-        (title as NSString).draw(
-            in: verticallyCenteredTextRect(textRect),
-            withAttributes: [
-                .font: resolvedFont,
-                .foregroundColor: textColor.withAlphaComponent(alpha),
-                .paragraphStyle: paragraph,
-            ]
-        )
+        if showsTitle {
+            let textRect = NSRect(
+                x: indicatorRect.maxX + indicatorTextSpacing,
+                y: 0,
+                width: max(0, bounds.maxX - indicatorRect.maxX - indicatorTextSpacing),
+                height: bounds.height
+            )
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineBreakMode = .byTruncatingTail
+            paragraph.alignment = .left
+            let textColor = isEnabled ? RimeUI.textPrimary : RimeUI.textMuted
+            (title as NSString).draw(
+                in: verticallyCenteredTextRect(textRect),
+                withAttributes: [
+                    .font: resolvedFont,
+                    .foregroundColor: textColor.withAlphaComponent(alpha),
+                    .paragraphStyle: paragraph,
+                ]
+            )
+        }
 
         if window?.firstResponder === self {
             let focusRect = bounds.insetBy(dx: -2, dy: -2)

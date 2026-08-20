@@ -47,18 +47,29 @@ final class StatusMenu {
         menu.addItem(settings)
 
         let inbox = NSMenuItem(
-            title: "外部来源收件箱…",
+            title: inboundTrayTitle,
             action: #selector(RimeBufferController.openInboundTrayFromInputMenu(_:)),
             keyEquivalent: "")
         inbox.target = target
         menu.addItem(inbox)
+
+        let maintenance = NSMenuItem(title: "维护…", action: nil, keyEquivalent: "")
+        let maintenanceMenu = NSMenu(title: "维护")
 
         let workbench = NSMenuItem(
             title: BufferWindowController.shared.isVisible ? "关闭缓冲工作台（保留内容）" : "显示缓冲工作台",
             action: #selector(RimeBufferController.toggleBufferWindowFromInputMenu(_:)),
             keyEquivalent: "")
         workbench.target = target
-        menu.addItem(workbench)
+        maintenanceMenu.addItem(workbench)
+
+        let clipboard = NSMenuItem(
+            title: "剪贴板历史（仅工作台显示时读取）",
+            action: #selector(RimeBufferController.toggleClipboardHistoryFromInputMenu(_:)),
+            keyEquivalent: "")
+        clipboard.target = target
+        clipboard.state = BufferWindowController.shared.clipboardRailEnabled ? .on : .off
+        maintenanceMenu.addItem(clipboard)
 
         let pin = NSMenuItem(
             title: "常显于所有桌面与全屏空间",
@@ -66,15 +77,15 @@ final class StatusMenu {
             keyEquivalent: "")
         pin.target = target
         pin.state = BufferWindowController.shared.pinned ? .on : .off
-        menu.addItem(pin)
+        maintenanceMenu.addItem(pin)
 
         let move = NSMenuItem(
             title: "把缓冲工作台移到当前屏幕",
             action: #selector(RimeBufferController.moveBufferWindowFromInputMenu(_:)),
             keyEquivalent: "")
         move.target = target
-        menu.addItem(move)
-        menu.addItem(.separator())
+        maintenanceMenu.addItem(move)
+        maintenanceMenu.addItem(.separator())
 
         let updateManager = UpdateManager.shared
         let updateTitle: String
@@ -89,37 +100,47 @@ final class StatusMenu {
             action: #selector(RimeBufferController.checkUpdateFromInputMenu(_:)),
             keyEquivalent: "")
         checkUpdate.target = target
-        menu.addItem(checkUpdate)
+        maintenanceMenu.addItem(checkUpdate)
 
         let log = NSMenuItem(
             title: "打开日志 (~/rimebuffer.log)",
             action: #selector(RimeBufferController.openLogFromInputMenu(_:)),
             keyEquivalent: "")
         log.target = target
-        menu.addItem(log)
+        maintenanceMenu.addItem(log)
 
         let deploy = NSMenuItem(
             title: "重新部署并重启",
             action: #selector(RimeBufferController.deployAndRestartFromInputMenu(_:)),
             keyEquivalent: "")
         deploy.target = target
-        menu.addItem(deploy)
+        maintenanceMenu.addItem(deploy)
 
         let reinstall = NSMenuItem(
             title: "重新安装输入法…",
             action: #selector(RimeBufferController.reinstallFromInputMenu(_:)),
             keyEquivalent: "")
         reinstall.target = target
-        menu.addItem(reinstall)
+        maintenanceMenu.addItem(reinstall)
 
         let restart = NSMenuItem(
             title: "重启输入法进程",
             action: #selector(RimeBufferController.restartFromInputMenu(_:)),
             keyEquivalent: "")
         restart.target = target
-        menu.addItem(restart)
+        maintenanceMenu.addItem(restart)
+
+        maintenance.submenu = maintenanceMenu
+        menu.addItem(maintenance)
 
         return menu
+    }
+
+    private var inboundTrayTitle: String {
+        let count = InboundBus.shared.pendingCount
+        return count > 0
+            ? "外部来源收件箱…（\(count) 项待审）"
+            : "外部来源收件箱…"
     }
 
     func openSettings() {
@@ -128,6 +149,10 @@ final class StatusMenu {
 
     func toggleBufferWindow() {
         BufferWindowController.shared.toggleVisibility()
+    }
+
+    func toggleClipboardHistory() {
+        BufferWindowController.shared.clipboardRailEnabled.toggle()
     }
 
     func toggleBufferPinned() {

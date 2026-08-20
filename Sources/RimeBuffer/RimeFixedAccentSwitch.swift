@@ -121,7 +121,9 @@ class RimeFixedAccentSwitch: NSControl {
         trackColor.withAlphaComponent(enabledAlpha).setFill()
         track.fill()
 
-        RimeUI.borderStrong.withAlphaComponent(isEnabled ? 0.58 : 0.30).setStroke()
+        (isOn ? RimeUI.accentTextColor : RimeUI.border)
+            .withAlphaComponent(isEnabled ? 0.78 : 0.30)
+            .setStroke()
         track.lineWidth = 1
         track.stroke()
 
@@ -136,8 +138,7 @@ class RimeFixedAccentSwitch: NSControl {
             width: knobSize,
             height: knobSize
         )
-        let knobColor = isOn ? RimeUI.accentForegroundColor : NSColor.white
-        knobColor.withAlphaComponent(isEnabled ? 1 : 0.70).setFill()
+        NSColor.white.withAlphaComponent(isEnabled ? 1 : 0.70).setFill()
         NSBezierPath(ovalIn: knobRect).fill()
 
         if window?.firstResponder === self {

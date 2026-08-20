@@ -14,6 +14,9 @@ enum BufferInlineMetrics {
     static let contentSpacing: CGFloat = 3
     static let originBadgeSize: CGFloat = 5
     static let messageHorizontalInset: CGFloat = 5
+    static let pagerCountWidth: CGFloat = 28
+    static let pagerButtonSize: CGFloat = 24
+    static let maximumAlternativeCount = 5
 
     /// Width used by repeated block chrome, excluding text and the rail edge.
     static func packedBlockChromeWidth(blockCount: Int,
@@ -24,6 +27,24 @@ enum BufferInlineMetrics {
         return CGFloat(blocks) * chipHorizontalInset * 2
             + CGFloat(gaps) * blockSpacing
             + CGFloat(badges) * (originBadgeSize + contentSpacing)
+    }
+}
+
+enum BufferAlternativePagerRules {
+    static let maximumCount = BufferInlineMetrics.maximumAlternativeCount
+
+    static func boundedCount(_ count: Int) -> Int {
+        min(max(count, 0), maximumCount)
+    }
+
+    static func selectedIndex(
+        selectedRows: [Bool],
+        count: Int
+    ) -> Int {
+        let bounded = boundedCount(count)
+        guard bounded > 0 else { return 0 }
+        return min(selectedRows.prefix(bounded).firstIndex(of: true) ?? 0,
+                   bounded - 1)
     }
 }
 
@@ -319,6 +340,104 @@ private final class TranslationTargetRail {
     }
 }
 
+/// In-rail alternative navigation from the React Buffer master. One stable
+/// target viewport presents up to five mutually-exclusive results; paging
+/// changes selection only and never bypasses the workspace's delivery lease.
+private final class TranslationRailPagerView: NSStackView {
+    private let countLabel = NSTextField(labelWithString: "")
+    private let previousButton = FirstMouseButton(title: "", target: nil, action: nil)
+    private let nextButton = FirstMouseButton(title: "", target: nil, action: nil)
+    private var onStep: ((Int) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        orientation = .horizontal
+        alignment = .centerY
+        distribution = .fill
+        spacing = 1
+        edgeInsets = NSEdgeInsets(top: 0, left: 4, bottom: 0, right: 1)
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        translatesAutoresizingMaskIntoConstraints = false
+
+        countLabel.font = .monospacedDigitSystemFont(ofSize: 9, weight: .bold)
+        countLabel.alignment = .center
+        countLabel.lineBreakMode = .byClipping
+        countLabel.translatesAutoresizingMaskIntoConstraints = false
+        countLabel.widthAnchor.constraint(
+            equalToConstant: BufferInlineMetrics.pagerCountWidth
+        ).isActive = true
+
+        configure(previousButton, symbol: "chevron.up", action: #selector(previous))
+        configure(nextButton, symbol: "chevron.down", action: #selector(next))
+        addArrangedSubview(countLabel)
+        addArrangedSubview(previousButton)
+        addArrangedSubview(nextButton)
+        heightAnchor.constraint(equalToConstant: BufferInlineMetrics.pagerButtonSize)
+            .isActive = true
+        applyAppearance()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func update(index: Int,
+                count: Int,
+                enabled: Bool,
+                onStep: ((Int) -> Void)?) {
+        let boundedCount = BufferAlternativePagerRules.boundedCount(count)
+        let boundedIndex = min(max(index, 0), max(0, boundedCount - 1))
+        countLabel.stringValue = "\(boundedIndex + 1)/\(boundedCount)"
+        toolTip = "\(boundedCount) 条候选"
+        self.onStep = onStep
+        previousButton.isEnabled = enabled && boundedCount > 1 && onStep != nil
+        nextButton.isEnabled = enabled && boundedCount > 1 && onStep != nil
+        applyAppearance()
+    }
+
+    func scrub() {
+        countLabel.stringValue = ""
+        toolTip = nil
+        onStep = nil
+        previousButton.isEnabled = false
+        nextButton.isEnabled = false
+    }
+
+    func applyAppearance() {
+        countLabel.textColor = RimeUI.accentBlue
+        layer?.backgroundColor = RimeUI.surface2.cgColor
+        layer?.borderColor = RimeUI.border.cgColor
+        layer?.borderWidth = 1 / max(window?.backingScaleFactor ?? 2, 1)
+        previousButton.contentTintColor = previousButton.isEnabled
+            ? RimeUI.textSecondary : RimeUI.textMuted
+        nextButton.contentTintColor = nextButton.isEnabled
+            ? RimeUI.textSecondary : RimeUI.textMuted
+        previousButton.refreshInteractionAppearance()
+        nextButton.refreshInteractionAppearance()
+    }
+
+    private func configure(_ button: FirstMouseButton,
+                           symbol: String,
+                           action: Selector) {
+        button.image = RimeUI.symbol(symbol, pointSize: 8, weight: .bold)
+        button.image?.isTemplate = true
+        button.imagePosition = .imageOnly
+        button.isBordered = false
+        button.focusRingType = .none
+        button.target = self
+        button.action = action
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.widthAnchor.constraint(
+            equalToConstant: BufferInlineMetrics.pagerButtonSize
+        ).isActive = true
+        button.heightAnchor.constraint(
+            equalToConstant: BufferInlineMetrics.pagerButtonSize
+        ).isActive = true
+    }
+
+    @objc private func previous() { onStep?(-1) }
+    @objc private func next() { onStep?(1) }
+}
+
 struct BufferTranslationRailLayoutProbe {
     struct Rail {
         let key: Int?
@@ -336,6 +455,7 @@ struct BufferTranslationRailLayoutProbe {
 /// an IMK client or action buttons; it only renders staged blocks.
 final class BufferInlineView: NSView {
     var onDerivedTargetSelection: ((UUID) -> Void)?
+    var onDerivedTargetStep: ((Int) -> Void)?
 
     static let standardPreferredHeight: CGFloat = 34
     static let translationPreferredHeight: CGFloat = 68
@@ -343,9 +463,8 @@ final class BufferInlineView: NSView {
 
     static func translationPreferredHeight(targetRows: Int,
                                             showsSourceRail: Bool = true) -> CGFloat {
-        (showsSourceRail ? translationPreferredHeight : standardPreferredHeight)
-            + CGFloat(min(max(targetRows, 1), 3) - 1)
-                * additionalTranslationTargetRowHeight
+        let visibleRails = (showsSourceRail ? 1 : 0) + (targetRows > 0 ? 1 : 0)
+        return visibleRails > 1 ? translationPreferredHeight : standardPreferredHeight
     }
 
     private struct RenderedBlock: Equatable {
@@ -364,6 +483,7 @@ final class BufferInlineView: NSView {
         let loadingMessage: String?
         let loadingActive: Bool
         let translation: TranslationRailSnapshot?
+        let presentationStyle: BufferDerivedPresentationStyle
         let shielded: Bool
         let isNight: Bool
     }
@@ -391,6 +511,7 @@ final class BufferInlineView: NSView {
     private var renderedShowsSourceRail = true
     private var translationTargetChipViews: [UUID: TranslationRailChipView] = [:]
     private var translationMessageView: TranslationRailMessageView?
+    private let translationPagerView = TranslationRailPagerView(frame: .zero)
     private var translationLoadingActive = false
     private var lastRenderSignature: RenderSignature?
     private var contentShielded = false
@@ -398,6 +519,8 @@ final class BufferInlineView: NSView {
     private(set) var renderPassCount = 0
     private(set) var renderedSelectedStandardBlockCount = 0
     private(set) var renderedTranslationSourceSelected = false
+    private(set) var renderedAlternativeCount = 0
+    private(set) var renderedAlternativeIndex = 0
     var renderedBlockCount: Int { renderedBlockIDs.count }
     var renderedTranslationTargetViewIdentities: [ObjectIdentifier] {
         renderedBlockIDs.compactMap {
@@ -435,11 +558,11 @@ final class BufferInlineView: NSView {
     var translationRailCount: Int {
         usesStackedTranslationLayout
             ? (renderedShowsSourceRail ? 1 : 0)
-                + max(renderedTranslationTargetRowKeys.count, 1)
+                + renderedTranslationTargetRowKeys.count
             : 0
     }
     var renderedTranslationTargetRowCount: Int {
-        usesStackedTranslationLayout ? max(renderedTranslationTargetRowKeys.count, 1) : 0
+        usesStackedTranslationLayout ? renderedTranslationTargetRowKeys.count : 0
     }
     var translationLayoutProbe: BufferTranslationRailLayoutProbe {
         let source = BufferTranslationRailLayoutProbe.Rail(
@@ -615,7 +738,7 @@ final class BufferInlineView: NSView {
 
     /// Host geometry changes and row reconciliation are deliberately separate
     /// operations. Recompute every document frame after the panel has reached
-    /// its final height so 1↔2↔3-row transitions cannot retain stale sizes.
+    /// its final height so exchange/live transitions cannot retain stale sizes.
     func reconcileTranslationDocumentGeometry() {
         guard !translationContainer.isHidden else { return }
         layoutSubtreeIfNeeded()
@@ -656,9 +779,12 @@ final class BufferInlineView: NSView {
         // a derived workspace for text. Besides keeping the rail hidden, this
         // replaces the cached render signature with a plaintext-free value.
         if shielded { return refreshShielded() }
+        let workspace = DerivedBufferWorkspaceRouter.selectedWorkspace
         return refresh(preedit: preedit,
-                       translation: DerivedBufferWorkspaceRouter
-                            .selectedWorkspace?.railSnapshot)
+                       translation: workspace?.railSnapshot,
+                       presentationStyle: BufferDerivedPresentationRules.style(
+                            for: workspace?.workspacePluginKey
+                       ))
     }
 
     /// Runtime seam for callers that already froze a derived snapshot to size
@@ -667,9 +793,12 @@ final class BufferInlineView: NSView {
     @discardableResult
     func refresh(preedit: String = "",
                  shielded: Bool,
-                 translationSnapshot: TranslationRailSnapshot?) -> Bool {
+                 translationSnapshot: TranslationRailSnapshot?,
+                 presentationStyle: BufferDerivedPresentationStyle = .liveExpand) -> Bool {
         if shielded { return refreshShielded() }
-        return refresh(preedit: preedit, translation: translationSnapshot)
+        return refresh(preedit: preedit,
+                       translation: translationSnapshot,
+                       presentationStyle: presentationStyle)
     }
 
     /// Deterministic standard-rail seam for CLI smoke tests and previews. It
@@ -678,11 +807,14 @@ final class BufferInlineView: NSView {
     func renderStandardForPreview(preedit: String = "",
                                   shielded: Bool = false) -> Bool {
         if shielded { return refreshShielded() }
-        return refresh(preedit: preedit, translation: nil)
+        return refresh(preedit: preedit,
+                       translation: nil,
+                       presentationStyle: .liveExpand)
     }
 
     private func refresh(preedit: String,
-                         translation: TranslationRailSnapshot?) -> Bool {
+                         translation: TranslationRailSnapshot?,
+                         presentationStyle: BufferDerivedPresentationStyle) -> Bool {
         let model = BufferModel.shared
         let preeditText = preedit.trimmingCharacters(in: .whitespacesAndNewlines)
         let active = model.active
@@ -704,6 +836,7 @@ final class BufferInlineView: NSView {
             loadingMessage: model.loadingMessage,
             loadingActive: model.transientLoadingActive,
             translation: translation,
+            presentationStyle: presentationStyle,
             shielded: false,
             isNight: RimeUI.isDark
         )
@@ -721,7 +854,9 @@ final class BufferInlineView: NSView {
             translationContainer.isHidden = false
             renderedSelectedStandardBlockCount = 0
             renderedTranslationSourceSelected = translation.sourceSelected
-            renderTranslation(translation, active: active)
+            renderTranslation(translation,
+                              active: active,
+                              presentationStyle: presentationStyle)
             applyAppearance()
             layoutSubtreeIfNeeded()
             updateTranslationDocumentSizes()
@@ -810,6 +945,7 @@ final class BufferInlineView: NSView {
             loadingMessage: nil,
             loadingActive: false,
             translation: nil,
+            presentationStyle: .liveExpand,
             shielded: true,
             isNight: RimeUI.isDark
         )
@@ -838,7 +974,8 @@ final class BufferInlineView: NSView {
     /// trusted workspace.
     @discardableResult
     func renderTranslationForPreview(_ snapshot: TranslationRailSnapshot,
-                                     active: Bool = true) -> Bool {
+                                     active: Bool = true,
+                                     presentationStyle: BufferDerivedPresentationStyle = .liveExpand) -> Bool {
         lastRenderSignature = nil
         contentShielded = false
         if translationContainer.isHidden { resetRailContents() }
@@ -846,19 +983,50 @@ final class BufferInlineView: NSView {
         translationContainer.isHidden = false
         renderedSelectedStandardBlockCount = 0
         renderedTranslationSourceSelected = snapshot.sourceSelected
-        renderTranslation(snapshot, active: active)
+        renderTranslation(snapshot,
+                          active: active,
+                          presentationStyle: presentationStyle)
         applyAppearance()
         layoutSubtreeIfNeeded()
         updateTranslationDocumentSizes()
         scrollTranslationRails(for: snapshot.phase)
         isHidden = false
-        return usesStackedTranslationLayout && translationRailCount >= 2
+        return usesStackedTranslationLayout && translationRailCount >= 1
     }
 
     private func renderTranslation(_ snapshot: TranslationRailSnapshot,
-                                   active: Bool) {
+                                   active: Bool,
+                                   presentationStyle: BufferDerivedPresentationStyle) {
         renderedBlockIDs.removeAll(keepingCapacity: true)
+        let allRows: [TranslationOutputRow]
+        if snapshot.outputRows.isEmpty {
+            allRows = [TranslationOutputRow(key: 0,
+                                            blocks: snapshot.outputBlocks)]
+        } else {
+            allRows = Array(snapshot.outputRows.prefix(
+                BufferAlternativePagerRules.maximumCount
+            ))
+        }
+        let alternativeCount = BufferAlternativePagerRules.boundedCount(allRows.count)
+        let activeAlternativeIndex = BufferAlternativePagerRules.selectedIndex(
+            selectedRows: allRows.map { row in
+                row.blocks.contains(where: { $0.selected })
+            },
+            count: alternativeCount
+        )
+        let exchangeShowsTarget = BufferDerivedPresentationRules.exchangeShowsTarget(
+            style: presentationStyle,
+            phase: snapshot.phase,
+            outputCount: snapshot.outputBlocks.count
+        )
+        let showsTargetRail = presentationStyle == .liveExpand
+            || exchangeShowsTarget
+            || !snapshot.showsSourceRail
         renderedShowsSourceRail = snapshot.showsSourceRail
+            && !(presentationStyle == .singleExchange && exchangeShowsTarget)
+        renderedAlternativeCount = showsTargetRail ? alternativeCount : 0
+        renderedAlternativeIndex = showsTargetRail ? activeAlternativeIndex : 0
+
         let sourceRole = translationSourceRoleView
             ?? translationRoleIcon(snapshot.sourceRole, target: false)
         translationSourceRoleView = sourceRole
@@ -891,17 +1059,21 @@ final class BufferInlineView: NSView {
         updateTranslationRoleIcon(targetRole,
                                   role: snapshot.targetRole,
                                   target: true)
-        let rowSnapshots: [TranslationOutputRow]
-        if snapshot.outputRows.isEmpty {
-            rowSnapshots = [TranslationOutputRow(key: 0,
-                                                 blocks: snapshot.outputBlocks)]
-        } else {
-            rowSnapshots = Array(snapshot.outputRows.prefix(3))
-        }
+        let activeRow = allRows.indices.contains(activeAlternativeIndex)
+            ? allRows[activeAlternativeIndex]
+            : TranslationOutputRow(key: 0, blocks: snapshot.outputBlocks)
+        // Keep one stable target viewport while the active alternative pages.
+        let pagerRailKey = Int.min
+        let rowSnapshots: [TranslationOutputRow] = showsTargetRail
+            ? [TranslationOutputRow(key: pagerRailKey, blocks: activeRow.blocks)]
+            : []
         let hasSelectableResults =
             (DerivedBufferWorkspaceRouter.selectedWorkspace
                 as? any DerivedResultSelectionControls)?
                 .ownsResultNavigation == true
+        let canPage = snapshot.phase == .ready
+            && alternativeCount > 1
+            && onDerivedTargetStep != nil
         let desiredRowKeys = rowSnapshots.map(\.key)
         let oldRowKeys = Set(renderedTranslationTargetRowKeys)
         for key in desiredRowKeys where translationTargetRails[key] == nil {
@@ -912,7 +1084,7 @@ final class BufferInlineView: NSView {
             translationTargetRails[$0]?.scroll
         }
         reconcileArrangedSubviews(
-            (snapshot.showsSourceRail ? [translationSourceScroll] : [])
+            (renderedShowsSourceRail ? [translationSourceScroll] : [])
                 + desiredTargetScrolls,
             in: translationContainer
         )
@@ -951,6 +1123,16 @@ final class BufferInlineView: NSView {
             for (_, chip) in translationTargetChipViews { chip.scrub() }
             translationTargetChipViews.removeAll()
         }
+        if alternativeCount > 1, showsTargetRail {
+            translationPagerView.update(
+                index: activeAlternativeIndex,
+                count: alternativeCount,
+                enabled: canPage,
+                onStep: onDerivedTargetStep
+            )
+        } else {
+            translationPagerView.scrub()
+        }
         if loading {
             if !translationLoadingActive {
                 loadingIndicator.startAnimation(nil)
@@ -971,6 +1153,9 @@ final class BufferInlineView: NSView {
             var targetViews: [NSView] = [
                 rowIndex == 0 ? targetRole : rail.leadingPlaceholder,
             ]
+            if alternativeCount > 1 {
+                targetViews.append(translationPagerView)
+            }
             if snapshot.outputBlocks.isEmpty, rowIndex == 0 {
                 if !loading, message == nil {
                     targetViews.append(translationTargetEmptyLabel)
@@ -984,7 +1169,7 @@ final class BufferInlineView: NSView {
                     translationTargetChipViews[block.id] = chip
                     chip.update(
                         text: block.text,
-                        ordinal: block.ordinal,
+                        ordinal: alternativeCount > 1 ? nil : block.ordinal,
                         selected: block.selected,
                         retainedTailStart: block.retainedTailStart,
                         stale: !targetIsCurrent,
@@ -1012,7 +1197,9 @@ final class BufferInlineView: NSView {
             clearArrangedSubviews(of: rail.row)
             rail.scroll.removeFromSuperview()
         }
-        active ? startCaretBlinking() : stopCaretBlinking()
+        renderedShowsSourceRail && active
+            ? startCaretBlinking()
+            : stopCaretBlinking()
     }
 
     private func reconcileArrangedSubviews(_ desired: [NSView],
@@ -1292,6 +1479,7 @@ final class BufferInlineView: NSView {
         translationSourceChipView?.scrub()
         translationTargetChipViews.values.forEach { $0.scrub() }
         translationMessageView?.scrub()
+        translationPagerView.scrub()
         clearArrangedSubviews(of: chipRow)
         clearArrangedSubviews(of: translationSourceRow)
         for rail in translationTargetRails.values {
@@ -1305,6 +1493,8 @@ final class BufferInlineView: NSView {
         translationSourceChipView = nil
         translationTargetRails.removeAll()
         renderedShowsSourceRail = true
+        renderedAlternativeCount = 0
+        renderedAlternativeIndex = 0
         let initialTargetRail = makeTranslationTargetRail(key: 0)
         translationTargetRails[0] = initialTargetRail
         renderedTranslationTargetRowKeys = [0]
@@ -1413,6 +1603,7 @@ final class BufferInlineView: NSView {
         emptyLabel.textColor = RimeUI.isDark ? RimeUI.textSecondary : RimeUI.textMuted
         translationSourceEmptyLabel.textColor = RimeUI.textSecondary
         translationTargetEmptyLabel.textColor = RimeUI.textSecondary
+        translationPagerView.applyAppearance()
     }
 
     private func startCaretBlinking() {
@@ -1437,6 +1628,7 @@ final class BufferInlineView: NSView {
 
 /// A button that works on the first click inside a never-key panel.
 class FirstMouseButton: NSButton {
+    var usesPrimarySurface = false
     private var pointerTrackingArea: NSTrackingArea?
     private var pointerHovered = false
     private var pointerPressed = false
@@ -1512,11 +1704,38 @@ class FirstMouseButton: NSButton {
         )
         wantsLayer = true
         layer?.cornerRadius = 6
-        layer?.backgroundColor = BufferWorkbenchPointerRules.backgroundColor(for: state).cgColor
-        layer?.borderColor = BufferWorkbenchPointerRules.borderColor(for: state).cgColor
-        layer?.borderWidth = (state == .idle || state == .disabled)
-            ? 0
-            : 1 / max(window?.backingScaleFactor ?? 2, 1)
+        if usesPrimarySurface {
+            let background: NSColor
+            switch state {
+            case .disabled:
+                background = RimeUI.surface2
+            case .idle:
+                background = RimeUI.accentBlue
+            case .hovered:
+                background = RimeUI.accentBlue.blended(
+                    withFraction: 0.10,
+                    of: RimeUI.accentForegroundColor
+                ) ?? RimeUI.accentBlue
+            case .pressed:
+                background = RimeUI.accentBlue.blended(
+                    withFraction: 0.16,
+                    of: .black
+                ) ?? RimeUI.accentBlue
+            }
+            layer?.backgroundColor = background.cgColor
+            layer?.borderColor = (state == .disabled
+                ? RimeUI.border
+                : RimeUI.accentBlue).cgColor
+            layer?.borderWidth = 1 / max(window?.backingScaleFactor ?? 2, 1)
+        } else {
+            layer?.backgroundColor = BufferWorkbenchPointerRules
+                .backgroundColor(for: state).cgColor
+            layer?.borderColor = BufferWorkbenchPointerRules
+                .borderColor(for: state).cgColor
+            layer?.borderWidth = (state == .idle || state == .disabled)
+                ? 0
+                : 1 / max(window?.backingScaleFactor ?? 2, 1)
+        }
         window?.invalidateCursorRects(for: self)
     }
 

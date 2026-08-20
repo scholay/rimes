@@ -508,6 +508,10 @@ if CommandLine.arguments.contains("buffer-smoke") {
 if CommandLine.arguments.contains("buffer-window-smoke") {
     exit(runBufferWindowSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("clipboard-history-smoke") {
+    _ = NSApplication.shared
+    exit(MainActor.assumeIsolated { ClipboardHistorySmoke.run() } ? 0 : 1)
+}
 if CommandLine.arguments.contains("schema-smoke") {
     exit(runSchemaListStoreSmokeTest() ? 0 : 1)
 }
@@ -2475,9 +2479,28 @@ func runInboundBusSmokeTest() -> Bool {
         print("FAILED: streaming should update one item in place")
         return false
     }
+    guard !bus.canAccept(bus.pending[0].id),
+          !bus.accept(bus.pending[0].id),
+          bus.pendingCount == 1,
+          model.blocks.isEmpty else {
+        print("FAILED: a streaming item must remain pending and cannot stage a partial snapshot")
+        return false
+    }
     bus.endStream(streamID: "s1")
-    guard !bus.pending[0].streaming else {
+    guard !bus.pending[0].streaming,
+          bus.canAccept(bus.pending[0].id) else {
         print("FAILED: endStream should settle the item")
+        return false
+    }
+    let settledID = bus.pending[0].id
+    guard bus.accept(settledID),
+          bus.pendingCount == 0,
+          model.blocks.count == 1,
+          model.blocks[0].text == "部分文本",
+          model.blocks[0].origin == .mcp(client: "a"),
+          !bus.accept(settledID),
+          model.blocks.count == 1 else {
+        print("FAILED: a settled stream must be accepted exactly once")
         return false
     }
 
@@ -5109,9 +5132,10 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
 
     let flexibleSpace = NSView()
     let statusIndicators = NSStackView()
+    let exchangeEdit = NSView()
     let refresh = NSView()
     let close = NSView()
-    for control in [refresh, close] {
+    for control in [exchangeEdit, refresh, close] {
         control.translatesAutoresizingMaskIntoConstraints = false
         control.widthAnchor.constraint(equalToConstant: 22).isActive = true
         control.heightAnchor.constraint(equalToConstant: 22).isActive = true
@@ -5122,6 +5146,7 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
         pluginActions: pluginActions,
         flexibleSpace: flexibleSpace,
         statusIndicators: statusIndicators,
+        exchangeEdit: exchangeEdit,
         refresh: refresh,
         close: close
     )
@@ -5470,12 +5495,33 @@ func runBufferWindowSmokeTest() -> Bool {
     let streamTargetOffset = BufferWorkbenchMetrics.mainControlYOffset(
         row: .target, mode: .derived(targetRows: 3)
     )
+    let statusReadySnapshot = TranslationRailSnapshot(
+        sourceText: "status-source",
+        outputBlocks: [TranslationOutputBlock(id: UUID(), text: "status-result")],
+        phase: .ready
+    )
+    let statusWaitingSnapshot = TranslationRailSnapshot(
+        sourceText: "status-source",
+        outputBlocks: [],
+        phase: .waiting
+    )
+    let statusFailedSnapshot = TranslationRailSnapshot(
+        sourceText: "status-source",
+        outputBlocks: [],
+        phase: .failed,
+        message: "生成失败"
+    )
+    let exchangeSourceSnapshot = TranslationRailSnapshot(
+        sourceText: "exchange-source",
+        outputBlocks: [],
+        phase: .idle
+    )
     guard BufferWorkbenchLayout.mainBar
             == [.bufferRail, .send],
           BufferWorkbenchLayout.toolbar
-            == [.status, .pluginActions, .refresh, .close],
+            == [.status, .pluginActions, .exchangeEdit, .refresh, .close],
           BufferWorkbenchLayout.hoverControls
-            == [.send, .pluginActions, .refresh, .close],
+            == [.send, .pluginActions, .exchangeEdit, .refresh, .close],
           BufferWorkbenchLayout.passiveControls == [.bufferRail, .status],
           BufferWorkbenchLayout.toolbarAlwaysExpanded,
           BufferWorkbenchLayout.toolbarEmptySpaceDraggable,
@@ -5501,10 +5547,74 @@ func runBufferWindowSmokeTest() -> Bool {
           BufferWorkbenchPointerRules.cursor(enabled: true) == .pointingHand,
           BufferWorkbenchPointerRules.cursor(enabled: false) == .arrow,
           BufferWorkbenchMetrics.controlSize == 22,
+          BufferWorkbenchMetrics.primaryControlWidth == 58,
+          BufferWorkbenchMetrics.primaryControlHeight == 30,
+          BufferWorkbenchLayoutMode.derived(targetRows: 99).targetRows == 5,
+          BufferAlternativePagerRules.maximumCount == 5,
           ProductIdentity.displayName == "RIMES",
           BufferWorkbenchMetrics.mainSpacing == 3,
           BufferWorkbenchMetrics.shelfSpacing == 4,
           BufferWorkbenchMetrics.shelfStatusWidth == 88,
+          BufferWorkbenchStatusPresentation.text(
+            fallback: readyText,
+            snapshot: nil
+          ).isEmpty,
+          BufferWorkbenchStatusPresentation.text(
+            fallback: contextOnlyNoFocusText,
+            snapshot: nil
+          ) == contextOnlyNoFocusText,
+          BufferWorkbenchStatusPresentation.text(
+            fallback: "AI 已就绪",
+            snapshot: statusReadySnapshot
+          ).isEmpty,
+          BufferWorkbenchStatusPresentation.text(
+            fallback: "正在生成",
+            snapshot: statusWaitingSnapshot
+          ) == "正在生成",
+          BufferWorkbenchStatusPresentation.text(
+            fallback: "生成失败",
+            snapshot: statusFailedSnapshot
+          ) == "生成失败",
+          BufferWorkbenchStatusPresentation.tone(
+            snapshot: statusFailedSnapshot,
+            text: "生成失败"
+          ) == .danger,
+          BufferDerivedPresentationRules.style(
+            for: AITextBuiltInPluginID.key
+          ) == .singleExchange,
+          BufferDerivedPresentationRules.style(
+            for: MarineChromeWorkspace.pluginKey
+          ) == .singleExchange,
+          BufferDerivedPresentationRules.nativeContract(
+            for: AITextBuiltInPluginID.key
+          ) == .derived(.singleExchange),
+          BufferDerivedPresentationRules.nativeContract(
+            for: MarineChromeWorkspace.pluginKey
+          ) == .derived(.singleExchange),
+          BufferDerivedPresentationRules.nativeContract(
+            for: RemarkableWorkspace.pluginKey
+          ) == .standardBufferImport,
+          BufferDerivedPresentationRules.style(for: nil) == .liveExpand,
+          BufferDerivedPresentationRules.layoutMode(
+            style: .singleExchange,
+            snapshot: exchangeSourceSnapshot
+          ) == .singleDerived,
+          BufferDerivedPresentationRules.layoutMode(
+            style: .singleExchange,
+            snapshot: statusReadySnapshot
+          ) == .singleDerived,
+          BufferDerivedPresentationRules.layoutMode(
+            style: .liveExpand,
+            snapshot: statusReadySnapshot
+          ) == .derived(targetRows: 1),
+          BufferDerivedPresentationRules.showsExchangeActions(
+            style: .singleExchange,
+            snapshot: statusReadySnapshot
+          ),
+          !BufferDerivedPresentationRules.showsExchangeActions(
+            style: .singleExchange,
+            snapshot: statusWaitingSnapshot
+          ),
           BufferWorkbenchShelfLayout.flexiblePriority.rawValue == 1,
           BufferWorkbenchShelfLayout.statusWidthPriority.rawValue == 749,
           runWorkbenchShelfAlignmentProbe(),
@@ -5529,8 +5639,8 @@ func runBufferWindowSmokeTest() -> Bool {
           translationSourceOffset < 0,
           translationTargetOffset > 0,
           translationSourceOffset == -translationTargetOffset,
-          streamSourceOffset == -46.5,
-          streamTargetOffset == 46.5,
+          streamSourceOffset == -15.5,
+          streamTargetOffset == 15.5,
           streamSourceOffset == -streamTargetOffset,
           !BufferWorkbenchLayout.windowBackgroundDraggable,
           FirstMouseButton(frame: .zero).acceptsFirstMouse(for: nil),
@@ -7391,7 +7501,7 @@ func runBufferWindowSmokeTest() -> Bool {
             x: 0,
             y: 0,
             width: 760,
-            height: BufferInlineView.translationPreferredHeight(targetRows: 1)
+            height: BufferInlineView.translationPreferredHeight(targetRows: 5)
         )
     )
     translationRail.layoutSubtreeIfNeeded()
@@ -7419,9 +7529,10 @@ func runBufferWindowSmokeTest() -> Bool {
         && compactMarineProbe.rails.count == 1
         && translationRail.renderedTextFragments.contains("等待网页上下文")
         && !translationRail.renderedTextFragments.contains("等待原文")
+
     translationRail.setFrameSize(NSSize(
         width: 760,
-        height: BufferInlineView.translationPreferredHeight(targetRows: 1)
+        height: BufferInlineView.translationPreferredHeight(targetRows: 5)
     ))
     let sourcePreview = "上方原文缓冲"
     let targetPreviewA = "下方译文"
@@ -7437,9 +7548,11 @@ func runBufferWindowSmokeTest() -> Bool {
         ],
         phase: .ready
     )
-    let renderedStackedTranslation = translationRail.renderTranslationForPreview(
+    let renderedLiveExpand = translationRail.renderTranslationForPreview(
         translationPreview
     ) && translationRail.renderedTranslationSourceSelected
+        && translationRail.translationRailCount == 2
+        && translationRail.renderedTranslationTargetRowCount == 1
     let translationFragments = translationRail.renderedTextFragments
     let sourcePosition = translationFragments.firstIndex(of: sourcePreview)
     let targetPosition = translationFragments.firstIndex(of: targetPreviewA)
@@ -7450,157 +7563,103 @@ func runBufferWindowSmokeTest() -> Bool {
             TranslationOutputBlock(
                 id: targetPreviewAID,
                 text: "\(targetPreviewA)续",
-                ordinal: 1,
-                selected: true,
                 retainedTailStart: targetPreviewA.utf16.count
             ),
-            TranslationOutputBlock(
-                id: targetPreviewBID,
-                text: targetPreviewB,
-                ordinal: 2
-            ),
+            TranslationOutputBlock(id: targetPreviewBID, text: targetPreviewB),
         ],
         phase: .translating,
         message: "继续全局猜测"
     )
     _ = translationRail.renderTranslationForPreview(continuedPreview)
-    let updatedTargetViews = translationRail.renderedTranslationTargetViewIdentities
-    let reusedTargetViews = stableTargetViews == updatedTargetViews
+    let reusedTargetViews = stableTargetViews
+        == translationRail.renderedTranslationTargetViewIdentities
         && stableTargetViews.count == 2
-        && translationRail.renderedTextFragments.contains(where: {
-            $0.contains("\(targetPreviewA)续")
-        })
-    let multiCandidateAID = UUID()
-    let multiCandidateBID = UUID()
-    let multiCandidateCID = UUID()
-    let multiCandidatePreview = TranslationRailSnapshot(
-        sourceText: "fangan",
-        outputBlocks: [
-            TranslationOutputBlock(id: multiCandidateAID, text: "方案", ordinal: 1,
-                                   selected: true),
-            TranslationOutputBlock(id: multiCandidateBID, text: "翻案", ordinal: 2),
-            TranslationOutputBlock(id: multiCandidateCID, text: "凡干", ordinal: 3),
-        ],
-        outputRows: [
-            TranslationOutputRow(
-                key: 0,
-                blocks: [TranslationOutputBlock(id: multiCandidateAID, text: "方案",
-                                                ordinal: 1, selected: true)]
-            ),
-            TranslationOutputRow(
-                key: 1,
-                blocks: [TranslationOutputBlock(id: multiCandidateBID, text: "翻案",
-                                                ordinal: 2)]
-            ),
-            TranslationOutputRow(
-                key: 2,
-                blocks: [TranslationOutputBlock(id: multiCandidateCID, text: "凡干",
-                                                ordinal: 3)]
-            ),
-        ],
-        phase: .ready,
-        sourceRole: "拼",
-        targetRole: "文"
-    )
-    // Runtime grows before attaching the third candidate. Exercise the real
-    // scroll/document geometry instead of only checking preferredHeight.
-    translationRail.setFrameSize(NSSize(
-        width: 760,
-        height: BufferInlineView.translationPreferredHeight(targetRows: 3)
-    ))
-    translationRail.layoutSubtreeIfNeeded()
-    let renderedMultiCandidateLayout = translationRail.renderTranslationForPreview(
-        multiCandidatePreview
-    ) && translationRail.renderedTranslationTargetRowCount == 3
-        && translationRail.translationRailCount == 4
+        && translationRail.renderedTextFragments.contains("\(targetPreviewA)续")
+
+    let alternativeTexts = ["方案", "翻案", "凡干", "反感", "返岗", "第六项"]
+    let alternativeIDs = alternativeTexts.map { _ in UUID() }
+    let alternativePreview: (Int, Int) -> TranslationRailSnapshot = { selected, count in
+        let blocks = (0..<count).map { index in
+            TranslationOutputBlock(
+                id: alternativeIDs[index],
+                text: alternativeTexts[index],
+                ordinal: index + 1,
+                selected: index == selected
+            )
+        }
+        return TranslationRailSnapshot(
+            sourceText: "fangan",
+            outputBlocks: blocks,
+            outputRows: blocks.enumerated().map { index, block in
+                TranslationOutputRow(key: index, blocks: [block])
+            },
+            phase: .ready,
+            sourceRole: "拼",
+            targetRole: "文"
+        )
+    }
+    let fiveAlternativePreview = alternativePreview(2, 5)
+    let renderedFiveAlternativePager = translationRail.renderTranslationForPreview(
+        fiveAlternativePreview
+    ) && translationRail.renderedAlternativeCount == 5
+        && translationRail.renderedAlternativeIndex == 2
+        && translationRail.renderedTranslationTargetRowCount == 1
+        && translationRail.translationRailCount == 2
         && translationRail.preferredHeight
-            == BufferInlineView.translationPreferredHeight(targetRows: 3)
-    let threeRowProbe = translationRail.translationLayoutProbe
-    let threeRowFrames = threeRowProbe.rails
+            == BufferInlineView.translationPreferredHeight(targetRows: 5)
+        && translationRail.renderedTextFragments.contains("凡干")
+        && !translationRail.renderedTextFragments.contains("方案")
+        && !translationRail.renderedTextFragments.contains("返岗")
+        && translationRail.renderedTranslationTargetViewIdentities.count == 1
+    translationRail.reconcileTranslationDocumentGeometry()
+    let pagerProbe = translationRail.translationLayoutProbe
+    let pagerFrames = pagerProbe.rails
         .map(\.viewportFrame)
         .sorted { $0.minY < $1.minY }
-    let renderedThreeRowGeometry = threeRowProbe.boundsHeight == 130
-        && threeRowProbe.containerHeight == 120
-        && threeRowProbe.rails.count == 4
-        && threeRowProbe.rails.allSatisfy {
+    let renderedPagerGeometry = pagerProbe.boundsHeight == 68
+        && pagerProbe.containerHeight == 58
+        && pagerProbe.rails.count == 2
+        && pagerProbe.rails.allSatisfy {
             abs($0.viewportHeight - 27) < 0.5
                 && abs($0.documentHeight - $0.viewportHeight) < 0.5
         }
-        && zip(threeRowFrames, threeRowFrames.dropFirst()).allSatisfy {
-            $1.minY >= $0.maxY
-                && abs(($1.minY - $0.maxY) - 4) < 0.5
+        && zip(pagerFrames, pagerFrames.dropFirst()).allSatisfy {
+            abs(($1.minY - $0.maxY) - 4) < 0.5
         }
-    let threeRowIdentities = translationRail.renderedTranslationTargetViewIdentities
-    let renderedMultiCandidateRows = renderedMultiCandidateLayout
-        && threeRowIdentities.count == 3
-    let reorderedCandidateIdentities = threeRowIdentities.count == 3
-        ? [threeRowIdentities[2], threeRowIdentities[0]]
-        : []
-    let retainedCandidateIdentity = threeRowIdentities.count == 3
-        ? threeRowIdentities[2]
-        : nil
-    let twoCandidatePreview = TranslationRailSnapshot(
-        sourceText: "fangan",
-        outputBlocks: [
-            TranslationOutputBlock(id: multiCandidateCID, text: "凡干", ordinal: 1,
-                                   selected: true),
-            TranslationOutputBlock(id: multiCandidateAID, text: "方案", ordinal: 2),
-        ],
-        outputRows: [
-            TranslationOutputRow(
-                key: 2,
-                blocks: [TranslationOutputBlock(id: multiCandidateCID, text: "凡干",
-                                                ordinal: 1, selected: true)]
-            ),
-            TranslationOutputRow(
-                key: 0,
-                blocks: [TranslationOutputBlock(id: multiCandidateAID, text: "方案",
-                                                ordinal: 2)]
-            ),
-        ],
-        phase: .ready,
-        sourceRole: "拼",
-        targetRole: "文"
-    )
-    let renderedTwoCandidateRowsBeforeShrink = translationRail.renderTranslationForPreview(
-        twoCandidatePreview
-    ) && translationRail.renderedTranslationTargetRowCount == 2
-        && translationRail.translationRailCount == 3
-        && !translationRail.renderedTextFragments.contains("翻案")
-        && translationRail.renderedTranslationTargetViewIdentities
-            == reorderedCandidateIdentities
-    translationRail.setFrameSize(NSSize(
-        width: 760,
-        height: BufferInlineView.translationPreferredHeight(targetRows: 2)
-    ))
-    translationRail.reconcileTranslationDocumentGeometry()
-    let twoRowProbe = translationRail.translationLayoutProbe
-    let renderedTwoCandidateRows = renderedTwoCandidateRowsBeforeShrink
-        && twoRowProbe.boundsHeight == 99
-        && twoRowProbe.containerHeight == 89
-        && twoRowProbe.rails.count == 3
-        && twoRowProbe.rails.map(\.key) == [nil, 2, 0]
-        && twoRowProbe.rails.allSatisfy {
-            abs($0.viewportHeight - 27) < 0.5
-                && abs($0.documentHeight - $0.viewportHeight) < 0.5
-        }
+    let renderedFifthAlternative = translationRail.renderTranslationForPreview(
+        alternativePreview(4, 5)
+    ) && translationRail.renderedAlternativeIndex == 4
+        && translationRail.renderedAlternativeCount == 5
+        && translationRail.renderedTextFragments.contains("返岗")
+        && !translationRail.renderedTextFragments.contains("凡干")
+    let cappedSixthAlternative = translationRail.renderTranslationForPreview(
+        alternativePreview(5, 6)
+    ) && translationRail.renderedAlternativeCount == 5
+        && translationRail.renderedAlternativeIndex == 0
+        && translationRail.renderedTextFragments.contains("方案")
+        && !translationRail.renderedTextFragments.contains("第六项")
+
     let retainedChildID = UUID()
-    let segmentedOneRowPreview = TranslationRailSnapshot(
+    let segmentedPreview = TranslationRailSnapshot(
         sourceText: "fangan",
         outputBlocks: [
-            TranslationOutputBlock(id: multiCandidateCID, text: "修复"),
-            TranslationOutputBlock(id: retainedChildID,
-                                   text: "一个问题",
-                                   retainedTailStart: 0),
+            TranslationOutputBlock(id: alternativeIDs[2], text: "修复"),
+            TranslationOutputBlock(
+                id: retainedChildID,
+                text: "一个问题",
+                retainedTailStart: 0
+            ),
         ],
         outputRows: [
             TranslationOutputRow(
                 key: 2,
                 blocks: [
-                    TranslationOutputBlock(id: multiCandidateCID, text: "修复"),
-                    TranslationOutputBlock(id: retainedChildID,
-                                           text: "一个问题",
-                                           retainedTailStart: 0),
+                    TranslationOutputBlock(id: alternativeIDs[2], text: "修复"),
+                    TranslationOutputBlock(
+                        id: retainedChildID,
+                        text: "一个问题",
+                        retainedTailStart: 0
+                    ),
                 ]
             ),
         ],
@@ -7608,26 +7667,78 @@ func runBufferWindowSmokeTest() -> Bool {
         sourceRole: "拼",
         targetRole: "文"
     )
-    let renderedSegmentedOneRow = translationRail.renderTranslationForPreview(
-        segmentedOneRowPreview
-    ) && translationRail.renderedTranslationTargetRowCount == 1
+    let renderedSegmentedRail = translationRail.renderTranslationForPreview(
+        segmentedPreview
+    ) && translationRail.renderedAlternativeCount == 1
+        && translationRail.renderedTranslationTargetRowCount == 1
         && translationRail.translationRailCount == 2
-        && retainedCandidateIdentity != nil
-        && translationRail.renderedTranslationTargetViewIdentities.first
-            == retainedCandidateIdentity
         && translationRail.renderedTranslationRetainedTailStarts[retainedChildID] == 0
-        && !translationRail.renderedTextFragments.contains("方案")
-        && !translationRail.renderedTextFragments.contains("翻案")
+        && translationRail.renderedTextFragments.contains("修复")
+        && translationRail.renderedTextFragments.contains("一个问题")
+
+    let exchangeIdlePreview = TranslationRailSnapshot(
+        sourceText: "仍由工作区保留的原文",
+        outputBlocks: [],
+        phase: .idle,
+        sourceRole: "原",
+        targetRole: "答"
+    )
+    let renderedExchangeSource = translationRail.renderTranslationForPreview(
+        exchangeIdlePreview,
+        presentationStyle: .singleExchange
+    ) && translationRail.translationRailCount == 1
+        && translationRail.renderedTranslationTargetRowCount == 0
+        && translationRail.preferredHeight == BufferInlineView.standardPreferredHeight
+        && translationRail.renderedTextFragments.contains("仍由工作区保留的原文")
+    let exchangeWaitingPreview = TranslationRailSnapshot(
+        sourceText: exchangeIdlePreview.sourceText,
+        outputBlocks: [],
+        phase: .waiting,
+        sourceRole: "原",
+        targetRole: "答",
+        waitingText: "正在生成"
+    )
+    let renderedExchangeWaiting = translationRail.renderTranslationForPreview(
+        exchangeWaitingPreview,
+        presentationStyle: .singleExchange
+    ) && translationRail.translationRailCount == 1
+        && translationRail.renderedTranslationTargetRowCount == 1
+        && translationRail.preferredHeight == BufferInlineView.standardPreferredHeight
+        && translationRail.renderedTextFragments.contains("正在生成")
+        && !translationRail.renderedTextFragments.contains(exchangeIdlePreview.sourceText)
+    let exchangeResultID = UUID()
+    let exchangeReadyPreview = TranslationRailSnapshot(
+        sourceText: exchangeIdlePreview.sourceText,
+        outputBlocks: [
+            TranslationOutputBlock(id: exchangeResultID, text: "尚未投递的结果"),
+        ],
+        phase: .ready,
+        sourceRole: "原",
+        targetRole: "答"
+    )
+    let renderedExchangeResult = translationRail.renderTranslationForPreview(
+        exchangeReadyPreview,
+        presentationStyle: .singleExchange
+    ) && translationRail.translationRailCount == 1
+        && translationRail.renderedTranslationTargetRowCount == 1
+        && translationRail.preferredHeight == BufferInlineView.standardPreferredHeight
+        && translationRail.renderedTextFragments.contains("尚未投递的结果")
+        && !translationRail.renderedTextFragments.contains(exchangeIdlePreview.sourceText)
+        && exchangeReadyPreview.sourceText == exchangeIdlePreview.sourceText
+        && exchangeReadyPreview.outputBlocks.first?.id == exchangeResultID
+    let returnedExchangeSource = translationRail.renderTranslationForPreview(
+        exchangeIdlePreview,
+        presentationStyle: .singleExchange
+    ) && translationRail.renderedTextFragments.contains(exchangeIdlePreview.sourceText)
+        && !translationRail.renderedTextFragments.contains("尚未投递的结果")
+
     _ = translationRail.refresh(shielded: true)
-    let translationShielded = !translationRail.renderedTextFragments.contains(sourcePreview)
-        && !translationRail.renderedTextFragments.contains(targetPreviewA)
+    let translationShielded = translationRail.translationRailCount == 0
+        && !translationRail.renderedTextFragments.contains(sourcePreview)
         && !translationRail.renderedTextFragments.contains("方案")
-        && !translationRail.renderedTextFragments.contains("翻案")
-        && !translationRail.renderedTextFragments.contains("凡干")
-        && !translationRail.renderedTextFragments.contains("修复")
-        && !translationRail.renderedTextFragments.contains("一个问题")
-    guard renderedStackedTranslation,
-          translationRail.translationRailCount == 0,
+        && !translationRail.renderedTextFragments.contains("尚未投递的结果")
+        && !translationRail.renderedTextFragments.contains(exchangeIdlePreview.sourceText)
+    guard renderedLiveExpand,
           sourcePosition != nil,
           targetPosition != nil,
           sourcePosition! < targetPosition!,
@@ -7640,22 +7751,30 @@ func runBufferWindowSmokeTest() -> Bool {
             == .init(name: "sparkles", accessibilityLabel: "AI 回答"),
           renderedCompactMarine,
           reusedTargetViews,
-          renderedMultiCandidateRows,
-          renderedThreeRowGeometry,
-          renderedTwoCandidateRows,
-          renderedSegmentedOneRow,
+          renderedFiveAlternativePager,
+          renderedPagerGeometry,
+          renderedFifthAlternative,
+          cappedSixthAlternative,
+          renderedSegmentedRail,
+          renderedExchangeSource,
+          renderedExchangeWaiting,
+          renderedExchangeResult,
+          returnedExchangeSource,
           translationShielded else {
-        print("FAILED: translation rail must render two stacked, independently shielded buffers",
-              "stacked=\(renderedStackedTranslation)",
-              "compactMarine=\(renderedCompactMarine)",
+        print("FAILED: buffer derived rail presentation contract",
+              "live=\(renderedLiveExpand)",
+              "compact=\(renderedCompactMarine)",
               "reused=\(reusedTargetViews)",
-              "multi=\(renderedMultiCandidateRows)",
-              "threeGeometry=\(renderedThreeRowGeometry)",
-              "two=\(renderedTwoCandidateRows)",
-              "segmented=\(renderedSegmentedOneRow)",
+              "pager=\(renderedFiveAlternativePager)",
+              "pagerGeometry=\(renderedPagerGeometry)",
+              "fifth=\(renderedFifthAlternative)",
+              "cap=\(cappedSixthAlternative)",
+              "segmented=\(renderedSegmentedRail)",
+              "exchange=\(renderedExchangeSource)/\(renderedExchangeWaiting)/\(renderedExchangeResult)",
+              "return=\(returnedExchangeSource)",
               "shielded=\(translationShielded)",
-              "threeProbe=\(threeRowProbe.boundsHeight)/\(threeRowProbe.containerHeight)",
-              "rails=\(threeRowProbe.rails.map { ($0.key, $0.viewportHeight, $0.documentHeight) })")
+              "probe=\(pagerProbe.boundsHeight)/\(pagerProbe.containerHeight)",
+              "rails=\(pagerProbe.rails.map { ($0.key, $0.viewportHeight, $0.documentHeight) })")
         return false
     }
 
@@ -7666,6 +7785,109 @@ func runBufferWindowSmokeTest() -> Bool {
     }
     guard caretIndexProbe == 0, forwardedCaretIndex == 0 else {
         print("FAILED: IMK inline-session caret index contract")
+        return false
+    }
+
+    let clipboardEligible = ClipboardWorkbenchIntegrationRules.captureState(
+        workbenchVisibleOnActiveSpace: true,
+        hiddenForSession: false,
+        railEnabled: true,
+        secureInput: false,
+        screenLocked: false,
+        sessionInactive: false,
+        sleeping: false
+    )
+    let clipboardOff = ClipboardWorkbenchIntegrationRules.captureState(
+        workbenchVisibleOnActiveSpace: true,
+        hiddenForSession: false,
+        railEnabled: false,
+        secureInput: false,
+        screenLocked: false,
+        sessionInactive: false,
+        sleeping: false
+    )
+    let clipboardOffSpace = ClipboardWorkbenchIntegrationRules.captureState(
+        workbenchVisibleOnActiveSpace: false,
+        hiddenForSession: false,
+        railEnabled: true,
+        secureInput: false,
+        screenLocked: false,
+        sessionInactive: false,
+        sleeping: false
+    )
+    let clipboardHidden = ClipboardWorkbenchIntegrationRules.captureState(
+        workbenchVisibleOnActiveSpace: true,
+        hiddenForSession: true,
+        railEnabled: true,
+        secureInput: false,
+        screenLocked: false,
+        sessionInactive: false,
+        sleeping: false
+    )
+    let clipboardSecure = ClipboardWorkbenchIntegrationRules.captureState(
+        workbenchVisibleOnActiveSpace: true,
+        hiddenForSession: false,
+        railEnabled: true,
+        secureInput: true,
+        screenLocked: false,
+        sessionInactive: false,
+        sleeping: false
+    )
+    let clipboardLocked = ClipboardWorkbenchIntegrationRules.captureState(
+        workbenchVisibleOnActiveSpace: true,
+        hiddenForSession: false,
+        railEnabled: true,
+        secureInput: false,
+        screenLocked: true,
+        sessionInactive: false,
+        sleeping: false
+    )
+    let clipboardSessionInactive = ClipboardWorkbenchIntegrationRules.captureState(
+        workbenchVisibleOnActiveSpace: true,
+        hiddenForSession: false,
+        railEnabled: true,
+        secureInput: false,
+        screenLocked: false,
+        sessionInactive: true,
+        sleeping: false
+    )
+    let clipboardSleeping = ClipboardWorkbenchIntegrationRules.captureState(
+        workbenchVisibleOnActiveSpace: true,
+        hiddenForSession: false,
+        railEnabled: true,
+        secureInput: false,
+        screenLocked: false,
+        sessionInactive: false,
+        sleeping: true
+    )
+    let clipboardStackedProtection = ClipboardWorkbenchIntegrationRules.captureState(
+        workbenchVisibleOnActiveSpace: true,
+        hiddenForSession: false,
+        railEnabled: true,
+        secureInput: true,
+        screenLocked: true,
+        sessionInactive: true,
+        sleeping: true
+    )
+    guard clipboardEligible.allowsClipboardObservation,
+          ClipboardWorkbenchIntegrationRules.allowsAddToBuffer(clipboardEligible),
+          !clipboardOff.allowsClipboardObservation,
+          !clipboardOffSpace.allowsClipboardObservation,
+          !clipboardHidden.allowsClipboardObservation,
+          !clipboardSecure.allowsClipboardObservation,
+          !clipboardLocked.allowsClipboardObservation,
+          !clipboardSessionInactive.allowsClipboardObservation,
+          !clipboardSleeping.allowsClipboardObservation,
+          clipboardSecure.protection == [.secureInput],
+          clipboardLocked.protection == [.screenLocked],
+          clipboardSessionInactive.protection == [.sessionInactive],
+          clipboardSleeping.protection == [.sessionInactive],
+          clipboardStackedProtection.protection
+            == [.secureInput, .screenLocked, .sessionInactive],
+          !ClipboardWorkbenchIntegrationRules.allowsAddToBuffer(
+            clipboardStackedProtection
+          ) else {
+        print("FAILED: Clipboard workbench capture/activation gates")
         return false
     }
 
@@ -7727,8 +7949,16 @@ func runBufferWindowSmokeTest() -> Bool {
     )
     let runtimeHeights = [
         BufferWindowGeometry.expandedHeight,
+        BufferWindowGeometry.height(
+            expanded: true,
+            clipboardRailEnabled: true
+        ),
         BufferWindowGeometry.translationExpandedHeight,
-        BufferWindowGeometry.height(expanded: true, mode: .derived(targetRows: 2)),
+        BufferWindowGeometry.height(
+            expanded: true,
+            mode: .derived(targetRows: 2),
+            clipboardRailEnabled: true
+        ),
         BufferWindowGeometry.maximumRuntimeHeight,
         BufferWindowGeometry.expandedHeight,
     ]
@@ -7783,11 +8013,11 @@ func runBufferWindowSmokeTest() -> Bool {
         preferredSide: .below,
         strictPreferredSide: true
     )
-    // Current height fits below, but the forecast does not. Choose the roomy
-    // upper side immediately, while still keeping the real 78pt frame close.
+    // Current 78pt height fits below, but the largest derived + Clipboard
+    // forecast does not. Choose the roomy upper side before either rail appears.
     let forecastAwareOpening = BufferWindowGeometry.openingPlacement(
         currentFrame: openingFrame,
-        targetRect: NSRect(x: 720, y: 150, width: 0, height: 22),
+        targetRect: NSRect(x: 720, y: 120, width: 0, height: 22),
         visibleFrames: [primary],
         fallback: primary
     )
@@ -7878,7 +8108,7 @@ func runBufferWindowSmokeTest() -> Bool {
           strictUnavailableAboveCandidate == nil,
           strictUnavailableBelowCandidate == nil,
           forecastAwareOpening.side == .aboveTarget,
-          forecastAwareOpening.frame.minY == 150 + 22
+          forecastAwareOpening.frame.minY == 120 + 22
             + BufferWindowGeometry.inputAnchorGap,
           !aboveCaret.frame.intersects(bottomCaret),
           leftScreenOpening.side == .belowTarget,
@@ -7997,6 +8227,41 @@ func runBufferWindowSmokeTest() -> Bool {
         visibleFrames: [primary],
         fallback: primary
     )
+    let clipboardStandardExpanded = BufferWindowGeometry.clampedFrame(
+        migratedOldCompact,
+        expanded: true,
+        clipboardRailEnabled: true,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    let clipboardDerivedExpanded = BufferWindowGeometry.clampedFrame(
+        migratedOldCompact,
+        expanded: true,
+        mode: .translation,
+        clipboardRailEnabled: true,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    let clipboardStandardCollapsed = BufferWindowGeometry.clampedFrame(
+        clipboardStandardExpanded,
+        expanded: false,
+        clipboardRailEnabled: true,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    let clipboardDerivedCollapsed = BufferWindowGeometry.clampedFrame(
+        clipboardDerivedExpanded,
+        expanded: false,
+        mode: .translation,
+        clipboardRailEnabled: true,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    let clipboardCanonicalFrame = BufferWindowGeometry.canonicalPersistedFrame(
+        clipboardDerivedExpanded,
+        persistedOrigin: nil,
+        transientOpeningOrigin: false
+    )
     let standardCompactAnchor = BufferWindowGeometry.candidateAnchor(for: migratedOldCompact)
     let belowStandardCompact = CandidatePanelGeometry.origin(anchor: standardCompactAnchor,
                                                               panelSize: candidateSize,
@@ -8020,15 +8285,23 @@ func runBufferWindowSmokeTest() -> Bool {
           compactDerivedExpanded.height == BufferWindowGeometry.expandedHeight,
           compactDerivedExpanded.minY == translationExpanded.minY,
           streamCandidatesTwoExpanded.height
-            == BufferWindowGeometry.translationExpandedHeight
-                + BufferInlineView.additionalTranslationTargetRowHeight,
+            == BufferWindowGeometry.translationExpandedHeight,
           streamCandidatesTwoExpanded.minY == translationExpanded.minY,
           streamCandidatesExpanded.height
-            == BufferWindowGeometry.translationExpandedHeight
-                + BufferInlineView.additionalTranslationTargetRowHeight * 2,
+            == BufferWindowGeometry.translationExpandedHeight,
           streamCandidatesExpanded.minY == streamCandidatesTwoExpanded.minY,
           standardAfterTranslation.height == BufferWindowGeometry.expandedHeight,
           standardAfterTranslation.minY == translationExpanded.minY,
+          BufferWindowGeometry.clipboardSectionHeight == 41,
+          BufferWindowGeometry.height(expanded: true) == 78,
+          BufferWindowGeometry.height(expanded: true, mode: .translation) == 112,
+          clipboardStandardExpanded.height == 119,
+          clipboardStandardExpanded.minY == migratedOldCompact.minY,
+          clipboardDerivedExpanded.height == 153,
+          clipboardDerivedExpanded.minY == migratedOldCompact.minY,
+          clipboardStandardCollapsed.height == 85,
+          clipboardDerivedCollapsed.height == 119,
+          clipboardCanonicalFrame.height == BufferWindowGeometry.expandedHeight,
           anchor.minY == migrated.minY,
           anchor.maxY == migrated.maxY,
           anchor.minX > migrated.minX,

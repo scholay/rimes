@@ -54,6 +54,13 @@ Plugin 提供的可信配置。插件设置必须通过
   与 changed field IDs，绝不携带值。
 - 插件在真正发起一次任务时读取并冻结配置快照；进行中的 SSH、翻译或
   模型请求不因设置窗口再次保存而半途变更。
+- 意识流输入 v1.2 保留独立 AI 渠道，并公开 `candidateCount`（1–5，默认
+  5）与 `latency`（`fast` / `balanced` / `stable`，默认 `balanced`）。
+  三档分别映射到 140/500、220/800 与 350/1200 ms 的
+  debounce/max-wait；候选上限与节奏在每次请求开始时一起冻结，并贯穿
+  prompt、provider 解码、补候选合并、partial 与 final 校验。v1.1 的
+  `debounceSeconds` / `maximumWaitSeconds` 只在读取时迁移到最近预设，
+  下一次显式保存会移除旧字段；原有 connector 选择不变。
 - 配置变化可以取消尚未获得结果的旧 generation，但迟到回调仍必须通过
   原有 generation、焦点与 owner 校验，不能恢复投递权。
 - My Prompt 只在本地目录或远程仓库变化时重建来源索引；结果数只触发

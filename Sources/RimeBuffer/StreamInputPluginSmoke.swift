@@ -326,7 +326,9 @@ func runStreamInputPluginSmokeTest() -> Bool {
           prompt.contains("English"),
           prompt.contains("不可信的数据"),
           prompt.contains("完整正文"),
-          prompt.contains("1–3"),
+          prompt.contains("\"maximumGuessCount\":5"),
+          prompt.contains("\"responsePace\":\"balanced\""),
+          prompt.contains("1–maximumGuessCount"),
           prompt.contains("互斥") else {
         return fail("prompt contract")
     }
@@ -394,12 +396,72 @@ func runStreamInputPluginSmokeTest() -> Bool {
             AITextProviderBlock(index: 0, text: "翻案", title: nil),
             AITextProviderBlock(index: 1, text: "凡干", title: nil),
             AITextProviderBlock(index: 2, text: "干饭", title: nil),
+            AITextProviderBlock(index: 3, text: "返岗", title: nil),
         ]
     )
-    guard mergedRetry?.map(\.text) == ["方案", "翻案", "凡干"],
-          mergedRetry?.map(\.index) == [0, 1, 2] else {
+    guard mergedRetry?.map(\.text)
+            == ["方案", "翻案", "凡干", "干饭", "返岗"],
+          mergedRetry?.map(\.index) == [0, 1, 2, 3, 4] else {
         return fail("retry merge must retain the first result and cap ordered alternatives")
     }
+
+    // The same frozen limit must reach the real provider-facing parser,
+    // structured schema and OpenAI request prompt. These checks exercise wire
+    // construction and parsing only; they never contact a model or network.
+    let oneCandidatePrompt = StreamInputPrompt.request(
+        for: "fangan",
+        maximumGuessCount: 1,
+        responsePace: .stable
+    )
+    let fiveAlternativeJSON = """
+    {"blocks":[{"text":"候选一","title":null},{"text":"候选二","title":null},{"text":"候选三","title":null},{"text":"候选四","title":null},{"text":"候选五","title":null}]}
+    """
+    let fiveProviderBlocks = AITextProviderStreamingOutput.blocks(
+        from: fiveAlternativeJSON,
+        outputContract: .alternativeGuesses,
+        maximumAlternativeGuessCount: 5
+    )
+    let fiveSchema = AITextResultDecoder.alternativeSchemaObject(
+        maximumCount: 5
+    )
+    let fiveSchemaProperties = fiveSchema["properties"] as? [String: Any]
+    let fiveSchemaBlocks = fiveSchemaProperties?["blocks"] as? [String: Any]
+    let fiveSchemaMaximum = fiveSchemaBlocks?["maxItems"] as? Int
+    let openAIRequest = try? AITextOpenAIRequestBuilder.makeRequest(
+        configuration: OpenAICompatibleConfiguration(
+            baseURL: "https://example.com/v1",
+            model: "smoke-model",
+            apiKey: ""
+        ),
+        sourceText: "fangan",
+        preparedPrompt: oneCandidatePrompt,
+        outputContract: .alternativeGuesses,
+        maximumAlternativeGuessCount: 5
+    )
+    let openAIBody = openAIRequest?.httpBody.flatMap {
+        try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+    }
+    let openAIMessages = openAIBody?["messages"] as? [[String: Any]]
+    let openAISystemPrompt = openAIMessages?.first?["content"] as? String
+    guard oneCandidatePrompt.contains("\"maximumGuessCount\":1"),
+          oneCandidatePrompt.contains("\"minimumGuessCount\":1"),
+          oneCandidatePrompt.contains("\"responsePace\":\"stable\""),
+          fiveProviderBlocks.map(\.text)
+            == ["候选一", "候选二", "候选三", "候选四", "候选五"],
+          (try? AITextResultDecoder.decodeAlternativeGuesses(
+            fiveAlternativeJSON,
+            maximumCount: 5
+          ))?.count == 5,
+          (try? AITextResultDecoder.decodeAlternativeGuesses(
+            fiveAlternativeJSON,
+            maximumCount: 3
+          )) == nil,
+          fiveSchemaMaximum == 5,
+          openAISystemPrompt?.contains("Return 1 to 5") == true,
+          openAISystemPrompt?.contains("Never exceed 5 blocks") == true else {
+        return fail("request-level provider parser and prompt limit")
+    }
+
     guard mixedCandidates.first?.compact.contains("[codex]") == true,
           mixedCandidates.first?.compact.contains("[bug]") == true,
           mixedCandidates.allSatisfy({
@@ -448,6 +510,89 @@ func runStreamInputPluginSmokeTest() -> Bool {
     )
     guard providerPolicyWorkspace.providerKindForTesting == .openAICompatible else {
         return fail("default provider must stay OpenAI-compatible")
+    }
+
+    // candidateCount and cadence are captured at each request boundary. A
+    // later settings read cannot shrink an older provisional producer or make
+    // its five-slot response fail validation; the next request uses the new
+    // one-slot stable policy and trims the inert baseline before rendering.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        var settings = StreamInputPluginSettings(
+            connectorKind: .openAICompatible,
+            candidateCount: 5,
+            responsePace: .fast
+        )
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            settingsProvider: { settings }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+
+        for letter in "fanga" {
+            guard workspace.capture(letter: letter, focusToken: focus) else {
+                return fail("five-candidate frozen request capture")
+            }
+        }
+        guard workspace.settleForReturn(focusToken: focus),
+              provider.pending.count == 1,
+              provider.pending[0].request.maximumAlternativeGuessCount == 5,
+              provider.pending[0].request.preparedPrompt?.contains(
+                "\"responsePace\":\"fast\""
+              ) == true,
+              workspace.activeRequestSettingsForTesting == settings else {
+            return fail("five-candidate request settings must freeze")
+        }
+
+        settings = StreamInputPluginSettings(
+            connectorKind: .openAICompatible,
+            candidateCount: 1,
+            responsePace: .stable
+        )
+        guard workspace.capture(letter: "n", focusToken: focus) else {
+            return fail("next frozen request capture")
+        }
+        let fiveBlocks = (0..<5).map {
+            AITextProviderBlock(
+                index: $0,
+                text: "旧候选\($0 + 1)",
+                title: nil
+            )
+        }
+        provider.complete(.success(fiveBlocks), at: 0)
+        guard workspace.outputBlocks.count == 5,
+              workspace.outputBlocks.allSatisfy(\.incomplete),
+              workspace.deliveryPendingBlocks.isEmpty else {
+            return fail("five-candidate provisional validation")
+        }
+
+        workspace.fireDebounceForTesting()
+        guard provider.pending.count == 2,
+              provider.pending[1].request.maximumAlternativeGuessCount == 1,
+              provider.pending[1].request.preparedPrompt?.contains(
+                "\"maximumGuessCount\":1"
+              ) == true,
+              provider.pending[1].request.preparedPrompt?.contains(
+                "\"responsePace\":\"stable\""
+              ) == true,
+              workspace.activeRequestSettingsForTesting == settings,
+              workspace.outputBlocks.count == 1 else {
+            return fail("next request must use one-candidate stable settings")
+        }
+        provider.complete(.success([
+            AITextProviderBlock(index: 0, text: "最终候选", title: nil),
+        ]), at: 1)
+        guard workspace.phase == .ready,
+              workspace.outputBlocks.map(\.text) == ["最终候选"],
+              provider.pending.count == 2 else {
+            return fail("one-candidate final must not trigger ambiguity retry")
+        }
     }
 
     let chordFixture = #"""
@@ -615,7 +760,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
         }
     }
 
-    // If the original 800 ms burst ceiling lands inside the next chord
+    // If the original default 800 ms burst ceiling lands inside the next chord
     // window, it must settle that batch first and request the newest complete
     // mutual spelling. Sending the preceding visible fragment would authorize
     // an inference for raw that the user has already extended.
@@ -1619,7 +1764,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
             ),
         ]), at: 0)
         guard workspace.phase == .ready,
-              (1...3).contains(workspace.outputBlocks.count),
+              (1...5).contains(workspace.outputBlocks.count),
               workspace.outputBlocks.map(\.text) == [
                   "修复一个问题",
                   "修复仪表问题",
@@ -1630,7 +1775,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
               workspace.deliveryPendingBlocks.first?.text == "修复一个问题",
               workspace.railSnapshot.outputRows.count == 3,
               workspace.hasNavigableAlternatives else {
-            return fail("alternative results must render as three candidate rows")
+            return fail("three returned alternatives must keep stable slots")
         }
 
         let unconfirmedGeneration = workspace.deliveryGeneration
@@ -1911,7 +2056,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
         }
     }
 
-    // Continuous typing must not starve inference by resetting the 800 ms
+    // Continuous typing must not starve inference by resetting the default 800 ms
     // burst deadline, and a useful older request may finish as an inert visual
     // baseline while the latest complete raw snapshot waits for its boundary.
     do {

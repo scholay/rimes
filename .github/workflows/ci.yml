@@ -263,6 +263,7 @@ jobs:
             schema-smoke
             buffer-smoke
             buffer-window-smoke
+            clipboard-history-smoke
             stats-smoke
             matrix-smoke
             candidate-metrics-smoke

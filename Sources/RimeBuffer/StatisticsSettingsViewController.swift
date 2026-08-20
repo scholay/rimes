@@ -78,11 +78,9 @@ final class StatisticsSettingsViewController: NSViewController {
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 0
-        root.edgeInsets = NSEdgeInsets(top: 24, left: 30, bottom: 32, right: 30)
-        pageContent.widthAnchor.constraint(
-            equalTo: root.widthAnchor,
-            constant: -(root.edgeInsets.left + root.edgeInsets.right)
-        ).isActive = true
+        root.edgeInsets = NSEdgeInsets(top: 0, left: 24, bottom: 22, right: 24)
+        pageContent.translatesAutoresizingMaskIntoConstraints = false
+        pageContent.widthAnchor.constraint(equalToConstant: 650).isActive = true
         view = root
         refreshImmediately()
     }
@@ -110,17 +108,17 @@ final class StatisticsSettingsViewController: NSViewController {
         dateRow.alignment = .centerY
         dateRow.spacing = 10
 
-        dailySummaryLabel.font = .systemFont(ofSize: 13, weight: .medium)
-        dailySummaryLabel.textColor = .labelColor
+        dailySummaryLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        dailySummaryLabel.textColor = RimeUI.textPrimary
         dailySummaryLabel.alignment = .left
-        dailyTopKeyLabel.font = .systemFont(ofSize: 12)
-        dailyTopKeyLabel.textColor = .secondaryLabelColor
+        dailyTopKeyLabel.font = .systemFont(ofSize: 10)
+        dailyTopKeyLabel.textColor = RimeUI.textSecondary
         dailyTopKeyLabel.alignment = .left
 
         dailyHeatmap.translatesAutoresizingMaskIntoConstraints = false
         dailyHeatmap.setContentHuggingPriority(.defaultLow, for: .horizontal)
         dailyHeatmap.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        dailyHeatmap.heightAnchor.constraint(equalToConstant: 330).isActive = true
+        dailyHeatmap.heightAnchor.constraint(equalToConstant: 260).isActive = true
 
         let stack = NSStackView(views: [
             title,
@@ -153,8 +151,8 @@ final class StatisticsSettingsViewController: NSViewController {
         clearHistoryButton.target = self
         clearHistoryButton.action = #selector(confirmClearHistory(_:))
 
-        historySummaryLabel.font = .systemFont(ofSize: 13, weight: .medium)
-        historySummaryLabel.textColor = .labelColor
+        historySummaryLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        historySummaryLabel.textColor = RimeUI.textPrimary
         historySummaryLabel.alignment = .left
         historySummaryLabel.maximumNumberOfLines = 0
         let summaryRow = NSStackView(views: [historySummaryLabel, flexibleSpacer(), clearHistoryButton])
@@ -164,17 +162,19 @@ final class StatisticsSettingsViewController: NSViewController {
 
         configureHistoryScrollView()
 
-        historyDetailTitleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        historyDetailTitleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        historyDetailTitleLabel.textColor = RimeUI.textPrimary
         historyDetailTitleLabel.alignment = .left
-        historyDaySummaryLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        historyDaySummaryLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        historyDaySummaryLabel.textColor = RimeUI.textPrimary
         historyDaySummaryLabel.alignment = .left
-        historyDayTopKeyLabel.font = .systemFont(ofSize: 12)
-        historyDayTopKeyLabel.textColor = .secondaryLabelColor
+        historyDayTopKeyLabel.font = .systemFont(ofSize: 10)
+        historyDayTopKeyLabel.textColor = RimeUI.textSecondary
         historyDayTopKeyLabel.alignment = .left
         historyDayHeatmap.translatesAutoresizingMaskIntoConstraints = false
         historyDayHeatmap.setContentHuggingPriority(.defaultLow, for: .horizontal)
         historyDayHeatmap.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        historyDayHeatmap.heightAnchor.constraint(equalToConstant: 330).isActive = true
+        historyDayHeatmap.heightAnchor.constraint(equalToConstant: 260).isActive = true
 
         historyDetailStack.orientation = .vertical
         historyDetailStack.alignment = .leading
@@ -216,8 +216,8 @@ final class StatisticsSettingsViewController: NSViewController {
     }
 
     private func configureStorageWarning() {
-        storageWarningLabel.font = .systemFont(ofSize: 12)
-        storageWarningLabel.textColor = .labelColor
+        storageWarningLabel.font = .systemFont(ofSize: 10)
+        storageWarningLabel.textColor = RimeUI.textPrimary
         storageWarningLabel.maximumNumberOfLines = 0
         storageWarningLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -531,22 +531,24 @@ final class StatisticsSettingsViewController: NSViewController {
 
     private func titleLabel(_ text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text)
-        label.font = .systemFont(ofSize: 24, weight: .semibold)
+        label.font = .systemFont(ofSize: 12, weight: .semibold)
+        label.textColor = RimeUI.textSecondary
         label.alignment = .left
         return label
     }
 
     private func sectionLabel(_ text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text)
-        label.font = .systemFont(ofSize: 14, weight: .semibold)
+        label.font = .systemFont(ofSize: 12, weight: .semibold)
+        label.textColor = RimeUI.textSecondary
         label.alignment = .left
         return label
     }
 
     private func secondaryLabel(_ text: String) -> NSTextField {
         let label = NSTextField(wrappingLabelWithString: text)
-        label.font = .systemFont(ofSize: 12)
-        label.textColor = .secondaryLabelColor
+        label.font = .systemFont(ofSize: 10)
+        label.textColor = RimeUI.textMuted
         label.alignment = .left
         return label
     }

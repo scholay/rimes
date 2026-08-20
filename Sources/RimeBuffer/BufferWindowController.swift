@@ -25,8 +25,87 @@ enum BufferWorkbenchLayoutMode: Equatable {
         switch self {
         case .standard: return nil
         case .singleDerived: return 1
-        case let .derived(targetRows): return min(max(targetRows, 1), 3)
+        case let .derived(targetRows): return min(max(targetRows, 1), 5)
         }
+    }
+}
+
+/// React's Buffer master has two presentation grammars. Live workspaces keep
+/// source and result visible together, while explicit generators may exchange
+/// the one visible rail after a request. This is presentation only: the
+/// concrete workspace still owns both source and result until delivery is
+/// confirmed through `BufferDeliveryCoordinator`.
+enum BufferDerivedPresentationStyle: Equatable {
+    case liveExpand
+    case singleExchange
+}
+
+/// Explicit bridge from the React mode taxonomy to native ownership. A
+/// Remarkable import has no derived source/result workspace: its recognized
+/// text becomes ordinary BufferModel content, so pretending it is an exchange
+/// rail would invent a second delivery authority.
+enum BufferNativePresentationContract: Equatable {
+    case standardBufferImport
+    case derived(BufferDerivedPresentationStyle)
+}
+
+enum BufferDerivedPresentationRules {
+    static func nativeContract(
+        for pluginKey: PluginKey?
+    ) -> BufferNativePresentationContract {
+        if pluginKey == RemarkableWorkspace.pluginKey {
+            return .standardBufferImport
+        }
+        if pluginKey == AITextBuiltInPluginID.key
+            || pluginKey == MarineChromeWorkspace.pluginKey {
+            return .derived(.singleExchange)
+        }
+        return .derived(.liveExpand)
+    }
+
+    static func style(for pluginKey: PluginKey?) -> BufferDerivedPresentationStyle {
+        guard case let .derived(style) = nativeContract(for: pluginKey) else {
+            // Remarkable never enters DerivedBufferWorkspaceRouter. This
+            // fallback keeps previews fail-safe if a caller asks anyway.
+            return .liveExpand
+        }
+        return style
+    }
+
+    static func exchangeShowsTarget(
+        style: BufferDerivedPresentationStyle,
+        phase: TranslationRailSnapshot.Phase,
+        outputCount: Int
+    ) -> Bool {
+        guard style == .singleExchange else { return true }
+        return phase == .waiting || phase == .translating || outputCount > 0
+    }
+
+    static func layoutMode(
+        style: BufferDerivedPresentationStyle,
+        snapshot: TranslationRailSnapshot?
+    ) -> BufferWorkbenchLayoutMode {
+        guard let snapshot else {
+            return style == .singleExchange ? .singleDerived : .derived(targetRows: 1)
+        }
+        let showsTarget = exchangeShowsTarget(
+            style: style,
+            phase: snapshot.phase,
+            outputCount: snapshot.outputBlocks.count
+        )
+        let showsSource = snapshot.showsSourceRail
+            && !(style == .singleExchange && showsTarget)
+        return showsSource && showsTarget
+            ? .derived(targetRows: 1)
+            : .singleDerived
+    }
+
+    static func showsExchangeActions(
+        style: BufferDerivedPresentationStyle,
+        snapshot: TranslationRailSnapshot?
+    ) -> Bool {
+        guard style == .singleExchange, let snapshot else { return false }
+        return snapshot.phase == .ready && !snapshot.outputBlocks.isEmpty
     }
 }
 
@@ -70,12 +149,18 @@ enum BufferWindowGeometry {
     static let expandedHeight: CGFloat = 78
     static let translationCollapsedHeight: CGFloat = 78
     static let translationExpandedHeight: CGFloat = 112
+    static let clipboardDividerHeight: CGFloat = 1
+    static var clipboardSectionHeight: CGFloat {
+        clipboardDividerHeight + ClipboardRailMetrics.railHeight
+    }
     static let standardMinimumHeight = expandedHeight
     static let screenSafetyMargin: CGFloat = 8
     static let inputAnchorGap: CGFloat = 10
     static let fallbackBottomOffset: CGFloat = 120
     static var maximumRuntimeHeight: CGFloat {
-        height(expanded: true, mode: .derived(targetRows: 3))
+        height(expanded: true,
+               mode: .derived(targetRows: 5),
+               clipboardRailEnabled: true)
     }
 
     static func clampedStandardWidth(_ width: CGFloat) -> CGFloat {
@@ -83,21 +168,24 @@ enum BufferWindowGeometry {
     }
 
     static func height(expanded: Bool,
-                       mode: BufferWorkbenchLayoutMode = .standard) -> CGFloat {
+                       mode: BufferWorkbenchLayoutMode = .standard,
+                       clipboardRailEnabled: Bool = false) -> CGFloat {
+        let baseHeight: CGFloat
         switch mode {
         case .standard, .singleDerived:
-            return expanded ? expandedHeight : collapsedHeight
-        case let .derived(targetRows):
-            let extra = CGFloat(min(max(targetRows, 1), 3) - 1)
-                * BufferInlineView.additionalTranslationTargetRowHeight
-            return (expanded ? translationExpandedHeight : translationCollapsedHeight)
-                + extra
+            baseHeight = expanded ? expandedHeight : collapsedHeight
+        case .derived:
+            // Alternatives page inside one target rail. Candidate count no
+            // longer changes the panel height or moves the host-side anchor.
+            baseHeight = expanded ? translationExpandedHeight : translationCollapsedHeight
         }
+        return baseHeight + (clipboardRailEnabled ? clipboardSectionHeight : 0)
     }
 
     static func clampedFrame(_ proposed: NSRect,
                              expanded: Bool = true,
                              mode: BufferWorkbenchLayoutMode = .standard,
+                             clipboardRailEnabled: Bool = false,
                              visibleFrames: [NSRect],
                              fallback: NSRect) -> NSRect {
         let screens = visibleFrames.isEmpty ? [fallback] : visibleFrames
@@ -111,15 +199,17 @@ enum BufferWindowGeometry {
         let minimumWidth = min(standardMinimumWidth, safeTarget.width)
         let maximumWidth = min(standardMaximumWidth, safeTarget.width)
         let width = min(max(proposed.width, minimumWidth), maximumWidth)
-        let height = min(height(expanded: expanded, mode: mode), safeTarget.height)
+        let height = min(
+            height(expanded: expanded,
+                   mode: mode,
+                   clipboardRailEnabled: clipboardRailEnabled),
+            safeTarget.height
+        )
         var x = proposed.width == width ? proposed.minX : proposed.midX - width / 2
         // The 52pt predecessor and both current states preserve their bottom
         // edge, keeping the candidate panel stationary. Only the legacy 340pt
         // workbench migrates by preserving its old top edge.
-        let maximumCurrentExpandedHeight = Self.height(
-            expanded: true,
-            mode: .derived(targetRows: 3)
-        )
+        let maximumCurrentExpandedHeight = maximumRuntimeHeight
         var y = proposed.height <= maximumCurrentExpandedHeight + 1
             ? proposed.minY
             : proposed.maxY - height
@@ -296,6 +386,35 @@ enum BufferWindowVisibilityRules {
     }
 }
 
+/// One fail-closed state projection drives Clipboard polling, rendering, and
+/// activation. Keeping it pure lets the integration smoke prove that every
+/// lifecycle flag closes the same gate without touching the user's pasteboard.
+enum ClipboardWorkbenchIntegrationRules {
+    static func captureState(
+        workbenchVisibleOnActiveSpace: Bool,
+        hiddenForSession: Bool,
+        railEnabled: Bool,
+        secureInput: Bool,
+        screenLocked: Bool,
+        sessionInactive: Bool,
+        sleeping: Bool
+    ) -> ClipboardHistoryCaptureState {
+        var protection: ClipboardHistoryProtection = []
+        if secureInput { protection.insert(.secureInput) }
+        if screenLocked { protection.insert(.screenLocked) }
+        if sessionInactive || sleeping { protection.insert(.sessionInactive) }
+        return ClipboardHistoryCaptureState(
+            workbenchVisible: workbenchVisibleOnActiveSpace && !hiddenForSession,
+            railEnabled: railEnabled,
+            protection: protection
+        )
+    }
+
+    static func allowsAddToBuffer(_ state: ClipboardHistoryCaptureState) -> Bool {
+        state.allowsClipboardObservation
+    }
+}
+
 /// Keep enabled capture discoverable without turning the passive workbench
 /// into a caret-following window. A newly trusted text focus may relocate it
 /// only when the panel was stranded on another Space or physical display.
@@ -339,6 +458,7 @@ enum BufferWorkbenchControl: String, Equatable {
     case send
     case status
     case pluginActions
+    case exchangeEdit
     case refresh
     case close
 }
@@ -423,6 +543,8 @@ enum BufferWorkbenchPointerRules {
 
 enum BufferWorkbenchMetrics {
     static let controlSize: CGFloat = 22
+    static let primaryControlWidth: CGFloat = 58
+    static let primaryControlHeight: CGFloat = 30
     static let mainSpacing: CGFloat = 3
     static let shelfSpacing: CGFloat = 4
     static let mainHorizontalInset: CGFloat = 5
@@ -444,15 +566,13 @@ enum BufferWorkbenchMetrics {
         mode.targetRows == nil ? 40 : railHeight(for: mode) + 6
     }
 
-    /// Translation renders two equal rails inside a 5pt vertical inset with a
-    /// 4pt separator. Main controls use the same centers so their hit targets,
-    /// not just their artwork, line up with the source and target rows.
+    /// Live-expand renders two equal rails inside a 5pt vertical inset with a
+    /// 4pt separator. Paged alternatives stay in that one target rail, so the
+    /// primary control never walks downward as the result count changes.
     static func mainControlYOffset(row: BufferMainControlRow,
                                    mode: BufferWorkbenchLayoutMode) -> CGFloat {
-        guard case let .derived(targetRows) = mode else { return 0 }
-        let normalizedTargetRows = min(max(targetRows, 1), 3)
-        let offset = BufferInlineView.additionalTranslationTargetRowHeight
-            * CGFloat(normalizedTargetRows) / 2
+        guard case .derived = mode else { return 0 }
+        let offset = BufferInlineView.additionalTranslationTargetRowHeight / 2
         // NSStackView lays this main bar out in a flipped view coordinate
         // system: the visually upper source row has the negative constant.
         return row == .source ? -offset : offset
@@ -472,6 +592,7 @@ enum BufferWorkbenchShelfLayout {
                           pluginActions: NSView,
                           flexibleSpace: NSView,
                           statusIndicators: NSView,
+                          exchangeEdit: NSView,
                           refresh: NSView,
                           close: NSView) {
         shelf.orientation = .horizontal
@@ -500,7 +621,8 @@ enum BufferWorkbenchShelfLayout {
         flexibleSpace.setContentCompressionResistancePriority(flexiblePriority,
                                                               for: .horizontal)
 
-        [status, pluginActions, flexibleSpace, statusIndicators, refresh, close].forEach {
+        [status, pluginActions, flexibleSpace, statusIndicators,
+         exchangeEdit, refresh, close].forEach {
             shelf.addArrangedSubview($0)
         }
     }
@@ -512,10 +634,10 @@ enum BufferWorkbenchLayout {
         .bufferRail, .send,
     ]
     static let toolbar: [BufferWorkbenchControl] = [
-        .status, .pluginActions, .refresh, .close,
+        .status, .pluginActions, .exchangeEdit, .refresh, .close,
     ]
     static let hoverControls: Set<BufferWorkbenchControl> = [
-        .send, .pluginActions, .refresh, .close,
+        .send, .pluginActions, .exchangeEdit, .refresh, .close,
     ]
     static let passiveControls: Set<BufferWorkbenchControl> = [.bufferRail, .status]
     static let toolbarAlwaysExpanded = true
@@ -580,6 +702,49 @@ enum BufferWorkbenchStatusText {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty else { return nil }
         return value
+    }
+}
+
+enum BufferWorkbenchStatusPresentation {
+    enum Tone: Equatable {
+        case neutral
+        case accent
+        case warning
+        case danger
+    }
+
+    /// The React master reserves this column but leaves routine ready/idle
+    /// prose blank; the rail and primary action already communicate those
+    /// states. Failures, protection, focus blockers, and active work remain
+    /// visible so the compact styling never hides an actionable condition.
+    static func text(
+        fallback: String,
+        snapshot: TranslationRailSnapshot?
+    ) -> String {
+        if let snapshot {
+            switch snapshot.phase {
+            case .idle, .ready:
+                return ""
+            case .unavailable, .waiting, .translating, .failed:
+                return fallback
+            }
+        }
+        return fallback == "可发送" || fallback == "等待内容" ? "" : fallback
+    }
+
+    static func tone(snapshot: TranslationRailSnapshot?, text: String) -> Tone {
+        if let snapshot {
+            switch snapshot.phase {
+            case .failed, .unavailable: return .danger
+            case .waiting, .translating: return .neutral
+            case .idle, .ready: return .accent
+            }
+        }
+        if text.contains("安全输入") { return .warning }
+        if text.contains("失败") || text.contains("过期") || text.contains("变化") {
+            return .danger
+        }
+        return text.isEmpty ? .neutral : .accent
     }
 }
 
@@ -753,6 +918,36 @@ private final class BufferPluginMenuIdentity: NSObject {
     }
 }
 
+/// Keeps trailing toolbar actions in stable 22pt columns. When an action is
+/// unavailable the wrapper remains in the layout, but the hidden control no
+/// longer intercepts the toolbar's first-click drag region.
+private final class BufferToolbarControlSlot: NSView {
+    private let control: NSControl
+
+    init(control: NSControl) {
+        self.control = control
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        control.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(control)
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: BufferWorkbenchMetrics.controlSize),
+            heightAnchor.constraint(equalToConstant: BufferWorkbenchMetrics.controlSize),
+            control.leadingAnchor.constraint(equalTo: leadingAnchor),
+            control.trailingAnchor.constraint(equalTo: trailingAnchor),
+            control.topAnchor.constraint(equalTo: topAnchor),
+            control.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setControlVisible(_ visible: Bool) {
+        control.isHidden = !visible
+        if !visible { control.isEnabled = false }
+    }
+}
+
 private final class BufferMainControlSlot: NSView {
     private let row: BufferMainControlRow
     private var heightConstraint: NSLayoutConstraint!
@@ -772,10 +967,12 @@ private final class BufferMainControlSlot: NSView {
         heightConstraint = height
         centerYConstraint = centerY
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: BufferWorkbenchMetrics.controlSize),
+            widthAnchor.constraint(equalToConstant: BufferWorkbenchMetrics.primaryControlWidth),
             height,
             control.centerXAnchor.constraint(equalTo: centerXAnchor),
             centerY,
+            control.widthAnchor.constraint(equalToConstant: BufferWorkbenchMetrics.primaryControlWidth),
+            control.heightAnchor.constraint(equalToConstant: BufferWorkbenchMetrics.primaryControlHeight),
         ])
     }
 
@@ -923,12 +1120,16 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         static let legacyFrame = "bufferWindow.frame.v1"
         static let pinned = "bufferWindow.pinned.v1"
         static let placement = "bufferWindow.candidatePlacement.v1"
+        static let clipboardRailEnabled = "bufferWindow.clipboardRailEnabled.v1"
     }
 
     private let panel: BufferPanel
     private let outerContainer = NSView()
     private let visual = BufferChromeView()
     private let bufferRail = BufferInlineView()
+    private let clipboardHistoryModel: ClipboardHistoryModel
+    private let clipboardRail: ClipboardRailView
+    private let clipboardDivider = NSView()
     private lazy var translationBridgeView = AppleTranslationWorkspace.shared.makeBridgeView()
     private let utilityShelf = BufferWorkbenchToolbarView()
     private let shelfDivider = NSView()
@@ -949,8 +1150,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private let translationSwapButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let sendButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let sendButtonProgressIndicator = NSProgressIndicator()
+    private let exchangeEditButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let refreshButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let closeButton = FirstMouseButton(title: "", target: nil, action: nil)
+    private lazy var exchangeEditSlot = BufferToolbarControlSlot(control: exchangeEditButton)
+    private lazy var refreshSlot = BufferToolbarControlSlot(control: refreshButton)
     private lazy var sendSlot = BufferMainControlSlot(control: sendButton, row: .target)
     private var hiddenForSession = false
     private var sessionInactive = false
@@ -974,7 +1178,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var renderedBuiltInActionHasOptions: Bool?
     private var renderedTranslationLanguages: [TranslationLanguageOption] = []
     private var renderedBuiltInActionOptions: [BuiltInBufferActionOption] = []
-    private var sendButtonUsesAccent = false
     private var openingSide: BufferOpeningSide = .bottomFallback
     private var openingFocusToken: FocusToken?
     private var transientOpeningOrigin = false
@@ -1046,6 +1249,22 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     func resetConfiguredWidth() {
         setConfiguredWidth(760)
     }
+
+    /// Opt-in permission and presentation state for the process-local Clipboard
+    /// rail. This is the only Clipboard value persisted across launches.
+    var clipboardRailEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: Key.clipboardRailEnabled) }
+        set {
+            guard newValue != clipboardRailEnabled else { return }
+            UserDefaults.standard.set(newValue, forKey: Key.clipboardRailEnabled)
+            applyClipboardRailEnabledChange(enabled: newValue)
+        }
+    }
+
+    func toggleClipboardRail() {
+        clipboardRailEnabled.toggle()
+    }
+
     var pinned: Bool {
         get { UserDefaults.standard.bool(forKey: Key.pinned) }
         set {
@@ -1076,18 +1295,35 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private override init() {
-        let initialSnapshot = DerivedBufferWorkspaceRouter.selectedWorkspace?
-            .railSnapshot
-        let initialLayoutMode: BufferWorkbenchLayoutMode = initialSnapshot.map {
-            $0.showsSourceRail
-                ? .derived(targetRows: $0.targetRowCount)
-                : .singleDerived
-        } ?? .standard
+        dispatchPrecondition(condition: .onQueue(.main))
+        let historyModel = MainActor.assumeIsolated {
+            ClipboardHistoryModel()
+        }
+        clipboardHistoryModel = historyModel
+        clipboardRail = MainActor.assumeIsolated {
+            ClipboardRailView(model: historyModel)
+        }
+        let initialWorkspace = DerivedBufferWorkspaceRouter.selectedWorkspace
+        let initialSnapshot = initialWorkspace?.railSnapshot
+        let initialStyle = BufferDerivedPresentationRules.style(
+            for: initialWorkspace?.workspacePluginKey
+        )
+        let initialLayoutMode: BufferWorkbenchLayoutMode = initialWorkspace == nil
+            ? .standard
+            : BufferDerivedPresentationRules.layoutMode(
+                style: initialStyle,
+                snapshot: initialSnapshot
+            )
+        let initialClipboardRailEnabled = UserDefaults.standard.bool(
+            forKey: Key.clipboardRailEnabled
+        )
         panel = BufferPanel(contentRect: NSRect(x: 0, y: 0, width: 760,
                                                 height: BufferWindowGeometry.height(
                                                     expanded: BufferWorkbenchLayout
                                                         .toolbarAlwaysExpanded,
-                                                    mode: initialLayoutMode
+                                                    mode: initialLayoutMode,
+                                                    clipboardRailEnabled:
+                                                        initialClipboardRailEnabled
                                                 )),
                             styleMask: [.borderless, .nonactivatingPanel, .resizable],
                             backing: .buffered,
@@ -1097,9 +1333,21 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         bufferRail.onDerivedTargetSelection = { [weak self] blockID in
             self?.selectDerivedTarget(blockID: blockID)
         }
+        bufferRail.onDerivedTargetStep = { [weak self] delta in
+            self?.moveDerivedTargetSelection(delta: delta)
+        }
+        MainActor.assumeIsolated {
+            clipboardRail.onAddToBuffer = { [weak self] item in
+                self?.addClipboardItemToBuffer(item) ?? false
+            }
+        }
         buildWindow()
         restoreFrame()
         installObservers()
+        MainActor.assumeIsolated {
+            clipboardRail.start()
+        }
+        syncClipboardHistoryCapture()
     }
 
     func showOnLaunchIfNeeded() {
@@ -1119,6 +1367,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         UserDefaults.standard.set(true, forKey: Key.visible)
         guard !sessionProtectionActive else {
             hiddenForSession = true
+            syncClipboardHistoryCapture()
             return
         }
         hiddenForSession = false
@@ -1141,6 +1390,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             panel.orderOut(nil)
         }
         panel.orderFrontRegardless()
+        syncClipboardHistoryCapture()
         RimeBufferController.refreshActiveUI()
     }
 
@@ -1190,6 +1440,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     func hideWithoutPausing() {
         UserDefaults.standard.set(false, forKey: Key.visible)
         panel.orderOut(nil)
+        syncClipboardHistoryCapture()
         RimeBufferController.refreshActiveUI()
     }
 
@@ -1200,6 +1451,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         DerivedBufferWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
         BuiltInBufferActionWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
         BufferModel.shared.discardForPrivacy()
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated {
+            clipboardHistoryModel.clear()
+        }
     }
 
     /// Product default: close means resolve the current composition into the
@@ -1251,33 +1506,51 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     func renderForPreview(to path: String,
                           scale: CGFloat = 2,
                           translationSnapshot: TranslationRailSnapshot? = nil,
+                          presentationStyle: BufferDerivedPresentationStyle = .liveExpand,
                           statusIndicators: [WorkbenchStatusIndicator]? = nil,
                           hoveredControl: BufferWorkbenchControl? = nil) -> Bool {
-        let previewMode: BufferWorkbenchLayoutMode = translationSnapshot == nil
-            ? DerivedBufferWorkspaceRouter.selectedWorkspace.map {
-                let snapshot = $0.railSnapshot
-                return snapshot.showsSourceRail
-                    ? .derived(targetRows: snapshot.targetRowCount)
-                    : .singleDerived
-            } ?? .standard
-            : (translationSnapshot?.showsSourceRail == false
-                ? .singleDerived
-                : .derived(targetRows: translationSnapshot?.targetRowCount ?? 1))
+        let selectedWorkspace = DerivedBufferWorkspaceRouter.selectedWorkspace
+        let previewStyle = translationSnapshot == nil
+            ? BufferDerivedPresentationRules.style(
+                for: selectedWorkspace?.workspacePluginKey
+            )
+            : presentationStyle
+        let previewMode: BufferWorkbenchLayoutMode
+        if let translationSnapshot {
+            previewMode = BufferDerivedPresentationRules.layoutMode(
+                style: previewStyle,
+                snapshot: translationSnapshot
+            )
+        } else if let selectedWorkspace {
+            previewMode = BufferDerivedPresentationRules.layoutMode(
+                style: previewStyle,
+                snapshot: selectedWorkspace.railSnapshot
+            )
+        } else {
+            previewMode = .standard
+        }
         syncLayoutMode(previewMode)
         adjustingFrame = true
         panel.setFrame(NSRect(x: 0, y: 0, width: 760,
                               height: BufferWindowGeometry.height(
                                   expanded: BufferWorkbenchLayout
                                       .toolbarAlwaysExpanded,
-                                  mode: previewMode
+                                  mode: previewMode,
+                                  clipboardRailEnabled: clipboardRailEnabled
                               )),
                        display: false)
         adjustingFrame = false
         if let translationSnapshot {
-            statusLabel.stringValue = translationSnapshot.showsSourceRail
-                ? "译文可发送"
-                : translationSnapshot.targetEmptyText
-            _ = bufferRail.renderTranslationForPreview(translationSnapshot)
+            statusLabel.stringValue = BufferWorkbenchStatusPresentation.text(
+                fallback: translationSnapshot.showsSourceRail
+                    ? "译文可发送"
+                    : translationSnapshot.targetEmptyText,
+                snapshot: translationSnapshot
+            )
+            _ = bufferRail.renderTranslationForPreview(
+                translationSnapshot,
+                presentationStyle: previewStyle
+            )
             applyAppearance()
         } else {
             refresh()
@@ -1317,6 +1590,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         let secureInputEnabled = IsSecureEventInputEnabled()
         let contentProtected = secureInputEnabled || sessionProtectionActive
+        syncClipboardHistoryCapture(secureInputEnabled: secureInputEnabled)
         if contentProtected {
             BufferModel.shared.clearAllContentSelection(notify: false)
             // Scrub every text-bearing view before protection notifications or
@@ -1334,6 +1608,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         BuiltInBufferActionWorkspaceRouter.setProtectedOnAll(contentProtected)
         let derivedWorkspace = DerivedBufferWorkspaceRouter.selectedWorkspace
         let derivedWorkspaceSelected = derivedWorkspace != nil
+        let derivedPresentationStyle = BufferDerivedPresentationRules.style(
+            for: derivedWorkspace?.workspacePluginKey
+        )
         let builtInActionWorkspace = BuiltInBufferActionWorkspaceRouter.selectedWorkspace
         let builtInActionWorkspaceSelected = builtInActionWorkspace != nil
         // Never ask a protected workspace for plaintext merely to size the
@@ -1350,9 +1627,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         // been removed. Otherwise NSScrollView captures a 0pt/old document
         // frame and AppKit permanently breaks the third row's constraints.
         let nextLayoutMode: BufferWorkbenchLayoutMode = derivedWorkspaceSelected
-            ? (derivedSnapshot?.showsSourceRail == false
-                ? .singleDerived
-                : .derived(targetRows: derivedSnapshot?.targetRowCount ?? 1))
+            ? BufferDerivedPresentationRules.layoutMode(
+                style: derivedPresentationStyle,
+                snapshot: derivedSnapshot
+            )
             : .standard
         let layoutChanged = layoutMode != nextLayoutMode
         let grows = BufferWorkbenchMetrics.railHeight(for: nextLayoutMode)
@@ -1366,7 +1644,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         _ = bufferRail.refresh(
             shielded: contentProtected,
-            translationSnapshot: derivedSnapshot
+            translationSnapshot: derivedSnapshot,
+            presentationStyle: derivedPresentationStyle
         )
         if layoutChanged, !grows {
             syncLayoutMode(nextLayoutMode)
@@ -1385,28 +1664,41 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                 !$0.requiresFocus && $0.canInvoke
             }
         lastSecureInputState = secureInputEnabled
+        let rawStatusText: String
         if !contentProtected, let derivedWorkspace {
-            statusLabel.stringValue = derivedWorkspace.statusText
+            rawStatusText = derivedWorkspace.statusText
         } else if !contentProtected, let builtInActionWorkspace {
-            statusLabel.stringValue = builtInActionWorkspace.actionPresentation.statusText
+            rawStatusText = builtInActionWorkspace.actionPresentation.statusText
         } else {
-            statusLabel.stringValue = BufferWorkbenchStatusText.text(
+            rawStatusText = BufferWorkbenchStatusText.text(
                 for: availability,
                 secureInput: secureInputEnabled,
                 pluginFailure: pluginFailure,
                 canGenerateWithoutFocus: canGenerateWithoutFocus
             )
         }
+        statusLabel.stringValue = BufferWorkbenchStatusPresentation.text(
+            fallback: rawStatusText,
+            snapshot: contentProtected ? nil : derivedSnapshot
+        )
         statusLabel.toolTip = !contentProtected
             && (derivedWorkspaceSelected || builtInActionWorkspaceSelected)
-            ? statusLabel.stringValue
+            ? rawStatusText
             : BufferWorkbenchStatusText.help(
                 for: availability,
                 secureInput: secureInputEnabled,
                 pluginFailure: pluginFailure,
                 canGenerateWithoutFocus: canGenerateWithoutFocus
         )
-        statusLabel.textColor = RimeUI.textSecondary
+        switch BufferWorkbenchStatusPresentation.tone(
+            snapshot: contentProtected ? nil : derivedSnapshot,
+            text: rawStatusText
+        ) {
+        case .neutral: statusLabel.textColor = RimeUI.textSecondary
+        case .accent: statusLabel.textColor = RimeUI.accentBlue
+        case .warning: statusLabel.textColor = .systemOrange
+        case .danger: statusLabel.textColor = .systemRed
+        }
         refreshContextualStatusIndicators(
             contentProtected ? nil : derivedWorkspace
         )
@@ -1416,11 +1708,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         refreshPrimaryAction(controls: WorkbenchManualGenerationRouter.selectedControls,
                              availability: availability,
                              contentProtected: contentProtected)
-        refreshButton.isEnabled = BufferPluginSelectionStore.shared.activeKey != nil
-            && !contentProtected
-        refreshButton.toolTip = refreshButton.isEnabled
-            ? "刷新或重置当前插件（保留缓冲正文）"
-            : "当前没有可刷新的缓冲插件"
+        refreshExchangeActions(
+            style: derivedPresentationStyle,
+            snapshot: derivedSnapshot,
+            contentProtected: contentProtected
+        )
         refreshPluginActions()
         applyAppearance()
     }
@@ -1431,6 +1723,38 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         let indicators = (workspace as? any WorkbenchStatusIndicatorProviding)?
             .workbenchStatusIndicators ?? []
         reconcileContextualStatusIndicators(indicators)
+    }
+
+    private func refreshExchangeActions(
+        style: BufferDerivedPresentationStyle,
+        snapshot: TranslationRailSnapshot?,
+        contentProtected: Bool
+    ) {
+        let showsExchangeActions = !contentProtected
+            && BufferDerivedPresentationRules.showsExchangeActions(
+                style: style,
+                snapshot: snapshot
+            )
+        exchangeEditSlot.setControlVisible(showsExchangeActions)
+        exchangeEditButton.isEnabled = showsExchangeActions
+        exchangeEditButton.toolTip = showsExchangeActions
+            ? "返回编辑原文（保留原文，放弃当前结果）"
+            : nil
+
+        let hasPlugin = BufferPluginSelectionStore.shared.activeKey != nil
+        // Current single-exchange workspaces clear an unsent result as soon as
+        // refresh starts. Do not expose that destructive path: transactional
+        // replacement is required before retry can satisfy retain-until-send.
+        let exposesRefresh = style != .singleExchange
+        refreshSlot.setControlVisible(exposesRefresh)
+        refreshButton.isEnabled = exposesRefresh
+            && hasPlugin
+            && !contentProtected
+        refreshButton.toolTip = refreshButton.isEnabled
+            ? "刷新或重置当前插件（保留缓冲正文）"
+            : (style == .singleExchange
+                ? "返回编辑后可重新生成"
+                : "当前没有可刷新的缓冲插件")
     }
 
     private func reconcileContextualStatusIndicators(
@@ -1521,13 +1845,15 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                                height: BufferWindowGeometry.height(
                                    expanded: BufferWorkbenchLayout
                                        .toolbarAlwaysExpanded,
-                                   mode: layoutMode
+                                   mode: layoutMode,
+                                   clipboardRailEnabled: clipboardRailEnabled
                                ))
         panel.maxSize = NSSize(width: BufferWindowGeometry.standardMaximumWidth,
                                height: BufferWindowGeometry.height(
                                    expanded: BufferWorkbenchLayout
                                        .toolbarAlwaysExpanded,
-                                   mode: layoutMode
+                                   mode: layoutMode,
+                                   clipboardRailEnabled: clipboardRailEnabled
                                ))
         panel.delegate = self
         applyCollectionBehavior()
@@ -1556,9 +1882,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             translationBridgeView.heightAnchor.constraint(equalToConstant: 1),
         ])
 
-        configureIconButton(
+        configurePrimaryButton(
             sendButton,
             "paperplane.fill",
+            "发送",
             "发送下一块（\(deliveryShortcutTitle)）",
             #selector(sendTapped)
         )
@@ -1578,6 +1905,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                             "arrow.clockwise",
                             "刷新或重置当前插件（保留缓冲正文）",
                             #selector(refreshPluginTapped))
+        configureIconButton(exchangeEditButton,
+                            "text.cursor",
+                            "返回编辑原文",
+                            #selector(returnToExchangeSourceTapped))
+        exchangeEditSlot.setControlVisible(false)
         configureIconButton(closeButton, "xmark", "关闭并暂停缓冲（保留内容）", #selector(closeTapped))
 
         statusLabel.font = .systemFont(ofSize: 10)
@@ -1719,12 +2051,18 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             pluginActions: pluginActionsControl,
             flexibleSpace: shelfFlexibleSpace,
             statusIndicators: contextualStatusControl,
-            refresh: refreshButton,
+            exchangeEdit: exchangeEditSlot,
+            refresh: refreshSlot,
             close: closeButton
         )
 
         shelfDivider.wantsLayer = true
         shelfDivider.layer?.backgroundColor = RimeUI.borderStrong.withAlphaComponent(0.55).cgColor
+        clipboardDivider.wantsLayer = true
+        clipboardDivider.layer?.backgroundColor = RimeUI.borderStrong
+            .withAlphaComponent(0.55).cgColor
+        clipboardDivider.isHidden = !clipboardRailEnabled
+        clipboardRail.isHidden = !clipboardRailEnabled
 
         let mainBar = NSStackView(
             views: BufferWorkbenchLayout.mainBar.map { view(for: $0) }
@@ -1742,10 +2080,17 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             right: BufferWorkbenchMetrics.mainHorizontalInset
         )
 
-        let root = NSStackView(views: [utilityShelf, shelfDivider, mainBar])
+        let root = NSStackView(views: [
+            utilityShelf,
+            shelfDivider,
+            mainBar,
+            clipboardDivider,
+            clipboardRail,
+        ])
         root.orientation = .vertical
         root.alignment = .width
         root.spacing = 0
+        root.detachesHiddenViews = true
         root.translatesAutoresizingMaskIntoConstraints = false
         visual.addSubview(root)
         let mainBarHeight = mainBar.heightAnchor.constraint(
@@ -1766,6 +2111,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             mainBarHeight,
             bufferRail.widthAnchor.constraint(greaterThanOrEqualToConstant: 190),
             railHeight,
+            clipboardDivider.heightAnchor.constraint(
+                equalToConstant: BufferWindowGeometry.clipboardDividerHeight
+            ),
+            clipboardRail.heightAnchor.constraint(equalToConstant: ClipboardRailMetrics.railHeight),
         ])
         updateMainControlAlignment(for: layoutMode)
         applyAppearance()
@@ -1789,12 +2138,32 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         button.heightAnchor.constraint(equalToConstant: BufferWorkbenchMetrics.controlSize).isActive = true
     }
 
+    private func configurePrimaryButton(_ button: FirstMouseButton,
+                                        _ symbol: String,
+                                        _ title: String,
+                                        _ toolTip: String,
+                                        _ action: Selector) {
+        button.usesPrimarySurface = true
+        button.image = RimeUI.symbol(symbol, pointSize: 10, weight: .semibold)
+        button.image?.isTemplate = true
+        button.imagePosition = .imageLeading
+        button.title = title
+        button.font = .systemFont(ofSize: 10, weight: .semibold)
+        button.isBordered = false
+        button.focusRingType = .none
+        button.toolTip = toolTip
+        button.target = self
+        button.action = action
+        button.translatesAutoresizingMaskIntoConstraints = false
+    }
+
     private func view(for control: BufferWorkbenchControl) -> NSView {
         switch control {
         case .bufferRail: return bufferRail
         case .send: return sendSlot
         case .status: return statusLabel
         case .pluginActions: return pluginActionsControl
+        case .exchangeEdit: return exchangeEditSlot
         case .refresh: return refreshButton
         case .close: return closeButton
         }
@@ -1806,16 +2175,27 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         visual.fillColor = RimeUI.workbenchChrome
         visual.strokeColor = RimeUI.borderStrong
         shelfDivider.layer?.backgroundColor = RimeUI.borderStrong.withAlphaComponent(0.55).cgColor
+        clipboardDivider.layer?.backgroundColor = RimeUI.borderStrong
+            .withAlphaComponent(0.55).cgColor
         pluginActionsControl.layer?.backgroundColor = RimeUI.surface2.cgColor
         pluginActionsControl.layer?.borderColor = RimeUI.border.cgColor
         pluginActionsControl.layer?.borderWidth = 1 / max(panel.backingScaleFactor, 1)
-        [refreshButton, closeButton, sendButton].forEach {
+        [exchangeEditButton, refreshButton, closeButton, sendButton].forEach {
             $0.contentTintColor = RimeUI.textSecondary
             $0.refreshInteractionAppearance()
         }
-        sendButton.contentTintColor = sendButtonUsesAccent && sendButton.isEnabled
-            ? RimeUI.accentBlue
+        sendButton.contentTintColor = sendButton.isEnabled
+            ? RimeUI.accentForegroundColor
             : RimeUI.textSecondary
+        sendButton.attributedTitle = NSAttributedString(
+            string: sendButton.title,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+                .foregroundColor: sendButton.isEnabled
+                    ? RimeUI.accentForegroundColor
+                    : RimeUI.textMuted,
+            ]
+        )
         translationSwapButton.contentTintColor = RimeUI.textSecondary
         translationSwapButton.refreshInteractionAppearance()
         pluginActionButtons.values.forEach {
@@ -1834,7 +2214,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func applyPreviewPointerState(_ hoveredControl: BufferWorkbenchControl?) {
-        [sendButton, refreshButton, closeButton].forEach {
+        [sendButton, exchangeEditButton, refreshButton, closeButton].forEach {
             $0.setPreviewPointerState(nil)
         }
         pluginSelector.setPreviewPointerState(nil)
@@ -1850,6 +2230,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             sendButton.setPreviewPointerState(.hovered)
         case .pluginActions:
             pluginSelector.setPreviewPointerState(.hovered)
+        case .exchangeEdit:
+            exchangeEditButton.setPreviewPointerState(.hovered)
         case .refresh:
             refreshButton.setPreviewPointerState(.hovered)
         case .close:
@@ -1864,12 +2246,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         availability: BufferDeliveryCoordinator.Availability,
         contentProtected: Bool
     ) {
-        sendButton.imagePosition = .imageOnly
-        sendButtonUsesAccent = false
-
+        sendButton.imagePosition = .imageLeading
         guard let controls else {
             setSendButtonGenerating(false)
             setSendButtonSymbol("paperplane.fill")
+            sendButton.title = "发送"
             sendButton.isEnabled = availability.canSend && !contentProtected
             sendButton.toolTip = availability.canSend
                 ? "发送下一块（\(deliveryShortcutTitle)）"
@@ -1882,6 +2263,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         case .disabled:
             setSendButtonGenerating(false)
             setSendButtonSymbol("sparkles")
+            sendButton.title = "生成"
             sendButton.isEnabled = false
             sendButton.toolTip = contentProtected
                 ? "安全输入已开启，AI 已暂停"
@@ -1890,6 +2272,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         case .requestGeneration:
             setSendButtonGenerating(false)
             setSendButtonSymbol("sparkles")
+            sendButton.title = "生成"
             sendButton.isEnabled = !contentProtected
                 && controls.canGenerate
                 && !availability.blocksManualGenerationRequest
@@ -1899,9 +2282,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                     ? availability.label
                     : controls.generationStatusText)
             sendButton.setAccessibilityLabel("请求 AI 生成")
-            sendButtonUsesAccent = true
         case .generating:
             sendButton.image = nil
+            sendButton.title = ""
             sendButton.isEnabled = false
             sendButton.toolTip = controls.generationStatusText
             sendButton.setAccessibilityLabel("AI 正在生成")
@@ -1909,12 +2292,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         case .deliver:
             setSendButtonGenerating(false)
             setSendButtonSymbol("paperplane.fill")
+            sendButton.title = "发送"
             sendButton.isEnabled = availability.canSend && !contentProtected
             sendButton.toolTip = availability.canSend
                 ? "发送下一块（\(deliveryShortcutTitle)）"
                 : availability.label
             sendButton.setAccessibilityLabel("发送下一块 AI 内容")
-            sendButtonUsesAccent = true
         }
     }
 
@@ -2221,6 +2604,116 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         popup.select(item)
     }
 
+    private func applyClipboardRailEnabledChange(enabled: Bool) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        if enabled {
+            // Grow before attaching the scroll-backed rail so AppKit never lays
+            // its document view out against a transient zero-height section.
+            resizeForClipboardRailChange()
+            clipboardDivider.isHidden = false
+            clipboardRail.isHidden = false
+            panel.contentView?.layoutSubtreeIfNeeded()
+            syncClipboardHistoryCapture()
+        } else {
+            // Close the capture gate and scrub card views before detaching the
+            // section. History remains process-local, matching React's hidden
+            // Clipboard state, and is never restored after process exit.
+            syncClipboardHistoryCapture()
+            MainActor.assumeIsolated {
+                clipboardRail.setActive(false)
+            }
+            clipboardRail.isHidden = true
+            clipboardDivider.isHidden = true
+            panel.contentView?.layoutSubtreeIfNeeded()
+            resizeForClipboardRailChange()
+        }
+    }
+
+    private func resizeForClipboardRailChange() {
+        let desiredHeight = BufferWindowGeometry.height(
+            expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
+            mode: layoutMode,
+            clipboardRailEnabled: clipboardRailEnabled
+        )
+        var proposed = panel.frame
+        if transientOpeningOrigin, openingSide != .bottomFallback {
+            proposed = BufferWindowGeometry.resizedOutward(
+                proposed,
+                height: desiredHeight,
+                openingSide: openingSide
+            )
+        } else {
+            proposed.size.height = desiredHeight
+        }
+        let fallback = panel.screen?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        applyClampedFrame(
+            proposed,
+            visibleFrames: NSScreen.screens.map(\.visibleFrame),
+            fallback: fallback,
+            display: panel.isVisible
+        )
+        visual.needsLayout = true
+        clipboardRail.needsLayout = true
+        saveFrame()
+        candidateWindow.syncWorkbenchAnchor(candidateAnchorRect)
+    }
+
+    private func clipboardCaptureState(
+        secureInputEnabled: Bool? = nil
+    ) -> ClipboardHistoryCaptureState {
+        ClipboardWorkbenchIntegrationRules.captureState(
+            workbenchVisibleOnActiveSpace: isVisible,
+            hiddenForSession: hiddenForSession,
+            railEnabled: clipboardRailEnabled,
+            secureInput: secureInputEnabled ?? IsSecureEventInputEnabled(),
+            screenLocked: screenLocked,
+            sessionInactive: sessionInactive,
+            sleeping: sleeping
+        )
+    }
+
+    private func syncClipboardHistoryCapture(
+        secureInputEnabled: Bool? = nil
+    ) {
+        let state = clipboardCaptureState(
+            secureInputEnabled: secureInputEnabled
+        )
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated {
+            clipboardRail.update(
+                workbenchVisible: state.workbenchVisible,
+                railEnabled: state.railEnabled,
+                protection: state.protection
+            )
+            if !state.allowsClipboardObservation {
+                clipboardRail.setActive(false)
+            }
+        }
+    }
+
+    private func addClipboardItemToBuffer(_ item: ClipboardHistoryItem) -> Bool {
+        let secureInputEnabled = IsSecureEventInputEnabled()
+        let state = clipboardCaptureState(
+            secureInputEnabled: secureInputEnabled
+        )
+        dispatchPrecondition(condition: .onQueue(.main))
+        return MainActor.assumeIsolated {
+            clipboardRail.update(
+                workbenchVisible: state.workbenchVisible,
+                railEnabled: state.railEnabled,
+                protection: state.protection
+            )
+            guard ClipboardWorkbenchIntegrationRules.allowsAddToBuffer(state),
+                  !secureInputEnabled,
+                  !clipboardHistoryModel.isContentShielded else {
+                return false
+            }
+            return BufferModel.shared.insertPastedText(item.text)
+        }
+    }
+
     private func syncLayoutMode(_ nextMode: BufferWorkbenchLayoutMode) {
         updateMainControlAlignment(for: nextMode)
         guard layoutMode != nextMode else { return }
@@ -2229,7 +2722,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         bufferRailHeightConstraint?.constant = BufferWorkbenchMetrics.railHeight(for: nextMode)
         let desiredHeight = BufferWindowGeometry.height(
             expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
-            mode: nextMode
+            mode: nextMode,
+            clipboardRailEnabled: clipboardRailEnabled
         )
         var proposed = panel.frame
         if transientOpeningOrigin, openingSide != .bottomFallback {
@@ -2397,6 +2891,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             BuiltInBufferActionWorkspaceRouter.setProtectedOnAll(
                 secureInputEnabled || self.sessionProtectionActive
             )
+            self.syncClipboardHistoryCapture(
+                secureInputEnabled: secureInputEnabled
+            )
             guard secureInputEnabled != self.lastSecureInputState else { return }
             self.lastSecureInputState = secureInputEnabled
             if secureInputEnabled {
@@ -2425,6 +2922,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func protectForSession(reason: String) {
+        syncClipboardHistoryCapture()
         ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
         DerivedBufferWorkspaceRouter.setProtectedOnAll(true)
         BuiltInBufferActionWorkspaceRouter.setProtectedOnAll(true)
@@ -2438,9 +2936,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             hiddenForSession = true
             panel.orderOut(nil)
         }
+        syncClipboardHistoryCapture()
     }
 
     private func restoreAfterSessionProtection() {
+        syncClipboardHistoryCapture()
         DerivedBufferWorkspaceRouter.setProtectedOnAll(
             sessionProtectionActive || IsSecureEventInputEnabled()
         )
@@ -2453,6 +2953,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         hiddenForSession = false
         refresh()
         panel.orderFrontRegardless()
+        syncClipboardHistoryCapture()
         RimeBufferController.refreshActiveUI()
     }
 
@@ -2563,6 +3064,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             panel.orderOut(nil)
         }
         panel.orderFrontRegardless()
+        syncClipboardHistoryCapture()
         candidateWindow.syncWorkbenchAnchor(candidateAnchorRect)
         let reason = wasVisibleOnActiveSpace ? "display" : "space"
         IMELog.write("workbench followed focused input token=\(token) reason=\(reason)")
@@ -2632,6 +3134,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             proposed,
             expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
             mode: layoutMode,
+            clipboardRailEnabled: clipboardRailEnabled,
             visibleFrames: visibleFrames,
             fallback: fallback
         )
@@ -2653,7 +3156,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         let usableWidth = max(1, visibleFrame.width - BufferWindowGeometry.screenSafetyMargin * 2)
         let targetHeight = min(BufferWindowGeometry.height(
             expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
-            mode: layoutMode
+            mode: layoutMode,
+            clipboardRailEnabled: clipboardRailEnabled
         ),
                                visibleFrame.height)
         panel.minSize = NSSize(
@@ -2682,6 +3186,43 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                 .selectedWorkspace as? any DerivedResultSelectionControls,
               controls.ownsResultNavigation,
               controls.selectResult(blockID: blockID),
+              InputFocusCoordinator.shared.interactionTarget(
+                expected: lease.token
+              ) === lease else {
+            return
+        }
+        refresh()
+        RimeBufferController.refreshActiveUI()
+    }
+
+    private func moveDerivedTargetSelection(delta: Int) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard delta != 0,
+              isVisible,
+              !lastSecureInputState,
+              !IsSecureEventInputEnabled(),
+              !sessionProtectionActive,
+              let lease = InputFocusCoordinator.shared.interactionTarget(),
+              lease.isExternalTarget else {
+            return
+        }
+
+        let moved: Bool
+        if let controls = DerivedBufferWorkspaceRouter.selectedWorkspace
+            as? any DerivedResultSelectionControls,
+           controls.ownsResultNavigation {
+            moved = controls.moveResultSelection(delta: delta)
+        } else if DerivedBufferWorkspaceRouter.selectedWorkspace
+                    === StreamInputWorkspace.shared,
+                  StreamInputWorkspace.shared.ownsAlternativeNavigation {
+            moved = StreamInputWorkspace.shared.moveAlternativeSelection(
+                delta: delta,
+                focusToken: lease.token
+            )
+        } else {
+            return
+        }
+        guard moved,
               InputFocusCoordinator.shared.interactionTarget(
                 expected: lease.token
               ) === lease else {
@@ -2802,9 +3343,41 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     @objc private func closeTapped() { closeAndPause() }
 
+    @objc private func returnToExchangeSourceTapped() {
+        guard !sessionProtectionActive,
+              !IsSecureEventInputEnabled() else {
+            return
+        }
+        if let workspace = DerivedBufferWorkspaceRouter.selectedWorkspace
+                as? AITextPluginWorkspace,
+           workspace.pluginKey == AITextBuiltInPluginID.key {
+            // `reset()` invalidates the generated delivery lease and clears
+            // only result state. BufferModel remains the retained source.
+            workspace.reset()
+        } else if let workspace = DerivedBufferWorkspaceRouter.selectedWorkspace
+                    as? MarineChromeWorkspace,
+                  workspace.workspacePluginKey == MarineChromeWorkspace.pluginKey {
+            // Marine's refresh operation is a source-preserving reset. The
+            // user has explicitly chosen to abandon this result and edit.
+            _ = workspace.requestRefresh()
+        } else {
+            return
+        }
+        IMELog.write("buffer single-exchange returned to source")
+        refresh()
+        RimeBufferController.refreshActiveUI()
+    }
+
     @objc private func refreshPluginTapped() {
         guard BufferPluginSelectionStore.shared.activeKey != nil,
               !IsSecureEventInputEnabled() else { return }
+        if BufferDerivedPresentationRules.style(
+            for: DerivedBufferWorkspaceRouter.selectedWorkspace?.workspacePluginKey
+        ) == .singleExchange {
+            // See `refreshExchangeActions`: refreshing this workspace is not
+            // transactional yet and must not discard an unsent result.
+            return
+        }
         if let workspace = DerivedBufferWorkspaceRouter.selectedWorkspace {
             _ = workspace.requestRefresh()
         } else if let workspace = BuiltInBufferActionWorkspaceRouter.selectedWorkspace {

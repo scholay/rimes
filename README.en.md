@@ -32,7 +32,7 @@ Nothing auto-posts, and nothing silently edits the web page. Built for writing, 
 | Settings | Open Settings anywhere with `⌘⇧S` |
 | Live translation | Apple on-device translation by default (macOS 15+); AI connector optional |
 | AI generate | Codex CLI / Claude Code CLI / OpenAI-compatible API |
-| Stream input | Pinyin/chords → up to 3 mutually exclusive guesses → deliver the chosen one |
+| Stream input | Pinyin/chords → up to 5 configured mutually exclusive guesses → deliver the chosen one |
 | My Prompt | Local-first retrieval over Fabric / Obsidian-style prompt libraries |
 | Marine Chrome | Chrome extension supplies page context (e.g. Bilibili comment/reply); generate only after local confirm |
 | Remarkable | USB + on-device OCR of the current page into the buffer |
@@ -48,7 +48,7 @@ This table is generated from [`Catalog/buffer-plugins.json`](Catalog/buffer-plug
 | AI Generation | `builtin.ai-text` | 2.0 | Bundled with RIMES | Enabled |
 | My Prompt | `builtin.my-prompt` | 1.0 | Bundled with RIMES | Enabled |
 | Real-time Translation | `builtin.apple-translation` | 2.0 | Bundled with RIMES | Enabled |
-| Stream of Consciousness Input | `builtin.stream-input` | 1.1 | Bundled with RIMES | Enabled |
+| Stream of Consciousness Input | `builtin.stream-input` | 1.2 | Bundled with RIMES | Enabled |
 | Remarkable | `builtin.remarkable` | 2.0 | On demand in Settings | Disabled |
 | Marine Chrome | `builtin.marine-chrome` | 0.2.3 | On demand in Settings | Disabled |
 

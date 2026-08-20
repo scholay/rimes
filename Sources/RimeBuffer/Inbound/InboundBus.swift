@@ -184,10 +184,19 @@ final class InboundBus {
 
     // MARK: user decisions
 
-    /// Accept an item: it becomes a buffer block carrying its origin. A still-
-    /// streaming item accepts a snapshot and keeps streaming into a fresh item.
-    func accept(_ id: UUID) {
-        guard let idx = pending.firstIndex(where: { $0.id == id }) else { return }
+    /// Streaming items remain review-only until their provider explicitly ends
+    /// the stream. This prevents a partial snapshot from being staged more than
+    /// once while later deltas are still mutating the same pending item.
+    func canAccept(_ id: UUID) -> Bool {
+        pending.first(where: { $0.id == id })?.streaming == false
+    }
+
+    /// Accept a completed item: it becomes a buffer block carrying its origin.
+    /// The model gate is authoritative even when a stale UI action arrives.
+    @discardableResult
+    func accept(_ id: UUID) -> Bool {
+        guard let idx = pending.firstIndex(where: { $0.id == id }),
+              !pending[idx].streaming else { return false }
         let item = pending[idx]
         let acceptedMetadata: BufferModel.PluginMetadata?
         if case .plugin = item.origin,
@@ -209,8 +218,9 @@ final class InboundBus {
                                              pluginMetadata: acceptedMetadata)
         }
         IMELog.write("inbound accepted origin=\(item.origin.tag) chars=\(item.text.count)")
-        if !item.streaming { pending.remove(at: idx) }
+        pending.remove(at: idx)
         onChange?()
+        return true
     }
 
     func reject(_ id: UUID) {

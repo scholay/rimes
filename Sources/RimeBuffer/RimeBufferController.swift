@@ -4696,6 +4696,10 @@ final class RimeBufferController: IMKInputController {
         StatusMenu.shared.toggleBufferWindow()
     }
 
+    @objc func toggleClipboardHistoryFromInputMenu(_ sender: Any?) {
+        StatusMenu.shared.toggleClipboardHistory()
+    }
+
     @objc func toggleBufferPinnedFromInputMenu(_ sender: Any?) {
         StatusMenu.shared.toggleBufferPinned()
     }

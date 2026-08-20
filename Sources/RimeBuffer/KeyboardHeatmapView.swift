@@ -33,7 +33,7 @@ final class KeyboardHeatmapView: NSView {
         // The keyboard scales to whatever width its settings page provides.
         // Advertising the old 820pt width made Auto Layout enlarge the whole
         // settings window instead of fitting the heatmap into the content area.
-        NSSize(width: NSView.noIntrinsicMetric, height: 330)
+        NSSize(width: NSView.noIntrinsicMetric, height: 260)
     }
 
     override func updateTrackingAreas() {
@@ -69,6 +69,17 @@ final class KeyboardHeatmapView: NSView {
         super.draw(dirtyRect)
         NSColor.clear.setFill()
         dirtyRect.fill()
+        let panel = NSBezierPath(
+            roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+            xRadius: 8,
+            yRadius: 8
+        )
+        RimeUI.surface2.withAlphaComponent(0.66).setFill()
+        panel.fill()
+        RimeUI.borderStrong.withAlphaComponent(0.72).setStroke()
+        panel.lineWidth = 1
+        panel.setLineDash([4, 3], count: 2, phase: 0)
+        panel.stroke()
 
         let metrics = layoutMetrics()
         for key in layout.keys {

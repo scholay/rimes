@@ -14,22 +14,25 @@ class RimeFixedAccentPopUpButton: NSPopUpButton {
 
         let indicatorRect = NSRect(
             x: bounds.maxX - Self.indicatorWidth,
-            y: bounds.minY + 2,
-            width: Self.indicatorWidth - 2,
-            height: bounds.height - 4
+            y: bounds.minY + 3,
+            width: Self.indicatorWidth - 3,
+            height: bounds.height - 6
         )
         let alpha: CGFloat = isEnabled ? 1 : 0.46
-        RimeUI.accentGreen.withAlphaComponent(alpha).setFill()
-        NSBezierPath(
+        let indicator = NSBezierPath(
             roundedRect: indicatorRect,
             xRadius: min(6, indicatorRect.height / 2),
             yRadius: min(6, indicatorRect.height / 2)
-        ).fill()
+        )
+        RimeUI.surface3.withAlphaComponent(alpha).setFill()
+        indicator.fill()
+        RimeUI.border.withAlphaComponent(alpha).setStroke()
+        indicator.lineWidth = 1
+        indicator.stroke()
 
-        let foreground = RimeUI.accentForegroundColor.withAlphaComponent(alpha)
+        let foreground = RimeUI.accentTextColor.withAlphaComponent(alpha)
         foreground.setStroke()
-        drawChevron(centerY: indicatorRect.midY + 3, pointsUp: true)
-        drawChevron(centerY: indicatorRect.midY - 3, pointsUp: false)
+        drawChevron(centerY: indicatorRect.midY, pointsUp: false)
     }
 
     override func viewDidChangeEffectiveAppearance() {

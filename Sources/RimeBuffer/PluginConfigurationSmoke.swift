@@ -101,29 +101,74 @@ func runPluginConfigurationSmokeTest() -> Bool {
                 StreamInputPluginConfigurationFieldID.connector
               ) == AITextProviderKind.openAICompatible.rawValue,
               streamSnapshot.number(
-                StreamInputPluginConfigurationFieldID.debounceSeconds
-              ) == 0.22,
-              streamSnapshot.number(
-                StreamInputPluginConfigurationFieldID.maximumWaitSeconds
-              ) == 0.80 else {
+                StreamInputPluginConfigurationFieldID.candidateCount
+              ) == 5,
+              streamSnapshot.string(
+                StreamInputPluginConfigurationFieldID.responsePace
+              ) == StreamInputResponsePace.balanced.rawValue else {
             return fail("stream defaults")
+        }
+
+        // A v1.1 profile has no candidate/pace fields. Loading projects its
+        // custom numeric timing onto the nearest v1.2 preset while retaining
+        // the independently selected connector.
+        let streamStorageKey =
+            "RimeBuffer.PluginConfiguration.\(BuiltInPluginID.streamInput)"
+        defaults.set([
+            StreamInputPluginConfigurationFieldID.connector:
+                AITextProviderKind.claudeCodeCLI.rawValue,
+            StreamInputPluginConfigurationFieldID.debounceSeconds: 0.35,
+            StreamInputPluginConfigurationFieldID.maximumWaitSeconds: 1.20,
+        ], forKey: streamStorageKey)
+        streamSnapshot = try streamModel.load()
+        guard streamSnapshot.string(
+                StreamInputPluginConfigurationFieldID.connector
+              ) == AITextProviderKind.claudeCodeCLI.rawValue,
+              streamSnapshot.number(
+                StreamInputPluginConfigurationFieldID.candidateCount
+              ) == 5,
+              streamSnapshot.string(
+                StreamInputPluginConfigurationFieldID.responsePace
+              ) == StreamInputResponsePace.stable.rawValue else {
+            return fail("stream v1.1 migration")
         }
         streamSnapshot[StreamInputPluginConfigurationFieldID.connector] =
             .string(AITextProviderKind.codexCLI.rawValue)
         streamSnapshot[
-            StreamInputPluginConfigurationFieldID.debounceSeconds
-        ] = .number(0.35)
+            StreamInputPluginConfigurationFieldID.candidateCount
+        ] = .number(4)
         streamSnapshot[
-            StreamInputPluginConfigurationFieldID.maximumWaitSeconds
-        ] = .number(1.20)
+            StreamInputPluginConfigurationFieldID.responsePace
+        ] = .string(StreamInputResponsePace.fast.rawValue)
         _ = try streamModel.save(streamSnapshot)
         let streamSettings = PluginConfigurationCatalog.streamInputSettings(
             defaults: defaults
         )
         guard streamSettings.connectorKind == .codexCLI,
-              streamSettings.debounce == 0.35,
-              streamSettings.maximumWait == 1.20 else {
+              streamSettings.candidateCount == 4,
+              streamSettings.responsePace == .fast,
+              streamSettings.debounce == 0.14,
+              streamSettings.maximumWait == 0.50,
+              let persistedStream = defaults.dictionary(
+                forKey: streamStorageKey
+              ),
+              persistedStream[
+                StreamInputPluginConfigurationFieldID.debounceSeconds
+              ] == nil,
+              persistedStream[
+                StreamInputPluginConfigurationFieldID.maximumWaitSeconds
+              ] == nil else {
             return fail("stream runtime bridge")
+        }
+        var fractionalCandidateSnapshot = streamSnapshot
+        fractionalCandidateSnapshot[
+            StreamInputPluginConfigurationFieldID.candidateCount
+        ] = .number(2.5)
+        do {
+            _ = try streamModel.save(fractionalCandidateSnapshot)
+            return fail("fractional stream candidate count accepted")
+        } catch PluginConfigurationError.invalidField {
+            // Expected.
         }
 
         let translationModel = try PluginConfigurationCatalog

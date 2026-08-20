@@ -115,25 +115,36 @@ enum AITextProviderOutputContract: Equatable {
     /// Ordinary AI actions return small semantic units that can be staged and
     /// delivered independently.
     case semanticBlocks
-    /// Consciousness-stream input returns one to three complete, mutually
-    /// exclusive readings of the same full raw-pinyin snapshot.
+    /// Consciousness-stream input returns one to the request-frozen limit
+    /// (currently at most five) of complete, mutually exclusive readings of
+    /// the same full raw-pinyin snapshot.
     case alternativeGuesses
 }
 
 struct AITextProviderRequest: Equatable {
+    static let maximumSupportedAlternativeGuessCount = 5
+
     let requestID: UUID
     let sourceText: String
     let preparedPrompt: String?
     let outputContract: AITextProviderOutputContract
+    /// Frozen by the workspace at the request boundary. Ordinary semantic
+    /// block requests ignore this value and retain their existing behavior.
+    let maximumAlternativeGuessCount: Int
 
     init(requestID: UUID,
          sourceText: String,
          preparedPrompt: String? = nil,
-         outputContract: AITextProviderOutputContract = .semanticBlocks) {
+         outputContract: AITextProviderOutputContract = .semanticBlocks,
+         maximumAlternativeGuessCount: Int = 3) {
         self.requestID = requestID
         self.sourceText = sourceText
         self.preparedPrompt = preparedPrompt
         self.outputContract = outputContract
+        self.maximumAlternativeGuessCount = min(
+            max(maximumAlternativeGuessCount, 1),
+            Self.maximumSupportedAlternativeGuessCount
+        )
     }
 }
 
@@ -261,6 +272,40 @@ enum AITextResultDecoder {
             preconditionFailure("Invalid built-in AI output schema")
         }
         return object
+    }
+
+    static func alternativeSchemaObject(maximumCount: Int) -> [String: Any] {
+        let boundedMaximum = min(
+            max(maximumCount, 1),
+            AITextProviderRequest.maximumSupportedAlternativeGuessCount
+        )
+        return [
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["blocks"],
+            "properties": [
+                "blocks": [
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": boundedMaximum,
+                    "description":
+                        "Complete mutually exclusive readings of the same input, ordered most likely first.",
+                    "items": [
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["text", "title"],
+                        "properties": [
+                            "text": [
+                                "type": "string",
+                                "description":
+                                    "The complete intended text for this reading.",
+                            ],
+                            "title": ["type": ["string", "null"]],
+                        ],
+                    ],
+                ],
+            ],
+        ]
     }
 
     static func decodeFinalText(_ raw: String) throws -> [AITextProviderBlock] {
@@ -2288,7 +2333,8 @@ struct AITextClaudeJSONStreamParser {
 enum AITextProviderStreamingOutput {
     static func blocks(
         from snapshot: String,
-        outputContract: AITextProviderOutputContract = .semanticBlocks
+        outputContract: AITextProviderOutputContract = .semanticBlocks,
+        maximumAlternativeGuessCount: Int = 3
     ) -> [AITextProviderBlock] {
         let trimmed = snapshot.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
@@ -2296,14 +2342,20 @@ enum AITextProviderStreamingOutput {
             || String(trimmed.prefix(7)).lowercased() == "```json"
 
         if outputContract == .alternativeGuesses {
-            if let complete = try? AITextResultDecoder.decodeAlternativeGuesses(trimmed) {
+            if let complete = try? AITextResultDecoder.decodeAlternativeGuesses(
+                trimmed,
+                maximumCount: maximumAlternativeGuessCount
+            ) {
                 return complete
             }
             guard startsStructuredJSON else { return [] }
             return AITextPartialJSONBlocks.decode(trimmed)
-                .prefix(3)
+                .prefix(maximumAlternativeGuessCount)
                 .compactMap {
-                    try? AITextResultDecoder.validateAlternativeSnapshot($0)
+                    try? AITextResultDecoder.validateAlternativeSnapshot(
+                        $0,
+                        maximumCount: maximumAlternativeGuessCount
+                    )
                 }
         }
 
@@ -2323,9 +2375,14 @@ enum AITextProviderStreamingOutput {
 
     static func emit(_ snapshots: [String],
                      outputContract: AITextProviderOutputContract = .semanticBlocks,
+                     maximumAlternativeGuessCount: Int = 3,
                      callback: (AITextProviderEvent) -> Void) {
         for snapshot in snapshots {
-            for block in blocks(from: snapshot, outputContract: outputContract) {
+            for block in blocks(
+                from: snapshot,
+                outputContract: outputContract,
+                maximumAlternativeGuessCount: maximumAlternativeGuessCount
+            ) {
                 callback(.blockSnapshot(block))
             }
         }
@@ -2765,6 +2822,15 @@ final class CodexCLITextProvider: AITextProvider {
             )))
             return relay
         }
+        let outputSchema: [String: Any]
+        switch request.outputContract {
+        case .semanticBlocks:
+            outputSchema = AITextResultDecoder.schemaObject
+        case .alternativeGuesses:
+            outputSchema = AITextResultDecoder.alternativeSchemaObject(
+                maximumCount: request.maximumAlternativeGuessCount
+            )
+        }
         let operation = AITextCodexAppServerOperation(
             executableURL: verifiedExecutable.url,
             verifiedExecutable: verifiedExecutable,
@@ -2772,7 +2838,7 @@ final class CodexCLITextProvider: AITextProvider {
             environment: processEnvironment,
             currentDirectoryURL: workspaceURL,
             prompt: prompt,
-            outputSchema: AITextResultDecoder.schemaObject,
+            outputSchema: outputSchema,
             inferenceProfile: inferenceProfile,
             timeout: AITextRuntimeLimits.defaultTimeout,
             maximumOutputBytes: AITextRuntimeLimits.maximumWireBytes,
@@ -3079,7 +3145,13 @@ final class ClaudeCodeCLITextProvider: AITextProvider {
         let task = runner.run(spec, onStandardOutput: { data in
             let batch = parser.append(data)
             batch.activities.forEach { onEvent(.activity($0)) }
-            AITextProviderStreamingOutput.emit(batch.snapshots, callback: onEvent)
+            AITextProviderStreamingOutput.emit(
+                batch.snapshots,
+                outputContract: request.outputContract,
+                maximumAlternativeGuessCount:
+                    request.maximumAlternativeGuessCount,
+                callback: onEvent
+            )
         }, completion: { result in
             defer { temporary.remove() }
             if result.cancelled { completion(.failure(.cancelled)); return }
@@ -3097,7 +3169,20 @@ final class ClaudeCodeCLITextProvider: AITextProvider {
             switch parser.finish() {
             case let .failure(error): completion(.failure(error))
             case let .success(text):
-                do { completion(.success(try AITextResultDecoder.decodeFinalText(text))) }
+                do {
+                    let blocks: [AITextProviderBlock]
+                    switch request.outputContract {
+                    case .semanticBlocks:
+                        blocks = try AITextResultDecoder.decodeFinalText(text)
+                    case .alternativeGuesses:
+                        blocks = try AITextResultDecoder.decodeAlternativeGuesses(
+                            text,
+                            maximumCount:
+                                request.maximumAlternativeGuessCount
+                        )
+                    }
+                    completion(.success(blocks))
+                }
                 catch let error as AITextProviderError { completion(.failure(error)) }
                 catch { completion(.failure(.invalidResult)) }
             }
@@ -3111,7 +3196,8 @@ enum AITextOpenAIRequestBuilder {
     static func makeRequest(configuration: OpenAICompatibleConfiguration,
                             sourceText: String,
                             preparedPrompt: String? = nil,
-                            outputContract: AITextProviderOutputContract = .semanticBlocks)
+                            outputContract: AITextProviderOutputContract = .semanticBlocks,
+                            maximumAlternativeGuessCount: Int = 3)
         throws -> URLRequest {
         let configuration = try configuration.validated()
         guard sourceText.utf8.count <= AITextRuntimeLimits.maximumSourceBytes else {
@@ -3137,7 +3223,11 @@ enum AITextOpenAIRequestBuilder {
         case .semanticBlocks:
             systemPrompt = "Return only JSON in this shape: {\"blocks\":[{\"text\":\"...\",\"title\":null}]}. Make blocks as fine-grained as practical: one short clause, sentence, list item, or step per block. Keep code, URLs, numbers, and quotations intact. Never use tools."
         case .alternativeGuesses:
-            systemPrompt = "Answer directly in non-thinking mode. Return only JSON in this shape: {\"blocks\":[{\"text\":\"...\",\"title\":null}]}. Return 1 to 3 complete, mutually exclusive guesses for the entire input, ordered most likely first. Respect minimumGuessCount in the user payload: whenever it is 2, return at least 2 materially different readings. Otherwise use one guess only when pronunciation and intent are both highly certain, and use 2 or 3 for any reasonable syllable, homophone, or semantic ambiguity. Each block must stand alone as the full intended text, never one segment of a longer answer. Alternatives must not be stylistic paraphrases. Titles must be null. Never use tools."
+            let boundedMaximum = min(
+                max(maximumAlternativeGuessCount, 1),
+                AITextProviderRequest.maximumSupportedAlternativeGuessCount
+            )
+            systemPrompt = "Answer directly in non-thinking mode. Return only JSON in this shape: {\"blocks\":[{\"text\":\"...\",\"title\":null}]}. Return 1 to \(boundedMaximum) complete, mutually exclusive guesses for the entire input, ordered most likely first. Never exceed \(boundedMaximum) blocks. Respect minimumGuessCount in the user payload, capped by this request limit. Otherwise use one guess only when pronunciation and intent are both highly certain, and use additional guesses for any reasonable syllable, homophone, or semantic ambiguity. Each block must stand alone as the full intended text, never one segment of a longer answer. Alternatives must not be stylistic paraphrases. Titles must be null. Never use tools."
         }
         var body: [String: Any] = [
             "model": configuration.model,
@@ -3330,6 +3420,7 @@ private final class AITextOpenAIStreamOperation: NSObject,
     private let request: URLRequest
     private let diagnosticRequestID: UUID
     private let outputContract: AITextProviderOutputContract
+    private let maximumAlternativeGuessCount: Int
     private let sessionConfiguration: URLSessionConfiguration
     private let onEvent: (AITextProviderEvent) -> Void
     private let completion: (Result<[AITextProviderBlock], AITextProviderError>) -> Void
@@ -3362,12 +3453,17 @@ private final class AITextOpenAIStreamOperation: NSObject,
     init(request: URLRequest,
          diagnosticRequestID: UUID,
          outputContract: AITextProviderOutputContract,
+         maximumAlternativeGuessCount: Int,
          sessionConfiguration: URLSessionConfiguration,
          onEvent: @escaping (AITextProviderEvent) -> Void,
          completion: @escaping (Result<[AITextProviderBlock], AITextProviderError>) -> Void) {
         self.request = request
         self.diagnosticRequestID = diagnosticRequestID
         self.outputContract = outputContract
+        self.maximumAlternativeGuessCount = min(
+            max(maximumAlternativeGuessCount, 1),
+            AITextProviderRequest.maximumSupportedAlternativeGuessCount
+        )
         self.sessionConfiguration = sessionConfiguration
         self.onEvent = onEvent
         self.completion = completion
@@ -3577,7 +3673,8 @@ private final class AITextOpenAIStreamOperation: NSObject,
         cumulativeText += delta
         let blocks = AITextProviderStreamingOutput.blocks(
             from: cumulativeText,
-            outputContract: outputContract
+            outputContract: outputContract,
+            maximumAlternativeGuessCount: maximumAlternativeGuessCount
         )
         if !blocks.isEmpty, !loggedFirstSnapshot {
             loggedFirstSnapshot = true
@@ -3596,7 +3693,10 @@ private final class AITextOpenAIStreamOperation: NSObject,
         case .semanticBlocks:
             return try AITextResultDecoder.decodeFinalText(cumulativeText)
         case .alternativeGuesses:
-            return try AITextResultDecoder.decodeAlternativeGuesses(cumulativeText)
+            return try AITextResultDecoder.decodeAlternativeGuesses(
+                cumulativeText,
+                maximumCount: maximumAlternativeGuessCount
+            )
         }
     }
 
@@ -3708,12 +3808,16 @@ final class OpenAICompatibleTextProvider: AITextProvider {
                 configuration: configuration,
                 sourceText: request.sourceText,
                 preparedPrompt: request.preparedPrompt,
-                outputContract: request.outputContract
+                outputContract: request.outputContract,
+                maximumAlternativeGuessCount:
+                    request.maximumAlternativeGuessCount
             )
             let operation = AITextOpenAIStreamOperation(
                 request: urlRequest,
                 diagnosticRequestID: request.requestID,
                 outputContract: request.outputContract,
+                maximumAlternativeGuessCount:
+                    request.maximumAlternativeGuessCount,
                 sessionConfiguration: sessionConfigurationFactory(),
                 onEvent: onEvent,
                 completion: completion
