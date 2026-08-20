@@ -16,9 +16,11 @@ Before making substantial visual changes, use the Product Design plugin's `get-c
 ## Confirmed Product Decisions
 
 - Keep the input-source menu limited to exactly three destinations: Settings, External Source Inbox, and Maintenance. Do not restore the former Buffer visibility, pinning, movement, update, deployment, reinstall, restart, or log actions in this menu.
-- The Buffer result-count contract is 1–5, the current design defaults to five results, and five-result presentation uses an in-rail pager. Do not reduce the range or default merely to match an older native configuration; the native runtime has not yet been synchronized to this design-branch contract.
+- The Buffer result-count contract is 1–5, the current design defaults to five results, and five-result presentation uses an in-rail pager. The native runtime now implements the same contract; future changes must keep the React design source and AppKit implementation synchronized.
 - The Buffer design master may remain fixed at 760 logical points wide. Responsive width behavior is not required for this prototype unless the user revises this decision.
 - Single-exchange is an accepted Buffer interaction pattern: a source rail may visually exchange into a result rail. Preserve both source and result state until delivery has been confirmed successful; a request or delivery failure must not discard either state.
+- Routine Buffer states render no toolbar status element and reserve no status width. Actionable progress, protection, failure, or delivery feedback may render the fixed 88pt status slot.
+- The Buffer main action is a 22×22 icon-only control. Its visible icon changes with generation and delivery state, while its accessible label and tooltip retain the complete action or progress text.
 - Controlled Buffer hosts must round-trip the `requestID` and `contextKey` emitted by `onGenerate`, keep `activeRequestID` aligned with the displayed result, honor generation/delivery `AbortSignal`s, and treat only an explicit `true` send acknowledgement as delivery success.
 
 When implementing from a selected generated mock, treat that image as the source of truth for layout, component anatomy, density, spacing, color, typography, visible content, and hierarchy.

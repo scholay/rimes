@@ -34,6 +34,40 @@ function PluginHarness() {
 }
 
 describe("Buffer generation and delivery", () => {
+  it("omits routine status space and keeps the main action icon-only", () => {
+    const view = render(
+      <BufferSurface
+        defaultMode="normal"
+        defaultPhase="ready"
+        defaultSourceText="source"
+      />,
+    );
+
+    expect(view.container.querySelector(".buffer-toolbar__status")).toBeNull();
+    const sendButton = screen.getByRole("button", { name: "发送" });
+    expect(sendButton.classList.contains("buffer-workbench__primary-action")).toBe(true);
+    expect(sendButton.textContent).toBe("");
+    expect(sendButton.getAttribute("title")).toBe("发送");
+    expect(sendButton.querySelector("svg")).toBeTruthy();
+    const sendIconMarkup = sendButton.querySelector("svg")?.innerHTML;
+
+    view.rerender(
+      <BufferSurface
+        defaultMode="normal"
+        defaultSourceText="source"
+        phase="loading"
+      />,
+    );
+    const status = view.container.querySelector(".buffer-toolbar__status");
+    expect(status?.textContent).toBe("正在发送");
+    const busyButton = screen.getByRole("button", { name: "发送中…" });
+    expect(busyButton.textContent).toBe("");
+    expect(busyButton.getAttribute("title")).toBe("发送中…");
+    expect(busyButton.getAttribute("aria-busy")).toBe("true");
+    expect(busyButton.querySelector("svg")).toBeTruthy();
+    expect(busyButton.querySelector("svg")?.innerHTML).not.toBe(sendIconMarkup);
+  });
+
   it("debounces live generation and ignores parent-only callback identity changes", async () => {
     vi.useFakeTimers();
     const firstCallback = vi.fn();
