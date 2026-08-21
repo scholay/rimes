@@ -10,6 +10,11 @@ final class RimeFixedAccentChoiceButton: NSControl {
 
     let style: Style
 
+    /// Rich choice-card wrappers draw selection outside the radio indicator.
+    /// Notify that owner whenever the semantic control state changes so the
+    /// old card is repainted as well as the newly selected card.
+    var onVisualStateChange: (() -> Void)?
+
     /// Settings choice cards render their title and detail as a richer sibling
     /// label while retaining this control as the sole accessible/action
     /// element. Other call sites keep the traditional indicator + title form.
@@ -40,6 +45,7 @@ final class RimeFixedAccentChoiceButton: NSControl {
             guard oldValue != state else { return }
             needsDisplay = true
             superview?.needsDisplay = true
+            onVisualStateChange?()
             NSAccessibility.post(element: self, notification: .valueChanged)
         }
     }

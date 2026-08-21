@@ -248,6 +248,12 @@ private final class SettingsIconTileView: NSView {
 /// control remains the accessible element and action owner; the wrapper only
 /// supplies React's choice-card geometry and forwards clicks in its padding.
 private final class SettingsChoiceCardView: NSView {
+    enum VisualState: Equatable {
+        case idle
+        case hovered
+        case selected
+    }
+
     private let choice: RimeFixedAccentChoiceButton
     private var trackingAreaRef: NSTrackingArea?
     private var pointerInside = false
@@ -302,6 +308,9 @@ private final class SettingsChoiceCardView: NSView {
             row.topAnchor.constraint(equalTo: topAnchor),
             row.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+        choice.onVisualStateChange = { [weak self] in
+            self?.needsDisplay = true
+        }
         setAccessibilityElement(false)
     }
 
@@ -353,20 +362,41 @@ private final class SettingsChoiceCardView: NSView {
         needsDisplay = true
     }
 
+    var visualState: VisualState {
+        if choice.state == .on { return .selected }
+        return pointerInside ? .hovered : .idle
+    }
+
+    func setPointerInsideForSmoke(_ inside: Bool) {
+        pointerInside = inside
+        needsDisplay = true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        let selected = choice.state == .on
         let path = NSBezierPath(
             roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
             xRadius: 8,
             yRadius: 8
         )
-        (selected ? SettingsVisualStyle.selectedChoice : RimeUI.surface2).setFill()
+        switch visualState {
+        case .selected:
+            SettingsVisualStyle.selectedChoice.setFill()
+        case .hovered, .idle:
+            RimeUI.surface2.setFill()
+        }
         path.fill()
-        (selected
-            ? RimeUI.accentTextColor.withAlphaComponent(0.60)
-            : (pointerInside ? RimeUI.borderStrong : RimeUI.border)).setStroke()
-        path.lineWidth = selected ? 1.2 : 1
+        switch visualState {
+        case .selected:
+            RimeUI.accentTextColor.withAlphaComponent(0.60).setStroke()
+            path.lineWidth = 1.2
+        case .hovered:
+            RimeUI.borderStrong.setStroke()
+            path.lineWidth = 1
+        case .idle:
+            RimeUI.border.setStroke()
+            path.lineWidth = 1
+        }
         path.stroke()
     }
 }
@@ -811,10 +841,48 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         encodingOK = encodingOK
             && actionProbe.choiceTags == Array(InputEncoding.allCases.indices)
 
-        if themeOK && encodingOK {
+        selectPreviewTarget(
+            routeID: SettingsCoreRoute.inputMethod.id,
+            subpageID: SettingsSubpageID(rawValue: "typing-mode")
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        let keyingCards = descendants(of: SettingsChoiceCardView.self, in: contentHost)
+            .sorted(by: { $0.frame.minX < $1.frame.minX })
+        let keyingChoices = keyingCards.compactMap { card in
+            descendants(of: RimeFixedAccentChoiceButton.self, in: card).first
+        }
+        var visualStateOK = keyingCards.count == 3 && keyingChoices.count == 3
+        if visualStateOK {
+            keyingChoices.forEach { $0.state = .off }
+            keyingCards.forEach { $0.needsDisplay = false }
+
+            keyingChoices[0].state = .on
+            visualStateOK = keyingCards[0].needsDisplay
+                && keyingCards.map(\.visualState) == [.selected, .idle, .idle]
+
+            keyingCards.forEach { $0.needsDisplay = false }
+            keyingChoices[0].state = .off
+            keyingChoices[1].state = .on
+            visualStateOK = visualStateOK
+                && keyingCards[0].needsDisplay
+                && keyingCards[1].needsDisplay
+                && keyingCards.map(\.visualState) == [.idle, .selected, .idle]
+
+            keyingCards[2].setPointerInsideForSmoke(true)
+            visualStateOK = visualStateOK
+                && keyingCards.map(\.visualState) == [.idle, .selected, .hovered]
+            keyingCards[2].setPointerInsideForSmoke(false)
+            visualStateOK = visualStateOK
+                && keyingCards.map(\.visualState) == [.idle, .selected, .idle]
+        }
+        if !visualStateOK {
+            print("settings card visual-state smoke: stale or overlapping state")
+        }
+
+        if themeOK && encodingOK && visualStateOK {
             print("settings card hit-test smoke: OK")
         }
-        return themeOK && encodingOK
+        return themeOK && encodingOK && visualStateOK
     }
 
     @discardableResult
