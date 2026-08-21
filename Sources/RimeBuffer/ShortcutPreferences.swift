@@ -139,6 +139,7 @@ struct RimeKeyboardShortcut: Codable, Equatable {
 enum RimeShortcutAction: String, CaseIterable {
     case deliverBuffer
     case toggleWorkbench
+    case toggleClipboardHistory
     case openSettings
     case previousPlugin
     case nextPlugin
@@ -147,6 +148,7 @@ enum RimeShortcutAction: String, CaseIterable {
         switch self {
         case .deliverBuffer: return "投递缓冲内容"
         case .toggleWorkbench: return "显示或隐藏工作台"
+        case .toggleClipboardHistory: return "显示或隐藏剪贴板历史"
         case .openSettings: return "打开设置"
         case .previousPlugin: return "上一个缓冲插件"
         case .nextPlugin: return "下一个缓冲插件"
@@ -159,6 +161,8 @@ enum RimeShortcutAction: String, CaseIterable {
             return "轻按发送下一块；按住约 1.2 秒发送全部"
         case .toggleWorkbench:
             return "在任何应用中呼出或收起缓冲工作台"
+        case .toggleClipboardHistory:
+            return "在共享工作台中单独呼出或收起剪贴板历史"
         case .openSettings:
             return "在任何应用中打开 RIMES 设置"
         case .previousPlugin:
@@ -178,6 +182,11 @@ enum RimeShortcutAction: String, CaseIterable {
         case .toggleWorkbench:
             return RimeKeyboardShortcut(
                 keyCode: UInt16(kVK_ANSI_B),
+                modifiers: [.command, .shift]
+            )
+        case .toggleClipboardHistory:
+            return RimeKeyboardShortcut(
+                keyCode: UInt16(kVK_ANSI_P),
                 modifiers: [.command, .shift]
             )
         case .openSettings:
@@ -224,15 +233,108 @@ enum RimeShortcutPreferenceError: Error, Equatable {
 enum RimeShortcutPreferences {
     private static let keyPrefix = "keyboardShortcut.v1."
 
+    /// These actions may already have an explicit user binding from a version
+    /// that did not expose the Clipboard rail shortcut. Upgrade must preserve
+    /// those choices even if one already owns the new Command-Shift-P default.
+    private static let actionsPredatingClipboardHistory: [RimeShortcutAction] = [
+        .deliverBuffer,
+        .toggleWorkbench,
+        .openSettings,
+        .previousPlugin,
+        .nextPlugin,
+    ]
+
+    /// A missing Clipboard binding normally resolves to Command-Shift-P. If a
+    /// pre-existing action already owns it, persist the first free fallback so
+    /// Carbon never receives duplicate registrations from this process.
+    private static let clipboardHistoryFallbackKeyCodes: [UInt16] = [
+        UInt16(kVK_ANSI_C), UInt16(kVK_ANSI_D), UInt16(kVK_ANSI_E),
+        UInt16(kVK_ANSI_F), UInt16(kVK_ANSI_G), UInt16(kVK_ANSI_H),
+        UInt16(kVK_ANSI_I), UInt16(kVK_ANSI_J), UInt16(kVK_ANSI_K),
+        UInt16(kVK_ANSI_L), UInt16(kVK_ANSI_M), UInt16(kVK_ANSI_N),
+        UInt16(kVK_ANSI_O), UInt16(kVK_ANSI_Q), UInt16(kVK_ANSI_R),
+        UInt16(kVK_ANSI_T), UInt16(kVK_ANSI_U), UInt16(kVK_ANSI_V),
+        UInt16(kVK_ANSI_W), UInt16(kVK_ANSI_X), UInt16(kVK_ANSI_Y),
+        UInt16(kVK_ANSI_Z), UInt16(kVK_ANSI_A), UInt16(kVK_ANSI_B),
+        UInt16(kVK_ANSI_S),
+    ]
+
     static func shortcut(for action: RimeShortcutAction,
                          defaults: UserDefaults = .standard) -> RimeKeyboardShortcut {
-        guard let data = defaults.data(forKey: keyPrefix + action.rawValue),
+        if action == .toggleClipboardHistory {
+            migrateClipboardHistoryShortcutIfNeeded(defaults: defaults)
+        }
+        return storedShortcut(for: action, defaults: defaults)
+            ?? action.defaultShortcut
+    }
+
+    /// This accessor is also used during global-hot-key installation, so the
+    /// migration writes silently and never posts a notification that could
+    /// re-enter Carbon registration.
+    private static func migrateClipboardHistoryShortcutIfNeeded(
+        defaults: UserDefaults
+    ) {
+        let clipboardAction = RimeShortcutAction.toggleClipboardHistory
+        let clipboardKey = preferenceKey(for: clipboardAction)
+        if let data = defaults.data(forKey: clipboardKey),
+           let shortcut = try? JSONDecoder().decode(
+                RimeKeyboardShortcut.self,
+                from: data
+           ),
+           clipboardAction.accepts(shortcut) {
+            return
+        }
+
+        let occupied = actionsPredatingClipboardHistory.map { action in
+            (action, storedShortcut(for: action, defaults: defaults)
+                ?? action.defaultShortcut)
+        }
+        let desired = clipboardAction.defaultShortcut
+        guard let conflict = occupied.first(where: { $0.1 == desired }) else {
+            return
+        }
+
+        let fallback = clipboardHistoryFallbackKeyCodes.lazy
+            .map {
+                RimeKeyboardShortcut(
+                    keyCode: $0,
+                    modifiers: [.command, .shift]
+                )
+            }
+            .first { candidate in
+                clipboardAction.accepts(candidate)
+                    && !occupied.contains(where: { $0.1 == candidate })
+            }
+        guard let fallback,
+              let data = try? JSONEncoder().encode(fallback) else {
+            IMELog.write(
+                "clipboard shortcut migration failed; no encodable fallback"
+            )
+            return
+        }
+
+        defaults.set(data, forKey: clipboardKey)
+        IMELog.write(
+            "clipboard shortcut migrated; preserved=\(conflict.0.rawValue) "
+                + "clipboard=\(fallback.displayTitle)"
+        )
+    }
+
+    private static func preferenceKey(for action: RimeShortcutAction) -> String {
+        keyPrefix + action.rawValue
+    }
+
+    private static func storedShortcut(
+        for action: RimeShortcutAction,
+        defaults: UserDefaults
+    ) -> RimeKeyboardShortcut? {
+        guard let data = defaults.data(forKey: preferenceKey(for: action)),
               let shortcut = try? JSONDecoder().decode(
                   RimeKeyboardShortcut.self,
                   from: data
               ),
               action.accepts(shortcut) else {
-            return action.defaultShortcut
+            return nil
         }
         return shortcut
     }
@@ -256,7 +358,7 @@ enum RimeShortcutPreferences {
             throw RimeShortcutPreferenceError.conflict(conflict)
         }
         guard let data = try? JSONEncoder().encode(shortcut) else { return }
-        defaults.set(data, forKey: keyPrefix + action.rawValue)
+        defaults.set(data, forKey: preferenceKey(for: action))
         NotificationCenter.default.post(
             name: .rimeShortcutPreferencesDidChange,
             object: nil,
@@ -273,7 +375,7 @@ enum RimeShortcutPreferences {
         }) {
             throw RimeShortcutPreferenceError.conflict(conflict)
         }
-        defaults.removeObject(forKey: keyPrefix + action.rawValue)
+        defaults.removeObject(forKey: preferenceKey(for: action))
         NotificationCenter.default.post(
             name: .rimeShortcutPreferencesDidChange,
             object: nil,
@@ -283,7 +385,7 @@ enum RimeShortcutPreferences {
 
     static func resetAll(defaults: UserDefaults = .standard) {
         for action in RimeShortcutAction.allCases {
-            defaults.removeObject(forKey: keyPrefix + action.rawValue)
+            defaults.removeObject(forKey: preferenceKey(for: action))
         }
         NotificationCenter.default.post(
             name: .rimeShortcutPreferencesDidChange,

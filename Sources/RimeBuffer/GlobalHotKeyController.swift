@@ -3,6 +3,7 @@ import Foundation
 
 enum GlobalHotKeyRoute: Equatable {
     case toggleWorkbench
+    case toggleClipboardHistory
     case openSettings
     case ignore
 }
@@ -10,10 +11,12 @@ enum GlobalHotKeyRoute: Equatable {
 enum GlobalHotKeyAction: UInt32, CaseIterable, Hashable {
     case toggleWorkbench = 1
     case openSettings = 2
+    case toggleClipboardHistory = 3
 
     var shortcutAction: RimeShortcutAction {
         switch self {
         case .toggleWorkbench: return .toggleWorkbench
+        case .toggleClipboardHistory: return .toggleClipboardHistory
         case .openSettings: return .openSettings
         }
     }
@@ -24,8 +27,18 @@ struct GlobalHotKeyDefinition {
     let keyCode: UInt32
     let modifiers: UInt32
 
+    /// Clipboard visibility is a deliberate global command. Register it
+    /// exclusively so another Carbon listener cannot observe the same chord;
+    /// ordinary AppKit editing events remain outside this handler.
+    var registrationOptions: OptionBits {
+        action == .toggleClipboardHistory
+            ? OptionBits(kEventHotKeyExclusive)
+            : OptionBits(kEventHotKeyNoOptions)
+    }
+
     var logDescription: String {
-        "action=\(action) keyCode=\(keyCode) modifiers=\(modifiers)"
+        "action=\(action) keyCode=\(keyCode) modifiers=\(modifiers) "
+            + "exclusive=\(registrationOptions == OptionBits(kEventHotKeyExclusive))"
     }
 
     var identifier: EventHotKeyID {
@@ -79,6 +92,7 @@ enum GlobalHotKeyRouting {
         }
         switch action {
         case .toggleWorkbench: return .toggleWorkbench
+        case .toggleClipboardHistory: return .toggleClipboardHistory
         case .openSettings: return .openSettings
         }
     }
@@ -105,15 +119,20 @@ final class GlobalHotKeyController {
             if let rawAction = notification.userInfo?["action"] as? String,
                let action = RimeShortcutAction(rawValue: rawAction),
                action != .toggleWorkbench,
+               action != .toggleClipboardHistory,
                action != .openSettings {
                 return
             }
-            _ = self?.reloadFromPreferences()
+            if self?.reloadFromPreferences() == false {
+                IMELog.write(
+                    "global hotkey reload incomplete; one or more shortcuts unavailable"
+                )
+            }
         }
     }
 
     @discardableResult
-    func install() -> Bool {
+    func install(defaults: UserDefaults = .standard) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
 
         if eventHandlerRef == nil {
@@ -137,7 +156,7 @@ final class GlobalHotKeyController {
             eventHandlerRef = installedHandler
         }
 
-        let definitions = GlobalHotKeyRouting.definitions()
+        let definitions = GlobalHotKeyRouting.definitions(defaults: defaults)
         for definition in definitions
         where hotKeyRefs[definition.action] == nil {
             var registeredHotKey: EventHotKeyRef?
@@ -146,13 +165,17 @@ final class GlobalHotKeyController {
                 definition.modifiers,
                 definition.identifier,
                 GetApplicationEventTarget(),
-                OptionBits(kEventHotKeyNoOptions),
+                definition.registrationOptions,
                 &registeredHotKey
             )
             guard registrationStatus == noErr, let registeredHotKey else {
+                let reason = registrationStatus == OSStatus(eventHotKeyExistsErr)
+                    ? "already registered by this or another process"
+                    : "Carbon registration error"
                 IMELog.write(
                     "global hotkey registration failed "
-                        + "\(definition.logDescription) status=\(registrationStatus)"
+                        + "\(definition.logDescription) status=\(registrationStatus) "
+                        + "reason=\(reason)"
                 )
                 continue
             }
@@ -226,6 +249,9 @@ final class GlobalHotKeyController {
             case .toggleWorkbench:
                 BufferWindowController.shared.toggleVisibility()
                 IMELog.write("global hotkey toggled buffer workbench")
+            case .toggleClipboardHistory:
+                BufferWindowController.shared.toggleClipboardHistory()
+                IMELog.write("global hotkey toggled clipboard history")
             case .openSettings:
                 SettingsWindowController.shared.show()
                 IMELog.write("global hotkey opened settings")

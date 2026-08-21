@@ -336,9 +336,16 @@ private final class SettingsChoiceCardView: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0, bounds.contains(point) else { return nil }
+        // AppKit passes `point` in our superview's coordinate space. Comparing
+        // it directly with local `bounds` makes horizontally arranged cards
+        // alias the first card's area (the last sibling can steal the click),
+        // while most other card areas appear dead. Convert once before every
+        // local geometry test, but keep the original point for `super` because
+        // NSView's implementation expects that same superview coordinate.
+        guard !isHidden, alphaValue > 0, frame.contains(point) else { return nil }
+        let localPoint = convert(point, from: superview)
         let choiceRect = convert(choice.bounds, from: choice)
-        return choiceRect.contains(point) ? super.hitTest(point) : self
+        return choiceRect.contains(localPoint) ? super.hitTest(point) : self
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -436,8 +443,24 @@ private final class SettingsThemeCardButton: NSButton {
     required init?(coder: NSCoder) { nil }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0, bounds.contains(point) else { return nil }
+        // `point` belongs to the vertical stack's coordinate system, not this
+        // button's local bounds. Matching it against `frame` keeps the bottom
+        // theme card from claiming clicks intended for either sibling.
+        guard !isHidden, alphaValue > 0, frame.contains(point) else { return nil }
         return self
+    }
+}
+
+private final class SettingsCardActionSmokeProbe: NSObject {
+    private(set) var choiceTags: [Int] = []
+    private(set) var appearanceModes: [RimeAppearanceMode] = []
+
+    @objc func choose(_ sender: RimeFixedAccentChoiceButton) {
+        choiceTags.append(sender.tag)
+    }
+
+    @objc func chooseAppearance(_ sender: SettingsThemeCardButton) {
+        appearanceModes.append(sender.mode)
     }
 }
 
@@ -648,6 +671,150 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         _ = navigation.selectRoute(routeID, catalog: routeCatalog)
         _ = navigation.selectSubpage(subpageID, catalog: routeCatalog)
         showCurrentRoute()
+    }
+
+    /// AppKit delivers `hitTest(_:)` points in each receiver's superview
+    /// coordinate system. Keep a smoke over the actual Settings page hierarchy
+    /// so a full-card override cannot accidentally compare those points with
+    /// local `bounds` and let the last sibling claim another card's click.
+    func validateChoiceCardHitTestingForSmoke() -> Bool {
+        if window == nil { build() }
+        guard let window else {
+            print("settings card hit-test smoke: missing window")
+            return false
+        }
+
+        let previousRouteID = navigation.currentRouteID
+        let previousSubpageID = navigation.selectedSubpage()
+        defer {
+            _ = navigation.selectRoute(previousRouteID, catalog: routeCatalog)
+            if let previousSubpageID {
+                _ = navigation.selectSubpage(previousSubpageID, catalog: routeCatalog)
+            }
+            showCurrentRoute()
+        }
+
+        window.setContentSize(Self.previewContentSize)
+
+        func descendants<T: NSView>(of type: T.Type, in root: NSView) -> [T] {
+            root.subviews.flatMap { child -> [T] in
+                let own = (child as? T).map { [$0] } ?? []
+                return own + descendants(of: type, in: child)
+            }
+        }
+
+        func exactCenterHits<T: NSView>(_ views: [T], label: String) -> Bool {
+            guard views.count == 3 else {
+                print("settings card hit-test smoke: expected 3 \(label), got \(views.count)")
+                return false
+            }
+            for view in views {
+                guard let parent = view.superview else {
+                    print("settings card hit-test smoke: \(label) has no parent")
+                    return false
+                }
+                let centerInParent = NSPoint(x: view.frame.midX, y: view.frame.midY)
+                let pointForParentHitTest = parent.convert(
+                    centerInParent,
+                    to: parent.superview
+                )
+                guard parent.hitTest(pointForParentHitTest) === view else {
+                    print("settings card hit-test smoke: wrong \(label) center target frame=\(view.frame)")
+                    return false
+                }
+            }
+            return true
+        }
+
+        selectPreviewTarget(
+            routeID: SettingsCoreRoute.appearance.id,
+            subpageID: SettingsSubpageID(rawValue: "theme")
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        let themeCards = descendants(of: SettingsThemeCardButton.self, in: contentHost)
+        var themeOK = exactCenterHits(themeCards, label: "theme card")
+
+        let actionProbe = SettingsCardActionSmokeProbe()
+        for mode in RimeAppearanceMode.allCases {
+            guard let button = themeCards.first(where: { $0.mode == mode }) else {
+                print("settings card hit-test smoke: missing theme action \(mode.rawValue)")
+                themeOK = false
+                continue
+            }
+            let previousTarget = button.target
+            let previousAction = button.action
+            button.target = actionProbe
+            button.action = #selector(SettingsCardActionSmokeProbe.chooseAppearance(_:))
+            button.performClick(nil)
+            button.target = previousTarget
+            button.action = previousAction
+            guard actionProbe.appearanceModes.last == mode else {
+                print("settings card hit-test smoke: wrong theme action for \(mode.rawValue)")
+                themeOK = false
+                continue
+            }
+        }
+        themeOK = themeOK
+            && actionProbe.appearanceModes == RimeAppearanceMode.allCases
+
+        selectPreviewTarget(
+            routeID: SettingsCoreRoute.inputMethod.id,
+            subpageID: SettingsSubpageID(rawValue: "encoding")
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        let encodingCards = descendants(of: SettingsChoiceCardView.self, in: contentHost)
+        var encodingOK = exactCenterHits(encodingCards, label: "input encoding card")
+        for (expectedTag, card) in encodingCards.sorted(by: { $0.frame.minX < $1.frame.minX })
+            .enumerated() {
+            let choices = descendants(of: RimeFixedAccentChoiceButton.self, in: card)
+            guard choices.count == 1, let choice = choices.first else {
+                print("settings card hit-test smoke: encoding card has \(choices.count) choices")
+                encodingOK = false
+                continue
+            }
+            let previousTarget = choice.target
+            let previousAction = choice.action
+            choice.target = actionProbe
+            choice.action = #selector(SettingsCardActionSmokeProbe.choose(_:))
+            choice.state = .off
+            guard let event = NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: card.convert(
+                    NSPoint(x: card.bounds.midX, y: card.bounds.midY),
+                    to: nil
+                ),
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1
+            ) else {
+                print("settings card hit-test smoke: could not create encoding click")
+                choice.target = previousTarget
+                choice.action = previousAction
+                encodingOK = false
+                continue
+            }
+            card.mouseDown(with: event)
+            choice.target = previousTarget
+            choice.action = previousAction
+            guard choice.state == .on,
+                  actionProbe.choiceTags.last == expectedTag,
+                  choice.tag == expectedTag else {
+                print("settings card hit-test smoke: wrong encoding action expected=\(expectedTag) actual=\(choice.tag)")
+                encodingOK = false
+                continue
+            }
+        }
+        encodingOK = encodingOK
+            && actionProbe.choiceTags == Array(InputEncoding.allCases.indices)
+
+        if themeOK && encodingOK {
+            print("settings card hit-test smoke: OK")
+        }
+        return themeOK && encodingOK
     }
 
     @discardableResult

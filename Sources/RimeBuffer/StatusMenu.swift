@@ -63,8 +63,11 @@ final class StatusMenu {
         workbench.target = target
         maintenanceMenu.addItem(workbench)
 
+        let clipboardShortcut = RimeShortcutPreferences
+            .shortcut(for: .toggleClipboardHistory)
+            .displayTitle
         let clipboard = NSMenuItem(
-            title: "剪贴板历史（仅工作台显示时读取）",
+            title: "剪贴板历史（\(clipboardShortcut)；仅工作台显示时读取）",
             action: #selector(RimeBufferController.toggleClipboardHistoryFromInputMenu(_:)),
             keyEquivalent: "")
         clipboard.target = target
@@ -152,7 +155,7 @@ final class StatusMenu {
     }
 
     func toggleClipboardHistory() {
-        BufferWindowController.shared.clipboardRailEnabled.toggle()
+        BufferWindowController.shared.toggleClipboardHistory()
     }
 
     func toggleBufferPinned() {

@@ -512,6 +512,29 @@ if CommandLine.arguments.contains("clipboard-history-smoke") {
     _ = NSApplication.shared
     exit(MainActor.assumeIsolated { ClipboardHistorySmoke.run() } ? 0 : 1)
 }
+if CommandLine.arguments.contains("global-hotkey-registration-smoke") {
+    _ = NSApplication.shared
+    let suite = "RimeBuffer.GlobalHotKeyRegistrationSmoke.\(UUID().uuidString)"
+    guard let defaults = UserDefaults(suiteName: suite) else {
+        print("FAILED: could not create isolated global hotkey defaults")
+        exit(1)
+    }
+    let definitions = GlobalHotKeyRouting.definitions(defaults: defaults)
+    let installed = GlobalHotKeyController.shared.install(defaults: defaults)
+    if installed {
+        let summary = definitions
+            .map {
+                let exclusive = $0.registrationOptions
+                    == OptionBits(kEventHotKeyExclusive)
+                return "\($0.action)=\($0.keyCode)/\($0.modifiers)"
+                    + "/exclusive:\(exclusive)"
+            }
+            .joined(separator: " ")
+        print("global hotkey registration smoke: OK \(summary)")
+    }
+    defaults.removePersistentDomain(forName: suite)
+    exit(installed ? 0 : 1)
+}
 if CommandLine.arguments.contains("schema-smoke") {
     exit(runSchemaListStoreSmokeTest() ? 0 : 1)
 }
@@ -5294,8 +5317,59 @@ func runBufferWindowSmokeTest() -> Bool {
     }
     defer { hotKeyDefaults.removePersistentDomain(forName: hotKeyDefaultsSuite) }
 
+    // Upgrade fixture: preserve a pre-existing custom Command-Shift-P binding
+    // and give Clipboard the deterministic first free fallback instead of
+    // registering the same Carbon hot key twice in one process.
+    let migrationDefaultsSuite =
+        "RimeBuffer.ClipboardShortcutMigrationSmoke.\(UUID().uuidString)"
+    guard let migrationDefaults = UserDefaults(suiteName: migrationDefaultsSuite),
+          let legacyCommandShiftP = try? JSONEncoder().encode(
+            RimeKeyboardShortcut(
+                keyCode: UInt16(kVK_ANSI_P),
+                modifiers: [.command, .shift]
+            )
+          ) else {
+        print("FAILED: could not create Clipboard shortcut migration fixture")
+        return false
+    }
+    defer {
+        migrationDefaults.removePersistentDomain(forName: migrationDefaultsSuite)
+    }
+    migrationDefaults.set(
+        legacyCommandShiftP,
+        forKey: "keyboardShortcut.v1.\(RimeShortcutAction.openSettings.rawValue)"
+    )
+    let migratedClipboardShortcut = RimeShortcutPreferences.shortcut(
+        for: .toggleClipboardHistory,
+        defaults: migrationDefaults
+    )
+    let migratedClipboardHotKey = GlobalHotKeyRouting.definition(
+        for: .toggleClipboardHistory,
+        defaults: migrationDefaults
+    )
+    guard migratedClipboardShortcut == RimeKeyboardShortcut(
+            keyCode: UInt16(kVK_ANSI_C),
+            modifiers: [.command, .shift]
+          ),
+          RimeShortcutPreferences.shortcut(
+            for: .openSettings,
+            defaults: migrationDefaults
+          ) == RimeKeyboardShortcut(
+            keyCode: UInt16(kVK_ANSI_P),
+            modifiers: [.command, .shift]
+          ),
+          migratedClipboardHotKey.keyCode == UInt32(kVK_ANSI_C),
+          migratedClipboardHotKey.modifiers == UInt32(cmdKey | shiftKey) else {
+        print("FAILED: Clipboard shortcut migration overwrote an existing binding")
+        return false
+    }
+
     let workbenchHotKey = GlobalHotKeyRouting.definition(
         for: .toggleWorkbench,
+        defaults: hotKeyDefaults
+    )
+    let clipboardHotKey = GlobalHotKeyRouting.definition(
+        for: .toggleClipboardHistory,
         defaults: hotKeyDefaults
     )
     let settingsHotKey = GlobalHotKeyRouting.definition(
@@ -5303,6 +5377,7 @@ func runBufferWindowSmokeTest() -> Bool {
         defaults: hotKeyDefaults
     )
     let workbenchHotKeyID = workbenchHotKey.identifier
+    let clipboardHotKeyID = clipboardHotKey.identifier
     let settingsHotKeyID = settingsHotKey.identifier
     let unrelatedHotKeyID = EventHotKeyID(
         signature: GlobalHotKeyRouting.signature,
@@ -5324,6 +5399,24 @@ func runBufferWindowSmokeTest() -> Bool {
     }
     let reloadedSettingsHotKey = GlobalHotKeyRouting.definition(
         for: .openSettings,
+        defaults: hotKeyDefaults
+    )
+    let customClipboardShortcut = RimeKeyboardShortcut(
+        keyCode: UInt16(kVK_ANSI_H),
+        modifiers: [.control, .option]
+    )
+    do {
+        try RimeShortcutPreferences.set(
+            customClipboardShortcut,
+            for: .toggleClipboardHistory,
+            defaults: hotKeyDefaults
+        )
+    } catch {
+        print("FAILED: could not persist isolated Clipboard shortcut \(error)")
+        return false
+    }
+    let reloadedClipboardHotKey = GlobalHotKeyRouting.definition(
+        for: .toggleClipboardHistory,
         defaults: hotKeyDefaults
     )
     let defaultDeliveryShortcut = RimeShortcutPreferences.shortcut(
@@ -5434,11 +5527,21 @@ func runBufferWindowSmokeTest() -> Bool {
 
     guard workbenchHotKey.keyCode == UInt32(kVK_ANSI_B),
           workbenchHotKey.modifiers == UInt32(cmdKey | shiftKey),
+          workbenchHotKey.registrationOptions == OptionBits(kEventHotKeyNoOptions),
+          clipboardHotKey.keyCode == UInt32(kVK_ANSI_P),
+          clipboardHotKey.modifiers == UInt32(cmdKey | shiftKey),
+          clipboardHotKey.registrationOptions
+            == OptionBits(kEventHotKeyExclusive),
           settingsHotKey.keyCode == UInt32(kVK_ANSI_S),
           settingsHotKey.modifiers == UInt32(cmdKey | shiftKey),
+          settingsHotKey.registrationOptions == OptionBits(kEventHotKeyNoOptions),
           workbenchHotKeyID.id != settingsHotKeyID.id,
+          clipboardHotKeyID.id != workbenchHotKeyID.id,
+          clipboardHotKeyID.id != settingsHotKeyID.id,
           reloadedSettingsHotKey.keyCode == UInt32(kVK_ANSI_G),
           reloadedSettingsHotKey.modifiers == UInt32(controlKey | optionKey),
+          reloadedClipboardHotKey.keyCode == UInt32(kVK_ANSI_H),
+          reloadedClipboardHotKey.modifiers == UInt32(controlKey | optionKey),
           defaultDeliveryShortcut
             == RimeShortcutAction.deliverBuffer.defaultShortcut,
           RimeShortcutPreferences.shortcut(
@@ -5461,6 +5564,11 @@ func runBufferWindowSmokeTest() -> Bool {
           GlobalHotKeyRouting.route(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed),
+            identifier: clipboardHotKeyID
+          ) == .toggleClipboardHistory,
+          GlobalHotKeyRouting.route(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed),
             identifier: settingsHotKeyID
           ) == .openSettings,
           GlobalHotKeyRouting.route(
@@ -5473,7 +5581,7 @@ func runBufferWindowSmokeTest() -> Bool {
             eventKind: UInt32(kEventHotKeyPressed),
             identifier: unrelatedHotKeyID
           ) == .ignore else {
-        print("FAILED: global workbench/settings hotkey routing")
+        print("FAILED: global workbench/Clipboard/settings hotkey routing")
         return false
     }
 

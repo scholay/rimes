@@ -428,6 +428,33 @@ enum ClipboardWorkbenchIntegrationRules {
     }
 }
 
+struct ClipboardRailVisibilityTogglePlan: Equatable {
+    let railEnabled: Bool
+    let showWorkbench: Bool
+}
+
+/// The Clipboard hot key owns only the optional rail. Opening it may reveal the
+/// existing nonactivating workbench shell, but must never resume Buffer capture.
+/// If the rail is already enabled on another Space, the first press brings it
+/// here instead of unpredictably disabling it out of sight.
+enum ClipboardRailVisibilityToggleRules {
+    static func plan(
+        railEnabled: Bool,
+        workbenchVisibleOnActiveSpace: Bool
+    ) -> ClipboardRailVisibilityTogglePlan {
+        if railEnabled, workbenchVisibleOnActiveSpace {
+            return ClipboardRailVisibilityTogglePlan(
+                railEnabled: false,
+                showWorkbench: false
+            )
+        }
+        return ClipboardRailVisibilityTogglePlan(
+            railEnabled: true,
+            showWorkbench: !workbenchVisibleOnActiveSpace
+        )
+    }
+}
+
 /// Keep enabled capture discoverable without turning the passive workbench
 /// into a caret-following window. A newly trusted text focus may relocate it
 /// only when the panel was stranded on another Space or physical display.
@@ -1278,8 +1305,20 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    func toggleClipboardRail() {
-        clipboardRailEnabled.toggle()
+    func toggleClipboardHistory() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        let plan = ClipboardRailVisibilityToggleRules.plan(
+            railEnabled: clipboardRailEnabled,
+            workbenchVisibleOnActiveSpace: isVisible
+        )
+        if clipboardRailEnabled != plan.railEnabled {
+            clipboardRailEnabled = plan.railEnabled
+        }
+        if plan.showWorkbench {
+            // `show()` preserves BufferModel.enabled. Clipboard can therefore
+            // be browsed without silently turning on text capture.
+            show()
+        }
     }
 
     var pinned: Bool {

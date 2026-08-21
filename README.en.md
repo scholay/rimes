@@ -29,6 +29,7 @@ Nothing auto-posts, and nothing silently edits the web page. Built for writing, 
 |---|---|
 | Input schemes | Full Pinyin, Natural Code double Pinyin, English; Feiyao chord / mutual |
 | Buffer workbench | Toggle with `⌘⇧B`; stage first, deliver in chunks |
+| Clipboard history | Show / hide with `⌘⇧P`; read only while the workbench is safely visible |
 | Settings | Open Settings anywhere with `⌘⇧S` |
 | Live translation | Apple on-device translation by default (macOS 15+); AI connector optional |
 | AI generate | Codex CLI / Claude Code CLI / OpenAI-compatible API |

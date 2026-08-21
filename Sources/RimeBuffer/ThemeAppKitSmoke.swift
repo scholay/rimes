@@ -332,6 +332,8 @@ func runThemeAppKitSmokeTest() -> Bool {
 
     check(settingsWindow != nil && settingsWindow?.isVisible == true,
           "settings smoke should locate the live settings window")
+    check(SettingsWindowController.shared.validateChoiceCardHitTestingForSmoke(),
+          "every theme and input-encoding card center should hit its own control")
     check(matches(settingsWindow, mode: .night),
           "settings should initially use 墨竹 AppKit appearance")
 

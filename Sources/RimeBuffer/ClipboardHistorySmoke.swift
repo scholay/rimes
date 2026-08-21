@@ -15,6 +15,50 @@ enum ClipboardHistorySmoke {
             ok = false
         }
 
+        // The global visibility shortcut never resumes Buffer capture. Its
+        // pure plan only enables/disables the rail and, when necessary, asks
+        // the existing nonactivating shell to become visible on this Space.
+        expect(
+            ClipboardRailVisibilityToggleRules.plan(
+                railEnabled: false,
+                workbenchVisibleOnActiveSpace: false
+            ) == ClipboardRailVisibilityTogglePlan(
+                railEnabled: true,
+                showWorkbench: true
+            ),
+            "hidden disabled rail did not plan enable-and-show"
+        )
+        expect(
+            ClipboardRailVisibilityToggleRules.plan(
+                railEnabled: true,
+                workbenchVisibleOnActiveSpace: false
+            ) == ClipboardRailVisibilityTogglePlan(
+                railEnabled: true,
+                showWorkbench: true
+            ),
+            "enabled rail on another Space was disabled instead of shown"
+        )
+        expect(
+            ClipboardRailVisibilityToggleRules.plan(
+                railEnabled: false,
+                workbenchVisibleOnActiveSpace: true
+            ) == ClipboardRailVisibilityTogglePlan(
+                railEnabled: true,
+                showWorkbench: false
+            ),
+            "visible disabled rail did not plan enable in place"
+        )
+        expect(
+            ClipboardRailVisibilityToggleRules.plan(
+                railEnabled: true,
+                workbenchVisibleOnActiveSpace: true
+            ) == ClipboardRailVisibilityTogglePlan(
+                railEnabled: false,
+                showWorkbench: false
+            ),
+            "visible enabled rail did not plan hide in place"
+        )
+
         let pasteboard = ClipboardHistoryPasteboardDouble()
         let configuration = ClipboardHistoryConfiguration(
             maximumItems: 3,
