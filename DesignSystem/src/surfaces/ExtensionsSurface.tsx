@@ -454,7 +454,11 @@ export function ExtensionsSurface({
   defaultMenuOpen = true,
 }: ExtensionsSurfaceProps) {
   const [menuOpen, setMenuOpen] = useState(defaultMenuOpen);
+  const [maintenanceOpen, setMaintenanceOpen] = useState(false);
   const [engineHealthy, setEngineHealthy] = useState(true);
+  const [workbenchVisible, setWorkbenchVisible] = useState(true);
+  const [clipboardRailEnabled, setClipboardRailEnabled] = useState(false);
+  const [bufferPinned, setBufferPinned] = useState(false);
   const [selectedPlugin, setSelectedPlugin] = useState<PluginRecord | null>(null);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [gatewayOnline, setGatewayOnline] = useState(true);
@@ -473,40 +477,58 @@ export function ExtensionsSurface({
   const inboxDialogTitleID = useId();
   const inboxDialogDescriptionID = useId();
 
-  const getMenuItems = () => Array.from(
-    menuRef.current?.querySelectorAll<HTMLButtonElement>("[role='menuitem']") ?? [],
+  const getMenuItems = (scope: "root" | "maintenance" = maintenanceOpen ? "maintenance" : "root") => Array.from(
+    menuRef.current?.querySelectorAll<HTMLButtonElement>(
+      `[data-menu-scope='${scope}']`,
+    ) ?? [],
   );
 
-  const focusMenuEdge = (edge: "first" | "last") => {
+  const focusMenuEdge = (edge: "first" | "last", scope?: "root" | "maintenance") => {
     window.requestAnimationFrame(() => {
-      const items = getMenuItems();
+      const items = getMenuItems(scope);
       items[edge === "first" ? 0 : items.length - 1]?.focus();
     });
   };
 
   const openMenuFromKeyboard = (edge: "first" | "last") => {
     if (menuOpen) {
-      focusMenuEdge(edge);
+      focusMenuEdge(edge, "root");
       return;
     }
     pendingMenuFocusRef.current = edge;
+    setMaintenanceOpen(false);
     setMenuOpen(true);
   };
 
   const closeMenu = (restoreFocus = false) => {
     pendingMenuFocusRef.current = null;
+    setMaintenanceOpen(false);
     setMenuOpen(false);
     if (restoreFocus) {
       window.requestAnimationFrame(() => menuTriggerRef.current?.focus());
     }
   };
 
+  const runMaintenanceAction = (label: string) => {
+    closeMenu();
+    setActivity(label);
+  };
+
   useEffect(() => {
     if (!menuOpen || pendingMenuFocusRef.current === null) return;
     const edge = pendingMenuFocusRef.current;
     pendingMenuFocusRef.current = null;
-    focusMenuEdge(edge);
+    focusMenuEdge(edge, "root");
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) setMaintenanceOpen(false);
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!maintenanceOpen) return;
+    focusMenuEdge("first", "maintenance");
+  }, [maintenanceOpen]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -570,7 +592,46 @@ export function ExtensionsSurface({
       window.requestAnimationFrame(() => destination?.focus());
       return;
     }
-    const items = getMenuItems();
+
+    const active = document.activeElement as HTMLElement | null;
+    const inMaintenance = active?.getAttribute("data-menu-scope") === "maintenance"
+      || active?.closest("[data-menu-panel='maintenance']") != null;
+    const onMaintenanceTrigger = active?.getAttribute("data-menu-item") === "maintenance";
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (maintenanceOpen) {
+        setMaintenanceOpen(false);
+        window.requestAnimationFrame(() => {
+          menuRef.current
+            ?.querySelector<HTMLButtonElement>("[data-menu-item='maintenance']")
+            ?.focus();
+        });
+        return;
+      }
+      closeMenu(true);
+      return;
+    }
+
+    if (event.key === "ArrowRight" && onMaintenanceTrigger) {
+      event.preventDefault();
+      setMaintenanceOpen(true);
+      return;
+    }
+
+    if (event.key === "ArrowLeft" && (inMaintenance || maintenanceOpen)) {
+      event.preventDefault();
+      setMaintenanceOpen(false);
+      window.requestAnimationFrame(() => {
+        menuRef.current
+          ?.querySelector<HTMLButtonElement>("[data-menu-item='maintenance']")
+          ?.focus();
+      });
+      return;
+    }
+
+    const items = getMenuItems(inMaintenance ? "maintenance" : "root");
     if (items.length === 0) return;
     const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
     let nextIndex: number | null = null;
@@ -587,11 +648,6 @@ export function ExtensionsSurface({
       case "End":
         nextIndex = items.length - 1;
         break;
-      case "Escape":
-        event.preventDefault();
-        event.stopPropagation();
-        closeMenu(true);
-        return;
       default:
         return;
     }
@@ -731,12 +787,13 @@ export function ExtensionsSurface({
                 {!engineHealthy ? (
                   <div className="native-input-menu__warning" role="status">
                     <Icon name="warning" size={16} weight="fill" />
-                    <span>输入引擎异常，当前已退化为英文直通</span>
+                    <span>⚠️ 输入引擎异常 — 已退化为英文直通</span>
                   </div>
                 ) : null}
 
                 <button
                   className="native-input-menu__item"
+                  data-menu-scope="root"
                   onClick={() => {
                     closeMenu();
                     onOpenSettings?.();
@@ -749,31 +806,180 @@ export function ExtensionsSurface({
                   <span>设置…</span>
                 </button>
                 <button
-                  aria-label={`外部来源收件箱，${inboxItems.length} 项待审`}
+                  aria-label={
+                    inboxItems.length > 0
+                      ? `外部来源收件箱…（${inboxItems.length} 项待审）`
+                      : "外部来源收件箱…"
+                  }
                   className="native-input-menu__item"
+                  data-menu-scope="root"
                   onClick={openInbox}
                   role="menuitem"
                   type="button"
                 >
                   <Icon name="tray" size={15} />
-                  <span>外部来源收件箱…</span>
-                  <span aria-hidden="true" className="native-input-menu__meta">
-                    {inboxItems.length}
+                  <span>
+                    {inboxItems.length > 0
+                      ? `外部来源收件箱…（${inboxItems.length} 项待审）`
+                      : "外部来源收件箱…"}
                   </span>
                 </button>
-                <button
-                  className="native-input-menu__item"
-                  onClick={() => {
-                    closeMenu();
-                    onOpenSettings?.("core.maintenance");
-                    setActivity("已打开设置 › 维护");
-                  }}
-                  role="menuitem"
-                  type="button"
-                >
-                  <Icon name="tools" size={15} />
-                  <span>维护…</span>
-                </button>
+                <div className="native-input-menu__submenu-host">
+                  <button
+                    aria-expanded={maintenanceOpen}
+                    aria-haspopup="menu"
+                    className={`native-input-menu__item${maintenanceOpen ? " is-active" : ""}`}
+                    data-menu-item="maintenance"
+                    data-menu-scope="root"
+                    onClick={() => {
+                      setMaintenanceOpen((open) => !open);
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
+                    <Icon name="tools" size={15} />
+                    <span>维护…</span>
+                    <Icon name="right" size={12} weight="bold" />
+                  </button>
+                  {maintenanceOpen ? (
+                    <div
+                      aria-label="维护"
+                      className="native-input-menu native-input-menu--submenu"
+                      data-menu-panel="maintenance"
+                      role="menu"
+                    >
+                      <button
+                        className="native-input-menu__item"
+                        data-menu-scope="maintenance"
+                        onClick={() => {
+                          const next = !workbenchVisible;
+                          setWorkbenchVisible(next);
+                          runMaintenanceAction(
+                            next ? "已显示缓冲工作台" : "已关闭缓冲工作台（保留内容）",
+                          );
+                        }}
+                        role="menuitem"
+                        type="button"
+                      >
+                        <Icon name="grid" size={15} />
+                        <span>
+                          {workbenchVisible
+                            ? "关闭缓冲工作台（保留内容）"
+                            : "显示缓冲工作台"}
+                        </span>
+                      </button>
+                      <button
+                        aria-checked={clipboardRailEnabled}
+                        className="native-input-menu__item"
+                        data-menu-scope="maintenance"
+                        onClick={() => {
+                          const next = !clipboardRailEnabled;
+                          setClipboardRailEnabled(next);
+                          runMaintenanceAction(
+                            next
+                              ? "已开启剪贴板历史（仅工作台显示时读取）"
+                              : "已关闭剪贴板历史",
+                          );
+                        }}
+                        role="menuitemcheckbox"
+                        type="button"
+                      >
+                        <span className="native-input-menu__check" aria-hidden="true">
+                          {clipboardRailEnabled ? <Icon name="check" size={13} weight="bold" /> : null}
+                        </span>
+                        <span>剪贴板历史（⇧⌘V；仅工作台显示时读取）</span>
+                      </button>
+                      <button
+                        aria-checked={bufferPinned}
+                        className="native-input-menu__item"
+                        data-menu-scope="maintenance"
+                        onClick={() => {
+                          const next = !bufferPinned;
+                          setBufferPinned(next);
+                          runMaintenanceAction(
+                            next
+                              ? "已常显于所有桌面与全屏空间"
+                              : "已取消常显",
+                          );
+                        }}
+                        role="menuitemcheckbox"
+                        type="button"
+                      >
+                        <span className="native-input-menu__check" aria-hidden="true">
+                          {bufferPinned ? <Icon name="check" size={13} weight="bold" /> : null}
+                        </span>
+                        <span>常显于所有桌面与全屏空间</span>
+                      </button>
+                      <button
+                        className="native-input-menu__item"
+                        data-menu-scope="maintenance"
+                        onClick={() => runMaintenanceAction("已把缓冲工作台移到当前屏幕")}
+                        role="menuitem"
+                        type="button"
+                      >
+                        <Icon name="export" size={15} />
+                        <span>把缓冲工作台移到当前屏幕</span>
+                      </button>
+                      <div className="native-input-menu__separator" role="separator" />
+                      <button
+                        className="native-input-menu__item"
+                        data-menu-scope="maintenance"
+                        onClick={() => runMaintenanceAction("已开始检查更新…")}
+                        role="menuitem"
+                        type="button"
+                      >
+                        <Icon name="cloudDownload" size={15} />
+                        <span>检查更新…</span>
+                      </button>
+                      <button
+                        className="native-input-menu__item"
+                        data-menu-scope="maintenance"
+                        onClick={() => runMaintenanceAction("已打开日志（~/rimebuffer.log）")}
+                        role="menuitem"
+                        type="button"
+                      >
+                        <Icon name="book" size={15} />
+                        <span>打开日志 (~/rimebuffer.log)</span>
+                      </button>
+                      <button
+                        className="native-input-menu__item"
+                        data-menu-scope="maintenance"
+                        onClick={() => {
+                          runMaintenanceAction("已触发重新部署并重启（本地模拟）");
+                          onOpenSettings?.("core.maintenance");
+                        }}
+                        role="menuitem"
+                        type="button"
+                      >
+                        <Icon name="refresh" size={15} />
+                        <span>重新部署并重启</span>
+                      </button>
+                      <button
+                        className="native-input-menu__item"
+                        data-menu-scope="maintenance"
+                        onClick={() => {
+                          runMaintenanceAction("已打开重新安装输入法…（本地模拟）");
+                          onOpenSettings?.("core.maintenance");
+                        }}
+                        role="menuitem"
+                        type="button"
+                      >
+                        <Icon name="download" size={15} />
+                        <span>重新安装输入法…</span>
+                      </button>
+                      <button
+                        className="native-input-menu__item"
+                        data-menu-scope="maintenance"
+                        onClick={() => runMaintenanceAction("已重启输入法进程（本地模拟）")}
+                        role="menuitem"
+                        type="button"
+                      >
+                        <Icon name="power" size={15} />
+                        <span>重启输入法进程</span>
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             ) : null}
           </section>

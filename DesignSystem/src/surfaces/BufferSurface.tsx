@@ -159,7 +159,7 @@ const MODE_DESCRIPTORS: Record<BufferMode, ModeDescriptor> = {
   prompt: {
     label: promptPlugin?.name ?? "My Prompt",
     icon: promptPlugin?.icon ?? "fileSearch",
-    sourceRole: "查",
+    sourceRole: "搜",
     sourceIcon: "search",
     targetRole: "词",
     targetIcon: "fileSearch",
@@ -179,10 +179,8 @@ const MODE_DESCRIPTORS: Record<BufferMode, ModeDescriptor> = {
   remarkable: {
     label: remarkablePlugin?.name ?? "Remarkable",
     icon: remarkablePlugin?.icon ?? "eye",
-    sourceRole: "页",
-    sourceIcon: "eye",
-    targetRole: "识",
-    targetIcon: "textbox",
+    sourceRole: "文",
+    sourceIcon: "textbox",
     action: "识别当前页",
     loadingAction: "识别中…",
   },
@@ -226,11 +224,48 @@ function defaultTargetsFor(_mode: BufferMode): readonly string[] {
   return [];
 }
 
-function bufferLayoutFor(mode: BufferMode): "single-exchange" | "live-expand" {
-  // Live retrieval / parallel drafting: grow a lower rail while typing.
-  return mode === "translation" || mode === "stream" || mode === "prompt"
-    ? "live-expand"
-    : "single-exchange";
+/** Mirrors BufferDerivedPresentationRules.nativeContract on main. */
+function bufferLayoutFor(
+  mode: BufferMode,
+): "standard" | "single-exchange" | "live-expand" {
+  if (mode === "translation" || mode === "stream" || mode === "prompt") {
+    return "live-expand";
+  }
+  if (mode === "ai" || mode === "marine") {
+    return "single-exchange";
+  }
+  // normal + remarkable: ordinary single BufferModel rail
+  return "standard";
+}
+
+function sourcePlaceholderFor(mode: BufferMode): string {
+  switch (mode) {
+    case "translation":
+      return "等待原文";
+    case "stream":
+      return "连续输入全拼";
+    case "prompt":
+      return "输入关键词查找提示词";
+    default:
+      return "等待暂存内容";
+  }
+}
+
+function targetEmptyLabelFor(mode: BufferMode): string {
+  switch (mode) {
+    case "translation":
+      return "等待译文";
+    case "stream":
+      return "等待 AI 猜测";
+    case "prompt":
+      return "等待检索结果";
+    case "marine":
+      return "等待网页上下文";
+    case "ai":
+      return "等待生成";
+    default:
+      return "等待结果";
+  }
 }
 
 export function bufferInputContextKey(
@@ -335,6 +370,7 @@ function BufferTrack({
   protectedContent,
   loading,
   sourceValue,
+  sourcePlaceholder = "等待暂存内容",
   targets,
   selectedTarget = 0,
   emptyLabel,
@@ -348,6 +384,7 @@ function BufferTrack({
   protectedContent: boolean;
   loading: boolean;
   sourceValue?: string;
+  sourcePlaceholder?: string;
   targets?: readonly string[];
   selectedTarget?: number;
   emptyLabel?: string;
@@ -370,9 +407,13 @@ function BufferTrack({
       aria-label={`${kind === "source" ? "源" : "目标"}缓冲轨道`}
       className={`buffer-track buffer-track--${kind}${protectedContent ? " is-protected" : ""}`}
     >
-      <span className="buffer-track__role" title={kind === "source" ? "源缓冲区" : "目标缓冲区"}>
+      <span
+        aria-label={role}
+        className="buffer-track__role"
+        title={kind === "source" ? "源缓冲区" : "目标缓冲区"}
+      >
         <Icon name={protectedContent ? "lock" : icon} size={13} weight="bold" />
-        <span>{role}</span>
+        <span className="sr-only">{role}</span>
       </span>
 
       <div className="buffer-track__content">
@@ -382,16 +423,23 @@ function BufferTrack({
             内容已隐藏
           </span>
         ) : kind === "source" ? (
-          <input
-            aria-label="缓冲正文"
-            className="buffer-track__editor"
-            disabled={interactionDisabled}
-            onChange={(event) => onSourceChange?.(event.target.value)}
-            placeholder="等待暂存内容"
-            spellCheck={false}
-            type="text"
-            value={sourceValue ?? ""}
-          />
+          loading ? (
+            <span className="buffer-track__loading">
+              <Icon className="is-spinning" name="refresh" size={13} />
+              正在处理…
+            </span>
+          ) : (
+            <input
+              aria-label="缓冲正文"
+              className="buffer-track__editor"
+              disabled={interactionDisabled}
+              onChange={(event) => onSourceChange?.(event.target.value)}
+              placeholder={sourcePlaceholder}
+              spellCheck={false}
+              type="text"
+              value={sourceValue ?? ""}
+            />
+          )
         ) : loading ? (
           <span className="buffer-track__loading">
             <Icon className="is-spinning" name="refresh" size={13} />
@@ -554,7 +602,8 @@ export function BufferSurface({
   const descriptor = MODE_DESCRIPTORS[effectiveMode];
   const layout = bufferLayoutFor(effectiveMode);
   const liveExpand = layout === "live-expand";
-  const exchange = layout === "single-exchange" && effectiveMode !== "normal";
+  const exchange = layout === "single-exchange";
+  const standardRail = layout === "standard";
   const protectedContent = phase === "protected";
   const loading = phase === "loading";
   const hasSource = sourceText.trim().length > 0;
@@ -1077,11 +1126,30 @@ export function BufferSurface({
   };
 
   const generate = () => {
+    if (paused || !canRequest) return;
+    // Remarkable is a standard BufferModel import: OCR lands on the single
+    // writing rail, then the user sends like Default.
+    if (effectiveMode === "remarkable") {
+      cancelPendingGeneration();
+      clearDeliveryStatus();
+      setPhase("loading");
+      window.setTimeout(() => {
+        if (paused || protectedContent) return;
+        const imported = generatedTargetsFor("remarkable", sourceText || "当前页")[0]
+          ?? "已在本机识别当前 reMarkable 页面。";
+        setSourceText(imported);
+        setTargets([]);
+        setSelectedTarget(0);
+        setTargetsAreCurrent(false);
+        setPhase("ready");
+      }, 500);
+      return;
+    }
     const manualLiveRequest = liveExpand && (
       phase === "error"
       || (effectiveMode === "translation" && !translationContinuously)
     );
-    if (paused || !canRequest || effectiveMode === "normal" || (liveExpand && !manualLiveRequest)) return;
+    if (effectiveMode === "normal" || (liveExpand && !manualLiveRequest) || standardRail) return;
     runGeneration(effectiveMode, sourceText);
   };
 
@@ -1175,11 +1243,7 @@ export function BufferSurface({
     setPhase(hasSource ? "ready" : "idle");
   };
 
-  const retryExchangeGeneration = () => {
-    if (!exchange || paused || !canRequest) return;
-    runGeneration(effectiveMode, sourceText);
-  };
-
+  const awaitingRemarkableImport = effectiveMode === "remarkable" && !hasSource;
   const awaitingExchangeRequest = exchange && !exchangeDecision;
   const awaitingLiveRequest = liveExpand && hasSource && (
     (phase === "error" && !outputIsCurrent)
@@ -1189,7 +1253,7 @@ export function BufferSurface({
       && (targets.length === 0 || !outputIsCurrent)
     )
   );
-  const awaitingRequest = awaitingExchangeRequest || awaitingLiveRequest;
+  const awaitingRequest = awaitingExchangeRequest || awaitingLiveRequest || awaitingRemarkableImport;
   const primaryAction = awaitingRequest ? generate : send;
   const primaryLabel = sending
     ? "发送中…"
@@ -1293,27 +1357,11 @@ export function BufferSurface({
 
         <span className="buffer-toolbar__spacer" />
         {exchange && !loading && targets.length > 0 ? (
-          <>
-            <IconButton
-              disabled={paused || sending}
-              icon="textbox"
-              label="返回编辑原文"
-              onClick={returnToExchangeSource}
-            />
-            <IconButton
-              disabled={paused || !canRequest}
-              icon="refresh"
-              label="重新生成"
-              onClick={retryExchangeGeneration}
-            />
-          </>
-        ) : null}
-        {liveExpand && phase === "error" && outputIsCurrent && targets.length > 0 ? (
           <IconButton
-            disabled={paused || !canRequest}
-            icon="refresh"
-            label="重新生成"
-            onClick={generate}
+            disabled={paused || sending}
+            icon="textbox"
+            label="返回编辑原文（保留原文，放弃当前结果）"
+            onClick={returnToExchangeSource}
           />
         ) : null}
         <IconButton icon="close" label="关闭并暂停缓冲（保留内容）" onClick={onClose} />
@@ -1327,7 +1375,7 @@ export function BufferSurface({
         <div className="buffer-workbench__rails">
           {exchangeDecision ? (
             <BufferTrack
-              emptyLabel="等待返回结果"
+              emptyLabel={targetEmptyLabelFor(effectiveMode)}
               icon={descriptor.targetIcon ?? "sparkle"}
               kind="target"
               loading={loading}
@@ -1342,23 +1390,18 @@ export function BufferSurface({
             <BufferTrack
               icon={descriptor.sourceIcon}
               kind="source"
-              loading={false}
+              loading={effectiveMode === "remarkable" && loading}
               interactionDisabled={paused || sending}
               onSourceChange={onSourceEdit}
               protectedContent={protectedContent}
               role={descriptor.sourceRole}
+              sourcePlaceholder={sourcePlaceholderFor(effectiveMode)}
               sourceValue={sourceText}
             />
           )}
           {showLiveTargetRail ? (
             <BufferTrack
-              emptyLabel={
-                effectiveMode === "stream"
-                  ? "等待推测结果"
-                  : effectiveMode === "prompt"
-                    ? "等待检索结果"
-                    : "等待译文"
-              }
+              emptyLabel={targetEmptyLabelFor(effectiveMode)}
               icon={descriptor.targetIcon ?? "sparkle"}
               kind="target"
               loading={loading}

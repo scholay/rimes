@@ -386,27 +386,84 @@ describe("Buffer generation and delivery", () => {
     expect(screen.getByText("generated result")).toBeTruthy();
   });
 
-  it("keeps the prior result when regeneration fails", () => {
-    function RetryFailureHarness() {
-      const [phase, setPhase] = useState<"ready" | "error">("ready");
-      return (
-        <BufferSurface
-          defaultMode="ai"
-          defaultSourceText="source"
-          defaultTargets={["prior result"]}
-          onGenerate={() => setPhase("error")}
-          phase={phase}
-        />
-      );
-    }
+  it("returns to the source rail and abandons the current exchange result", () => {
+    render(
+      <BufferSurface
+        defaultMode="ai"
+        defaultPhase="ready"
+        defaultSourceText="source"
+        defaultTargets={["prior result"]}
+      />,
+    );
+    expect(screen.getByText("prior result")).toBeTruthy();
 
-    render(<RetryFailureHarness />);
-    fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
+    fireEvent.click(screen.getByRole("button", {
+      name: "返回编辑原文（保留原文，放弃当前结果）",
+    }));
+    expect(screen.queryByText("prior result")).toBeNull();
+    expect((screen.getByRole("textbox", { name: "缓冲正文" }) as HTMLInputElement).value)
+      .toBe("source");
+    expect(screen.getByRole("button", { name: "生成" })).toBeTruthy();
+  });
+
+  it("keeps a settled controlled result sendable after a later request fails", async () => {
+    const onGenerate = vi.fn();
+    const onSend = vi.fn().mockResolvedValue(true);
+    const view = render(
+      <BufferSurface
+        mode="ai"
+        onGenerate={onGenerate}
+        onSend={onSend}
+        phase="ready"
+        sourceText="source"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "生成" }));
+    const firstRequest = onGenerate.mock.calls[0]?.[2];
+
+    view.rerender(
+      <BufferSurface
+        activeRequestID={firstRequest.requestID}
+        mode="ai"
+        onGenerate={onGenerate}
+        onSend={onSend}
+        phase="ready"
+        sourceText="source"
+        targetContext={{
+          requestID: firstRequest.requestID,
+          contextKey: firstRequest.contextKey,
+        }}
+        targets={["prior result"]}
+      />,
+    );
+
+    view.rerender(
+      <BufferSurface
+        activeRequestID={firstRequest.requestID}
+        mode="ai"
+        onGenerate={onGenerate}
+        onSend={onSend}
+        phase="error"
+        sourceText="source"
+        targetContext={{
+          requestID: firstRequest.requestID,
+          contextKey: firstRequest.contextKey,
+        }}
+        targets={["prior result"]}
+      />,
+    );
     expect(screen.getAllByText("处理失败")).toHaveLength(1);
     expect(screen.getByText(
       "处理失败，已保留上次结果。候选 1 / 1：prior result",
     )).toBeTruthy();
-    expect(screen.getByText("prior result")).toBeTruthy();
+
+    const sendButton = screen.getByRole("button", { name: "发送" });
+    expect(sendButton.hasAttribute("disabled")).toBe(false);
+    await act(async () => {
+      fireEvent.click(sendButton);
+      await Promise.resolve();
+    });
+    expect(onSend.mock.calls[0]?.slice(0, 2)).toEqual(["prior result", "ai"]);
   });
 
   it("hides rather than deletes a completed result during protected input", () => {
@@ -521,64 +578,6 @@ describe("Buffer generation and delivery", () => {
       />,
     );
     expect(screen.getByRole("button", { name: "翻译" }).hasAttribute("disabled")).toBe(false);
-  });
-
-  it("keeps a settled controlled result usable when regeneration fails", async () => {
-    const onGenerate = vi.fn();
-    const onSend = vi.fn().mockResolvedValue(true);
-    const view = render(
-      <BufferSurface
-        mode="ai"
-        onGenerate={onGenerate}
-        onSend={onSend}
-        phase="ready"
-        sourceText="source"
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "生成" }));
-    const firstRequest = onGenerate.mock.calls[0]?.[2];
-
-    view.rerender(
-      <BufferSurface
-        activeRequestID={firstRequest.requestID}
-        mode="ai"
-        onGenerate={onGenerate}
-        onSend={onSend}
-        phase="ready"
-        sourceText="source"
-        targetContext={{
-          requestID: firstRequest.requestID,
-          contextKey: firstRequest.contextKey,
-        }}
-        targets={["prior result"]}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
-    const retryRequest = onGenerate.mock.calls[1]?.[2];
-    expect(retryRequest.requestID).not.toBe(firstRequest.requestID);
-
-    view.rerender(
-      <BufferSurface
-        activeRequestID={firstRequest.requestID}
-        mode="ai"
-        onGenerate={onGenerate}
-        onSend={onSend}
-        phase="error"
-        sourceText="source"
-        targetContext={{
-          requestID: firstRequest.requestID,
-          contextKey: firstRequest.contextKey,
-        }}
-        targets={["prior result"]}
-      />,
-    );
-    const sendButton = screen.getByRole("button", { name: "发送" });
-    expect(sendButton.hasAttribute("disabled")).toBe(false);
-    await act(async () => {
-      fireEvent.click(sendButton);
-      await Promise.resolve();
-    });
-    expect(onSend.mock.calls[0]?.slice(0, 2)).toEqual(["prior result", "ai"]);
   });
 
   it("keeps controlled live candidates usable after a confirmed send", async () => {
@@ -771,9 +770,20 @@ describe("External source inbox", () => {
     const menu = screen.getByRole("menu", { name: "RIMES 输入法菜单" });
     expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
       "设置…",
-      "外部来源收件箱…2",
+      "外部来源收件箱…（2 项待审）",
       "维护…",
     ]);
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "维护…" }));
+    expect(within(menu).getByRole("menu", { name: "维护" })).toBeTruthy();
+    expect(
+      within(menu).getByRole("menuitem", { name: "关闭缓冲工作台（保留内容）" }),
+    ).toBeTruthy();
+    expect(
+      within(menu).getByRole("menuitemcheckbox", {
+        name: "剪贴板历史（⇧⌘V；仅工作台显示时读取）",
+      }),
+    ).toBeTruthy();
 
     fireEvent.click(within(menu).getByRole("menuitem", { name: /外部来源收件箱/ }));
     const dialog = screen.getByRole("dialog", { name: "外部来源收件箱" });
