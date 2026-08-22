@@ -313,7 +313,7 @@ jobs:
             RIMEBUFFER_USER_DIR="$ROOT/$MODE/profile" \
             RIMEBUFFER_LOCAL_DATA_ROOT="$ROOT/$MODE/local" \
             RIMEBUFFER_PLUGIN_ROOT="$ROOT/$MODE/plugins" \
-              "$BIN" settings-render "$OUTPUT"
+              "$BIN" -chord.extension.enabled.v1 NO settings-render "$OUTPUT"
             png_count="$(find "$OUTPUT" -maxdepth 1 -type f -name '*.png' | wc -l | tr -d ' ')"
             python3 -m json.tool "$OUTPUT/manifest.json" >/dev/null
             route_count="$(python3 -c \
@@ -324,8 +324,11 @@ jobs:
             dimensions="$(sips -g pixelWidth -g pixelHeight "$OUTPUT"/*.png | \
               awk '/pixelWidth:/{w=$2}/pixelHeight:/{print w"x"$2}' | sort -u)"
             echo "mode=$MODE pngs=$png_count routes=$route_count dimensions=$dimensions"
-            test "$png_count" = '21'
-            test "$route_count" = '21'
+            # A clean profile renders the 17 always-available routes. The
+            # optional Chording extension adds four more only after enablement.
+            test "$png_count" = "$route_count"
+            test "$png_count" = '17'
+            test "$route_count" = '17'
             test "$translation_route_count" = '0'
             # bitmapImageRepForCachingDisplay follows the hosted runner's
             # backing scale. A headless 1x runner and a Retina 2x runner both
