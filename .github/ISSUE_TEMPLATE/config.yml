@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: RIMES Wiki
+    url: https://github.com/scholay/rimes/wiki
+    about: 安装、输入方案、Buffer、插件与故障排查

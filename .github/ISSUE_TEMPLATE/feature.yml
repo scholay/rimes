@@ -1,0 +1,46 @@
+name: Feature request
+description: 提议 RIMES 的新能力或产品改进
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 需要解决的问题
+      description: 请先描述使用场景和现在为什么做不到。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 影响范围
+      options:
+        - 输入方案
+        - Buffer / 剪贴板
+        - 候选窗 / 焦点
+        - 插件 / 连接器
+        - 设置 / 设计系统
+        - 安装 / 更新 / 发布
+        - Windows / Linux / 移动端
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: 隐私、兼容性与迁移影响
+      description: 是否影响 secure input、焦点投递、既有用户配置或发布格式？
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 可验收结果
+      description: 什么样的代码、测试和真实宿主证据才算完成？
+    validations:
+      required: true
