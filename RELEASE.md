@@ -13,11 +13,12 @@ Buffer 插件随已签名应用一起交付，不再生成或上传独立 manife
 
 唯一发布中心是 [`scholay/rimes`](https://github.com/scholay/rimes/releases)：
 
-- `vX.Y.Z`：macOS 正式版，进入 `/releases/latest` 和应用内更新通道；唯一例外是一次性的
-  `v0.4.3` 未签名 Pre-release，它不进入 latest 或自动更新；
+- `vX.Y.Z`：macOS 正式版，进入 `/releases/latest` 和应用内更新通道；
+- `vX.Y.Z-preview.N`：macOS 未签名公开预览版，始终是 Pre-release，不进入 latest 或自动更新；
 - `platform-preview-vX.Y.Z`：Windows/Linux 数据与输入方案预览版，始终标记为 Pre-release。
 
-两个通道使用独立版本号，但都只能由新仓库的 tag 触发。旧仓库
+这些通道使用互不混淆的 tag 规则；正式版与跨平台预览由 tag 触发，macOS 未签名预览则由
+当前 `main` 的显式手动工作流创建不可变 tag。旧仓库
 `young-bo-i/rime-buffer` 只保留历史版本和一次性升级桥，不再发布新功能版本。
 
 > 仓库/内部代号是 RimeBuffer（SPM target、源码目录、控制器类）；`ETInput.app` / `MacOS/ETInput`
@@ -29,6 +30,7 @@ Buffer 插件随已签名应用一起交付，不再生成或上传独立 manife
 ./scripts/release.sh --dry-run 0.5.0  # 当前功能线先做只读发布检查
 ./scripts/release.sh 0.5.0            # 门禁、凭据与真机验收齐备后才执行
 ./scripts/release.sh patch            # 已发布功能线的后续维护版；也支持 minor / major
+gh workflow run release.yml --ref main -f version=0.5.0-preview.1 -f publish_unsigned_preview=true
 ```
 
 脚本只允许 `origin` 的 fetch/push URL 同时指向 `scholay/rimes`。它会从远端正式 tag 与
@@ -59,11 +61,24 @@ workflow 使用两台彼此隔离的 runner。第一台 `build_and_smoke` 不绑
    GitHub Release 并计算/发布 SHA256；发布前先销毁临时 keychain/P8，发布使用受控的
    `gh` CLI，所有外部 Actions 都固定到完整 commit SHA
 
-也可在 GitHub Actions 手动运行 `Release macOS` 做发布前演练。手动运行只上传短期
-Artifact，不创建 Release；这条非正式路径使用 ad-hoc app 和 unsigned pkg，通常不能对外
-分发。历史上的一次性 `v0.4.3` 未签名预览通道已经永久关闭，workflow 会拒绝
-`publish_unsigned_preview=true`。正式 Release 仍必须来自严格的
-`vX.Y.Z` tag，且签名或公证凭据缺失时 fail-closed，绝不回退为未签名产物。
+也可在 GitHub Actions 手动运行 `Release macOS` 做发布前演练。普通手动运行只上传短期
+Artifact，不创建 Release；显式勾选 `publish_unsigned_preview` 且版本严格使用
+`X.Y.Z-preview.N` 时，才会从当前 `main` 创建同名 GitHub Pre-release。正式 Release 仍必须
+来自严格的 `vX.Y.Z` tag，且签名或公证凭据缺失时 fail-closed，绝不回退为未签名产物。
+
+### 受控未签名预览通道
+
+未取得 Developer ID 时，可用 `vX.Y.Z-preview.N` 向明确接受风险的社区用户发布测试版本：
+
+1. 只能手动从当前 `origin/main` 触发；workflow 会再次核对远端 SHA，并拒绝已经存在的 tag 或 Release。
+2. 无 secrets 的构建机生成 ad-hoc app 与 unsigned PKG，执行 runtime smoke，并通过真实
+   `sudo installer` 验证 PackageKit、固定路径、输入法 metadata、通用架构和安装回执。
+3. 独立的无 secrets 发布机只做被动成员集、权限、版本、架构、签名状态与 SHA-256 复核，
+   不执行 handoff 中的 ETInput。
+4. Release 只包含 `RIMES-X.Y.Z-preview.N.pkg` 与 `SHA256SUMS`，必须标记为 Pre-release、
+   `latest=false`，正文明确写明 unsigned / not notarized，并链接 `UNSIGNED-PREVIEW.md`。
+5. 预览版不进入应用内更新；后续预览递增 `N`，正式版仍使用不带后缀的 `vX.Y.Z`，任何既有
+   tag 和资产都不得删除、移动或覆盖。
 
 ### 已关闭的一次性未签名预览通道（历史：v0.4.3）
 
@@ -96,8 +111,8 @@ Artifact，不创建 Release；这条非正式路径使用 ad-hoc app 和 unsign
 fail-closed 校验。绝不能在 `v0.4.3` 上补签后覆盖原字节。
 
 > 当前 GitHub 仓库尚未配置 `macos-release` Environment、发布 Secrets 与 tag ruleset，开发机
-> 也没有 Developer ID Application/Installer 身份。因此可以运行不带凭据的 `v0.5.0` 手动构建
-> 演练，但在这些门禁补齐前不得创建正式 tag 或把产物标记为正式 Release。
+> 也没有 Developer ID Application/Installer 身份。因此当前只能发布明确标注、不可自动更新的
+> `v0.5.0-preview.N`；在这些门禁补齐前不得创建 `v0.5.0` 正式 tag 或把预览产物标记为正式 Release。
 
 ### 正式发布环境与 Secrets
 

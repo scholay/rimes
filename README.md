@@ -62,11 +62,11 @@
 
 ## 安装
 
-### 临时免费预览版（v0.4.3）
+### 未签名公开预览版（v0.5.0-preview.1）
 
 在取得 Apple Developer Program 资格前，社区可以从官方仓库的
-[GitHub Pre-release v0.4.3](https://github.com/scholay/rimes/releases/tag/v0.4.3)
-下载 `RIMES-0.4.3.pkg`。这个包**没有 Developer ID 签名、没有经过 Apple 公证，Apple
+[GitHub Pre-release v0.5.0-preview.1](https://github.com/scholay/rimes/releases/tag/v0.5.0-preview.1)
+下载 `RIMES-0.5.0-preview.1.pkg`。这个包**没有 Developer ID 签名、没有经过 Apple 公证，Apple
 无法验证它**；它不是正式版。只从 `scholay/rimes` 下载，并在安装前把本机计算的 SHA-256
 与该 Release 公布的值逐字核对。
 
@@ -74,10 +74,10 @@
 Installer；输入源没有立即显示时请注销并重新登录。不要全局关闭 Gatekeeper，也不要用 `xattr`
 移除隔离属性。若系统提示“已损坏”或“将损坏你的电脑”，立即停止，不要绕过。公司/学校管理的
 Mac 可能由 MDM 禁止这个例外。完整步骤与风险边界见
-[《v0.4.3 未签名预览版安装说明》](UNSIGNED-PREVIEW.md)，以及
+[《未签名预览版安装说明》](UNSIGNED-PREVIEW.md)，以及
 [Apple 官方说明](https://support.apple.com/zh-cn/102445)。
 
-v0.4.3 不进入应用内自动更新通道。将来发布 Developer ID 签名并经 Apple 公证的更高版本后，
+`v0.5.0-preview.1` 不进入应用内自动更新通道。将来发布 Developer ID 签名并经 Apple 公证的正式版后，
 预览版用户需要从官方 Release 手动下载安装一次。
 
 ### 正式版
@@ -125,23 +125,22 @@ Windows 11 实机验证。它目前仍是 commit-only 开发里程碑，尚无�
 | [SYSTEM-ARCHITECTURE.md](SYSTEM-ARCHITECTURE.md) | 当前权威全局架构（接手开发请先读） |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | P1/P2 历史契约与踩坑 |
 | [PLUGIN-CONFIGURATION.md](PLUGIN-CONFIGURATION.md) | 插件声明式配置 |
-| [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) | v0.4.3 未签名预览版的下载、校验与安全安装步骤 |
+| [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) | 当前未签名预览版的下载、校验与安全安装步骤 |
 | [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) | Windows / Linux 输入方案预览边界与验证 |
 | [RELEASE.md](RELEASE.md) | CI、通用二进制、应用内更新 |
 
 ## 自动更新
 
 已安装的正式签名版 RIMES 会检查 [`scholay/rimes`](https://github.com/scholay/rimes) 的
-GitHub Release；未签名的 v0.4.3 预览版不会进入该通道。发布：
+GitHub Release；未签名的 `vX.Y.Z-preview.N` 不会进入该通道。发布：
 
 ```bash
 ./scripts/release.sh patch         # macOS 正式版
 ./scripts/release.sh preview 0.2.0 # Windows/Linux 数据预览版
 ```
 
-两类 Release 都发布在新仓库：macOS `vX.Y.Z` 通常是稳定版；`v0.4.3` 是一次性的未签名
-Pre-release 例外，不进入自动更新。Windows/Linux `platform-preview-vX.Y.Z` 始终是
-Pre-release。
+所有 Release 都发布在新仓库：macOS `vX.Y.Z` 是正式版；`vX.Y.Z-preview.N` 是未签名
+Pre-release，不进入自动更新。Windows/Linux `platform-preview-vX.Y.Z` 始终是 Pre-release。
 
 ## 友链
 

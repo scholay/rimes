@@ -9,11 +9,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version number (strict X.Y.Z)'
+        description: 'Version: X.Y.Z rehearsal or X.Y.Z-preview.N public preview'
         required: false
         default: '0.5.0'
       publish_unsigned_preview:
-        description: 'Historical v0.4.3 channel is closed; this must remain false'
+        description: 'Publish an explicitly unsigned X.Y.Z-preview.N GitHub pre-release'
         required: false
         type: boolean
         default: false
@@ -146,13 +146,23 @@ jobs:
             VERSION="0.0.0-dev"
             IS_RELEASE=false
           fi
-          IS_UNSIGNED_PREVIEW=false
-          if [[ "$PUBLISH_UNSIGNED_PREVIEW" == true ]]; then
-            echo "The one-time v0.4.3 unsigned preview channel is permanently closed." >&2
-            exit 1
-          fi
           if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
             echo "Invalid build version: $VERSION" >&2
+            exit 1
+          fi
+          IS_UNSIGNED_PREVIEW=false
+          if [[ "$PUBLISH_UNSIGNED_PREVIEW" == true ]]; then
+            [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] || {
+              echo 'Unsigned previews may only be published by an explicit manual dispatch.' >&2
+              exit 1
+            }
+            [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.([1-9][0-9]*)$ ]] || {
+              echo "Public unsigned previews must use X.Y.Z-preview.N with N >= 1: $VERSION" >&2
+              exit 1
+            }
+            IS_UNSIGNED_PREVIEW=true
+          elif [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] && [[ "$VERSION" == *-* ]]; then
+            echo 'A prerelease version requires publish_unsigned_preview=true.' >&2
             exit 1
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
@@ -188,7 +198,7 @@ jobs:
           [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
           [[ "$GITHUB_REF" == refs/heads/main ]]
           [[ "$GITHUB_REF_TYPE" == branch && "$GITHUB_REF_NAME" == main ]]
-          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.([1-9][0-9]*)$ ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           git fetch --no-tags --depth=1 origin \
             '+refs/heads/main:refs/remotes/origin/main'
@@ -526,7 +536,7 @@ jobs:
           [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
           [[ "$GITHUB_REF" == refs/heads/main ]]
           [[ "$GITHUB_REF_TYPE" == branch && "$GITHUB_REF_NAME" == main ]]
-          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.([1-9][0-9]*)$ ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           git fetch --no-tags --depth=1 origin \
             '+refs/heads/main:refs/remotes/origin/main'
@@ -572,7 +582,7 @@ jobs:
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
         run: |
           set -euo pipefail
-          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.([1-9][0-9]*)$ ]]
 
           handoff="$RUNNER_TEMP/rimes-unsigned-preview-inputs"
           pkg="RIMES-${VERSION}.pkg"
@@ -979,6 +989,9 @@ jobs:
           此版本为了让社区先验证修复，**没有 Apple Developer ID 签名，也没有经过
           Apple 公证**。macOS 无法验证开发者身份；它不是将来的正式签名版，也绝不会
           被标记为 Latest。
+
+          完整风险边界与安全安装步骤：
+          https://github.com/scholay/rimes/blob/main/UNSIGNED-PREVIEW.md
 
           ## 安装
 

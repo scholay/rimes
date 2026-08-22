@@ -62,11 +62,11 @@ Chording 2.0 preserves the legacy ID and learning progress while taking ownershi
 
 ## Install
 
-### Temporary free preview (v0.4.3)
+### Unsigned public preview (v0.5.0-preview.1)
 
 Until the project can join the Apple Developer Program, community testers may download
-`RIMES-0.4.3.pkg` from the official
-[GitHub Pre-release v0.4.3](https://github.com/scholay/rimes/releases/tag/v0.4.3).
+`RIMES-0.5.0-preview.1.pkg` from the official
+[GitHub Pre-release v0.5.0-preview.1](https://github.com/scholay/rimes/releases/tag/v0.5.0-preview.1).
 This package is **unsigned, not notarized, and not verified by Apple**; it is not a formal
 release. Download only from `scholay/rimes`, then compare the package's locally calculated
 SHA-256 with the value published on that Release page.
@@ -79,7 +79,7 @@ computer”. An organization-managed Mac may block this exception through MDM. S
 [the detailed preview guide](UNSIGNED-PREVIEW.md) and
 [Apple's official guidance](https://support.apple.com/zh-cn/102445).
 
-The v0.4.3 preview cannot use in-app updates. When a higher Developer ID-signed and
+The `v0.5.0-preview.1` preview cannot use in-app updates. When a Developer ID-signed and
 Apple-notarized release becomes available, preview users must download and install it manually
 once from the official Release page.
 
@@ -135,14 +135,14 @@ for the exact boundary, safety model, and validation commands.
 | [SYSTEM-ARCHITECTURE.md](SYSTEM-ARCHITECTURE.md) | Authoritative system architecture (start here if hacking) |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | P1/P2 historical contracts and footguns |
 | [PLUGIN-CONFIGURATION.md](PLUGIN-CONFIGURATION.md) | Declarative plugin configuration |
-| [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) | Download, verification, and safe-install steps for the unsigned v0.4.3 preview |
+| [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) | Download, verification, and safe-install steps for the current unsigned preview |
 | [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) | Windows / Linux input-schemes preview boundary and validation |
 | [RELEASE.md](RELEASE.md) | CI, universal binaries, in-app updates |
 
 ## Auto-update
 
 Formally signed builds check GitHub Releases on
-[`scholay/rimes`](https://github.com/scholay/rimes); the unsigned v0.4.3 preview is excluded
+[`scholay/rimes`](https://github.com/scholay/rimes); unsigned `vX.Y.Z-preview.N` builds are excluded
 from that channel. To ship:
 
 ```bash
@@ -150,9 +150,9 @@ from that channel. To ship:
 ./scripts/release.sh preview 0.2.0 # Windows/Linux data preview
 ```
 
-Both release channels are published in the new repository: macOS `vX.Y.Z` is normally stable;
-`v0.4.3` is a one-time unsigned pre-release exception and is excluded from auto-update.
-Windows/Linux `platform-preview-vX.Y.Z` is always a pre-release.
+All release channels are published in the new repository: macOS `vX.Y.Z` is formal;
+`vX.Y.Z-preview.N` is an unsigned pre-release excluded from auto-update. Windows/Linux
+`platform-preview-vX.Y.Z` is always a pre-release.
 
 ## Contributors
 
