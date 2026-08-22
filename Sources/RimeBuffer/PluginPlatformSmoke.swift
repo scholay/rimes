@@ -48,9 +48,6 @@ func runPluginPlatformSmokeTest() -> Bool {
     )
     guard shippedBufferPluginIDs == Set([
         BuiltInPluginID.appleTranslation,
-        BuiltInPluginID.myPrompt,
-        BuiltInPluginID.remarkable,
-        BuiltInPluginID.marineChrome,
         BuiltInPluginID.streamInput,
         BuiltInPluginID.aiText,
     ]) else {
@@ -97,31 +94,15 @@ func runPluginPlatformSmokeTest() -> Bool {
           streamInputPlugins[0].descriptor.canUninstall == false else {
         return fail("built-in stream input plugin")
     }
-    let remarkablePlugins = BuiltInPlugins.makeAll().filter {
-        $0.descriptor.key.rawID == BuiltInPluginID.remarkable
-    }
-    guard remarkablePlugins.count == 1,
-          remarkablePlugins[0].descriptor.capabilities == [.bufferAction],
-          remarkablePlugins[0].descriptor.canUninstall == false else {
-        return fail("built-in Remarkable plugin")
-    }
-    let marineChromePlugins = BuiltInPlugins.makeAll().filter {
-        $0.descriptor.key.rawID == BuiltInPluginID.marineChrome
-    }
-    guard marineChromePlugins.count == 1,
-          marineChromePlugins[0].descriptor.capabilities == [.bufferAction],
-          marineChromePlugins[0].descriptor.settings == nil,
-          marineChromePlugins[0].descriptor.canUninstall == false else {
-        return fail("built-in Marine Chrome plugin")
-    }
-    let myPromptPlugins = BuiltInPlugins.makeAll().filter {
-        $0.descriptor.key.rawID == BuiltInPluginID.myPrompt
-    }
-    guard myPromptPlugins.count == 1,
-          myPromptPlugins[0].descriptor.capabilities
-            == [.bufferAction, .localStorage],
-          myPromptPlugins[0].descriptor.canUninstall == false else {
-        return fail("built-in My Prompt plugin")
+    let retiredBufferPluginIDs = Set([
+        BuiltInPluginID.myPrompt,
+        BuiltInPluginID.remarkable,
+        BuiltInPluginID.marineChrome,
+    ])
+    guard shippedDescriptors.allSatisfy({
+        !retiredBufferPluginIDs.contains($0.key.rawID)
+    }) else {
+        return fail("retired buffer plugin remained registered")
     }
 
     let root = fileManager.temporaryDirectory.appendingPathComponent(
@@ -167,6 +148,73 @@ func runPluginPlatformSmokeTest() -> Bool {
             rootURL: root,
             stateURL: root.appendingPathComponent(".state.json")
         )
+        let chordDefaultsName =
+            "RimeBuffer.PluginPlatformChordSmoke.\(UUID().uuidString)"
+        guard let chordDefaults = UserDefaults(suiteName: chordDefaultsName) else {
+            return fail("chord defaults suite")
+        }
+        defer {
+            chordDefaults.removePersistentDomain(forName: chordDefaultsName)
+        }
+        chordDefaults.removePersistentDomain(forName: chordDefaultsName)
+        let standardChordEnabledBefore = UserDefaults.standard.object(
+            forKey: "chord.extension.enabled.v1"
+        ) as? Bool
+        let chordKey = PluginKey(
+            domain: .builtIn,
+            rawID: ChordExtensionStore.pluginID
+        )
+        let chordFixture = PluginRegistrySmokeBuiltIn(
+            rawID: ChordExtensionStore.pluginID
+        )
+        let chordSelection = BufferPluginSelectionStore(defaults: chordDefaults)
+        let chordRegistry = PluginRegistry(
+            internalPlugins: [chordFixture],
+            defaults: chordDefaults,
+            externalManager: manager,
+            bufferPluginSelection: chordSelection
+        )
+        guard !chordRegistry.isEnabled(chordKey),
+              chordFixture.startCount == 0,
+              chordRegistry.enabledSettingsContributions().isEmpty else {
+            return fail("fresh chord extension was not disabled")
+        }
+        try chordRegistry.setEnabled(true, for: chordKey)
+        guard chordRegistry.isEnabled(chordKey),
+              chordFixture.startCount == 1,
+              chordRegistry.enabledSettingsContributions().map(\.pluginKey)
+                == [chordKey],
+              !(chordDefaults.stringArray(
+                forKey: PluginRegistry.disabledInternalPluginIDsKey
+              ) ?? []).contains(ChordExtensionStore.pluginID) else {
+            return fail("chord extension enablement authority")
+        }
+
+        let restartedChordStore = ChordExtensionStore(defaults: chordDefaults)
+        let restartedChordFixture = PluginRegistrySmokeBuiltIn(
+            rawID: ChordExtensionStore.pluginID
+        )
+        let restartedChordRegistry = PluginRegistry(
+            internalPlugins: [restartedChordFixture],
+            defaults: chordDefaults,
+            externalManager: manager,
+            bufferPluginSelection: chordSelection,
+            chordExtensionStore: restartedChordStore
+        )
+        guard restartedChordRegistry.isEnabled(chordKey),
+              restartedChordFixture.startCount == 1 else {
+            return fail("chord extension restart persistence")
+        }
+        try restartedChordRegistry.setEnabled(false, for: chordKey)
+        guard !restartedChordStore.isEnabled,
+              !restartedChordRegistry.isEnabled(chordKey),
+              restartedChordFixture.stopCount == 1,
+              UserDefaults.standard.object(
+                forKey: "chord.extension.enabled.v1"
+              ) as? Bool == standardChordEnabledBefore else {
+            return fail("chord extension disable or defaults isolation")
+        }
+
         let builtIn = PluginRegistrySmokeBuiltIn(rawID: externalRawID)
         let bufferBuiltIn = PluginRegistrySmokeBuiltIn(
             rawID: "translation-smoke",

@@ -108,6 +108,7 @@ final class GlobalHotKeyController {
 
     private var eventHandlerRef: EventHandlerRef?
     private var hotKeyRefs: [GlobalHotKeyAction: EventHotKeyRef] = [:]
+    private var registeredDefinitions: [GlobalHotKeyAction: GlobalHotKeyDefinition] = [:]
     private var shortcutPreferencesObserver: NSObjectProtocol?
 
     private init() {
@@ -181,6 +182,7 @@ final class GlobalHotKeyController {
             }
 
             hotKeyRefs[definition.action] = registeredHotKey
+            registeredDefinitions[definition.action] = definition
             IMELog.write("global hotkey installed \(definition.logDescription)")
         }
 
@@ -196,6 +198,7 @@ final class GlobalHotKeyController {
             _ = UnregisterEventHotKey(hotKeyRef)
         }
         hotKeyRefs.removeAll()
+        registeredDefinitions.removeAll()
         return install()
     }
 
@@ -245,6 +248,28 @@ final class GlobalHotKeyController {
         // The application event target normally invokes us on the main loop;
         // retain the same behavior defensively if Carbon ever calls elsewhere.
         let performRoute = {
+            // Carbon owns the shortcut's Command/key events, so the active IMK
+            // controller may only see Shift down/up. Record a process-wide
+            // tombstone before changing the workbench: the eventual release
+            // can be delivered after host re-entry or to another controller,
+            // so mutating only the current controller's gesture is not enough.
+            let carbonTimestamp = TimeInterval(GetEventTime(event))
+            let eventTimestamp = carbonTimestamp.isFinite && carbonTimestamp > 0
+                ? carbonTimestamp
+                : TimeInterval(GetCurrentEventTime())
+            // Consult the definition that actually owns this Carbon
+            // registration. Preferences can change immediately before a
+            // reload; re-reading them here could describe a different chord
+            // from the event currently being dispatched.
+            let shortcutUsesShift = GlobalHotKeyAction(rawValue: identifier.id)
+                .flatMap { self.registeredDefinitions[$0] }
+                .map { $0.modifiers & UInt32(shiftKey) != 0 }
+                ?? false
+            RimeBufferController.globalHotKeyWillPerform(
+                route,
+                eventTimestamp: eventTimestamp,
+                shortcutUsesShift: shortcutUsesShift
+            )
             switch route {
             case .toggleWorkbench:
                 BufferWindowController.shared.toggleVisibility()
@@ -262,7 +287,10 @@ final class GlobalHotKeyController {
         if Thread.isMainThread {
             performRoute()
         } else {
-            DispatchQueue.main.async(execute: performRoute)
+            // Suppression must be ordered before the physical Shift-up
+            // callback. Carbon normally invokes us on the main loop; this
+            // synchronous fallback keeps the exceptional path deterministic.
+            DispatchQueue.main.sync(execute: performRoute)
         }
 
         // This exact registered hot key is ours. Mark it handled so its key

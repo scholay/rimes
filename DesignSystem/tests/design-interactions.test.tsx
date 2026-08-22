@@ -9,12 +9,17 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { initialPlugins, type PluginRecord } from "../src/design-system/data";
+import {
+  initialPlugins,
+  inputSchemes,
+  type PluginRecord,
+} from "../src/design-system/data";
 import {
   BufferSurface,
   bufferInputContextKey,
 } from "../src/surfaces/BufferSurface";
 import { ExtensionsSurface } from "../src/surfaces/ExtensionsSurface";
+import { SettingsSurface } from "../src/surfaces/SettingsSurface";
 
 afterEach(() => {
   cleanup();
@@ -33,7 +38,209 @@ function PluginHarness() {
   );
 }
 
+function BufferSettingsHarness() {
+  const [plugins, setPlugins] = useState<PluginRecord[]>(
+    () => initialPlugins.map((plugin) => ({ ...plugin })),
+  );
+  return (
+    <SettingsSurface
+      initialRouteID="core.buffer"
+      plugins={plugins}
+      setPlugins={setPlugins}
+    />
+  );
+}
+
+function InputMethodSettingsHarness() {
+  const [plugins, setPlugins] = useState<PluginRecord[]>(
+    () => initialPlugins.map((plugin) => ({ ...plugin })),
+  );
+  return (
+    <SettingsSurface
+      initialRouteID="core.input-method"
+      plugins={plugins}
+      setPlugins={setPlugins}
+    />
+  );
+}
+
+function ChordSettingsHarness() {
+  const [plugins, setPlugins] = useState<PluginRecord[]>(
+    () => initialPlugins.map((plugin) => (
+      plugin.id === "builtin.fly-chord-learning"
+        ? { ...plugin, enabled: true }
+        : { ...plugin }
+    )),
+  );
+  return (
+    <SettingsSurface
+      initialRouteID="extension.fly-chord-learning"
+      plugins={plugins}
+      setPlugins={setPlugins}
+    />
+  );
+}
+
+function StreamConfigurationHarness({ chordEnabled }: { chordEnabled: boolean }) {
+  const [plugins, setPlugins] = useState<PluginRecord[]>(() => initialPlugins.map((plugin) => (
+    plugin.id === "builtin.fly-chord-learning"
+      ? { ...plugin, enabled: chordEnabled }
+      : { ...plugin }
+  )));
+  return (
+    <ExtensionsSurface
+      defaultMenuOpen={false}
+      plugins={plugins}
+      setPlugins={setPlugins}
+    />
+  );
+}
+
+describe("Input scheme and chord-extension information architecture", () => {
+  it("keeps only Input Schemes and Dictionaries in core input-method settings", () => {
+    expect(inputSchemes.map((scheme) => [scheme.id, scheme.name])).toEqual([
+      ["rime_ice", "雾凇全拼"],
+      ["double_pinyin", "自然码双拼"],
+      ["double_pinyin_flypy", "小鹤双拼"],
+      ["wubi86", "五笔86"],
+      ["english", "英文"],
+    ]);
+
+    render(<InputMethodSettingsHarness />);
+    const subpages = screen.getByRole("group", { name: "输入法子页面" });
+    expect(within(subpages).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "输入方案",
+      "词库",
+    ]);
+    expect(screen.queryByText("键入模式")).toBeNull();
+
+    for (const scheme of inputSchemes) {
+      expect(screen.getByRole("button", { name: new RegExp(`^${scheme.name}`) })).toBeTruthy();
+    }
+    const fullPinyin = screen.getByRole("button", { name: /^雾凇全拼/ });
+    const flypy = screen.getByRole("button", { name: /^小鹤双拼/ });
+    expect(fullPinyin.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(flypy);
+    expect(fullPinyin.getAttribute("aria-pressed")).toBe("false");
+    expect(flypy.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("keeps the stable chord ID while exposing the 2.0 extension settings", () => {
+    expect(initialPlugins.find((plugin) => plugin.id === "builtin.fly-chord-learning"))
+      .toEqual(expect.objectContaining({
+        id: "builtin.fly-chord-learning",
+        name: "并击",
+        version: "2.0",
+        enabled: false,
+      }));
+
+    render(<ChordSettingsHarness />);
+    const subpages = screen.getByRole("group", { name: "并击子页面" });
+    expect(within(subpages).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "设置",
+      "课程",
+      "练习",
+      "进度",
+    ]);
+
+    const enabledSwitch = screen.getByRole("switch", { name: "启用并击扩展" });
+    expect(enabledSwitch.getAttribute("aria-checked")).toBe("true");
+    const chordCard = screen.getByRole("button", { name: /^飞耀并击/ });
+    const mutualCard = screen.getByRole("button", { name: /^飞耀互击/ });
+    expect(mutualCard.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(chordCard);
+    expect(chordCard.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.change(screen.getByRole("slider", { name: "并击间隔" }), {
+      target: { value: "0.18" },
+    });
+    expect(screen.getByText("并击间隔 · 0.18 秒")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "设为当前输入方案" }));
+    expect(screen.getByText("当前：飞耀并击")).toBeTruthy();
+  });
+
+  it("explains Stream Input routing from the chord extension state", () => {
+    const disabledView = render(<StreamConfigurationHarness chordEnabled={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "配置 意识流输入" }));
+    expect(screen.getByText("并击扩展已停用：意识流输入保持顺序全拼，不处理并击键序。"))
+      .toBeTruthy();
+    disabledView.unmount();
+
+    render(<StreamConfigurationHarness chordEnabled />);
+    fireEvent.click(screen.getByRole("button", { name: "配置 意识流输入" }));
+    expect(screen.getByText("并击扩展已启用：意识流输入支持并击键序，并在生成前转换为连续全拼。"))
+      .toBeTruthy();
+  });
+});
+
+describe("Current Buffer plugin catalog", () => {
+  it("exposes only the three current plugins, versions, and modes", () => {
+    const bufferPlugins = initialPlugins.filter((plugin) => plugin.category === "buffer");
+    expect(bufferPlugins.map((plugin) => ({
+      id: plugin.id,
+      version: plugin.version,
+      enabled: plugin.enabled,
+    }))).toEqual([
+      { id: "builtin.ai-text", version: "2.1", enabled: true },
+      { id: "builtin.apple-translation", version: "2.1", enabled: true },
+      { id: "builtin.stream-input", version: "1.3", enabled: true },
+    ]);
+
+    render(
+      <BufferSurface
+        availablePluginIDs={bufferPlugins.map((plugin) => plugin.id)}
+        defaultMode="normal"
+        defaultSourceText="source"
+      />,
+    );
+    const modeSelect = screen.getByRole("combobox", { name: "工作台插件" });
+    expect(within(modeSelect).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Default",
+      "AI 生成",
+      "实时翻译",
+      "意识流输入",
+    ]);
+  });
+});
+
+describe("Buffer settings mirror", () => {
+  it("defaults terminal delivery close on and clipboard history off", () => {
+    render(<BufferSettingsHarness />);
+
+    const closeAfterDelivery = screen.getByRole("switch", {
+      name: "最后一块上屏后关闭工作台",
+    });
+    const clipboardHistory = screen.getByRole("switch", {
+      name: "启用剪贴板历史",
+    });
+    expect(closeAfterDelivery.getAttribute("aria-checked")).toBe("true");
+    expect(clipboardHistory.getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(closeAfterDelivery);
+    fireEvent.click(clipboardHistory);
+    expect(closeAfterDelivery.getAttribute("aria-checked")).toBe("false");
+    expect(clipboardHistory.getAttribute("aria-checked")).toBe("true");
+  });
+});
+
 describe("Buffer generation and delivery", () => {
+  it("removes the empty-source hint while every Buffer input mode is focused", () => {
+    for (const mode of ["normal", "ai", "translation", "stream"] as const) {
+      const view = render(
+        <BufferSurface mode={mode} phase="idle" sourceText="" />,
+      );
+      const editor = screen.getByRole("textbox", { name: "缓冲正文" }) as HTMLInputElement;
+      expect(editor.placeholder).toBe("等待暂存内容");
+
+      fireEvent.focus(editor);
+      expect(editor.placeholder).toBe("");
+
+      fireEvent.blur(editor);
+      expect(editor.placeholder).toBe("等待暂存内容");
+      view.unmount();
+    }
+  });
+
   it("omits routine status space and keeps the main action icon-only", () => {
     const view = render(
       <BufferSurface
@@ -66,6 +273,44 @@ describe("Buffer generation and delivery", () => {
     expect(busyButton.getAttribute("aria-busy")).toBe("true");
     expect(busyButton.querySelector("svg")).toBeTruthy();
     expect(busyButton.querySelector("svg")?.innerHTML).not.toBe(sendIconMarkup);
+  });
+
+  it("renders plugin loading status in the visible result rail instead of the toolbar", () => {
+    const view = render(
+      <BufferSurface
+        mode="ai"
+        phase="loading"
+        sourceText="source"
+      />,
+    );
+
+    expect(view.container.querySelector(".buffer-toolbar__status")).toBeNull();
+    expect(view.container.querySelector(".buffer-track__loading")?.textContent)
+      .toBe("插件正在生成");
+
+    view.rerender(
+      <BufferSurface
+        mode="translation"
+        phase="loading"
+        sourceText="source"
+        translationProvider="ai"
+      />,
+    );
+    expect(view.container.querySelector(".buffer-toolbar__status")).toBeNull();
+    expect(view.container.querySelector(".buffer-track__loading")?.textContent)
+      .toBe("正在通过 AI 通道翻译");
+
+    view.rerender(
+      <BufferSurface
+        mode="translation"
+        phase="loading"
+        sourceText=""
+        translationProvider="ai"
+      />,
+    );
+    expect(view.container.querySelector(".buffer-track__loading")).toBeNull();
+    expect(view.container.querySelector(".buffer-toolbar__status")?.textContent)
+      .toBe("正在通过 AI 通道翻译");
   });
 
   it("debounces live generation and ignores parent-only callback identity changes", async () => {
@@ -277,7 +522,13 @@ describe("Buffer generation and delivery", () => {
     fireEvent.click(screen.getByRole("button", { name: "生成" }));
     const modeRequest = onGenerate.mock.calls[1]?.[2];
     view.rerender(
-      <BufferSurface mode="marine" phase="ready" sourceText="second" onGenerate={onGenerate} />,
+      <BufferSurface
+        mode="translation"
+        phase="ready"
+        sourceText="second"
+        translationContinuously={false}
+        onGenerate={onGenerate}
+      />,
     );
     expect(modeRequest.signal.aborted).toBe(true);
   });
@@ -468,7 +719,7 @@ describe("Buffer generation and delivery", () => {
     view.rerender(
       <BufferSurface
         activeRequestID="request-2"
-        mode="marine"
+        mode="ai"
         onSend={onSend}
         phase="ready"
         sourceText="second source"
@@ -780,7 +1031,7 @@ describe("External source inbox", () => {
     expect(within(dialog).getByText("2 项待审")).toBeTruthy();
 
     fireEvent.click(within(dialog).getByRole("button", {
-      name: "接受 Marine Chrome 内容并加入 Buffer",
+      name: "接受 本地配对来源 内容并加入 Buffer",
     }));
     expect(within(dialog).getByText(/待审 1 · 已接受 1 · 已拒绝 0/)).toBeTruthy();
     expect(document.activeElement).toBe(
@@ -799,7 +1050,7 @@ describe("External source inbox", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "加入模拟待审项" }));
     expect(document.activeElement).toBe(
       within(dialog).getByRole("button", {
-        name: "接受 Marine Chrome 内容并加入 Buffer",
+        name: "接受 本地配对来源 内容并加入 Buffer",
       }),
     );
 
@@ -875,24 +1126,24 @@ describe("Design lab configuration integration", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: /外部来源收件箱/ }));
     const dialog = screen.getByRole("dialog", { name: "外部来源收件箱" });
     fireEvent.click(within(dialog).getByRole("button", {
-      name: "接受 Marine Chrome 内容并加入 Buffer",
+      name: "接受 本地配对来源 内容并加入 Buffer",
     }));
     fireEvent.click(screen.getByRole("button", { name: /^Buffer/ }));
     const firstDraft = (screen.getByRole("textbox", { name: "缓冲正文" }) as HTMLInputElement).value;
     expect(firstDraft).toContain("请把这段缓冲内容整理为一段清晰的产品说明。");
-    expect(firstDraft).toContain("[Marine Chrome] 把这一段加入 Buffer");
+    expect(firstDraft).toContain("[本地配对来源] 把这段配对传入的文字加入 Buffer");
 
     fireEvent.click(screen.getByRole("button", { name: /扩展与菜单/ }));
     const persistentDialog = screen.getByRole("dialog", { name: "外部来源收件箱" });
     expect(within(persistentDialog).queryByRole("button", {
-      name: "接受 Marine Chrome 内容并加入 Buffer",
+      name: "接受 本地配对来源 内容并加入 Buffer",
     })).toBeNull();
     fireEvent.click(within(persistentDialog).getByRole("button", {
       name: "接受 配对设备 · iPhone 内容并加入 Buffer",
     }));
     fireEvent.click(screen.getByRole("button", { name: /^Buffer/ }));
     const secondDraft = (screen.getByRole("textbox", { name: "缓冲正文" }) as HTMLInputElement).value;
-    expect(secondDraft).toContain("[Marine Chrome]");
+    expect(secondDraft).toContain("[本地配对来源]");
     expect(secondDraft).toContain("[配对设备 · iPhone]");
   });
 

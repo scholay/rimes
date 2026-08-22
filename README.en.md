@@ -2,7 +2,7 @@
 
 **[中文](README.md)** · **[English](README.en.md)**
 
-A modern macOS input method built from scratch: **librime** engine + custom candidate UI + a persistent **buffer workbench**. Ships with Feiyao chord/mutual typing, Natural Code double Pinyin, full Pinyin, and English. **Self-contained** — librime and Rime data are bundled; no separate Squirrel install required.
+A modern macOS input method built from scratch: **librime** engine + custom candidate UI + a persistent **buffer workbench**. Its core schemes are Rime Ice full Pinyin, Natural Code double Pinyin, Xiaohe double Pinyin, Wubi 86, and English; Feiyao chord/mutual typing is supplied by the disabled-by-default Chording extension. **Self-contained** — librime and Rime data are bundled; no separate Squirrel install required.
 
 > Internal codename remains **RimeBuffer** (SPM target, `Sources/RimeBuffer/`). `ETInput.app` is kept as a compatibility path for existing installs and in-app updates. The public product name is **RIMES** (rime-scholay).
 
@@ -11,14 +11,14 @@ A modern macOS input method built from scratch: **librime** engine + custom cand
 - [Bilibili — full walkthrough](https://www.bilibili.com/video/BV17XuH6SEDg/)
 - [Douyin — product demo](https://www.douyin.com/video/7671078195197742355)
 
-Shorter feature clips (live translation, AI generate, stream input, My Prompt, Remarkable, Marine, and more) are in the same Bilibili collection.
+Shorter feature clips for live translation, AI generation, stream input, and more are in the same Bilibili collection.
 
 ## What problem it solves
 
 Most IMEs commit straight into the focused field. RIMES inserts a **pre-commit text workbench**:
 
 1. Chinese / English land in the buffer first
-2. You can translate, rewrite with AI, look up prompts, or attach browser page context
+2. You can translate in real time or generate and rewrite with the selected AI connector
 3. Only after you confirm — paper-plane or Return — does text get **explicitly delivered** into the live input field
 
 Nothing auto-posts, and nothing silently edits the web page. Built for writing, commenting, bilingual work, and AI-assisted flows.
@@ -27,16 +27,13 @@ Nothing auto-posts, and nothing silently edits the web page. Built for writing, 
 
 | Capability | Notes |
 |---|---|
-| Input schemes | Full Pinyin, Natural Code double Pinyin, English; Feiyao chord / mutual |
+| Input schemes | Rime Ice full Pinyin, Natural Code and Xiaohe double Pinyin, Wubi 86, English; optional Chording extension |
 | Buffer workbench | Toggle with `⌘⇧B`; stage first, deliver in chunks |
 | Clipboard history | Show / hide with `⌘⇧P`; read only while the workbench is safely visible |
 | Settings | Open Settings anywhere with `⌘⇧S` |
 | Live translation | Apple on-device translation by default (macOS 15+); AI connector optional |
 | AI generate | Codex CLI / Claude Code CLI / OpenAI-compatible API |
 | Stream input | Pinyin/chords → up to 5 configured mutually exclusive guesses → deliver the chosen one |
-| My Prompt | Local-first retrieval over Fabric / Obsidian-style prompt libraries |
-| Marine Chrome | Chrome extension supplies page context (e.g. Bilibili comment/reply); generate only after local confirm |
-| Remarkable | USB + on-device OCR of the current page into the buffer |
 | Remote typing | Encrypted Mac ↔ Mac delivery; no shared Wi‑Fi or Apple ID required |
 
 <!-- BEGIN PRESET BUFFER PLUGINS -->
@@ -46,15 +43,22 @@ This table is generated from [`Catalog/buffer-plugins.json`](Catalog/buffer-plug
 
 | Plug-in | ID | Version | Default installation | Default state |
 |---|---|---:|---|---|
-| AI Generation | `builtin.ai-text` | 2.0 | Bundled with RIMES | Enabled |
-| My Prompt | `builtin.my-prompt` | 1.0 | Bundled with RIMES | Enabled |
-| Real-time Translation | `builtin.apple-translation` | 2.0 | Bundled with RIMES | Enabled |
-| Stream of Consciousness Input | `builtin.stream-input` | 1.2 | Bundled with RIMES | Enabled |
-| Remarkable | `builtin.remarkable` | 2.0 | On demand in Settings | Disabled |
-| Marine Chrome | `builtin.marine-chrome` | 0.2.3 | On demand in Settings | Disabled |
+| AI Generation | `builtin.ai-text` | 2.1 | Bundled with RIMES | Enabled |
+| Real-time Translation | `builtin.apple-translation` | 2.1 | Bundled with RIMES | Enabled |
+| Stream of Consciousness Input | `builtin.stream-input` | 1.3 | Bundled with RIMES | Enabled |
 
-The four bundled plug-ins are installed and enabled on a clean first run. Other plug-ins are never downloaded automatically and remain disabled after installation.
+Every plug-in in the table is bundled with RIMES and enabled on a clean first run.
 <!-- END PRESET BUFFER PLUGINS -->
+
+## Built-in extensions
+
+| Extension | Stable ID | Version | Default state |
+|---|---|---:|---|
+| Statistics | `builtin.statistics` | 1.0 | Enabled |
+| Typing Speed | `builtin.typing-speed` | 1.0 | Enabled |
+| Chording | `builtin.fly-chord-learning` | 2.0 | Disabled |
+
+Chording 2.0 preserves the legacy ID and learning progress while taking ownership of Feiyao chord/mutual input, the chord window, lessons, practice, and progress. When disabled, ordinary input cannot enter the Feiyao schema and Stream Input returns to sequential full Pinyin.
 
 ## Install
 
@@ -103,7 +107,8 @@ More smoke targets and the release pipeline are documented in [RELEASE.md](RELEA
 ### Windows / Linux input-schemes preview
 
 Windows and Linux currently receive a separate **Data / Input-Schemes Preview**. It reuses
-RIMES's four Rime schemas, dictionaries, Lua modules, and same-batch chord configuration, but
+RIMES's five core Rime schemas, dictionaries, Lua modules, plus the packaged optional Chording
+schema data, but
 requires an existing installation of [Weasel](https://github.com/rime/weasel) on Windows or
 [Fcitx5 Rime](https://github.com/fcitx/fcitx5-rime) / [IBus Rime](https://github.com/rime/ibus-rime)
 on Linux.
@@ -122,16 +127,6 @@ package alone. Use the
 **Pre-release** assets named `RIMES-Windows-Data-Preview-*` or
 `RIMES-Linux-Data-Preview-*`; see [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)
 for the exact boundary, safety model, and validation commands.
-
-### Marine Chrome (optional)
-
-Stable Chrome only today. Extension sources live in [`Extensions/marine-chrome`](Extensions/marine-chrome):
-
-1. Open `chrome://extensions`, enable Developer mode, load unpacked `Extensions/marine-chrome`
-2. Complete the two-sided pairing with RIMES in the UI (no secret pasting)
-3. Enable Buffer + Marine Chrome in RIMES and select it as the workbench owner
-
-The extension is a page sensor only: it does not run a model, auto-fill fields, or publish content.
 
 ## Docs
 

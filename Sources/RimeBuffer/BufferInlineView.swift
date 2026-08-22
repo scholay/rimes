@@ -30,6 +30,200 @@ enum BufferInlineMetrics {
     }
 }
 
+/// Visual marked-text run for the Buffer's logical input surface. The
+/// workbench deliberately remains a nonactivating panel, so the external host
+/// keeps the real IMK marked-text guard; this view mirrors only Rime's current
+/// preedit at the logical insertion point and exposes its caret as the anchor
+/// for the independent candidate panel.
+private final class BufferInlinePreeditView: NSView {
+    private let prefixLabel = NSTextField(labelWithString: "")
+    private let suffixLabel = NSTextField(labelWithString: "")
+    private let caretView = NSView()
+    private let row = NSStackView()
+
+    private(set) var renderedText = ""
+    private(set) var renderedPrefix = ""
+    private(set) var renderedSuffix = ""
+
+    override var intrinsicContentSize: NSSize {
+        let textWidth = prefixLabel.intrinsicContentSize.width
+            + suffixLabel.intrinsicContentSize.width
+        return NSSize(
+            width: min(max(textWidth + 2, 2), 360),
+            height: BufferInlineMetrics.chipHeight
+        )
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        for label in [prefixLabel, suffixLabel] {
+            label.font = .systemFont(ofSize: 12, weight: .semibold)
+            label.maximumNumberOfLines = 1
+            label.drawsBackground = false
+            label.isBezeled = false
+            label.isEditable = false
+            label.isSelectable = false
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.setContentCompressionResistancePriority(.defaultLow,
+                                                          for: .horizontal)
+        }
+        prefixLabel.lineBreakMode = .byTruncatingHead
+        suffixLabel.lineBreakMode = .byTruncatingTail
+
+        caretView.wantsLayer = true
+        caretView.layer?.cornerRadius = 1
+        caretView.translatesAutoresizingMaskIntoConstraints = false
+
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.distribution = .fill
+        row.spacing = 0
+        row.detachesHiddenViews = true
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.addArrangedSubview(prefixLabel)
+        row.addArrangedSubview(caretView)
+        row.addArrangedSubview(suffixLabel)
+        addSubview(row)
+
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.topAnchor.constraint(equalTo: topAnchor),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor),
+            caretView.widthAnchor.constraint(equalToConstant: 2),
+            caretView.heightAnchor.constraint(equalToConstant: 18),
+            heightAnchor.constraint(equalToConstant: BufferInlineMetrics.chipHeight),
+            widthAnchor.constraint(lessThanOrEqualToConstant: 360),
+        ])
+        applyAppearance()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func update(text: String, cursorPosUTF8: Int) {
+        renderedText = text
+        let offset = Self.utf16Offset(ofUTF8: cursorPosUTF8, in: text)
+        let value = text as NSString
+        renderedPrefix = value.substring(to: min(max(offset, 0), value.length))
+        renderedSuffix = value.substring(from: min(max(offset, 0), value.length))
+        prefixLabel.isHidden = renderedPrefix.isEmpty
+        suffixLabel.isHidden = renderedSuffix.isEmpty
+        prefixLabel.attributedStringValue = markedString(renderedPrefix)
+        suffixLabel.attributedStringValue = markedString(renderedSuffix)
+        invalidateIntrinsicContentSize()
+        toolTip = text
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel("正在组字")
+        setAccessibilityValue(text)
+        applyAppearance()
+    }
+
+    func scrub() {
+        renderedText = ""
+        renderedPrefix = ""
+        renderedSuffix = ""
+        prefixLabel.stringValue = ""
+        suffixLabel.stringValue = ""
+        prefixLabel.isHidden = true
+        suffixLabel.isHidden = true
+        toolTip = nil
+        setAccessibilityValue(nil)
+        invalidateIntrinsicContentSize()
+        setCaretBlinking(false)
+    }
+
+    func applyAppearance() {
+        prefixLabel.textColor = RimeUI.textPrimary
+        suffixLabel.textColor = RimeUI.textPrimary
+        if !renderedPrefix.isEmpty {
+            prefixLabel.attributedStringValue = markedString(renderedPrefix)
+        }
+        if !renderedSuffix.isEmpty {
+            suffixLabel.attributedStringValue = markedString(renderedSuffix)
+        }
+        caretView.layer?.backgroundColor = RimeUI.accentBlue.cgColor
+    }
+
+    func setCaretBlinking(_ blinking: Bool) {
+        if blinking {
+            guard caretView.layer?.animation(forKey: "bufferPreeditCaretBlink") == nil else {
+                return
+            }
+            caretView.layer?.opacity = 1
+            let animation = CABasicAnimation(keyPath: "opacity")
+            animation.fromValue = 1
+            animation.toValue = 0.15
+            animation.duration = 0.58
+            animation.autoreverses = true
+            animation.repeatCount = .infinity
+            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            caretView.layer?.add(animation, forKey: "bufferPreeditCaretBlink")
+        } else {
+            caretView.layer?.removeAnimation(forKey: "bufferPreeditCaretBlink")
+            caretView.layer?.opacity = 1
+        }
+    }
+
+    func caretRect(convertedTo target: NSView) -> NSRect? {
+        guard caretView.superview != nil else { return nil }
+        return caretView.convert(caretView.bounds, to: target)
+    }
+
+    private func markedString(_ text: String) -> NSAttributedString {
+        NSAttributedString(
+            string: text,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+                .foregroundColor: RimeUI.textPrimary,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+                .underlineColor: RimeUI.accentBlue,
+            ]
+        )
+    }
+
+    private static func utf16Offset(ofUTF8 byteOffset: Int, in text: String) -> Int {
+        guard byteOffset > 0 else { return 0 }
+        let bytes = Array(text.utf8)
+        var boundary = min(byteOffset, bytes.count)
+        if boundary == bytes.count { return (text as NSString).length }
+        while boundary > 0,
+              String(bytes: bytes[..<boundary], encoding: .utf8) == nil {
+            boundary -= 1
+        }
+        return String(bytes: bytes[..<boundary], encoding: .utf8)?.utf16.count ?? 0
+    }
+}
+
+struct BufferInlineCompositionSnapshot {
+    let renderedText: String
+    let renderedPrefix: String
+    let renderedSuffix: String
+    let caretBetweenRuns: Bool
+    let height: CGFloat
+}
+
+struct BufferDerivedInlineCompositionSnapshot {
+    let renderedText: String
+    let sourceRailVisible: Bool
+    let attachedToSourceRail: Bool
+    let placeholderAbsent: Bool
+    let caretVisibleInSourceClip: Bool
+}
+
+/// Empty-source copy is a placeholder, not part of the logical input value.
+/// Once Buffer owns keyboard input, the placeholder leaves the hierarchy and
+/// the caret occupies the empty insertion point by itself.
+enum BufferInputPlaceholderRules {
+    static func shouldShow(contentIsEmpty: Bool,
+                           preeditIsEmpty: Bool,
+                           inputActive: Bool) -> Bool {
+        contentIsEmpty && preeditIsEmpty && !inputActive
+    }
+}
+
 enum BufferAlternativePagerRules {
     static let maximumCount = BufferInlineMetrics.maximumAlternativeCount
 
@@ -451,11 +645,13 @@ struct BufferTranslationRailLayoutProbe {
     let rails: [Rail]
 }
 
-/// Compact block rail used by the independent workbench window. It never holds
-/// an IMK client or action buttons; it only renders staged blocks.
+/// Compact block-level logical input surface used by the independent
+/// workbench. It never becomes first responder or stores an IMK client; a
+/// first-mouse click only requests capture for the still-focused host token.
 final class BufferInlineView: NSView {
     var onDerivedTargetSelection: ((UUID) -> Void)?
     var onDerivedTargetStep: ((Int) -> Void)?
+    var onCaptureRequested: ((Int) -> Void)?
 
     static let standardPreferredHeight: CGFloat = 34
     static let translationPreferredHeight: CGFloat = 68
@@ -480,6 +676,7 @@ final class BufferInlineView: NSView {
         let allContentSelected: Bool
         let active: Bool
         let preedit: String
+        let preeditCursorPosUTF8: Int
         let loadingMessage: String?
         let loadingActive: Bool
         let translation: TranslationRailSnapshot?
@@ -497,12 +694,14 @@ final class BufferInlineView: NSView {
     private let leadingSpacer = NSView()
     private let translationSourceSpacer = NSView()
     private let caretView = NSView()
+    private let preeditView = BufferInlinePreeditView(frame: .zero)
     private let emptyLabel = NSTextField(labelWithString: "等待暂存内容")
     private let translationSourceEmptyLabel = NSTextField(labelWithString: "等待原文")
     private let translationTargetEmptyLabel = NSTextField(labelWithString: "等待译文")
     private let loadingIndicator = NSProgressIndicator()
     private let enterHoldProgressLayer = CALayer()
     private var renderedBlockIDs: [UUID] = []
+    private var standardBlockViews: [UUID: NSView] = [:]
     private var translationSourceRoleView: NSImageView?
     private var translationTargetRoleView: NSImageView?
     private var translationSourceChipView: TranslationRailChipView?
@@ -521,7 +720,12 @@ final class BufferInlineView: NSView {
     private(set) var renderedTranslationSourceSelected = false
     private(set) var renderedAlternativeCount = 0
     private(set) var renderedAlternativeIndex = 0
+    private(set) var renderedInputPlaceholderVisible = false
     var renderedBlockCount: Int { renderedBlockIDs.count }
+    var renderedInputCaretVisible: Bool {
+        caretView.superview === chipRow
+            || caretView.superview === translationSourceRow
+    }
     var renderedTranslationTargetViewIdentities: [ObjectIdentifier] {
         renderedBlockIDs.compactMap {
             translationTargetChipViews[$0].map(ObjectIdentifier.init)
@@ -594,6 +798,119 @@ final class BufferInlineView: NSView {
         )
     }
 
+    /// Screen-space caret for the logical Buffer input surface. Callers must
+    /// still validate the exact FocusToken before and after reading it; this
+    /// view intentionally knows nothing about IMK clients or delivery rights.
+    var inputCaretScreenRect: NSRect? {
+        guard let window,
+              window.isVisible,
+              window.isOnActiveSpace,
+              !contentShielded,
+              BufferModel.shared.active else { return nil }
+
+        let scroll: NSScrollView
+        let row: NSStackView
+        if translationContainer.isHidden {
+            guard !normalRailContainer.isHidden else { return nil }
+            scroll = chipScroll
+            row = chipRow
+        } else {
+            guard renderedShowsSourceRail,
+                  !translationSourceScroll.isHidden else { return nil }
+            scroll = translationSourceScroll
+            row = translationSourceRow
+        }
+
+        let caretRectInSelf: NSRect
+        let caretRectInClip: NSRect
+        if !preeditView.renderedText.isEmpty {
+            guard preeditView.superview === row,
+                  let localRect = preeditView.caretRect(convertedTo: self),
+                  let clipRect = preeditView.caretRect(convertedTo: scroll.contentView) else {
+                return nil
+            }
+            caretRectInSelf = localRect
+            caretRectInClip = clipRect
+        } else {
+            guard caretView.superview === row else { return nil }
+            caretRectInSelf = caretView.convert(caretView.bounds, to: self)
+            caretRectInClip = caretView.convert(caretView.bounds, to: scroll.contentView)
+        }
+        guard scroll.contentView.bounds.intersects(caretRectInClip) else { return nil }
+        return window.convertToScreen(convert(caretRectInSelf, to: nil))
+    }
+
+    static func inlineCompositionSnapshotForSmoke(
+        text: String,
+        cursorPosUTF8: Int
+    ) -> BufferInlineCompositionSnapshot {
+        let preedit = BufferInlinePreeditView(frame: .zero)
+        let host = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 24))
+        host.addSubview(preedit)
+        NSLayoutConstraint.activate([
+            preedit.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            preedit.centerYAnchor.constraint(equalTo: host.centerYAnchor),
+        ])
+        preedit.update(text: text, cursorPosUTF8: cursorPosUTF8)
+        host.layoutSubtreeIfNeeded()
+        let caret = preedit.caretRect(convertedTo: preedit)
+        return BufferInlineCompositionSnapshot(
+            renderedText: preedit.renderedText,
+            renderedPrefix: preedit.renderedPrefix,
+            renderedSuffix: preedit.renderedSuffix,
+            caretBetweenRuns: caret.map {
+                $0.minX >= 0 && $0.maxX <= preedit.bounds.maxX + 0.5
+            } ?? false,
+            height: preedit.frame.height
+        )
+    }
+
+    static func derivedInlineCompositionSnapshotForSmoke()
+        -> BufferDerivedInlineCompositionSnapshot {
+        let view = BufferInlineView(frame: .zero)
+        let host = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 68))
+        host.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            view.topAnchor.constraint(equalTo: host.topAnchor),
+            view.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+        ])
+        host.layoutSubtreeIfNeeded()
+        let snapshot = TranslationRailSnapshot(
+            sourceText: "",
+            showsSourceRail: true,
+            outputBlocks: [
+                TranslationOutputBlock(id: UUID(), text: "上一轮结果"),
+            ],
+            phase: .ready
+        )
+        _ = view.renderTranslationForPreview(
+            snapshot,
+            active: true,
+            preedit: "zhong'jian",
+            preeditCursorPosUTF8: 5,
+            presentationStyle: .singleExchange
+        )
+        host.layoutSubtreeIfNeeded()
+        view.layoutSubtreeIfNeeded()
+        let caretInClip = view.preeditView.caretRect(
+            convertedTo: view.translationSourceScroll.contentView
+        )
+        return BufferDerivedInlineCompositionSnapshot(
+            renderedText: view.preeditView.renderedText,
+            sourceRailVisible: view.renderedShowsSourceRail
+                && !view.translationSourceScroll.isHidden,
+            attachedToSourceRail: view.preeditView.superview
+                === view.translationSourceRow,
+            placeholderAbsent: view.translationSourceEmptyLabel.superview
+                !== view.translationSourceRow,
+            caretVisibleInSourceClip: caretInClip.map {
+                view.translationSourceScroll.contentView.bounds.intersects($0)
+            } ?? false
+        )
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
@@ -605,6 +922,11 @@ final class BufferInlineView: NSView {
         enterHoldProgressLayer.opacity = 0
         layer?.addSublayer(enterHoldProgressLayer)
         updateHairlineWidth()
+        let inputClick = NSClickGestureRecognizer(
+            target: self,
+            action: #selector(logicalInputClicked(_:))
+        )
+        addGestureRecognizer(inputClick)
 
         emptyLabel.font = .systemFont(ofSize: 12)
         emptyLabel.lineBreakMode = .byTruncatingTail
@@ -686,6 +1008,42 @@ final class BufferInlineView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    @objc private func logicalInputClicked(_ recognizer: NSClickGestureRecognizer) {
+        guard recognizer.state == .ended, !contentShielded else { return }
+        let point = recognizer.location(in: self)
+        if !translationContainer.isHidden {
+            guard renderedShowsSourceRail,
+                  translationSourceScroll.convert(
+                    translationSourceScroll.bounds,
+                    to: self
+                  ).contains(point) else { return }
+            onCaptureRequested?(BufferModel.shared.blocks.count)
+            return
+        }
+
+        guard normalRailContainer.convert(
+            normalRailContainer.bounds,
+            to: self
+        ).contains(point) else { return }
+        let rowPoint = chipRow.convert(point, from: self)
+        let orderedIDs = BufferModel.shared.blocks.map(\.id)
+        var insertion = orderedIDs.count
+        for (index, id) in orderedIDs.enumerated() {
+            guard let blockView = standardBlockViews[id] else { continue }
+            if rowPoint.x < blockView.frame.midX {
+                insertion = index
+                break
+            }
+            if blockView.frame.contains(rowPoint) {
+                insertion = index + 1
+                break
+            }
+        }
+        onCaptureRequested?(insertion)
+    }
 
     private func configureHorizontalRail(_ scroll: NSScrollView, row: NSStackView) {
         row.orientation = .horizontal
@@ -774,13 +1132,16 @@ final class BufferInlineView: NSView {
     }
 
     @discardableResult
-    func refresh(preedit: String = "", shielded: Bool = false) -> Bool {
+    func refresh(preedit: String = "",
+                 preeditCursorPosUTF8: Int = 0,
+                 shielded: Bool = false) -> Bool {
         // The privacy branch must run before asking either the source model or
         // a derived workspace for text. Besides keeping the rail hidden, this
         // replaces the cached render signature with a plaintext-free value.
         if shielded { return refreshShielded() }
         let workspace = DerivedBufferWorkspaceRouter.selectedWorkspace
         return refresh(preedit: preedit,
+                       preeditCursorPosUTF8: preeditCursorPosUTF8,
                        translation: workspace?.railSnapshot,
                        presentationStyle: BufferDerivedPresentationRules.style(
                             for: workspace?.workspacePluginKey
@@ -792,11 +1153,13 @@ final class BufferInlineView: NSView {
     /// a one-frame row-count mismatch during streaming updates.
     @discardableResult
     func refresh(preedit: String = "",
+                 preeditCursorPosUTF8: Int = 0,
                  shielded: Bool,
                  translationSnapshot: TranslationRailSnapshot?,
                  presentationStyle: BufferDerivedPresentationStyle = .liveExpand) -> Bool {
         if shielded { return refreshShielded() }
         return refresh(preedit: preedit,
+                       preeditCursorPosUTF8: preeditCursorPosUTF8,
                        translation: translationSnapshot,
                        presentationStyle: presentationStyle)
     }
@@ -805,18 +1168,21 @@ final class BufferInlineView: NSView {
     /// deliberately ignores the user's currently selected buffer plugin.
     @discardableResult
     func renderStandardForPreview(preedit: String = "",
+                                  preeditCursorPosUTF8: Int = 0,
                                   shielded: Bool = false) -> Bool {
         if shielded { return refreshShielded() }
         return refresh(preedit: preedit,
+                       preeditCursorPosUTF8: preeditCursorPosUTF8,
                        translation: nil,
                        presentationStyle: .liveExpand)
     }
 
     private func refresh(preedit: String,
+                         preeditCursorPosUTF8: Int,
                          translation: TranslationRailSnapshot?,
                          presentationStyle: BufferDerivedPresentationStyle) -> Bool {
         let model = BufferModel.shared
-        let preeditText = preedit.trimmingCharacters(in: .whitespacesAndNewlines)
+        let preeditText = preedit
         let active = model.active
         let wasRenderingTranslation = !contentShielded
             && lastRenderSignature?.translation != nil
@@ -833,6 +1199,7 @@ final class BufferInlineView: NSView {
             allContentSelected: model.allContentSelected,
             active: active,
             preedit: preeditText,
+            preeditCursorPosUTF8: preeditCursorPosUTF8,
             loadingMessage: model.loadingMessage,
             loadingActive: model.transientLoadingActive,
             translation: translation,
@@ -850,12 +1217,17 @@ final class BufferInlineView: NSView {
 
         if let translation {
             if !wasRenderingTranslation { resetRailContents() }
+            updatePreeditPresentation(
+                text: preeditText,
+                cursorPosUTF8: preeditCursorPosUTF8
+            )
             normalRailContainer.isHidden = true
             translationContainer.isHidden = false
             renderedSelectedStandardBlockCount = 0
             renderedTranslationSourceSelected = translation.sourceSelected
             renderTranslation(translation,
                               active: active,
+                              preedit: preeditText,
                               presentationStyle: presentationStyle)
             applyAppearance()
             layoutSubtreeIfNeeded()
@@ -866,6 +1238,10 @@ final class BufferInlineView: NSView {
         }
 
         resetRailContents()
+        updatePreeditPresentation(
+            text: preeditText,
+            cursorPosUTF8: preeditCursorPosUTF8
+        )
         normalRailContainer.isHidden = false
         translationContainer.isHidden = true
         renderedSelectedStandardBlockCount = signature.allContentSelected
@@ -875,22 +1251,34 @@ final class BufferInlineView: NSView {
 
         let insertionIndex = signature.insertionIndex
         if model.blocks.isEmpty, preeditText.isEmpty {
-            emptyLabel.stringValue = model.loadingMessage ?? "等待暂存内容"
+            let explicitMessage = model.loadingMessage?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if active {
+                chipRow.addArrangedSubview(caretView)
+            }
             if model.transientLoadingActive {
                 chipRow.addArrangedSubview(loadingIndicator)
                 loadingIndicator.startAnimation(nil)
             }
-            chipRow.addArrangedSubview(emptyLabel)
-            if active {
-                chipRow.addArrangedSubview(caretView)
+            if let explicitMessage, !explicitMessage.isEmpty {
+                emptyLabel.stringValue = explicitMessage
+                chipRow.addArrangedSubview(emptyLabel)
+            } else if BufferInputPlaceholderRules.shouldShow(
+                contentIsEmpty: true,
+                preeditIsEmpty: true,
+                inputActive: active
+            ) {
+                emptyLabel.stringValue = "等待暂存内容"
+                chipRow.addArrangedSubview(emptyLabel)
+                renderedInputPlaceholderVisible = true
             }
         } else if active {
             for index in 0...model.blocks.count {
                 if index == insertionIndex {
                     if !preeditText.isEmpty {
-                        chipRow.addArrangedSubview(preeditChip(text: preeditText))
+                        chipRow.addArrangedSubview(preeditView)
                     }
-                    if !signature.allContentSelected {
+                    if preeditText.isEmpty, !signature.allContentSelected {
                         chipRow.addArrangedSubview(caretView)
                     }
                 }
@@ -911,7 +1299,7 @@ final class BufferInlineView: NSView {
                 ))
             }
             if !preeditText.isEmpty {
-                chipRow.addArrangedSubview(preeditChip(text: preeditText))
+                chipRow.addArrangedSubview(preeditView)
             }
         }
         if let message = model.loadingMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -942,6 +1330,7 @@ final class BufferInlineView: NSView {
             allContentSelected: false,
             active: false,
             preedit: "",
+            preeditCursorPosUTF8: 0,
             loadingMessage: nil,
             loadingActive: false,
             translation: nil,
@@ -975,6 +1364,8 @@ final class BufferInlineView: NSView {
     @discardableResult
     func renderTranslationForPreview(_ snapshot: TranslationRailSnapshot,
                                      active: Bool = true,
+                                     preedit: String = "",
+                                     preeditCursorPosUTF8: Int = 0,
                                      presentationStyle: BufferDerivedPresentationStyle = .liveExpand) -> Bool {
         lastRenderSignature = nil
         contentShielded = false
@@ -983,8 +1374,11 @@ final class BufferInlineView: NSView {
         translationContainer.isHidden = false
         renderedSelectedStandardBlockCount = 0
         renderedTranslationSourceSelected = snapshot.sourceSelected
+        updatePreeditPresentation(text: preedit,
+                                  cursorPosUTF8: preeditCursorPosUTF8)
         renderTranslation(snapshot,
                           active: active,
+                          preedit: preedit,
                           presentationStyle: presentationStyle)
         applyAppearance()
         layoutSubtreeIfNeeded()
@@ -996,8 +1390,10 @@ final class BufferInlineView: NSView {
 
     private func renderTranslation(_ snapshot: TranslationRailSnapshot,
                                    active: Bool,
+                                   preedit: String,
                                    presentationStyle: BufferDerivedPresentationStyle) {
         renderedBlockIDs.removeAll(keepingCapacity: true)
+        renderedInputPlaceholderVisible = false
         let allRows: [TranslationOutputRow]
         if snapshot.outputRows.isEmpty {
             allRows = [TranslationOutputRow(key: 0,
@@ -1014,16 +1410,14 @@ final class BufferInlineView: NSView {
             },
             count: alternativeCount
         )
-        let exchangeShowsTarget = BufferDerivedPresentationRules.exchangeShowsTarget(
+        let visibility = BufferDerivedPresentationRules.visibleRails(
             style: presentationStyle,
-            phase: snapshot.phase,
-            outputCount: snapshot.outputBlocks.count
+            snapshot: snapshot
         )
-        let showsTargetRail = presentationStyle == .liveExpand
-            || exchangeShowsTarget
-            || !snapshot.showsSourceRail
-        renderedShowsSourceRail = snapshot.showsSourceRail
-            && !(presentationStyle == .singleExchange && exchangeShowsTarget)
+        let showsTargetRail = visibility.showsTarget
+        // A fresh composition is always edited in the source rail, even if a
+        // single-exchange plugin was previously showing only its result.
+        renderedShowsSourceRail = visibility.showsSource || (active && !preedit.isEmpty)
         renderedAlternativeCount = showsTargetRail ? alternativeCount : 0
         renderedAlternativeIndex = showsTargetRail ? activeAlternativeIndex : 0
 
@@ -1034,22 +1428,39 @@ final class BufferInlineView: NSView {
                                   role: snapshot.sourceRole,
                                   target: false)
         var sourceViews: [NSView] = [sourceRole]
-        if snapshot.sourceText.isEmpty {
+        if renderedShowsSourceRail,
+           BufferInputPlaceholderRules.shouldShow(
+            contentIsEmpty: snapshot.sourceText.isEmpty,
+            preeditIsEmpty: preedit.isEmpty,
+            inputActive: active
+        ) {
             translationSourceEmptyLabel.stringValue = snapshot.sourceEmptyText
             sourceViews.append(translationSourceEmptyLabel)
+            renderedInputPlaceholderVisible = true
         } else {
-            let sourceChip = translationSourceChipView
-                ?? TranslationRailChipView(target: false)
-            translationSourceChipView = sourceChip
-            sourceChip.update(
-                text: snapshot.sourceText,
-                selected: snapshot.sourceSelected,
-                stale: false,
-                scale: window?.backingScaleFactor ?? 2
-            )
-            sourceViews.append(sourceChip)
+            if !snapshot.sourceText.isEmpty {
+                let sourceChip = translationSourceChipView
+                    ?? TranslationRailChipView(target: false)
+                translationSourceChipView = sourceChip
+                sourceChip.update(
+                    text: snapshot.sourceText,
+                    selected: snapshot.sourceSelected,
+                    stale: false,
+                    scale: window?.backingScaleFactor ?? 2
+                )
+                sourceViews.append(sourceChip)
+            }
         }
-        if active, !snapshot.sourceSelected { sourceViews.append(caretView) }
+        if renderedShowsSourceRail, active {
+            if !preedit.isEmpty {
+                // Marked text is a transient replacement preview. Preserve
+                // source selection until commit/cancel, but keep its live caret
+                // visible so candidates never lose their Buffer anchor.
+                sourceViews.append(preeditView)
+            } else if !snapshot.sourceSelected {
+                sourceViews.append(caretView)
+            }
+        }
         sourceViews.append(translationSourceSpacer)
         reconcileArrangedSubviews(sourceViews, in: translationSourceRow)
 
@@ -1091,7 +1502,7 @@ final class BufferInlineView: NSView {
 
         var loading = false
         var message: String?
-        if snapshot.outputBlocks.isEmpty {
+        if showsTargetRail, snapshot.outputBlocks.isEmpty {
             switch snapshot.phase {
             case .waiting, .translating:
                 loading = true
@@ -1105,7 +1516,7 @@ final class BufferInlineView: NSView {
             case .idle, .ready:
                 translationTargetEmptyLabel.stringValue = snapshot.targetEmptyText
             }
-        } else {
+        } else if showsTargetRail {
             let liveIDs = Set(rowSnapshots.flatMap(\.blocks).map(\.id))
             let obsoleteIDs = translationTargetChipViews.keys.filter {
                 !liveIDs.contains($0)
@@ -1328,6 +1739,7 @@ final class BufferInlineView: NSView {
             ? 1 / max(window?.backingScaleFactor ?? 2, 1)
             : 0
         box.toolTip = blockToolTip(block)
+        standardBlockViews[block.id] = box
         row.translatesAutoresizingMaskIntoConstraints = false
         box.addSubview(row)
         NSLayoutConstraint.activate([
@@ -1370,52 +1782,6 @@ final class BufferInlineView: NSView {
         }
         lines.append(block.text)
         return lines.joined(separator: "\n")
-    }
-
-    private func preeditChip(text: String) -> NSView {
-        let label = NSTextField(labelWithString: text)
-        label.font = .systemFont(ofSize: 12, weight: .semibold)
-        label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 1
-        label.toolTip = text
-        label.textColor = RimeUI.textPrimary
-
-        let row = NSStackView(views: [label])
-        row.orientation = .horizontal
-        row.alignment = .centerY
-
-        let box = NSView()
-        box.wantsLayer = true
-        box.layer?.backgroundColor = RimeUI.accentBlue.withAlphaComponent(
-            RimeUI.isDark ? 0.34 : 0.22
-        ).cgColor
-        box.layer?.borderWidth = 1
-        box.layer?.borderColor = RimeUI.accentBlue.withAlphaComponent(0.45).cgColor
-        box.layer?.cornerRadius = BufferInlineMetrics.chipCornerRadius
-        box.toolTip = text
-        row.translatesAutoresizingMaskIntoConstraints = false
-        box.addSubview(row)
-        NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(
-                equalTo: box.leadingAnchor,
-                constant: BufferInlineMetrics.chipHorizontalInset
-            ),
-            row.trailingAnchor.constraint(
-                equalTo: box.trailingAnchor,
-                constant: -BufferInlineMetrics.chipHorizontalInset
-            ),
-            row.topAnchor.constraint(
-                equalTo: box.topAnchor,
-                constant: BufferInlineMetrics.chipVerticalInset
-            ),
-            row.bottomAnchor.constraint(
-                equalTo: box.bottomAnchor,
-                constant: -BufferInlineMetrics.chipVerticalInset
-            ),
-            label.widthAnchor.constraint(lessThanOrEqualToConstant: 180),
-            box.heightAnchor.constraint(equalToConstant: BufferInlineMetrics.chipHeight),
-        ])
-        return box
     }
 
     private func messageChip(text: String) -> NSView {
@@ -1475,12 +1841,24 @@ final class BufferInlineView: NSView {
         }
     }
 
+    private func updatePreeditPresentation(text: String,
+                                           cursorPosUTF8: Int) {
+        guard !text.isEmpty else {
+            preeditView.scrub()
+            return
+        }
+        preeditView.update(text: text, cursorPosUTF8: cursorPosUTF8)
+    }
+
     private func resetRailContents() {
+        renderedInputPlaceholderVisible = false
+        preeditView.scrub()
         translationSourceChipView?.scrub()
         translationTargetChipViews.values.forEach { $0.scrub() }
         translationMessageView?.scrub()
         translationPagerView.scrub()
         clearArrangedSubviews(of: chipRow)
+        standardBlockViews.removeAll()
         clearArrangedSubviews(of: translationSourceRow)
         for rail in translationTargetRails.values {
             clearArrangedSubviews(of: rail.row)
@@ -1537,7 +1915,15 @@ final class BufferInlineView: NSView {
 
     private func scrollTranslationRails(for phase: TranslationRailSnapshot.Phase) {
         if renderedShowsSourceRail {
-            scrollToEnd(row: translationSourceRow, in: translationSourceScroll)
+            if !preeditView.renderedText.isEmpty,
+               preeditView.superview === translationSourceRow,
+               let caret = preeditView.caretRect(convertedTo: translationSourceRow) {
+                scroll(rect: caret.insetBy(dx: -14, dy: 0),
+                       row: translationSourceRow,
+                       in: translationSourceScroll)
+            } else {
+                scrollToEnd(row: translationSourceRow, in: translationSourceScroll)
+            }
         }
         for key in renderedTranslationTargetRowKeys {
             guard let rail = translationTargetRails[key] else { continue }
@@ -1560,6 +1946,21 @@ final class BufferInlineView: NSView {
         scroll.reflectScrolledClipView(scroll.contentView)
     }
 
+    private func scroll(rect: NSRect, row: NSView, in scrollView: NSScrollView) {
+        let maxX = max(0, row.frame.width - scrollView.contentSize.width)
+        let visible = scrollView.contentView.bounds
+        var targetX = visible.minX
+        if rect.minX < visible.minX {
+            targetX = max(0, rect.minX)
+        } else if rect.maxX > visible.maxX {
+            targetX = max(0, min(maxX, rect.maxX - scrollView.contentSize.width))
+        } else {
+            targetX = min(max(0, visible.minX), maxX)
+        }
+        scrollView.contentView.scroll(to: NSPoint(x: targetX, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
     private func scrollChipsToInsertionPoint() {
         let maxX = max(0, chipRow.frame.width - chipScroll.contentSize.width)
         if BufferModel.shared.loadingMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1574,19 +1975,16 @@ final class BufferInlineView: NSView {
             return
         }
 
-        let visible = chipScroll.contentView.bounds
-        let caretFrame = caretView.frame.insetBy(dx: -14, dy: 0)
-        var targetX = visible.minX
-        if caretFrame.minX < visible.minX {
-            targetX = max(0, caretFrame.minX)
-        } else if caretFrame.maxX > visible.maxX {
-            targetX = max(0, min(maxX, caretFrame.maxX - chipScroll.contentSize.width))
+        let caretFrame: NSRect
+        if !preeditView.renderedText.isEmpty,
+           preeditView.superview === chipRow,
+           let preeditCaret = preeditView.caretRect(convertedTo: chipRow) {
+            caretFrame = preeditCaret.insetBy(dx: -14, dy: 0)
         } else {
-            targetX = min(max(0, visible.minX), maxX)
+            caretFrame = caretView.convert(caretView.bounds, to: chipRow)
+                .insetBy(dx: -14, dy: 0)
         }
-
-        chipScroll.contentView.scroll(to: NSPoint(x: targetX, y: 0))
-        chipScroll.reflectScrolledClipView(chipScroll.contentView)
+        scroll(rect: caretFrame, row: chipRow, in: chipScroll)
     }
 
     private func applyAppearance() {
@@ -1599,6 +1997,7 @@ final class BufferInlineView: NSView {
                 .withAlphaComponent(RimeUI.isDark ? 0.13 : 0.08).cgColor
         }
         caretView.layer?.backgroundColor = RimeUI.accentBlue.cgColor
+        preeditView.applyAppearance()
         enterHoldProgressLayer.backgroundColor = RimeUI.accentBlue.cgColor
         emptyLabel.textColor = RimeUI.isDark ? RimeUI.textSecondary : RimeUI.textMuted
         translationSourceEmptyLabel.textColor = RimeUI.textSecondary
@@ -1607,6 +2006,13 @@ final class BufferInlineView: NSView {
     }
 
     private func startCaretBlinking() {
+        if !preeditView.renderedText.isEmpty {
+            caretView.layer?.removeAnimation(forKey: "bufferCaretBlink")
+            caretView.layer?.opacity = 1
+            preeditView.setCaretBlinking(true)
+            return
+        }
+        preeditView.setCaretBlinking(false)
         guard caretView.layer?.animation(forKey: "bufferCaretBlink") == nil else { return }
         caretView.layer?.opacity = 1
         let animation = CABasicAnimation(keyPath: "opacity")
@@ -1622,6 +2028,7 @@ final class BufferInlineView: NSView {
     private func stopCaretBlinking() {
         caretView.layer?.removeAnimation(forKey: "bufferCaretBlink")
         caretView.layer?.opacity = 1
+        preeditView.setCaretBlinking(false)
     }
 
 }

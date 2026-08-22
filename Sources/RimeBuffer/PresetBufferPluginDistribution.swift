@@ -174,7 +174,7 @@ final class PresetBufferPluginInstallationStore {
 
     /// Existing installations ran a version where every compiled-in plugin
     /// was considered installed. Preserve that contract exactly once. A truly
-    /// fresh profile instead starts with the catalog's four default plugins.
+    /// fresh profile instead starts with the catalog's default plugins.
     func bootstrap(hadLegacyEnablement: Bool,
                    legacyDisabledIDs: Set<String>) {
         stateLock.lock()

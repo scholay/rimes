@@ -24,6 +24,46 @@ export type PluginRecord = {
   configurable: boolean;
 };
 
+export type InputSchemeRecord = {
+  id: "rime_ice" | "double_pinyin" | "double_pinyin_flypy" | "wubi86" | "english";
+  name: string;
+  summary: string;
+  icon: IconName;
+};
+
+export const inputSchemes: readonly InputSchemeRecord[] = [
+  {
+    id: "rime_ice",
+    name: "雾凇全拼",
+    summary: "雾凇拼音 · 使用完整拼音输入",
+    icon: "textbox",
+  },
+  {
+    id: "double_pinyin",
+    name: "自然码双拼",
+    summary: "自然码双拼键位",
+    icon: "keyboard",
+  },
+  {
+    id: "double_pinyin_flypy",
+    name: "小鹤双拼",
+    summary: "小鹤双拼键位",
+    icon: "keyboard",
+  },
+  {
+    id: "wubi86",
+    name: "五笔86",
+    summary: "86 版五笔字型",
+    icon: "grid",
+  },
+  {
+    id: "english",
+    name: "英文",
+    summary: "英文候选与补全",
+    icon: "globe",
+  },
+];
+
 export const initialPlugins: PluginRecord[] = [
   {
     id: "builtin.typing-speed",
@@ -49,9 +89,9 @@ export const initialPlugins: PluginRecord[] = [
   },
   {
     id: "builtin.fly-chord-learning",
-    name: "飞耀互击学习",
-    version: "1.0",
-    summary: "从飞耀互击方案生成课程与专项练习，进度只保存在本机。",
+    name: "并击",
+    version: "2.0",
+    summary: "提供飞耀并击与互击输入、课程和练习；停用后不再接管并击按键。",
     icon: "hands",
     category: "extension",
     installState: "bundled",
@@ -61,7 +101,7 @@ export const initialPlugins: PluginRecord[] = [
   {
     id: "builtin.ai-text",
     name: "AI 生成",
-    version: "2.0",
+    version: "2.1",
     summary: "使用选定的 Codex、Claude Code 或通用 Open API 生成独立目标缓冲区。",
     icon: "sparkle",
     category: "buffer",
@@ -70,20 +110,9 @@ export const initialPlugins: PluginRecord[] = [
     configurable: true,
   },
   {
-    id: "builtin.my-prompt",
-    name: "My Prompt",
-    version: "1.0",
-    summary: "从本地 Markdown、Obsidian 或 Fabric 风格提示词库实时检索。",
-    icon: "fileSearch",
-    category: "buffer",
-    installState: "bundled",
-    enabled: true,
-    configurable: true,
-  },
-  {
     id: "builtin.apple-translation",
     name: "实时翻译",
-    version: "2.0",
+    version: "2.1",
     summary: "把源缓冲区实时翻译到独立目标缓冲区，默认使用 Apple 本地翻译。",
     icon: "globe",
     category: "buffer",
@@ -94,34 +123,12 @@ export const initialPlugins: PluginRecord[] = [
   {
     id: "builtin.stream-input",
     name: "意识流输入",
-    version: "Next",
-    summary: "下一版本设计目标：连续全拼实时给出一至五个完整猜测。",
+    version: "1.3",
+    summary: "连续输入不分词的全拼；并击扩展启用时支持并击转全拼，停用时继续使用顺序全拼。",
     icon: "waveform",
     category: "buffer",
     installState: "bundled",
     enabled: true,
-    configurable: true,
-  },
-  {
-    id: "builtin.remarkable",
-    name: "Remarkable",
-    version: "2.0",
-    summary: "只读导出 reMarkable 当前页，并用 Apple Vision 在 Mac 本地识别。",
-    icon: "eye",
-    category: "buffer",
-    installState: "not-downloaded",
-    enabled: false,
-    configurable: true,
-  },
-  {
-    id: "builtin.marine-chrome",
-    name: "Marine Chrome",
-    version: "0.2.3",
-    summary: "由配套 Chrome 扩展读取当前网页和精确回复目标。",
-    icon: "network",
-    category: "buffer",
-    installState: "not-downloaded",
-    enabled: false,
     configurable: true,
   },
 ];

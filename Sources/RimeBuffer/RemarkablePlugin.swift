@@ -64,7 +64,7 @@ extension BuiltInBufferActionWorkspace {
 /// `BufferDeliveryCoordinator -> Delivery.insert` path.
 enum BuiltInBufferActionWorkspaceRouter {
     private static var all: [any BuiltInBufferActionWorkspace] {
-        [RemarkableWorkspace.shared]
+        []
     }
 
     static var selectedWorkspace: (any BuiltInBufferActionWorkspace)? {

@@ -4,12 +4,14 @@ private final class UserLexiconFakeEngine: UserLexiconEngine {
     var isHealthy = true
     var existing = Set<String>()
     var exportedText = "# Rime user dictionary export\nni hao \t你好\t100\n"
+    private(set) var exportedDictionary: String?
     private(set) var importedDictionary: String?
     private(set) var importedText = ""
 
     func hasUserDictionary(named name: String) -> Bool { existing.contains(name) }
 
     func exportUserDictionary(named name: String, to fileURL: URL) -> Int {
+        exportedDictionary = name
         do {
             try Data(exportedText.utf8).write(to: fileURL)
             return 1
@@ -44,10 +46,16 @@ func runUserLexiconServiceSmokeTest() -> Bool {
                                attributes: [.posixPermissions: 0o700])
         let engine = UserLexiconFakeEngine()
         engine.existing.insert(UserLexiconKind.chinese.dictionaryName)
+        engine.existing.insert(UserLexiconKind.wubi86.dictionaryName)
         let service = UserLexiconService(engine: engine,
                                          temporaryDirectory: root.appendingPathComponent("private"))
 
-        guard service.status(for: .chinese).hasLearningDatabase,
+        guard UserLexiconKind.allCases.map(\.dictionaryName)
+                == ["rime_ice", "wubi86", "english"],
+              UserLexiconKind.wubi86.displayName == "五笔86学习词库",
+              UserLexiconKind.wubi86.suggestedFileName.contains("wubi86"),
+              service.status(for: .chinese).hasLearningDatabase,
+              service.status(for: .wubi86).hasLearningDatabase,
               !service.status(for: .english).hasLearningDatabase else {
             print("user-lexicon-smoke: status mapping failed")
             return false
@@ -58,6 +66,7 @@ func runUserLexiconServiceSmokeTest() -> Bool {
         let exported = try String(contentsOf: exportedURL, encoding: .utf8)
         let attrs = try fm.attributesOfItem(atPath: exportedURL.path)
         guard exportResult.entryCount == 1,
+              engine.exportedDictionary == "rime_ice",
               exported.contains("#@/db_name\trime_ice"),
               exported.contains("你好"),
               (attrs[.posixPermissions] as? NSNumber)?.intValue == 0o600 else {
@@ -71,6 +80,28 @@ func runUserLexiconServiceSmokeTest() -> Bool {
               engine.importedDictionary == "rime_ice",
               engine.importedText.contains("你好") else {
             print("user-lexicon-smoke: import routing failed")
+            return false
+        }
+
+        engine.exportedText = "# Rime user dictionary export\n工\ta\t100\n"
+        let wubiURL = root.appendingPathComponent("wubi86.tsv")
+        let wubiExportResult = try service.exportLearningData(.wubi86,
+                                                               to: wubiURL)
+        let wubiExported = try String(contentsOf: wubiURL, encoding: .utf8)
+        guard wubiExportResult.entryCount == 1,
+              engine.exportedDictionary == "wubi86",
+              wubiExported.contains("#@/db_name\twubi86"),
+              wubiExported.contains("工\ta\t") else {
+            print("user-lexicon-smoke: Wubi86 export routing failed")
+            return false
+        }
+        let wubiImportResult = try service.importLearningData(.wubi86,
+                                                               from: wubiURL)
+        guard wubiImportResult.entryCount == 1,
+              wubiImportResult.sourceWasSelfDescribing,
+              engine.importedDictionary == "wubi86",
+              engine.importedText.contains("工\ta\t") else {
+            print("user-lexicon-smoke: Wubi86 import routing failed")
             return false
         }
 
@@ -162,6 +193,59 @@ func runRimeUserLexiconBridgeSmokeTest() -> Bool {
         }
         let service = UserLexiconService(engine: rimeEngine,
                                          temporaryDirectory: root.appendingPathComponent("tmp/lexicon"))
+
+        // Exercise the bundled Wubi schema before calling levers. librime
+        // 1.16 derives the table translator's user dictionary from
+        // `translator/dictionary` when `translator/user_dict` is absent. The
+        // official iterator below is the runtime proof that this checkout's
+        // schema therefore opens the exact database name `wubi86`.
+        var wubiSession = rimeEngine.createSession()
+        defer {
+            if wubiSession != 0 {
+                rimeEngine.destroySession(wubiSession)
+            }
+        }
+        guard wubiSession != 0,
+              rimeEngine.selectSchema("wubi86", session: wubiSession),
+              rimeEngine.getStatus(session: wubiSession).schemaId == "wubi86" else {
+            print("user-lexicon-bridge-smoke: cannot select bundled Wubi86 schema")
+            return false
+        }
+        rimeEngine.setOption("ascii_mode", false, session: wubiSession)
+        rimeEngine.clearComposition(session: wubiSession)
+        _ = rimeEngine.processKey(Int32(Character("a").asciiValue!),
+                                  session: wubiSession)
+        let wubiContext = rimeEngine.getContext(session: wubiSession)
+        guard wubiContext.candidates.contains(where: { $0.text == "工" }) else {
+            print("user-lexicon-bridge-smoke: Wubi86 code a did not produce 工")
+            return false
+        }
+        _ = rimeEngine.processKey(RimeKey.space, session: wubiSession)
+        guard rimeEngine.takeCommit(session: wubiSession) == "工" else {
+            print("user-lexicon-bridge-smoke: Wubi86 candidate did not commit")
+            return false
+        }
+        // An unhandled key settles Memory's pending userdb transaction.
+        _ = rimeEngine.processKey(RimeKey.space, session: wubiSession)
+        rimeEngine.destroySession(wubiSession)
+        wubiSession = 0
+
+        guard rimeEngine.hasUserDictionary(named: UserLexiconKind.wubi86.dictionaryName),
+              !rimeEngine.hasUserDictionary(named: "wubi") else {
+            print("user-lexicon-bridge-smoke: levers did not enumerate exact Wubi86 userdb name")
+            return false
+        }
+        let wubiOutput = root.appendingPathComponent("wubi86-export.tsv")
+        let wubiExported = try service.exportLearningData(.wubi86,
+                                                           to: wubiOutput)
+        let wubiOutputText = try String(contentsOf: wubiOutput, encoding: .utf8)
+        guard wubiExported.entryCount >= 1,
+              wubiOutputText.contains("#@/db_name\twubi86"),
+              wubiOutputText.contains("工\ta\t") else {
+            print("user-lexicon-bridge-smoke: official Wubi86 export failed")
+            return false
+        }
+
         let input = root.appendingPathComponent("bridge-import.tsv")
         let output = root.appendingPathComponent("bridge-export.tsv")
         let fixture = "# Rime user dictionary export\ncodex \tcodex\t100\n"
@@ -191,7 +275,7 @@ func runRimeUserLexiconBridgeSmokeTest() -> Bool {
             return false
         }
         rimeEngine.destroySession(fresh)
-        print("user-lexicon-bridge-smoke: PASS imported=\(imported.entryCount) exported=\(exported.entryCount)")
+        print("user-lexicon-bridge-smoke: PASS wubi86=\(wubiExported.entryCount) imported=\(imported.entryCount) exported=\(exported.entryCount)")
         return true
     } catch {
         print("user-lexicon-bridge-smoke: FAIL \(error.localizedDescription)")

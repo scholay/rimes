@@ -35,8 +35,30 @@ private final class TranslationSmokeDeliverySource: BufferDeliveryContentSource 
 
     func consumeDelivered(blockIDs: [UUID], generation: UInt64) {
         let ids = Set(blockIDs)
-        consumedIDs.append(contentsOf: blocks.filter { ids.contains($0.id) }.map(\.id))
+        let consumed = blocks.filter { ids.contains($0.id) }
+        consumedIDs.append(contentsOf: consumed.map(\.id))
         blocks.removeAll { ids.contains($0.id) }
+        if !consumed.isEmpty { deliveryGeneration &+= 1 }
+    }
+
+    func consumeDeliveredAndReportTerminalDrain(
+        blockIDs: [UUID],
+        generation: UInt64
+    ) -> BufferDeliveryTerminalSourceReceipt? {
+        let generationBeforeConsumption = deliveryGeneration
+        let matchingIDs = Set(blocks.lazy.filter {
+            blockIDs.contains($0.id)
+        }.map(\.id))
+        consumeDelivered(blockIDs: blockIDs, generation: generation)
+        guard generation == generationBeforeConsumption,
+              !matchingIDs.isEmpty,
+              blocks.isEmpty else { return nil }
+        return BufferDeliveryTerminalSourceReceipt(
+            workspaceID: deliveryWorkspaceID,
+            generation: generationBeforeConsumption,
+            generationAfterConsumption: deliveryGeneration,
+            consumedBlockIDs: matchingIDs
+        )
     }
 
     func markDeliveryBlockStale(id: UUID, generation: UInt64) -> Bool { false }
@@ -67,6 +89,15 @@ func runTranslationPluginSmokeTest() -> Bool {
     func fail(_ message: String) -> Bool {
         print("FAILED: translation plugin \(message)")
         return false
+    }
+
+    func runMainLoopUntil(_ predicate: () -> Bool) -> Bool {
+        let deadline = Date(timeIntervalSinceNow: 0.5)
+        while !predicate(), Date() < deadline {
+            _ = RunLoop.current.run(mode: .default,
+                                    before: Date(timeIntervalSinceNow: 0.01))
+        }
+        return predicate()
     }
 
     guard TranslationRefreshPolicy.deadline(lastChange: 0.2, burstStarted: 0) == 0.5,
@@ -313,6 +344,7 @@ func runTranslationPluginSmokeTest() -> Bool {
     var rejectSecond = false
     var mutateAfterFirst: (() -> Void)?
     var deliveryCalls = 0
+    var terminalContexts: [BufferDeliveryCoordinator.TerminalDrainContext] = []
     let dependencies = BufferDeliveryCoordinator.Dependencies(
         resolveTarget: { expected in
             guard expected == nil || expected == focus else { return nil }
@@ -329,7 +361,9 @@ func runTranslationPluginSmokeTest() -> Bool {
         },
         secureInputEnabled: { false },
         validatePlugin: { _, _, completion in completion(.allowed) },
-        refreshUI: {}
+        refreshUI: {},
+        workbenchSessionEpoch: { 41 },
+        terminalDrainDelivered: { terminalContexts.append($0) }
     )
 
     let incomplete = TranslationSmokeDeliverySource(texts: ["Hello"])
@@ -373,16 +407,56 @@ func runTranslationPluginSmokeTest() -> Bool {
         contentSourceResolver: { translated }
     )
     let sent = coordinator.sendAll(expectedToken: focus)
-    guard sent.succeeded,
+    guard let terminalContext = sent.terminalDrain,
+          sent.succeeded,
           sent.sentCount == 2,
           inserted == ["Hello", " world"],
           translated.blocks.isEmpty,
           translated.consumedIDs.count == 2,
-          translated.prepareCallCount == 2 else {
+          translated.prepareCallCount == 2,
+          terminalContext.workspaceID == translated.deliveryWorkspaceID,
+          terminalContext.workbenchSessionEpoch == 41,
+          terminalContext.sourceGenerationAfterConsumption
+            == translated.deliveryGeneration,
+          terminalContext.matchesCurrentSource(translated),
+          terminalContexts.isEmpty,
+          runMainLoopUntil({ terminalContexts.count == 1 }),
+          terminalContexts.first == sent.terminalDrain else {
         return fail("target-only send-all")
+    }
+    translated.deliveryGeneration &+= 1
+    guard !terminalContext.matchesCurrentSource(translated) else {
+        return fail("post-consumption generation must invalidate deferred close")
+    }
+
+
+    terminalContexts.removeAll()
+    let oneAtATime = TranslationSmokeDeliverySource(texts: ["first", "last"])
+    inserted.removeAll()
+    deliveryCalls = 0
+    let oneAtATimeCoordinator = BufferDeliveryCoordinator(
+        model: BufferModel(),
+        dependencies: dependencies,
+        contentSourceResolver: { oneAtATime }
+    )
+    let firstResult = oneAtATimeCoordinator.sendNext(expectedToken: focus)
+    guard firstResult.succeeded,
+          firstResult.terminalDrain == nil,
+          terminalContexts.isEmpty,
+          oneAtATime.blocks.map(\.text) == ["last"] else {
+        return fail("nonterminal source block requested workbench close")
+    }
+    let lastResult = oneAtATimeCoordinator.sendNext(expectedToken: focus)
+    guard lastResult.succeeded,
+          lastResult.terminalDrain != nil,
+          terminalContexts.isEmpty,
+          runMainLoopUntil({ terminalContexts.count == 1 }),
+          terminalContexts.first == lastResult.terminalDrain else {
+        return fail("last source block did not defer terminal callback")
     }
 
     let partial = TranslationSmokeDeliverySource(texts: ["one", "two"])
+    terminalContexts.removeAll()
     inserted.removeAll()
     deliveryCalls = 0
     rejectSecond = true
@@ -395,11 +469,14 @@ func runTranslationPluginSmokeTest() -> Bool {
     guard partialResult.sentCount == 1,
           partialResult.blockedReason == .deliveryRejected,
           inserted == ["one"],
-          partial.blocks.map(\.text) == ["two"] else {
+          partial.blocks.map(\.text) == ["two"],
+          partialResult.terminalDrain == nil,
+          terminalContexts.isEmpty else {
         return fail("partial failure retention")
     }
 
     let changing = TranslationSmokeDeliverySource(texts: ["old-1", "old-2"])
+    terminalContexts.removeAll()
     inserted.removeAll()
     deliveryCalls = 0
     rejectSecond = false
@@ -414,8 +491,42 @@ func runTranslationPluginSmokeTest() -> Bool {
     guard changingResult.sentCount == 1,
           changingResult.blockedReason == .contentChanged,
           inserted == ["old-1"],
-          changing.blocks.map(\.text) == ["old-2"] else {
+          changing.blocks.map(\.text) == ["old-2"],
+          changingResult.terminalDrain == nil,
+          terminalContexts.isEmpty else {
         return fail("live generation revalidation")
+    }
+
+    let ordinary = BufferModel()
+    ordinary.append("default-1", origin: .rime)
+    ordinary.append("default-2", origin: .rime)
+    terminalContexts.removeAll()
+    inserted.removeAll()
+    deliveryCalls = 0
+    let ordinaryCoordinator = BufferDeliveryCoordinator(
+        model: ordinary,
+        dependencies: dependencies,
+        contentSourceResolver: { ordinary }
+    )
+    let ordinaryFirstResult = ordinaryCoordinator.sendNext(expectedToken: focus)
+    guard ordinaryFirstResult.succeeded,
+          ordinaryFirstResult.sentCount == 1,
+          ordinaryFirstResult.terminalDrain == nil,
+          inserted == ["default-1"],
+          ordinary.blocks.map(\.text) == ["default-2"],
+          terminalContexts.isEmpty else {
+        return fail("nonterminal Default block requested workbench close")
+    }
+    let ordinaryLastResult = ordinaryCoordinator.sendNext(expectedToken: focus)
+    guard ordinaryLastResult.succeeded,
+          ordinaryLastResult.sentCount == 1,
+          ordinaryLastResult.terminalDrain != nil,
+          inserted == ["default-1", "default-2"],
+          ordinary.blocks.isEmpty,
+          terminalContexts.isEmpty,
+          runMainLoopUntil({ terminalContexts.count == 1 }),
+          terminalContexts.first == ordinaryLastResult.terminalDrain else {
+        return fail("last Default block did not defer terminal callback")
     }
 
     print("translation plugin smoke OK")

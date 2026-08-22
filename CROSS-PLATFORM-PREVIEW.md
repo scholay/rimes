@@ -13,9 +13,13 @@ installer, updater, or platform text-delivery implementation.
 `scripts/platform-preview/preview.py` uses only the Python standard library and
 performs the same checks on Windows, Linux, and macOS:
 
-- `default.yaml` and `default.custom.yaml` expose exactly four product schemas,
-  in the frozen order `my_combo`, `double_pinyin`, `rime_ice`, `english`.
-- Every product schema file declares the matching `schema_id`.
+- `default.yaml` and `default.custom.yaml` expose exactly five core product
+  schemas, in the frozen order `rime_ice`, `double_pinyin`,
+  `double_pinyin_flypy`, `wubi86`, `english`.
+- `my_combo` remains packaged as the optional schema supplied by the disabled-
+  by-default Chording extension, but is absent from both fresh-install lists.
+- Every core and optional-extension schema file declares the matching
+  `schema_id`.
 - The package is the reviewed dependency closure of those schemas: hidden
   schemas, dictionaries and import tables, static text tables, Lua components,
   local OpenCC resources, symbol tables, and notices must all resolve.
@@ -46,7 +50,7 @@ The preview package rejects or omits:
   content;
 - `rime_ai.example.json` and the retired `ai_*`/`ai_box_*` Lua experiment;
 - optional dictionaries, spelling variants, and Lua modules that are not in the
-  four-schema preview closure.
+  five-core-schema plus optional-Chording preview closure.
 
 `custom_phrase.txt` remains included because it is a checked-in, reviewed
 static table referenced by the product configuration. A user's replacement
@@ -58,10 +62,10 @@ and other profile state are never collected by this tool.
 Every included file is assigned exactly once in `policy.json` under
 `provenanceGroups`; validation fails if a future payload file lacks a license
 and source classification. RIMES-authored packaging/configuration remains MIT,
-the Rime Ice-derived data is GPL-3.0-only, the easy-en dictionary is
-LGPL-3.0-only, and `lua/search.lua` retains its CC BY-SA 4.0 attribution. The
-GPL text and source notices are part of the validated payload, while both
-platform packages also include `THIRD_PARTY_NOTICES.md`.
+the Rime Ice-derived data is GPL-3.0-only, the easy-en dictionary and Rime
+Wubi 86 data are LGPL-3.0-only, and `lua/search.lua` retains its CC BY-SA 4.0
+attribution. The GPL/LGPL texts and source notices are part of the validated
+payload, while both platform packages also include `THIRD_PARTY_NOTICES.md`.
 
 ## Local commands
 

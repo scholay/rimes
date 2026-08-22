@@ -2,7 +2,7 @@
 
 **[中文](README.md)** · **[English](README.en.md)**
 
-从零做的现代 macOS 输入法：**librime** 引擎 + 自绘候选窗 + 常驻缓冲区（buffer）。内置飞耀互击、自然码双拼、全拼与英文方案；**自包含**打包 librime 与词库，装一个就能用，无需单独安装 Squirrel。
+从零做的现代 macOS 输入法：**librime** 引擎 + 自绘候选窗 + 常驻缓冲区（buffer）。内置雾凇全拼、自然码双拼、小鹤双拼、五笔 86 与英文核心方案；飞耀并击 / 互击由默认关闭的“并击”扩展提供。**自包含**打包 librime 与词库，装一个就能用，无需单独安装 Squirrel。
 
 > 仓库/内部代号仍是 **RimeBuffer**（SPM target、`Sources/RimeBuffer/`）；`ETInput.app` 为兼容旧安装与自动更新保留的内部路径。对外产品名统一为 **RIMES**（rime-scholay）。
 
@@ -11,14 +11,14 @@
 - [哔哩哔哩 · 完整介绍](https://www.bilibili.com/video/BV17XuH6SEDg/)
 - [抖音 · 产品演示](https://www.douyin.com/video/7671078195197742355)
 
-另有分集快剪：实时翻译、AI 生成、意识流、My Prompt、Remarkable、Marine 等，见 B 站合集。
+另有分集快剪：实时翻译、AI 生成、意识流等，见 B 站合集。
 
 ## 它解决什么问题
 
 普通输入法打完就直接上屏；RIMES 在中间加了一层**上屏前的文本工作台**：
 
 1. 中文 / 英文先进入缓冲
-2. 可翻译、AI 改写、检索提示词，或带上浏览器页面上下文再生成
+2. 可实时翻译，或使用选定的 AI 连接器生成和改写
 3. 你确认后，才用纸飞机或 Return **显式投递**到当前输入框
 
 结果不会自动发帖、不会静默改网页。适合写作、评论、双语与 AI 工作流。
@@ -27,16 +27,13 @@
 
 | 能力 | 说明 |
 |---|---|
-| 输入方案 | 全拼、自然码双拼、英文；飞耀并击 / 互击 |
+| 输入方案 | 雾凇全拼、自然码双拼、小鹤双拼、五笔 86、英文；可选并击扩展 |
 | 缓冲工作台 | `⌘⇧B` 开关；先暂存、再分块投递 |
 | 剪贴板历史 | `⌘⇧P` 显示 / 隐藏；仅在工作台可见且安全时读取 |
 | 设置 | `⌘⇧S` 随时打开设置页面 |
 | 实时翻译 | 默认 Apple 本地翻译（macOS 15+），也可走 AI 渠道 |
 | AI 生成 | Codex CLI / Claude Code CLI / OpenAI 兼容 API |
 | 意识流输入 | 拼音/并击 → 按配置给出最多 5 个互斥猜测 → 选定后投递 |
-| My Prompt | 本地优先检索 Fabric / Obsidian 等提示词库 |
-| Marine Chrome | Chrome 扩展提供页面上下文（如 B 站评论/回复），本地确认后生成 |
-| Remarkable | USB + 本地 OCR，把当前页识别进缓冲 |
 | 隔空传字 | Mac ↔ Mac 加密直连，无需同一 Wi‑Fi / Apple ID |
 
 <!-- BEGIN PRESET BUFFER PLUGINS -->
@@ -46,15 +43,22 @@
 
 | 插件 | ID | 版本 | 默认安装 | 默认状态 |
 |---|---|---:|---|---|
-| AI 生成 | `builtin.ai-text` | 2.0 | 随 RIMES 预装 | 启用 |
-| My Prompt | `builtin.my-prompt` | 1.0 | 随 RIMES 预装 | 启用 |
-| 实时翻译 | `builtin.apple-translation` | 2.0 | 随 RIMES 预装 | 启用 |
-| 意识流输入 | `builtin.stream-input` | 1.2 | 随 RIMES 预装 | 启用 |
-| Remarkable | `builtin.remarkable` | 2.0 | 设置中按需下载 | 禁用 |
-| Marine Chrome | `builtin.marine-chrome` | 0.2.3 | 设置中按需下载 | 禁用 |
+| AI 生成 | `builtin.ai-text` | 2.1 | 随 RIMES 预装 | 启用 |
+| 实时翻译 | `builtin.apple-translation` | 2.1 | 随 RIMES 预装 | 启用 |
+| 意识流输入 | `builtin.stream-input` | 1.3 | 随 RIMES 预装 | 启用 |
 
-预装的四个插件在全新安装后已安装并启用；其他插件不会自动下载，安装后仍默认禁用。
+表中插件均随 RIMES 预装，并在全新安装后默认启用。
 <!-- END PRESET BUFFER PLUGINS -->
+
+## 内置扩展
+
+| 扩展 | 稳定 ID | 版本 | 默认状态 |
+|---|---|---:|---|
+| 统计 | `builtin.statistics` | 1.0 | 启用 |
+| 打字测速 | `builtin.typing-speed` | 1.0 | 启用 |
+| 并击 | `builtin.fly-chord-learning` | 2.0 | 关闭 |
+
+“并击”2.0 保留旧 ID 与学习进度，但现在统一拥有飞耀并击 / 互击输入、组键间隔、课程、练习与进度；关闭后普通输入不再进入飞耀方案，意识流输入自动回到逐字连续全拼。
 
 ## 安装
 
@@ -97,8 +101,8 @@ tail -f ~/rimebuffer.log          # 行为日志
 
 ### Windows / Linux 输入方案预览
 
-Windows 与 Linux 目前提供独立的 **Data / Input-Schemes Preview**。它复用 RIMES 的四套
-Rime 方案、词库、Lua 与同批并击配置，但需要用户先安装 Windows
+Windows 与 Linux 目前提供独立的 **Data / Input-Schemes Preview**。它复用 RIMES 的五套
+核心 Rime 方案、词库、Lua，以及随包保留的可选并击方案数据，但需要用户先安装 Windows
 [小狼毫 Weasel](https://github.com/rime/weasel)、Linux
 [Fcitx5 Rime](https://github.com/fcitx/fcitx5-rime) 或
 [IBus Rime](https://github.com/rime/ibus-rime)。
@@ -113,16 +117,6 @@ Windows 11 实机验证。它目前仍是 commit-only 开发里程碑，尚无�
 由数据包单独提供。请从 Releases 中标记为 **Pre-release** 的
 `RIMES-Windows-Data-Preview-*` / `RIMES-Linux-Data-Preview-*` 资产安装；完整边界、
 安全策略和验证方式见 [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)。
-
-### Marine Chrome（可选）
-
-当前仅支持 Stable Chrome。扩展源码在 [`Extensions/marine-chrome`](Extensions/marine-chrome)：
-
-1. 打开 `chrome://extensions`，启用开发者模式，加载已解压的 `Extensions/marine-chrome`
-2. 按页面完成与 RIMES 的双确认配对（无需粘贴密钥）
-3. 在 RIMES 中开启缓冲与 Marine Chrome，并把工作台 owner 切过去
-
-扩展只做网页传感器，不运行模型，也不会自动填入或发布内容。
 
 ## 文档
 

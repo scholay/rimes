@@ -5,6 +5,12 @@ Plugin 提供的可信配置。插件设置必须通过
 `PluginConfigurationSchema` 声明，并由 RIMES 渲染；不得为单个插件在
 `SettingsWindow` 中继续增加一次性的输入框或持久化分支。
 
+> **当前产品范围（2026-08-21）**：当前维护的 Buffer 插件只有 **AI 生成
+> 2.1、实时翻译 2.1、意识流输入 1.3**。`Marine Chrome`、`My Prompt`、
+> `Remarkable` 已下架，不再下载、安装、启用，也不应出现在当前插件配置
+> UI。本文中保留的 My Prompt 数据目录与运行时规则仅是历史兼容说明，
+> 不代表当前产品仍提供该插件。
+
 ## 1. 声明与身份
 
 - `pluginID` 使用稳定插件 ID；发布后不可复用给另一个插件。
@@ -32,11 +38,12 @@ Plugin 提供的可信配置。插件设置必须通过
   复用通用表单，不能再生成第二份密钥副本。
 - 密码、token、API key 不得进入 UserDefaults、argv、URL、通知、
   `description`、日志、崩溃诊断或测试输出。
-- 配置值与插件管理的显式产品数据分开：My Prompt 的普通偏好仍进
-  UserDefaults，用户导入的 Markdown、远程 checkout 与 SQLite 索引放在
+- **历史兼容（已下架 My Prompt）**：旧版本中 My Prompt 的普通偏好写入
+  UserDefaults，用户导入的 Markdown、远程 checkout 与 SQLite 索引位于
   `~/Library/RimeBuffer/my-prompt`（测试优先
-  `RIMEBUFFER_LOCAL_DATA_ROOT` / `RIMEBUFFER_USER_DIR`）。开发重播种、
-  pkg 与应用内更新必须保留该目录；查询词和提示词正文不得进入日志。
+  `RIMEBUFFER_LOCAL_DATA_ROOT` / `RIMEBUFFER_USER_DIR`）。当前版本不再
+  暴露或运行该插件；升级、重部署和卸载迁移不得擅自删除既有用户数据，
+  查询词和提示词正文仍不得进入日志。
 - 远程仓库字段只接受不含 user/password/query/fragment 的 HTTPS URL；
   Git 同步使用固定 argv、清除继承的 `GIT_*`/`SSH_*` 环境、关闭交互和
   `file`/`ext` protocol，不能把
@@ -54,7 +61,7 @@ Plugin 提供的可信配置。插件设置必须通过
   与 changed field IDs，绝不携带值。
 - 插件在真正发起一次任务时读取并冻结配置快照；进行中的 SSH、翻译或
   模型请求不因设置窗口再次保存而半途变更。
-- 意识流输入 v1.2 保留独立 AI 渠道，并公开 `candidateCount`（1–5，默认
+- 意识流输入 v1.3 保留独立 AI 渠道，并公开 `candidateCount`（1–5，默认
   5）与 `latency`（`fast` / `balanced` / `stable`，默认 `balanced`）。
   三档分别映射到 140/500、220/800 与 350/1200 ms 的
   debounce/max-wait；候选上限与节奏在每次请求开始时一起冻结，并贯穿
@@ -63,9 +70,10 @@ Plugin 提供的可信配置。插件设置必须通过
   下一次显式保存会移除旧字段；原有 connector 选择不变。
 - 配置变化可以取消尚未获得结果的旧 generation，但迟到回调仍必须通过
   原有 generation、焦点与 owner 校验，不能恢复投递权。
-- My Prompt 只在本地目录或远程仓库变化时重建来源索引；结果数只触发
-  本地重查，`user.md` 开关只撤销旧投递快照，启动同步开关不触发实时
-  工作。保存新的远程仓库列表会执行一次显式同步。
+- **历史兼容（已下架 My Prompt）**：旧运行时只在本地目录或远程仓库
+  变化时重建来源索引；结果数只触发本地重查，`user.md` 开关只撤销旧
+  投递快照，启动同步开关不触发实时工作。该规则仅用于理解和迁移旧数据，
+  当前运行时不再注册 My Prompt owner 或配置入口。
 - 默认值必须保持升级前的行为，除非产品明确要求迁移。损坏或不安全的
   敏感配置必须 fail closed，并给出不含敏感值的状态。
 - 连接器与缓冲插件 owner 是两个维度。选择 AI 渠道不能暗中切换当前

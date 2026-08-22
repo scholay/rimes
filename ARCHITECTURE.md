@@ -6,17 +6,29 @@
 > "永不 setMarkedText" 的假设，组字协议全面改为 **marked-text 会话常驻**（§4）。
 > 修改本文档时保持"先说做什么、再说为什么"的写法。
 >
-> **2026-08-20 React BufferSurface 原生移植覆盖（覆盖下文 174pt/多 target row 描述）**：缓冲工作台默认采用 760pt React 母版宽度，继续是 nonactivating 原生 `NSPanel`，不改 `FocusToken`、secure/session protection、跨 Space 恢复或 `BufferDeliveryCoordinator -> Delivery.insert` 投递契约。普通、source-only 与 target-only single-exchange 都是 78pt；live source+target 固定 112pt，最大方向预判也降为 112pt。派生 workspace 可呈现 1–5 个互斥 alternative，但 `BufferInlineView` 只维护一个稳定 target viewport，以 pager 切换活动项，不再堆叠 2/3 条 target row 或因候选数改变窗口高度。实时翻译、My Prompt、意识流沿用 live-expand；内置 AI 生成与 Marine Chrome 采用 single-exchange，idle 显示 source/context，生成/结果显示 target，而源与未投递结果仍由 workspace 同时持有，直至宿主明确投递成功。返回编辑是用户明确放弃当前结果；现有 single-exchange refresh 在替换请求成功前会清空旧结果，因此结果态不暴露该非事务性入口。React 同样把 Remarkable 画成 exchange，但其原生实现是经过 SSH 当前页复验和本地 OCR 后直接写入普通 `BufferModel` 的 importer，没有第二份 derived source/result authority，因此 `BufferNativePresentationContract` 明确把它保留为 `standardBufferImport`。工具栏的 88pt 状态列仅在 active、保护、焦点阻塞和失败等可操作状态出现，普通 idle/ready 时完全脱离布局；22pt 返回编辑/刷新槽保持固定。主操作恢复为 22×22 纯图标按钮（投递用纸飞机、生成用 sparkles、生成中用 spinner），可见文字由 tooltip 与无障碍标签承载。`buffer-window-smoke` 钉住 AI/Marine/Remarkable 映射、single-exchange/live-expand、1–5 pager、单/双轨 78/112pt 几何、secure scrub 与固定工具栏槽。
+> **2026-08-22 输入方案与并击扩展覆盖（优先于下文输入编码 / 键入模式历史描述）**：核心「输入法」页只保留「输入方案 / 词库」，不再提供全局「键入模式」。全新 profile 默认启用雾凇全拼、自然码双拼、小鹤双拼、五笔 86 与英文五个普通方案，默认当前方案是 `rime_ice`。`my_combo`、并击 / 互击模式、组键间隔、课程、练习与进度全部归属保留内部 ID `builtin.fly-chord-learning` 的「并击」扩展；扩展全新默认关闭，旧 `my_combo` 或旧 chord/mutual 用户按原语义迁移。扩展开启本身不替换当前普通方案；只有显式「设为当前输入方案」才切到 `my_combo`。扩展关闭会同步退回上一次普通方案，并拒绝 F4 中可能残留的 `my_combo`。意识流不依赖当前普通方案：扩展开启时继续把飞耀物理批次映射为全拼，关闭时立即回到逐字连续全拼。
 >
-> **2026-08-20 Clipboard rail 覆盖**：剪贴板历史是默认关闭的独立工作台开关，不等同于 Control/Command+V。`Command+Shift+P` 通过可配置的全局 Carbon hot key 显示/隐藏该 rail；从隐藏态呼出时只显示 nonactivating 工作台外壳，不恢复 `BufferModel.enabled`，因此不会隐式开启文本捕获或抢走宿主焦点。只有开关开启、工作台真实位于当前 Space 且可见、secure input/锁屏/睡眠/会话保护均关闭时才读取系统 pasteboard；隐藏或保护期间不读正文，恢复只建立新的 `changeCount` baseline，不补抓期间内容。历史最多 30 项、单项 64 KiB、总计 512 KiB，只存在输入法进程，不写 UserDefaults、文件或正文日志。40pt rail 与 1pt divider 令单轨/双轨运行时高度从 78/112pt 变为 119/153pt，但持久 frame 仍保存 canonical 78pt。双击加入只调用 `BufferModel.insertPastedText`，不会开启 Buffer 捕获、写回系统剪贴板、保存历史或绕过 `BufferDeliveryCoordinator -> Delivery.insert`。
+> **2026-08-21 当前实现覆盖（优先于下文全部历史描述）**：Buffer 的“工作台可见”“仍有未投递内容”“输入事件路由”是三个相互独立的状态；显示 nonactivating `NSPanel` 不等于开始捕获，隐藏也不等于清空内容。工作台正文是块级逻辑输入面而不是会抢走 macOS first responder 的 `NSTextView`；用户点击逻辑输入面时，捕获才绑定到当时仍精确存活、非 secure 的外部 `FocusToken`，随后按键进入 Buffer。切换到另一个输入焦点默认回到直输；再次点击任何外部应用（包括仍是同一个输入框）也会先把 Buffer 组字结算为块，再把按键交还宿主。界面不提供额外的“直输/缓冲” switcher，旧 token 不能继续截获新输入框的按键。
+>
+> **2026-08-21 工作台与插件覆盖（优先于下文刷新槽、轨道和插件清单）**：右上角用户可见的刷新按钮已经废弃；generation 作废、上下文重验、配置变化重启等内部生命周期刷新仍保留，但不再以常驻按钮暴露。派生插件在输入为空且没有真实结果/显式状态时只显示单轨；只有存在实际 source、result 或需要向用户说明的 status 时，才增加第二轨或把当前轨交换成结果轨。设置中的“最后一块上屏后关闭工作台”默认开启，适用于 `Default` 与所有 Buffer 插件：只有 `BufferDeliveryCoordinator` 成功投递精确的最后一个 block、对应 source 已原子消费、同一 generation/工作台会话仍有效且目标仍存活时，才关闭并暂停工作台。设置关闭、部分成功、失败、新内容到达、迟到 generation、目标丢失或 owner/会话已切换时都不得关闭。
+>
+> **2026-08-21 当前维护插件清单**：当前只维护并发布 **AI 生成 2.1、实时翻译 2.1、意识流输入 1.3**。`Marine Chrome`、`My Prompt`、`Remarkable` 已从当前产品清单下架，不再下载、安装、启用或出现在运行时路由中；本文后续关于它们的实现、版本和测试说明仅保留为历史设计记录，不代表当前可用能力。
+>
+> **2026-08-20 React BufferSurface 原生移植覆盖（覆盖下文 174pt/多 target row 描述）**：缓冲工作台默认采用 760pt React 母版宽度，继续是 nonactivating 原生 `NSPanel`，不改 `FocusToken`、secure/session protection、跨 Space 恢复或 `BufferDeliveryCoordinator -> Delivery.insert` 投递契约。普通、source-only 与 target-only single-exchange 都是 78pt；live source+target 固定 112pt，最大方向预判也降为 112pt。派生 workspace 可呈现 1–5 个互斥 alternative，但 `BufferInlineView` 只维护一个稳定 target viewport，以 pager 切换活动项，不再堆叠 target row 或因候选数改变窗口高度。当前实时翻译与意识流采用 live-expand，AI 生成采用 single-exchange；该段原有 My Prompt、Marine Chrome、Remarkable 描述只属历史兼容。返回编辑是用户明确放弃当前结果；用户可见刷新按钮与固定刷新槽已经移除。工具栏的 88pt 状态列仅在 active、保护、焦点阻塞和失败等可操作状态出现，普通 idle/ready 时完全脱离布局；返回编辑按状态出现。主操作恢复为 22×22 纯图标按钮（投递用纸飞机、生成用 sparkles、生成中用 spinner），可见文字由 tooltip 与无障碍标签承载。
+>
+> **2026-08-20 Clipboard rail 覆盖**：剪贴板历史是默认关闭的独立工作台开关，不等同于 Control/Command+V。`Command+Shift+P` 通过可配置的全局 Carbon hot key 显示/隐藏该 rail；从隐藏态呼出时只显示 nonactivating 工作台外壳，不恢复 `BufferModel.enabled`，因此不会隐式开启文本捕获或抢走宿主焦点。只有开关开启、工作台真实位于当前 Space 且可见、secure input/锁屏/睡眠/会话保护均关闭时才读取系统 pasteboard。用户显式把 Clipboard History 从关闭切为开启，并且工作台已在同一显式操作后真实可见时，可以把当下合格的纯文本捕获一次；隐藏或保护期间不读正文，普通显隐、锁屏/睡眠/会话恢复只建立新的 `changeCount` baseline，绝不补抓期间内容。历史最多 30 项、单项 64 KiB、总计 512 KiB，只存在输入法进程，不写 UserDefaults、文件或正文日志。40pt rail 与 1pt divider 令单轨/双轨运行时高度从 78/112pt 变为 119/153pt，但持久 frame 仍保存 canonical 78pt。双击加入只调用 `BufferModel.insertPastedText`，不会开启 Buffer 捕获、写回系统剪贴板、保存历史或绕过 `BufferDeliveryCoordinator -> Delivery.insert`。
+>
+> **2026-08-21 Esc 与活动状态覆盖**：工作台可见时，未修饰的 `Esc` 统一关闭并暂停 Buffer 工作台或 Clipboard-only 外壳。Buffer 正在捕获时只安全收束 Buffer 自己拥有的组字；Clipboard-only/直输路径不得强制提交或改写宿主文本框的组字。AI/插件活动摘要只允许一个可见承载者：正文 target/status rail 已显示该信息时，工具栏状态列必须隐藏同一文案；正文不承担时才由工具栏作为后备显示，禁止重复。
 >
 > **2026-08-13 工作台跨屏恢复覆盖（覆盖下一条“只在显式 hidden→visible 定位”）**：缓冲捕获开启时，新建立或重新确认的可信外部文本焦点会检查工作台是否仍在当前 macOS Space、以及合法 caret 是否落在另一物理显示器。只有发生这两类可见性断裂时，才把 nonactivating 工作台一次性带到当前 Space/目标显示器；同屏字段切换、输入与流式刷新仍不追踪 caret。自动恢复继续以精确 `FocusToken`、前台身份、secure input 与会话保护作前后门控，真正置前前再次复验；无合法 caret 时只在当前 Space 重排并保留已有 frame，禁止借鼠标屏 fallback 猜测显示器。未固定窗口使用 `.moveToActiveSpace + .fullScreenAuxiliary`，固定窗口使用 `.canJoinAllSpaces + .fullScreenAuxiliary`。关闭工作台仍会暂停捕获，因此 `BufferModel.enabled` 是恢复可见性的权威意图；自动位置保持 transient，不覆盖用户保存的 origin。
 >
-> **2026-08-06 工作台焦点定位覆盖**：用户显式从隐藏态唤出缓冲工作台时，先为当前精确外部 `FocusToken` 同步恢复 marked-text guard，再以 `liveTarget` 的 controller/client、前台 PID 和 secure-input 门控前后夹住一次 caret 查询。`attributes(forCharacterIndex:)` 的下标按 InputMethodKit 契约相对于 inline session，必须沿用稳定的相对下标 `0`；宿主的 `selectedRange`/`markedRange` 是文档级坐标，禁止直接混入，否则普通候选与工作台会一起漂移。合法零宽 caret 所在屏幕有空间时工作台优先位于输入框下方，否则翻到上方；174pt 最大布局只用于预判稳定方向，真实 78/112/143/174pt frame 均贴输入行 10pt。高度变化沿远离输入框的方向展开，候选窗贴真实外沿继续向外，不能用虚拟最大高度制造空隙。无精确目标、矩形非法或离屏时，才在鼠标所在屏幕居中靠下。定位只发生在显式 hidden→visible 转换，显示期间不会跟随焦点或流式刷新跳动；被动启动/锁屏恢复仍保留持久化 frame，自动开窗位置不覆盖用户保存的 origin。
+> **2026-08-21 工作台焦点与候选承载覆盖**：用户显式从隐藏态唤出缓冲工作台时，先收束宿主直输组字，再把当前精确外部 `FocusToken` 的逻辑输入权交给 Buffer；宿主文本框只保留为后续投递锚点。随后以 `liveTarget` 的 controller/client、前台 PID 和 secure-input 门控前后夹住一次 caret 查询。`attributes(forCharacterIndex:)` 的下标按 InputMethodKit 契约相对于 inline session，必须沿用稳定的相对下标 `0`；宿主的 `selectedRange`/`markedRange` 是文档级坐标，禁止直接混入。合法零宽 caret 所在屏幕有空间时工作台优先位于输入框下方，否则翻到上方；只有基础 rails 与可选 Clipboard rail 参与工作台最大高度和稳定方向预判，真实当前 frame 始终贴输入行 10pt。工作台自身高度变化沿远离输入框的方向展开。直输时唯一 `CandidateWindow` panel 跟随宿主 caret；Buffer 捕获时 Rime preedit 在 `BufferInlineView` 的逻辑插入光标处内联投影，同一个候选 panel 保持独立、nonactivating，并悬浮跟随该 Buffer caret，不占工作台高度。无精确目标、矩形非法或离屏时，才在鼠标所在屏幕居中靠下。工作台定位只发生在显式 hidden→visible 转换或跨 Space/显示器恢复，显示期间不会随同屏字段或流式刷新跳动；候选 panel 则随当前可见的真实输入 caret 更新。被动启动/Clipboard-only 显示仍保留持久化 frame 且不切换输入路由。
 >
 > **2026-08-06 Marine Chrome 0.2.3 覆盖**：`builtin.marine-chrome` 是内置派生 workspace，配套 MV3 扩展使用固定 ID、RIMES 原生允许 + 扩展页确认的双确认流程自动领取内部凭据，日常不复制、不显示 token。没有网页上下文或用户备注时工作台隐藏空 source rail，以 78pt 单 target rail 显示“等待网页上下文”；真实 source 到达后恢复 112pt 双轨。工具栏右侧分别显示“Chrome 已配对/未配对”“上下文 在线/未挂载”“字幕来源”和“AI 就绪/未就绪”，其中“已配对”只表达本机信任关系，不能冒充扩展在线。抓取复用旧 Marine 的宿主标签绑定语义：popup 独立窗口造成的 `WINDOW_ID_NONE` 与父窗口 `focused=false` 不撤销同一 selected tab；worker 仍要求 main frame/document、tab/window/URL/epoch 与 `lastFocusedWindow` 的 active tab 全部一致，并在 PUT 前后重验。可恢复的前台 409、回环网络中断、正文未就绪和 503 必须保留不含正文的 suspended 读取意图；手动读取与无精确目标的 B 站直评可用只含 protocolVersion/URL 的前台探针恢复，精确回复仍要求真实 deep active editor 并重新解析评论 ID。Bilibili 的标题/URL 只是未就绪元数据，只有字幕、已捕获评论或明确视频简介可发布；空字幕按 2/5/10/30 秒退避重试，成功按 BV/分 P 缓存，隐藏页停发，导航 generation 拒绝迟到结果。popup 占焦期间到达的数据必须保留 dirty 标记并在页面恢复后用新 revision 重建；心跳必须单飞，不能在慢回环上排队。`dom` 权限只用于穿透 Bilibili 开放/闭合 Shadow DOM。状态轮询必须与 PUT/心跳串行，并且只把当前标签与 content identity 同时匹配的租约报为在线。切标签、跳转、关闭、Escape 或评论框失焦立即取消。AI capability/auth 探测完成后必须刷新被缓存的 unavailable phase；生成日志只记录 request ID、provider、来源枚举、结果分类与 block 数，不记录 URL、标题、网页正文、提示词、结果或凭据。
 >
-> **2026-08-20 当前缓冲 UI/按键覆盖**：顶部功能栏永久展开，固定显示无去向信息的状态文字、插件动作、刷新/重置和关闭；其空白、间距与弹性留白可拖动窗口，所有控件继续接收首击，正文轨不能拖窗。主条只保留缓冲块轨和右侧主按钮，不再显示拖拽手柄或展开/收起按钮。单轨工作台固定为 78pt，live source+target 双轨固定为 112pt；1–5 个 alternatives 共用一个 target viewport，以 pager 切换而不改变高度。手动/无目标布局保持底边，焦点锚定布局保持靠输入框的一侧并向外增高。刷新/重置保留缓冲正文，只取消过时插件任务、重新检测上下文或重启当前派生操作。工作台不再提供块编辑器或面板内缓冲开关，缓冲启停仍由设置/输入法菜单管理。精确外部缓冲租约下，`Command+Shift+↑/↓` 按选择器同一顺序循环切换 `Default + 已启用缓冲插件`，首尾相接；额外修饰键、自有窗口与 secure input 不接管。缓冲模式复用常规 `CandidateWindow` 呈现 Rime 组字候选，手动/无目标布局默认显示在工作台下方，焦点锚定布局沿远离输入框的一侧显示；意识流的互斥解释是工作台 alternative pager，不是第二份 Rime 候选。普通/Shift+Return 与 Backspace 在缓冲模式下永不落到宿主文本框：若有未决 Rime/并击组字，本次 Return 只收束为块；否则 keyDown 定点重建 IME guard，轻按发送下一块，按住约 1.2 秒发送全部，并显示底部进度。右侧纸飞机每次只发送下一块。成功发送的 block 立即从 live buffer 消失且不保留发送历史；失败和未发送 block 保留。本文若有更早的折叠、投影或留块描述，以本条和 `SYSTEM-ARCHITECTURE.md` 为准。
+> **2026-08-21 当前缓冲 UI/按键覆盖**：顶部功能栏永久展开，固定显示插件动作、刷新/重置和关闭；其空白、间距与弹性留白可拖动窗口，所有控件继续接收首击，正文轨不能拖窗。主条只保留缓冲块轨和右侧主按钮，不再显示拖拽手柄或展开/收起按钮。单轨基础高度为 78pt，live source+target 双轨基础高度为 112pt；1–5 个 alternatives 共用一个 target viewport，以 pager 切换而不改变基础高度。所有普通与派生 Buffer 的空 source 文案都只是 placeholder：仅在逻辑输入未激活且内容/组字为空时出现；用户点击 source 轨并成功取得精确 Buffer 输入权后，placeholder 立即离开布局，只在空插入点显示光标。加载、错误和结果状态不是 placeholder，不受此规则影响。Buffer 精确捕获并存在 Rime 组字时，preedit 按 `cursorPos` 内联显示在 Buffer 逻辑光标处；存在 Rime candidates 时，同一个 `CandidateWindow` 仍以独立 nonactivating panel 悬浮跟随该光标，不嵌入工作台，也不改变 78/112pt 基础高度。刷新/重置保留缓冲正文，只取消过时插件任务、重新检测上下文或重启当前派生操作。工作台不再提供块编辑器或面板内缓冲开关，缓冲启停仍由设置/输入法菜单管理。精确外部缓冲租约下，`Command+Shift+↑/↓` 按选择器同一顺序循环切换 `Default + 已启用缓冲插件`，首尾相接；额外修饰键、自有窗口与 secure input 不接管。意识流的互斥解释是工作台 alternative pager，不是第二份 Rime 候选。普通/Shift+Return 与 Backspace 在缓冲模式下永不落到宿主文本框：若有未决 Rime/并击组字，本次 Return 只收束为块；否则 keyDown 定点重建 IME guard，轻按发送下一块，按住约 1.2 秒发送全部，并显示底部进度。右侧纸飞机每次只发送下一块。成功发送的 block 立即从 live buffer 消失且不保留发送历史；失败和未发送 block 保留。本文若有更早的折叠、投影或候选承载描述，以本条和 `SYSTEM-ARCHITECTURE.md` 为准。
+
+> **2026-08-21 输入源/Space 生命周期覆盖**：直输候选 panel 使用 `.moveToActiveSpace + .fullScreenAuxiliary`，不再常驻所有 Space；已显示却滞留旧 Space 时先 `orderOut` 再重新置前。真实输入源从 RIMES 切到其他输入法时，先撤销焦点租约并收束候选，再执行工作台 `closeAndPause()`：保留 staged blocks、停止捕获与 transient 插件工作并隐藏；重复的同一非 RIMES 输入源通知仍会 fail-closed 撤销残余焦点/候选 authority，但不重复推进工作台关闭，切回 RIMES 也不自动打开。
 >
 > **2026-07-20 输入配置/翻译覆盖**：设置层已把输入编码（自然码双拼/全拼/英文）与键入模式（串击/并击/互击）拆开，再映射到经过验证的固定 schema。飞耀互击复用 `my_combo`：并击结算同一计时批内的全部按键，多键的左侧、右侧或跨区组合均可映射但不跨批重组；互击在此基础上允许相邻的左侧声母与右侧韵母跨批配对。单独敲下的物理字母保留为英文原码，不自动插入分词符，也不与另一个单键批次重组。「实时翻译」作为内置缓冲插件只出现在缓冲插件列表，与 Marine 共用唯一 owner；默认用 Apple 本地翻译，也可改用当前 AI 渠道。源文在上方连续缓冲轨显示，译文在下方独立分块轨显示，顶部功能栏常显且空白可拖，发送与目标语言行对齐，只能经 `BufferDeliveryCoordinator -> Delivery.insert` 手动发送。
 >
@@ -49,7 +61,7 @@
 | 进程模型 | **内部单进程**。IMK、librime、候选窗、buffer、网关、菜单都在同一进程；禁止把内部 UI/状态拆成依赖轮询或 IPC 的伴随进程。MCP/HTTP 与配对传字是明确的外部接口，不在此禁令内 |
 | 引擎 | 优先 dlopen app 自带的 `librime.1.dylib` + lua/octagram/predict 插件；开发态才回退 Squirrel 路径；用户数据独立在 `~/Library/RimeBuffer` |
 | 上屏 | 只经 `client.insertText`（IMK 一等公民通道，网页/Electron/原生通吃） |
-| 已验证 | 引擎 smoke 覆盖四方案列表、F4、雾凇拼音上屏，以及英文补全/空格/生词兜底；.app 可安装可注册可输入 |
+| 已验证 | 引擎 smoke 覆盖五个普通方案、可选飞耀方案、F4、雾凇拼音上屏，以及英文补全/空格/生词兜底；.app 可安装可注册可输入 |
 | 当前状态 | §4 的 3 个现场 bug 对应修复已落地；§9 P1' 保留为历史验收记录，当前仍需安装后真机回归 |
 | 兜底 | Squirrel 保持安装不动，用户随时切回；引擎宕机时输入法自动退化为原生 latin 直通 |
 
@@ -66,7 +78,7 @@
 
 ### 1.2 目标（按优先级）
 
-1. **P1 日常可打**：并击、自然码双拼、雾凇拼音、英文四方案在 Safari、Electron、终端全部正常；候选窗自绘；insertText 上屏；引擎宕机不砸打字。
+1. **P1 日常可打**：雾凇全拼、自然码双拼、小鹤双拼、五笔 86、英文五个普通方案，以及可选飞耀并击 / 互击，在 Safari、Electron、终端全部正常；候选窗自绘；insertText 上屏；引擎宕机不砸打字。
 2. **P2 buffer 平台**：提交文字可先落缓冲面板，分块暂存后再冲刷到目标框。
 3. **P3 语音 + AI**：在 buffer 上做听写和 AI 变换。
 4. **P4 转正**：学习词同步/迁移、per-app 精调、签名公证、设为默认。进程内 maintenance/deploy 与自包含 runtime 已提前完成。
@@ -85,8 +97,8 @@
 
 | 项 | 值 | 对实现的约束 |
 |---|---|---|
-| 用户可见方案 | `my_combo`（并击）/ `double_pinyin`（自然码）/ `rime_ice`（雾凇拼音）/ `english`（英文） | 只有这四项进入 schema_list 与 F4；melt_eng/radical_pinyin 只作隐藏依赖 |
-| 默认方案 | my_combo | 系统输入法菜单需能进入设置并切换 |
+| 用户可见方案 | `rime_ice`（雾凇全拼）/ `double_pinyin`（自然码双拼）/ `double_pinyin_flypy`（小鹤双拼）/ `wubi86`（五笔 86）/ `english`（英文）；扩展开启时另有 `my_combo`（飞耀输入） | 五个普通方案进入 schema_list 与 F4；`my_combo` 只随“并击”扩展开启；melt_eng/radical_pinyin 只作隐藏依赖 |
+| 默认方案 | rime_ice | 系统输入法菜单需能进入设置并切换；旧并击用户按原语义迁移 |
 | `page_size` | **9**（default.custom.yaml patch；default.yaml 原值 5） | 候选窗渲染 `menu.page_size` 行，**不许硬编码** |
 | 并击间隔 | 当前 UserDefaults `chord.duration`，默认 **0.10s**，范围 0.02–0.50s | `ChordSettings` 是唯一运行时来源；设置修改会通知所有活跃 controller，旧 `squirrel.yaml chord_duration` 不再驱动运行时 |
 | 方案切换热键 | **F4 / Control+grave / Control+Shift+grave**（default.yaml switcher） | 键位表必须映射 F 键与 grave；切换器以**候选形式**渲染（就是一页候选），候选窗必须能正确显示它 |
@@ -144,7 +156,7 @@
 │    │  键路由: keysym 映射 → processRimeKey → commit drain → UI 更新           │
 │    ├─ CompositionSession   ★v2 组字协议(marked text 常驻, inline/placeholder) │
 │    ├─ ChordController      并击重放(仅 my_combo; duration=ChordSettings)     │
-│    ├─ CandidateWindow      唯一候选 panel：锚定 caret / 工作台真实外沿       │
+│    ├─ CandidateWindow      唯一候选状态/视图：独立浮窗跟随当前逻辑 caret │
 │    ├─ InputFocusCoordinator FocusToken + 当前 IMK client 租约                │
 │    ├─ StatusMenu           IMK menu() 构建器(设置/健康/更新/重载)             │
 │    ├─ FocusObserver        失焦强制 flush chord + 提交/清组字                 │
@@ -198,18 +210,18 @@
 - 提交路径：`Delivery.insert`（insertText 自动替换 marked 区）→ 若 Rime 仍在组字（长句剩余部分）→ 立刻 setMarkedText(新 preedit)；否则清会话。
 - **切勿**在同一客户端同时"设 marked text"又"把 preedit 画在自己面板里重复显示"——inline 模式候选窗只画候选，placeholder 模式候选窗才画 preedit 行。
 
-### 5.5 CandidateWindow — 状态：✅ 单一候选面板与双锚点已实现
+### 5.5 CandidateWindow — 状态：✅ 单一悬浮候选面板与双输入目标锚点已实现
 
-- NSPanel（borderless + nonactivating；普通宿主使用 `.popUpMenu`，只有精确验证的 iShot 非激活标注租约临时使用 `CGShieldingWindowLevel()`，隐藏或换宿主时立即恢复普通层级；canJoinAllSpaces + fullScreenAuxiliary + stationary，orderFrontRegardless）。这个条件升层用于兼容截图遮罩，仍需目标版本 iShot 真机验证；最终排序前再次检查 secure input，焦点租约、非空组字和锁屏门控仍然 fail closed。宿主进程必须 `NSApp.setActivationPolicy(.accessory)`（纯 LSBackgroundOnly 应用不能可靠置窗，已在 main.swift 落实）。
+- NSPanel（borderless + nonactivating；普通宿主使用 `.popUpMenu`，只有精确验证的 iShot 非激活标注租约临时使用 `CGShieldingWindowLevel()`，隐藏或换宿主时立即恢复普通层级；`.moveToActiveSpace + .fullScreenAuxiliary`，已显示却滞留旧 Space 时先 `orderOut` 再 `orderFrontRegardless`）。这个条件升层用于兼容截图遮罩，仍需目标版本 iShot 真机验证；最终排序前再次检查 secure input，焦点租约、非空组字和锁屏门控仍然 fail closed。宿主进程必须 `NSApp.setActivationPolicy(.accessory)`（纯 LSBackgroundOnly 应用不能可靠置窗，已在 main.swift 落实）。
 - 渲染：`page_size` 行（用户=9）· label 用 librime select_labels · 高亮行 `highlightedIndex` 以墨竹/翡翠主题高亮色作实底，并在黑/白文字中自动选择 WCAG 对比度更高者 · comment 淡色 · 翻页指示（page_no/is_last_page）· stacked 竖排 · 字号对齐用户（候选 20pt/标签 14pt）· 配色向 purity_of_form_custom 靠（P4 精调）。
 - **定位链**（每次更新执行）：
-  1. `client.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)`——该下标相对于 inline session；没有 inline session 时 `0` 按 IMK 契约定位 current selection。它不能替换成文档级 `selectedRange`/`markedRange`。有 marked 会话后这是可靠主路径（Squirrel 同款）；窗放 rect 下沿、必要时翻到上方防出屏。
-  2. rect 为零/明显非法 → 该 client（bundleId）**最近一次合法 rect** 缓存。
-  3. 仍无 → 前台窗口底部居中（P4 再精化）。**禁止**默认屏幕角落。
+  1. 直输 route 使用 `client.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)`；该下标相对于 inline session，没有 inline session 时 `0` 按 IMK 契约定位 current selection。它不能替换成文档级 `selectedRange`/`markedRange`。有 marked 会话后这是可靠主路径（Squirrel 同款）。
+  2. Buffer capture route 先把 preedit 按 `cursorPos` 内联排进当前可见 source rail，再把该逻辑 caret 转换为屏幕矩形。工作台 move/resize/backing/Space、rail 滚动或插入位置变化后都重读这个 live caret；不得沿用此前的宿主 caret。
+  3. panel 优先放在当前 route caret 下沿，空间不足时翻到上方。直输 rect 暂时非法时只可使用同一精确 `FocusToken` 生命周期内的最近合法 host rect；owner 变化立即清空，不按 bundle 跨字段复用。Buffer caret 不可见或非法时 fail closed 隐藏候选 panel，禁止回退到旧宿主 rect 或屏幕角落。
 - 交互：鼠标点候选 → `select_candidate_on_current_page` → 正常 commit drain（**不许**直接 insertText 绕过控制器）。数字/减号/等号/空格/回车**一律进 Rime**，让用户 has_menu 翻页与选重绑定生效。
 - 方案选单（switcher）就是一页候选——本窗即渲染载体，无需特殊逻辑。
-- 缓冲模式把同一个带 `FocusToken` 的 Rime 候选 panel 锚定在工作台外沿；单轨工作台固定 78pt，source+target 双轨固定 112pt，意识流的 1–5 个 alternatives 只在单一 target viewport 内分页，不再随数量增高。手动或无目标布局保持底边并默认把候选放在下方；焦点锚定布局保持靠输入框的一边，匹配原 `FocusToken` 的候选也严格贴真实外沿，外侧空间不足则暂时隐藏而不穿过输入行。用户可在设置中切回 caret。两种位置共享完全相同的 Rime 候选视觉、矩阵翻页、单字选择与提交状态，过期点击无效；工作台不再维护 Rime 候选投影，意识流 pager 是独立派生结果。
-- `isVisible` 同时要求逻辑 owner/context、仍可投递的 `interactionTarget`、非空内容、`panel.isVisible` 与 `panel.isOnActiveSpace`；所有 show/hide 经过统一状态机。焦点权限失效会物理隐藏并清空逻辑 presentation，避免 panel 已 `orderOut` 但控制器仍误判“可见”而不再重建。候选专属的鼠标、方向键、Return/Space、分页和 Option 单字选择还必须满足同一真实可见/active-Space 门控；临时隐藏时可保留组字语义，但不得在不可见 UI 上隐式选择或劫持宿主按键。
+- Rime 候选只有一套带 `FocusToken` 的状态与原生 panel 内容层级：直输时跟随宿主 caret；Buffer 精确捕获时仍是同一个独立 panel，只把 anchor 切到 Buffer 逻辑 caret，并让 `BufferInlineView` 独立承担 preedit 的无状态视觉投影。候选 panel 不进入 Buffer view tree，不参与工作台 78/112pt 几何；意识流的 1–5 个 alternatives 仍只在单一 target viewport 内分页。两种 route 共享相同的候选视觉、矩阵翻页、单字选择与提交状态，过期点击无效；设置中不再提供手动候选位置切换，也不存在第二份 Rime 候选选择 authority。
+- `isVisible` 同时要求逻辑 owner/context、仍可交互的 `interactionTarget`、非空候选，以及独立 `panel` 在 WindowServer 中真实可见并位于 active Space；所有 show/hide 经过统一状态机。焦点权限失效会物理隐藏并清空逻辑 presentation，避免承载面已消失但控制器仍误判“可见”而不再重建。候选专属的鼠标、方向键、Return/Space、分页和 Option 单字选择还必须满足同一真实可见/active-Space 门控；临时隐藏时可保留组字语义，但不得在不可见 UI 上隐式选择或劫持宿主按键。inline preedit 与候选明文都必须在 secure input、失权、锁屏或会话保护时先 scrub 再隐藏。
 
 ### 5.6 ChordController（并击）— 状态：✅ 已实现
 
@@ -244,10 +256,10 @@ macOS 版本不可靠。`Info.plist` 的 `etinput-menu.pdf` 继续负责系统�
 
 ### 5.10 BufferWindowController + BufferModel（P2）— 状态：✅ 已实现
 
-- 工作台是独立、nonactivating、可调整宽度的 `NSPanel`。顶部功能栏永久展开；它的空白、间距和弹性留白调用 `performDrag`，按钮、弹窗和其他 `NSControl` 保持首击，整个窗口背景与正文轨均不可拖。主条只保留缓冲轨和右侧主控件，不再显示专用拖拽手柄或 disclosure。普通、source-only 与 target-only single-exchange 固定为 78pt；实时翻译、Marine Chrome、My Prompt 与意识流的 live source+target 固定为 112pt。派生 workspace 可提供 1–5 个 alternatives，但只维护一个稳定 target viewport，以 pager 切换而不改变窗口高度；活动项内部的横向 document row 关闭 autoresizing-mask constraints 并将高度绑定到 scroll viewport。内置 AI，或整个 resolved action surface 只有一个 prepared presentation 的外部 owner 被选中时，右侧主控件在禁用 AI 图标/可请求 AI 图标/转圈/纸飞机间原位切换，顶部功能栏不再放第二个生成按钮；只要还有第二项 presentation，就全部保留为显式插件动作。顶部功能栏固定为状态、带小图标的缓冲插件选择器及其他插件的当前动作、选中 workspace 提供的隐私安全右侧状态、刷新/重置与关闭。设置页可多选启用缓冲插件，选择器只显示该集合并用 `Default` 表示无插件；选择器直接改写唯一 owner，刷新/重置保留缓冲正文并只重置当前插件运行状态。显式从隐藏态唤出时，工作台只读取当前精确外部 IMK 租约的一次新鲜 caret 行矩形：最大 112pt 布局只用于选择稳定的一侧，真实当前高度仍与输入行保持 10pt；通常位于下方，空间不足则连同候选展开方向一起翻到上方。焦点锚定布局切 owner 或单/双轨高度时保持靠输入框的一侧并向外增减，候选紧贴真实外沿；手动/无目标布局仍固定底边。没有可信目标时才在鼠标所在屏幕居中靠下，显示后不追踪光标。圆角表面使用墨竹/翡翠固定 palette，内缩到透明窗口边距，并按 backing scale 在路径内绘制 hairline。显隐、frame、pin 与候选位置持久化，多屏变化时恢复到可见区域；自动开窗 origin 不覆盖用户保存位置，旧展开态偏好被忽略。普通关闭会收束组字、暂停捕获、结束 transient 加载/错误状态并保留已有块。`Command+Shift+B` 通过全局 Carbon hot key 调用 `toggleVisibility()`；工作台不提供块编辑器、面板内缓冲开关、手动遮蔽、历史恢复或清空撤销。
+- 工作台是独立、nonactivating、可调整宽度的 `NSPanel`。顶部功能栏永久展开；它的空白、间距和弹性留白调用 `performDrag`，按钮、弹窗和其他 `NSControl` 保持首击，整个窗口背景与正文轨均不可拖。主条只保留缓冲轨和右侧主控件，不再显示专用拖拽手柄或 disclosure。普通、source-only 与 target-only single-exchange 的基础高度为 78pt；实时翻译与意识流的 live source+target 基础高度为 112pt。派生 workspace 可提供 1–5 个 alternatives，但只维护一个稳定 target viewport，以 pager 切换而不改变基础高度；活动项内部的横向 document row 关闭 autoresizing-mask constraints 并将高度绑定到 scroll viewport。内置 AI，或整个 resolved action surface 只有一个 prepared presentation 的外部 owner 被选中时，右侧主控件在禁用 AI 图标/可请求 AI 图标/转圈/纸飞机间原位切换，顶部功能栏不再放第二个生成按钮；只要还有第二项 presentation，就全部保留为显式插件动作。顶部功能栏固定为状态、带小图标的缓冲插件选择器及其他插件的当前动作、选中 workspace 提供的隐私安全右侧状态、刷新/重置与关闭。设置页可多选启用缓冲插件，选择器只显示该集合并用 `Default` 表示无插件；选择器直接改写唯一 owner，刷新/重置保留缓冲正文并只重置当前插件运行状态。显式从隐藏态唤出时，先收束宿主直输组字，再把当前精确外部 `FocusToken` 的逻辑输入权交给 Buffer；外部文本框只保留为后续上屏目标。工作台读取该租约的一次新鲜 host caret 行矩形，以基础 rails 与可选 Clipboard rail 的最大高度选择稳定一侧，真实当前高度仍与输入行保持 10pt；通常位于下方，空间不足则翻到上方。焦点锚定布局切 owner 或单/双轨时保持靠输入框的一侧并向外增减；手动/无目标布局仍固定底边。Rime preedit 直接占用 source rail 中现有的逻辑插入位置，候选 panel 独立计算自己的尺寸和屏幕夹取，因此两者都不改变工作台高度或 canonical frame。没有可信目标时才在鼠标所在屏幕居中靠下，显示后工作台不追踪光标。圆角表面使用墨竹/翡翠固定 palette，内缩到透明窗口边距，并按 backing scale 在路径内绘制 hairline。显隐、frame 与 pin 持久化，多屏变化时恢复到可见区域；旧展开态和候选位置偏好均被忽略。普通关闭会收束组字、暂停捕获、结束 transient 加载/错误状态并保留已有块。`Command+Shift+B` 通过全局 Carbon hot key 调用 `toggleVisibility()`，隐藏态打开时优先把输入路由切到 Buffer；工作台不提供块编辑器、面板内缓冲开关、手动遮蔽、历史恢复或清空撤销。
 - Rime commit 只在捕获开启时进入 `BufferModel`；preedit 永不存入模型。成功调用 `Delivery.insert` 后，该 block 立即从 live buffer 消失且不保留明文发送历史；失败 block 和未发送后缀保留。
 - 缓冲块在工作台中是被动展示单元，不再支持点选后单块编辑；Backspace 删除和显式投递仍由模型/协调器保持身份与顺序不变。输入法自身所有文本框都绕过缓冲捕获与远端镜像。
-- Rime 组字候选默认使用常规 `CandidateWindow` 跟随工作台真实外沿：焦点锚定布局沿远离输入框的一侧显示，手动或无目标布局默认显示在下方；用户也可切回跟随 caret。工作台自身不包含 Rime 候选投影或全文预览；意识流的 1–5 个互斥解释在同一派生 target viewport 中分页。缓冲启停、常显与移屏入口保留在设置/输入法菜单；secure-input 检测与锁屏隐藏由 `BufferWindowController` 管理。锁屏、睡眠或会话切出会撤销租约、在 Rime 内收束组字并隐藏窗口，恢复后仍必须等新 activation/event。
+- Rime 候选始终只有一个 `CandidateWindow` 状态机和一套独立 `NSPanel` 内容层级。精确焦点处于直输 route 时，它跟随宿主 caret；同一精确 `FocusToken` 被 Buffer 捕获时，`BufferInlineView` 在逻辑插入 caret 处投影 preedit，候选 panel 切换到该 caret 并保持悬浮，不进入工作台 view tree。preedit-only 时 panel 隐藏；候选出现时也不改变 Buffer 高度。secure input、锁屏和会话保护会先清除 inline preedit、候选、tooltip 与 accessibility 明文再隐藏。意识流的 1–5 个互斥解释仍在独立的派生 target viewport 中分页，不属于 Rime 候选。缓冲启停、常显与移屏入口保留在设置/输入法菜单；锁屏、睡眠或会话切出会撤销租约、在 Rime 内收束组字并隐藏窗口，恢复后仍必须等新 activation/event。
 
 ### 5.11 AI 文本插件与连接器（P3）— 状态：✅ 单插件、三连接器已实现
 
@@ -320,8 +332,8 @@ rime-buffer/
     ├── PluginConfiguration.swift ✅ 声明式 schema / 通用表单 / 普通与私有存储
     ├── RemarkablePlugin.swift    ✅ SSH 当前页稳定校验 / USB PDF 导出 / 前后复验 / 取消墓碑
     ├── RemarkableLocalOCR.swift  ✅ PDFKit 目标 300dpi 有界渲染 + Apple Vision 本地 OCR
-    ├── SettingsWindow.swift       ✅ 四方案/F4/部署/候选窗/缓冲与通用插件配置
-    ├── InputSchemaCatalog.swift   ✅ 四方案产品目录 + schema_list 安全读写
+    ├── SettingsWindow.swift       ✅ 五个普通方案/可选并击/F4/部署/候选窗/缓冲与通用插件配置
+    ├── InputSchemaCatalog.swift   ✅ 五个普通方案 + 可选飞耀方案目录及 schema_list 安全读写
     └── [P3+] 语音/CaretLocator/精细 Deploy
 
 **键路由铁则补充(实测 bug 修正)**：Cmd 按住的 keyDown 一律直通 App(先 forceCommit 再放行)——
@@ -340,7 +352,7 @@ cd ~/Documents/05-dev/apps/rime-buffer
 ./build_install.sh                 # 构建+签名+安装+注册（幂等）
 # 启用（一次性）：系统设置→键盘→输入法→编辑→＋→简体中文→RimeBuffer→添加
 tail -f ~/rimebuffer.log           # 行为日志
-.build/release/RimeBuffer smoke    # 四方案/F4/中文/英文引擎自检
+.build/release/RimeBuffer smoke    # 五个普通方案/可选飞耀方案/F4/中文/英文引擎自检
 .build/release/RimeBuffer schema-smoke  # 设置页 schema_list 读写自检
 .build/release/RimeBuffer buffer-smoke # 成功消费/未发顺序/隐私丢弃/暂停保留
 .build/release/RimeBuffer buffer-window-smoke # Focus/目标/生命周期门控/多屏frame
@@ -352,7 +364,7 @@ pkill -x RimeBuffer                # 系统会按需重新拉起
 # 卸载：rm -rf ~/Library/Input\ Methods/RimeBuffer.app && 输入源列表移除
 ```
 
-已踩坑速查：本地 `build_install.sh` 仍用 ad-hoc；正式 tag 由一次性 keychain 完成 Developer ID + hardened runtime + app/pkg 公证，不可降级回未签名 · 我方 Bash 沙盒里 `open` GUI app 会假失败，装完由系统拉起或用户双击 · smoke 若 0 候选先查四方案是否已部署以及 userdb LOCK。
+已踩坑速查：本地 `build_install.sh` 仍用 ad-hoc；正式 tag 由一次性 keychain 完成 Developer ID + hardened runtime + app/pkg 公证，不可降级回未签名 · 我方 Bash 沙盒里 `open` GUI app 会假失败，装完由系统拉起或用户双击 · smoke 若 0 候选先查五个普通方案及已启用的可选飞耀方案是否部署，以及 userdb LOCK。
 
 不要用 `rm -rf ~/Library/RimeBuffer` 触发 reseed：该目录还包含 `ai/openai-compatible.json` 等用户凭据和产品持久状态。`build_install.sh` 自带安全重播种逻辑，会保留这些目录；若只想替换应用且完全跳过 userdb 重播种，使用 `RB_KEEP_USERDB=1 ./build_install.sh`。
 
@@ -378,7 +390,7 @@ pkill -x RimeBuffer                # 系统会按需重新拉起
 | 5 | StatusMenu（仅 IMK menu） | 无重复状态栏图标；系统输入法菜单可见且操作可用 |
 | 6 | 兜底收口 + watchdog | kill -STOP 模拟引擎挂：打字退化英文不丢键；日志出现 watchdog 行 |
 
-**P1 总闸**：用户以 RimeBuffer 为唯一输入法工作一整天（Squirrel 不卸载仅待命），四方案/F4/翻页/简繁/标点全程无需切回。
+**P1 总闸**：用户以 RimeBuffer 为唯一输入法工作一整天（Squirrel 不卸载仅待命），五个普通方案、可选并击、F4、翻页、简繁与标点全程无需切回。
 
 ### P2 buffer / P3 语音+AI / P4 转正
 

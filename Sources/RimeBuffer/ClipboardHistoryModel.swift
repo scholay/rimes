@@ -79,7 +79,9 @@ private final class SystemClipboardHistoryPasteboard: ClipboardHistoryPasteboard
 /// while `start()` is active and the latest capture state says that both the
 /// workbench and Clipboard rail are visible. Every protected or inactive gap is
 /// followed by a change-count-only baseline, so text copied while the rail was
-/// hidden or protected is never backfilled on resume.
+/// hidden or protected is never backfilled on resume. The sole exception is a
+/// separate, explicit user enable/show request, which may capture the item
+/// already on the pasteboard after all visibility and protection gates pass.
 @MainActor
 final class ClipboardHistoryModel {
     typealias Observer = () -> Void
@@ -317,6 +319,45 @@ final class ClipboardHistoryModel {
 
         // A protection transition during the synchronous provider read must
         // discard the result before it reaches history or a view.
+        guard resolveEffectiveProtection(notifyOnChange: true).isEmpty,
+              captureState.workbenchVisible,
+              captureState.railEnabled else {
+            needsPasteboardBaseline = true
+            return false
+        }
+        return ingest(text)
+    }
+
+    /// Explicit user intent may import the clipboard item that already exists
+    /// when Clipboard History is enabled or summoned. This is deliberately a
+    /// separate entry point from passive resume: hidden, locked, session, and
+    /// Secure Input transitions must continue to establish a baseline only.
+    @discardableResult
+    func captureCurrentIfEligible() -> Bool {
+        guard started,
+              captureState.workbenchVisible,
+              captureState.railEnabled else {
+            needsPasteboardBaseline = true
+            return false
+        }
+
+        guard resolveEffectiveProtection(notifyOnChange: true).isEmpty else {
+            needsPasteboardBaseline = true
+            return false
+        }
+
+        lastObservedPasteboardChangeCount = pasteboard.changeCount
+        needsPasteboardBaseline = false
+
+        // Recheck immediately before and after asking a potentially lazy
+        // pasteboard provider for payload text.
+        guard resolveEffectiveProtection(notifyOnChange: true).isEmpty,
+              captureState.workbenchVisible,
+              captureState.railEnabled else {
+            needsPasteboardBaseline = true
+            return false
+        }
+        guard let text = pasteboard.readPlainText() else { return false }
         guard resolveEffectiveProtection(notifyOnChange: true).isEmpty,
               captureState.workbenchVisible,
               captureState.railEnabled else {

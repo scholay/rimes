@@ -815,6 +815,67 @@ private enum AITextPluginSmoke {
         return true
     }
 
+    static func terminalDeliveryReceipt() -> Bool {
+        guard Thread.isMainThread else { return false }
+        let source = BufferModel()
+        let provider = AITextSmokeProvider()
+        let workspace = AITextPluginWorkspace(
+            provider: provider,
+            sourceModel: source,
+            isSelected: { true }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+
+        let previousBufferEnabled = UserDefaults.standard.object(
+            forKey: "bufferEnabled"
+        )
+        defer {
+            if let previousBufferEnabled {
+                UserDefaults.standard.set(
+                    previousBufferEnabled,
+                    forKey: "bufferEnabled"
+                )
+            } else {
+                UserDefaults.standard.removeObject(forKey: "bufferEnabled")
+            }
+        }
+        source.enabled = true
+        source.stageExternal("source", origin: .rime)
+        guard workspace.generate(), provider.requests.count == 1 else {
+            return false
+        }
+        provider.finish(.success([
+            AITextProviderBlock(index: 0, text: "first", title: nil),
+            AITextProviderBlock(index: 1, text: "last", title: nil),
+        ]), request: 0)
+        guard workspace.phase == .ready,
+              workspace.outputBlocks.count == 2 else { return false }
+
+        let firstGeneration = workspace.deliveryGeneration
+        let firstID = workspace.outputBlocks[0].id
+        guard workspace.consumeDeliveredAndReportTerminalDrain(
+                blockIDs: [firstID],
+                generation: firstGeneration
+              ) == nil,
+              source.stagedText == "source",
+              workspace.outputBlocks.count == 1 else { return false }
+
+        let terminalGeneration = workspace.deliveryGeneration
+        let terminalID = workspace.outputBlocks[0].id
+        return workspace.consumeDeliveredAndReportTerminalDrain(
+            blockIDs: [terminalID],
+            generation: terminalGeneration
+        ) == BufferDeliveryTerminalSourceReceipt(
+            workspaceID: workspace.deliveryWorkspaceID,
+            generation: terminalGeneration,
+            generationAfterConsumption: workspace.deliveryGeneration,
+            consumedBlockIDs: Set([terminalID])
+        ) && source.stagedText.isEmpty
+            && workspace.outputBlocks.isEmpty
+            && workspace.phase == .idle
+    }
+
     private static func resultDecoder() -> Bool {
         let structured = """
         {"blocks":[{"text":"第一块","title":"A"},{"text":"第二块","title":null}]}
@@ -2321,18 +2382,33 @@ private enum AITextPluginSmoke {
 
         let firstGeneration = workspace.deliveryGeneration
         let firstID = workspace.outputBlocks[0].id
-        workspace.consumeDelivered(blockIDs: [firstID], generation: firstGeneration)
+        let firstReceipt = workspace.consumeDeliveredAndReportTerminalDrain(
+            blockIDs: [firstID],
+            generation: firstGeneration
+        )
         guard source.stagedText == "source",
               workspace.outputBlocks.count == 1,
-              workspace.primaryAction == .deliver else {
+              workspace.primaryAction == .deliver,
+              firstReceipt == nil else {
             return false
         }
         let secondGeneration = workspace.deliveryGeneration
         let secondID = workspace.outputBlocks[0].id
-        workspace.consumeDelivered(blockIDs: [secondID], generation: secondGeneration)
+        let secondReceipt = workspace.consumeDeliveredAndReportTerminalDrain(
+            blockIDs: [secondID],
+            generation: secondGeneration
+        )
         guard source.stagedText.isEmpty,
               workspace.outputBlocks.isEmpty,
-              workspace.primaryAction == .disabled else { return false }
+              workspace.primaryAction == .disabled,
+              secondReceipt == BufferDeliveryTerminalSourceReceipt(
+                workspaceID: workspace.deliveryWorkspaceID,
+                generation: secondGeneration,
+                generationAfterConsumption: workspace.deliveryGeneration,
+                consumedBlockIDs: Set([secondID])
+              ) else {
+            return false
+        }
 
         source.stageExternal("stale", origin: .rime)
         guard workspace.primaryAction == .requestGeneration,
@@ -2548,5 +2624,13 @@ private enum AITextPluginSmoke {
 func runAITextPluginSmokeTest() -> Bool {
     let passed = AITextPluginSmoke.run()
     print(passed ? "AI text plugin smoke OK" : "FAILED: AI text plugin smoke")
+    return passed
+}
+
+func runAITextTerminalDeliveryReceiptSmokeTest() -> Bool {
+    let passed = AITextPluginSmoke.terminalDeliveryReceipt()
+    print(passed
+        ? "AI text terminal delivery receipt smoke OK"
+        : "FAILED: AI text terminal delivery receipt smoke")
     return passed
 }

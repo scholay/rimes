@@ -73,9 +73,11 @@ package_root=$(find "$tmp_root/extracted" -mindepth 1 -maxdepth 1 -type d -print
 
 payload="$package_root/data/rime-data"
 payload_count=$(find -P "$payload" -type f | wc -l | tr -d '[:space:]')
-[[ "$payload_count" == "46" ]] || fail "expected 46 reviewed payload files, got $payload_count"
+[[ "$payload_count" == "52" ]] || fail "expected 52 reviewed payload files, got $payload_count"
 [[ -f "$payload/licenses/GPL-3.0.txt" ]] || fail "package omitted GPL-3.0 text"
 [[ -f "$payload/licenses/rime-ice-SOURCE.md" ]] || fail "package omitted Rime Ice source notice"
+[[ -f "$payload/licenses/rime-wubi-LICENSE" ]] || fail "package omitted Rime Wubi license"
+[[ -f "$payload/licenses/rime-wubi-SOURCE.md" ]] || fail "package omitted Rime Wubi source notice"
 [[ ! -e "$payload/rime_ai.example.json" ]] || fail "legacy AI example entered package"
 if find -P "$payload/lua" -type f -name 'ai_*.lua' -print -quit | grep -q .; then
     fail "legacy AI Lua entered package"

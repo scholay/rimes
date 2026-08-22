@@ -78,8 +78,7 @@ enum CoreSettingsSubpages {
         switch route {
         case .inputMethod:
             values = [
-                ("encoding", "输入编码"),
-                ("typing-mode", "键入模式"),
+                ("encoding", "输入方案"),
                 ("dictionaries", "词库"),
             ]
         case .appearance:
@@ -443,15 +442,20 @@ func runSettingsRoutingSmokeTest() -> Bool {
             subpages: [("daily", "每日"), ("heatmap", "热力图")],
             order: 10
         )
-        let chordLearning = contribution(
+        let chordExtension = contribution(
             pluginID: "feiyao-learning",
             pageID: "feiyao-learning",
-            title: "飞耀互击学习",
-            subpages: [("overview", "概览")],
+            title: "并击",
+            subpages: [
+                ("settings", "设置"),
+                ("lessons", "课程"),
+                ("practice", "练习"),
+                ("progress", "进度"),
+            ],
             order: 20
         )
         let catalog = try SettingsRouteCatalog(
-            contributions: [chordLearning, statistics]
+            contributions: [chordExtension, statistics]
         )
 
         guard catalog.coreRoutes.map(\.id) == SettingsCoreRoute.allCases.map(\.id),
@@ -462,6 +466,19 @@ func runSettingsRoutingSmokeTest() -> Bool {
               catalog.sections.map(\.id) == [.core, .extensions],
               catalog.route(for: SettingsCoreRoute.plugins.id)?.subpages.map(\.id)
                 == PluginManagementSubpage.allCases.map(\.id),
+              catalog.route(for: SettingsCoreRoute.inputMethod.id)?.subpages.map(\.id)
+                == [
+                    SettingsSubpageID(rawValue: "encoding"),
+                    SettingsSubpageID(rawValue: "dictionaries"),
+                ],
+              catalog.route(
+                for: SettingsRouteID(rawValue: "extension.feiyao-learning")
+              )?.subpages.map(\.id) == [
+                    SettingsSubpageID(rawValue: "settings"),
+                    SettingsSubpageID(rawValue: "lessons"),
+                    SettingsSubpageID(rawValue: "practice"),
+                    SettingsSubpageID(rawValue: "progress"),
+                ],
               catalog.route(for: SettingsCoreRoute.appearance.id)?.subpages.map(\.id)
                 == [
                     SettingsSubpageID(rawValue: "theme"),
@@ -493,7 +510,7 @@ func runSettingsRoutingSmokeTest() -> Bool {
         }
 
         let withoutStatistics = try SettingsRouteCatalog(
-            contributions: [chordLearning]
+            contributions: [chordExtension]
         )
         navigation.reconcile(with: withoutStatistics)
         guard navigation.currentRouteID == SettingsCoreRoute.plugins.id,

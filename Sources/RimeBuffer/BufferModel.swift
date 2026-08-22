@@ -16,6 +16,14 @@ enum DirectInputRunOwner: Hashable {
     case testing(Int)
 }
 
+/// Where the exact focused IMK client's next editing event is routed.  This
+/// is deliberately independent from both workbench visibility and staged
+/// content: a visible/non-empty Buffer may still leave typing in the host.
+enum BufferInputRoute: Equatable {
+    case directToHost
+    case captureToBuffer
+}
+
 enum BufferPrivacyTransitionRules {
     static func externalIdentity(bundleID: String?,
                                  processIdentifier: pid_t,
@@ -167,6 +175,7 @@ final class BufferModel {
     enum MutationReason: Equatable {
         case ordinary
         case transient
+        case inputRoute
         case pluginStreamUpdate
         case pluginStreamFinalization
         case pluginStreamCancellation
@@ -223,6 +232,9 @@ final class BufferModel {
     private(set) var transientLoadingActive = false
     private(set) var lastMutationReason: MutationReason = .ordinary
     private(set) var changeCount = 0
+    private var captureRouteEnabled = false
+    private(set) var captureFocusToken: FocusToken?
+    private(set) var inputRouteGeneration: UInt64 = 0
     private struct DirectInputRun {
         let owner: DirectInputRunOwner
         var blockIDs: [UUID]
@@ -251,24 +263,86 @@ final class BufferModel {
         active || !blocks.isEmpty || loadingMessage != nil
     }
 
-    /// Interaction mode (Enter/backspace controls). Commit capture itself is
-    /// deliberately narrower and uses `enabled`; transient external content
-    /// must not silently begin capturing the user's local typing.
-    var active: Bool { enabled || transientEnabled }
+    /// Interaction mode (typing, Return, deletion and navigation). External
+    /// content never activates it implicitly; only an explicit capture route
+    /// may own editing events.
+    var active: Bool { inputRoute == .captureToBuffer }
+
+    var inputRoute: BufferInputRoute {
+        captureRouteEnabled ? .captureToBuffer : .directToHost
+    }
+
+    /// Processing remains available while the visible workbench owns staged
+    /// content, even if physical keys have been returned to the host field.
+    /// Closing the workbench clears `transientEnabled` through the pause path.
+    var processingActive: Bool { captureRouteEnabled || transientEnabled }
 
     /// Wired to the independent workbench window in main.swift.
     var onChange: (() -> Void)?
 
     var enabled: Bool {
-        get { UserDefaults.standard.bool(forKey: "bufferEnabled") }
+        get { captureRouteEnabled }
         set {
+            guard captureRouteEnabled != newValue
+                    || (!newValue && captureFocusToken != nil) else { return }
+            captureRouteEnabled = newValue
+            // Direct writes are retained for deterministic smoke tests and
+            // compatibility call sites. Runtime capture uses
+            // `activateCapture(for:)` so it is bound to one exact FocusToken.
+            if !newValue { captureFocusToken = nil }
+            if !newValue, !blocks.isEmpty { transientEnabled = true }
+            inputRouteGeneration &+= 1
             UserDefaults.standard.set(newValue, forKey: "bufferEnabled")
             if !newValue { directInputRun = nil }
             if !newValue, !blocks.isEmpty {
                 IMELog.write("buffer mode off; preserving \(blocks.count) queued blocks")
             }
-            notifyChange()
+            notifyChange(reason: .inputRoute)
         }
+    }
+
+    /// Explicitly grant capture to one trusted external focus. A later focus
+    /// token can never inherit this route.
+    func activateCapture(for token: FocusToken) {
+        let changed = !captureRouteEnabled || captureFocusToken != token
+        captureRouteEnabled = true
+        captureFocusToken = token
+        UserDefaults.standard.set(true, forKey: "bufferEnabled")
+        guard changed else { return }
+        inputRouteGeneration &+= 1
+        directInputRun = nil
+        IMELog.write("buffer input route -> capture token=\(token)")
+        notifyChange(reason: .inputRoute)
+    }
+
+    func capturesInput(for token: FocusToken?) -> Bool {
+        guard captureRouteEnabled else { return false }
+        // A nil grant exists only for isolated legacy/model smoke tests. Live
+        // controller paths always establish and validate an exact token.
+        guard let captureFocusToken else { return token == nil }
+        return captureFocusToken == token
+    }
+
+    /// Revoke key ownership without altering staged blocks or derived results.
+    func routeDirectPreservingContent(reason: String) {
+        guard captureRouteEnabled || captureFocusToken != nil else { return }
+        captureRouteEnabled = false
+        captureFocusToken = nil
+        if !blocks.isEmpty { transientEnabled = true }
+        inputRouteGeneration &+= 1
+        UserDefaults.standard.set(false, forKey: "bufferEnabled")
+        directInputRun = nil
+        IMELog.write("buffer input route -> direct reason=\(reason) blocks=\(blocks.count)")
+        notifyChange(reason: .inputRoute)
+    }
+
+    /// Showing a previously paused workbench re-enables source/result
+    /// processing without claiming the focused application's key events.
+    func resumeWorkbenchProcessing() {
+        guard !processingActive, !blocks.isEmpty else { return }
+        transientEnabled = true
+        IMELog.write("buffer processing resumed blocks=\(blocks.count)")
+        notifyChange(reason: .inputRoute)
     }
 
     /// A persistent workbench preserves content across applications by default.
@@ -289,9 +363,8 @@ final class BufferModel {
         set { UserDefaults.standard.set(newValue, forKey: "bufferResetOnAppSwitch.v2") }
     }
 
-    /// Stage accepted external text without changing the user's persistent
-    /// capture preference. It may expose buffer keyboard commands while visible,
-    /// but local Rime commits still use `enabled` to decide whether to capture.
+    /// Stage accepted external text without changing the current input route.
+    /// Visibility and content never grant keyboard ownership implicitly.
     func stageExternal(_ text: String,
                        origin: Origin,
                        pluginMetadata: PluginMetadata? = nil) {
@@ -323,6 +396,7 @@ final class BufferModel {
                 origin: Origin = .rime,
                 pluginMetadata: PluginMetadata? = nil) {
         guard !text.isEmpty else { return }
+        if !captureRouteEnabled { transientEnabled = true }
         if origin == .rime, pluginMetadata == nil {
             removeSelectedContentBeforeLocalInsertion()
         }
@@ -496,6 +570,9 @@ final class BufferModel {
     /// preserving every staged block. Transient loading/error state is dropped
     /// because the simplified workbench intentionally has no manual Clear.
     func pauseCapturePreservingContent() {
+        captureRouteEnabled = false
+        captureFocusToken = nil
+        inputRouteGeneration &+= 1
         UserDefaults.standard.set(false, forKey: "bufferEnabled")
         transientEnabled = false
         loadingRequestId = nil
@@ -504,6 +581,36 @@ final class BufferModel {
         directInputRun = nil
         IMELog.write("buffer capture paused; preserved blocks=\(blocks.count), cleared transient state")
         notifyChange(reason: .pause)
+    }
+
+    /// Move the block caret to an explicit gap selected by the logical input
+    /// surface. Character-level editing is intentionally not implied.
+    @discardableResult
+    func setInsertionPoint(_ index: Int) -> Bool {
+        let target = min(max(index, 0), blocks.count)
+        let changed = insertionIndex != target || allContentSelected
+        insertionIndex = target
+        allContentSelected = false
+        directInputRun = nil
+        if changed { notifyPresentationChange() }
+        return true
+    }
+
+    /// Delete the complete block immediately after the logical caret.
+    @discardableResult
+    func deleteForwardAtInsertionPoint() -> Bool {
+        if removeSelectedContentForDeletion() { return true }
+        let index = clampedInsertionIndex()
+        guard blocks.indices.contains(index) else { return false }
+        let removed = blocks.remove(at: index)
+        if directInputRun?.blockIDs.contains(removed.id) == true {
+            directInputRun = nil
+        }
+        clampInsertionIndexInPlace()
+        settleTransientIfIdle()
+        IMELog.write("buffer delete-forward block id=\(removed.id) origin=\(removed.origin.tag)")
+        notifyChange(reason: .blockRemoval)
+        return true
     }
 
     /// Select every staged block without changing source text or its delivery
@@ -550,6 +657,7 @@ final class BufferModel {
         }
 
         removeSelectedContentBeforeLocalInsertion()
+        if !captureRouteEnabled { transientEnabled = true }
         directInputRun = nil
         var insertion = clampedInsertionIndex()
         for segment in segments {
@@ -946,11 +1054,11 @@ final class BufferModel {
         // Loading/error heartbeats are presentation-only and must not make a
         // user's Select All evaporate while an Action plugin is still working.
         // Every actual source/block mutation uses a non-transient reason.
-        if reason != .transient {
+        if reason != .transient && reason != .inputRoute {
             allContentSelected = false
         }
         lastMutationReason = reason
-        changeCount += 1
+        if reason != .inputRoute { changeCount += 1 }
         onChange?()
         NotificationCenter.default.post(name: .bufferModelDidChange, object: self)
     }

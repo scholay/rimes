@@ -3,17 +3,23 @@
   "sourceRoot": "rime-data",
   "archiveRoot": "RIMES-platform-preview-data",
   "productSchemas": [
-    "my_combo",
-    "double_pinyin",
     "rime_ice",
+    "double_pinyin",
+    "double_pinyin_flypy",
+    "wubi86",
     "english"
+  ],
+  "optionalExtensionSchemas": [
+    "my_combo"
   ],
   "seedFiles": [
     "default.yaml",
     "default.custom.yaml",
     "my_combo.schema.yaml",
     "double_pinyin.schema.yaml",
+    "double_pinyin_flypy.schema.yaml",
     "rime_ice.schema.yaml",
+    "wubi86.schema.yaml",
     "english.schema.yaml"
   ],
   "include": [
@@ -26,9 +32,11 @@
     "default.custom.yaml",
     "default.yaml",
     "double_pinyin.schema.yaml",
+    "double_pinyin_flypy.schema.yaml",
     "easy_en.dict.yaml",
     "en_dicts/cn_en.txt",
     "en_dicts/cn_en_double_pinyin.txt",
+    "en_dicts/cn_en_flypy.txt",
     "en_dicts/en.dict.yaml",
     "en_dicts/en_ext.dict.yaml",
     "english.schema.yaml",
@@ -36,6 +44,8 @@
     "licenses/rime-easy-en-LICENSE",
     "licenses/rime-easy-en-SOURCE.md",
     "licenses/rime-ice-SOURCE.md",
+    "licenses/rime-wubi-LICENSE",
+    "licenses/rime-wubi-SOURCE.md",
     "lua/autocap_filter.lua",
     "lua/calc_translator.lua",
     "lua/corrector.lua",
@@ -62,13 +72,17 @@
     "rime_ice.dict.yaml",
     "rime_ice.schema.yaml",
     "symbols_caps_v.yaml",
-    "symbols_v.yaml"
+    "symbols_v.yaml",
+    "wubi86.dict.yaml",
+    "wubi86.schema.yaml"
   ],
   "supplementalFiles": [
     "licenses/GPL-3.0.txt",
     "licenses/rime-easy-en-LICENSE",
     "licenses/rime-easy-en-SOURCE.md",
-    "licenses/rime-ice-SOURCE.md"
+    "licenses/rime-ice-SOURCE.md",
+    "licenses/rime-wubi-LICENSE",
+    "licenses/rime-wubi-SOURCE.md"
   ],
   "exclude": {
     "legacyAI": [
@@ -85,7 +99,6 @@
     "optionalOrUnusedData": [
       "cn_dicts/41448.dict.yaml",
       "en_dicts/cn_en_abc.txt",
-      "en_dicts/cn_en_flypy.txt",
       "en_dicts/cn_en_jiajia.txt",
       "en_dicts/cn_en_mspy.txt",
       "en_dicts/cn_en_sogou.txt",
@@ -110,7 +123,8 @@
   "staticUserDictionaries": {
     "custom_phrase": "custom_phrase.txt",
     "en_dicts/cn_en": "en_dicts/cn_en.txt",
-    "en_dicts/cn_en_double_pinyin": "en_dicts/cn_en_double_pinyin.txt"
+    "en_dicts/cn_en_double_pinyin": "en_dicts/cn_en_double_pinyin.txt",
+    "en_dicts/cn_en_flypy": "en_dicts/cn_en_flypy.txt"
   },
   "optionalUserDictionaries": [
     "custom_phrase_double",
@@ -128,12 +142,13 @@
         "english.schema.yaml",
         "licenses/rime-easy-en-SOURCE.md",
         "licenses/rime-ice-SOURCE.md",
+        "licenses/rime-wubi-SOURCE.md",
         "my_combo.schema.yaml"
       ]
     },
     "rime-ice-derived": {
       "license": "GPL-3.0-only",
-      "source": "https://github.com/iDvel/rime-ice (RIMES import d6d9f9cea97da478540b8a5e9a5c102216e2cf1d)",
+      "source": "https://github.com/iDvel/rime-ice (RIMES import d6d9f9cea97da478540b8a5e9a5c102216e2cf1d; Xiaohe additions c398c0d4526b012cb3b306f792089abed13e0413)",
       "files": [
         "cn_dicts/8105.dict.yaml",
         "cn_dicts/base.dict.yaml",
@@ -143,8 +158,10 @@
         "custom_phrase.txt",
         "default.yaml",
         "double_pinyin.schema.yaml",
+        "double_pinyin_flypy.schema.yaml",
         "en_dicts/cn_en.txt",
         "en_dicts/cn_en_double_pinyin.txt",
+        "en_dicts/cn_en_flypy.txt",
         "en_dicts/en.dict.yaml",
         "en_dicts/en_ext.dict.yaml",
         "lua/autocap_filter.lua",
@@ -172,6 +189,15 @@
         "rime_ice.schema.yaml",
         "symbols_caps_v.yaml",
         "symbols_v.yaml"
+      ]
+    },
+    "rime-wubi": {
+      "license": "LGPL-3.0-only",
+      "source": "https://github.com/rime/rime-wubi/tree/152a0d3f3efe40cae216d1e3b338242446848d07",
+      "files": [
+        "licenses/rime-wubi-LICENSE",
+        "wubi86.dict.yaml",
+        "wubi86.schema.yaml"
       ]
     },
     "rime-easy-en": {

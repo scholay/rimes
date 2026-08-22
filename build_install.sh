@@ -52,9 +52,11 @@ done
 # Its OWN Rime user dir (never fights Squirrel over the userdb LevelDB lock).
 # IMPORT: if you have a live ~/Library/Rime (Squirrel), carry your real config
 # in — your schemes, learned userdb, custom_phrase, lua, dicts — so RIMES uses
-# your actual setup. We then force RIMES's product schema list (并击、自然码双拼、
-# 雾凇拼音、英文) + 9 candidates; everything else you have is preserved. With no ~/Library/Rime, the
-# app deploys from the bundled schemas instead. RB_KEEP_USERDB=1 skips reseeding.
+# your actual setup. We then force RIMES's five ordinary product schemas
+# (雾凇全拼、自然码双拼、小鹤双拼、五笔86、英文) + 9 candidates; the optional
+# 并击 schema is added only when its extension is enabled. Everything else you
+# have is preserved. With no ~/Library/Rime, the app deploys from the bundled
+# schemas instead. RB_KEEP_USERDB=1 skips reseeding.
 RB_USER="$HOME/Library/RimeBuffer"
 if [ -L "$RB_USER" ]; then
     echo "!! refusing to update symlinked RimeBuffer user directory: $RB_USER"
@@ -68,7 +70,8 @@ if [ "${RB_KEEP_USERDB:-0}" != "1" ]; then
         echo "==> no ~/Library/Rime; deploying from the bundled schemas"
         reset_rime_user_dir_preserving_product_state "$RB_USER"
     fi
-    # Enforce RIMES's four product schemas + 9 candidates. Your learned
+    # Enforce RIMES's five ordinary product schemas + 9 candidates. The optional
+    # chord schema is reconciled by the extension state at startup. Your learned
     # userdb and unrelated tweaks are kept.
     cp rime-data/default.custom.yaml "$RB_USER/default.custom.yaml"
 fi

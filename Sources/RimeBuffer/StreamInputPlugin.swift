@@ -80,16 +80,33 @@ enum StreamInputDisplayReconciler {
     }
 }
 
-/// Consciousness-stream chord capture is a product configuration decision,
-/// not a schema-ID shortcut. 飞耀并击 and 飞耀互击 intentionally share
-/// `my_combo`, so the route must freeze both the effective schema and the
-/// host-side settlement policy for the physical batch.
+/// Consciousness-stream chord capture is owned by the optional chord
+/// extension, independently from the ordinary Rime schema selected for direct
+/// input. The route freezes both extension enablement and settlement policy for
+/// each physical batch.
 struct StreamInputChordRoute: Equatable {
     let schemaID: String
     let policy: FlyChordSettlementPolicy
 }
 
 enum StreamInputChordRoutingRules {
+    static func route(for configuration: ChordExtensionConfiguration)
+        -> StreamInputChordRoute? {
+        guard configuration.isEnabled else { return nil }
+        return StreamInputChordRoute(
+            schemaID: ChordExtensionStore.schemaID,
+            policy: configuration.mode.settlementPolicy
+        )
+    }
+
+    static func route(for store: ChordExtensionStore = .shared)
+        -> StreamInputChordRoute? {
+        route(for: store.configuration)
+    }
+
+    /// Compatibility seam for persisted v1 tests and migrations. Live routing
+    /// uses the extension overload above so turning the extension off always
+    /// returns to ordinary sequential stream capture.
     static func route(for configuration: InputConfiguration)
         -> StreamInputChordRoute? {
         let policy: FlyChordSettlementPolicy
@@ -757,6 +774,7 @@ private final class StreamInputCancellationRelay: AITextCancellable {
 
 struct StreamInputRuntime {
     let bufferEnabled: () -> Bool
+    let capturesFocus: (_ token: FocusToken) -> Bool
     let pluginSelected: () -> Bool
     let secureInput: () -> Bool
     let liveFocus: (_ token: FocusToken,
@@ -764,6 +782,9 @@ struct StreamInputRuntime {
 
     static let live = StreamInputRuntime(
         bufferEnabled: { BufferModel.shared.enabled },
+        capturesFocus: { token in
+            BufferModel.shared.capturesInput(for: token)
+        },
         pluginSelected: {
             BufferPluginSelectionStore.shared.isSelected(
                 StreamInputWorkspace.pluginKey
@@ -967,13 +988,17 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         privacyTick()
     }
 
+    func bufferStateDidChangeForTesting() {
+        bufferStateDidChange()
+    }
+
     var isSelected: Bool {
         runtime.pluginSelected()
     }
 
     var isActive: Bool {
         guard let boundFocusToken else { return false }
-        return operational(focusToken: boundFocusToken)
+        return canRetainProcessAndDeliver(focusToken: boundFocusToken)
     }
 
     var statusText: String {
@@ -1141,6 +1166,13 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         ) { [weak self] _ in
             self?.inputConfigurationDidChange()
         })
+        observers.append(center.addObserver(
+            forName: .chordExtensionDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.inputConfigurationDidChange()
+        })
         let timer = Timer(timeInterval: 0.20, repeats: true) { [weak self] _ in
             self?.privacyTick()
         }
@@ -1183,8 +1215,10 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         guard boundFocusToken == focusToken,
               lockedDeliveryAlternativeIndex == nil,
               !rawInput.isEmpty,
-              operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true) else { return false }
+              canRetainProcessAndDeliver(
+                focusToken: focusToken,
+                forceOverlayVisibilityRefresh: true
+              ) else { return false }
         cancelInFlightTasks(reason: "manual-refresh")
         invalidateTimers()
         inputFeedback = nil
@@ -1205,8 +1239,8 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
     @discardableResult
     func capture(letter: Character, focusToken: FocusToken) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true),
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true),
               Self.isLowercaseASCIILetter(letter) else { return false }
         invalidatePendingChord()
         if let boundFocusToken, boundFocusToken != focusToken {
@@ -1248,8 +1282,8 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
                          policy: FlyChordSettlementPolicy = .sameBatchOnly,
                          focusToken: FocusToken) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true),
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true),
               StreamInputChordRoutingRules.isChordKey(
                   keycode,
                   schemaID: schemaID
@@ -1309,21 +1343,32 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
             if closesPairingAfterSettlement { mutualPairingState.reset() }
             return false
         }
-        let keys = chordBatch.settle()
         let schemaID = chordBatchSchemaID
         let policy = chordBatchPolicy
         let owner = chordBatchFocusToken
+        guard owner == focusToken,
+              boundFocusToken == focusToken,
+              canRetainProcessAndDeliver(
+                focusToken: focusToken,
+                forceOverlayVisibilityRefresh: true
+              ) else {
+            invalidate(clearRaw: true, nextPhase: .idle)
+            return true
+        }
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true) else {
+            invalidatePendingChord()
+            return true
+        }
+
+        let keys = chordBatch.settle()
         chordTimer?.invalidate()
         chordTimer = nil
         chordBatchSchemaID = nil
         chordBatchPolicy = nil
         chordBatchFocusToken = nil
 
-        guard owner == focusToken,
-              boundFocusToken == focusToken,
-              operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true),
-              let schemaID,
+        guard let schemaID,
               let policy,
               let mapping = chordMapping(for: schemaID) else {
             invalidate(clearRaw: true, nextPhase: .idle)
@@ -1504,14 +1549,14 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
     @discardableResult
     func selectAllInput(focusToken: FocusToken) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true) else { return false }
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true) else { return false }
         _ = settlePendingChord(
             focusToken: focusToken,
             closesPairingAfterSettlement: true
         )
-        guard operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true),
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true),
               boundFocusToken == nil
                 || boundFocusToken == focusToken else { return false }
         if boundFocusToken == nil { boundFocusToken = focusToken }
@@ -1532,14 +1577,14 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
     func insertPastedText(_ text: String,
                           focusToken: FocusToken) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true) else { return false }
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true) else { return false }
         _ = settlePendingChord(
             focusToken: focusToken,
             closesPairingAfterSettlement: true
         )
-        guard operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true),
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true),
               boundFocusToken == nil
                 || boundFocusToken == focusToken else { return false }
         boundFocusToken = focusToken
@@ -1586,14 +1631,14 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
     @discardableResult
     func deleteBackward(focusToken: FocusToken) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true) else { return false }
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true) else { return false }
         _ = settlePendingChord(
             focusToken: focusToken,
             closesPairingAfterSettlement: true
         )
-        guard operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true),
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true),
               boundFocusToken == nil
                 || boundFocusToken == focusToken else { return false }
         boundFocusToken = focusToken
@@ -1631,14 +1676,14 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
     func consumeIgnoredKey(keycode: Int32? = nil,
                            focusToken: FocusToken) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true) else { return false }
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true) else { return false }
         _ = settlePendingChord(
             focusToken: focusToken,
             closesPairingAfterSettlement: true
         )
-        guard operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true),
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true),
               boundFocusToken == nil
                 || boundFocusToken == focusToken else { return false }
         if boundFocusToken == nil { boundFocusToken = focusToken }
@@ -1720,8 +1765,8 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
     /// existing tap/hold delivery gesture only after a matching result is ready.
     func settleForReturn(focusToken: FocusToken) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true) else {
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true) else {
             return false
         }
         let settledChord = settlePendingChord(
@@ -1779,8 +1824,10 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
     func focusDidChange() {
         dispatchPrecondition(condition: .onQueue(.main))
         guard let boundFocusToken else { return }
-        guard operational(focusToken: boundFocusToken,
-                          forceOverlayVisibilityRefresh: true) else {
+        guard canRetainProcessAndDeliver(
+            focusToken: boundFocusToken,
+            forceOverlayVisibilityRefresh: true
+        ) else {
             invalidate(clearRaw: true, nextPhase: .idle)
             return
         }
@@ -1880,8 +1927,10 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         let settings = frozenSettings ?? refreshSettings()
         guard let focusToken = boundFocusToken,
               !rawInput.isEmpty,
-              operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true) else {
+              canRetainProcessAndDeliver(
+                focusToken: focusToken,
+                forceOverlayVisibilityRefresh: true
+              ) else {
             focusDidChange()
             return
         }
@@ -2352,8 +2401,10 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
             return
         }
         guard let focusToken = boundFocusToken,
-              operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true) else {
+              canRetainProcessAndDeliver(
+                focusToken: focusToken,
+                forceOverlayVisibilityRefresh: true
+              ) else {
             invalidate(clearRaw: true, nextPhase: .idle)
             return
         }
@@ -2387,7 +2438,6 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         dispatchPrecondition(condition: .onQueue(.main))
         let selected = isSelected
         guard selected,
-              runtime.bufferEnabled(),
               !protectedSession,
               !runtime.secureInput() else {
             invalidate(clearRaw: true, nextPhase: .idle)
@@ -2407,11 +2457,27 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
     }
 
     private func bufferStateDidChange() {
-        guard runtime.bufferEnabled() else {
+        guard started,
+              isSelected,
+              !protectedSession,
+              !runtime.secureInput() else {
             invalidate(clearRaw: true, nextPhase: .idle)
             return
         }
-        guard isSelected else { return }
+        if let boundFocusToken,
+           !canRetainProcessAndDeliver(
+            focusToken: boundFocusToken,
+            forceOverlayVisibilityRefresh: true
+           ) {
+            invalidate(clearRaw: true, nextPhase: .idle)
+            return
+        }
+        guard runtime.bufferEnabled() else {
+            let discardedPendingChord = chordBatch.hasPending
+            invalidatePendingChord()
+            if discardedPendingChord { notifyChange() }
+            return
+        }
         if observesRuntimeNotifications,
            !protectedSession,
            !runtime.secureInput(),
@@ -2439,11 +2505,24 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         if boundFocusToken != nil { focusDidChange() }
     }
 
-    private func operational(focusToken: FocusToken,
-                             forceOverlayVisibilityRefresh: Bool = false) -> Bool {
+    private func canCaptureKeys(
+        focusToken: FocusToken,
+        forceOverlayVisibilityRefresh: Bool = false
+    ) -> Bool {
+        guard runtime.bufferEnabled(),
+              runtime.capturesFocus(focusToken) else { return false }
+        return canRetainProcessAndDeliver(
+            focusToken: focusToken,
+            forceOverlayVisibilityRefresh: forceOverlayVisibilityRefresh
+        )
+    }
+
+    private func canRetainProcessAndDeliver(
+        focusToken: FocusToken,
+        forceOverlayVisibilityRefresh: Bool = false
+    ) -> Bool {
         guard started,
               isSelected,
-              runtime.bufferEnabled(),
               !protectedSession,
               !runtime.secureInput(),
               runtime.liveFocus(focusToken,
@@ -2462,7 +2541,7 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         forceOverlayVisibilityRefresh: Bool
     ) -> Bool {
         boundFocusToken == job.focusToken
-            && operational(
+            && canRetainProcessAndDeliver(
                 focusToken: job.focusToken,
                 forceOverlayVisibilityRefresh: forceOverlayVisibilityRefresh
             )
@@ -2478,7 +2557,7 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
               resultInputRevision == inputRevision,
               let resultFocusToken,
               resultFocusToken == boundFocusToken else { return false }
-        return operational(
+        return canRetainProcessAndDeliver(
             focusToken: resultFocusToken,
             forceOverlayVisibilityRefresh: forceOverlayVisibilityRefresh
         )
@@ -2525,8 +2604,10 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         pendingInferenceRevision = nil
         guard let focusToken = boundFocusToken,
               !rawInput.isEmpty,
-              operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true) else {
+              canRetainProcessAndDeliver(
+                focusToken: focusToken,
+                forceOverlayVisibilityRefresh: true
+              ) else {
             invalidate(clearRaw: true, nextPhase: .idle)
             return
         }
@@ -2575,15 +2656,15 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
     func moveAlternativeSelection(delta: Int,
                                   focusToken: FocusToken) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true),
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true),
               boundFocusToken == focusToken else { return false }
         _ = settlePendingChord(
             focusToken: focusToken,
             closesPairingAfterSettlement: true
         )
-        guard operational(focusToken: focusToken,
-                          forceOverlayVisibilityRefresh: true),
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true),
               boundFocusToken == focusToken,
               ownsAlternativeNavigation else { return false }
         let feedbackChanged = inputFeedback != nil
@@ -2902,25 +2983,43 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
     }
 
     func consumeDelivered(blockIDs: [UUID], generation: UInt64) {
+        _ = consumeDeliveredAndReportTerminalDrain(
+            blockIDs: blockIDs,
+            generation: generation
+        )
+    }
+
+    func consumeDeliveredAndReportTerminalDrain(
+        blockIDs: [UUID],
+        generation: UInt64
+    ) -> BufferDeliveryTerminalSourceReceipt? {
         guard self.generation == generation,
               confirmedAlternativeIndex != nil,
-              !blockIDs.isEmpty else { return }
+              !blockIDs.isEmpty else { return nil }
         let ids = Set(blockIDs)
         guard let selectedOutputBlock,
               var segments = deliverySegmentsByAlternative[selectedOutputBlock.index] else {
-            return
+            return nil
         }
-        let previousCount = segments.count
+        let consumedIDs = Set(segments.lazy.filter {
+            ids.contains($0.id)
+        }.map(\.id))
+        guard !consumedIDs.isEmpty else { return nil }
         segments.removeAll { ids.contains($0.id) }
-        guard segments.count != previousCount else { return }
         if segments.isEmpty {
             invalidate(clearRaw: true, nextPhase: .idle)
-            return
+            return BufferDeliveryTerminalSourceReceipt(
+                workspaceID: deliveryWorkspaceID,
+                generation: generation,
+                generationAfterConsumption: self.generation,
+                consumedBlockIDs: consumedIDs
+            )
         }
         lockedDeliveryAlternativeIndex = selectedOutputBlock.index
         deliverySegmentsByAlternative[selectedOutputBlock.index] = segments
         self.generation &+= 1
         notifyChange()
+        return nil
     }
 
     func markDeliveryBlockStale(id: UUID, generation: UInt64) -> Bool {

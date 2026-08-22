@@ -2,15 +2,17 @@ import Cocoa
 import Carbon.HIToolbox
 import QuartzCore
 
-enum BufferCandidatePlacement: String, CaseIterable {
-    case workbench
-    case caret
-
-    var title: String {
-        switch self {
-        case .workbench: return "跟随缓冲工作台"
-        case .caret: return "跟随输入光标"
-        }
+enum BufferCandidateRoutingRules {
+    static func shouldFollowBufferCaret(
+        workbenchVisible: Bool,
+        presentationProtected: Bool,
+        secureInput: Bool,
+        capturesExactFocus: Bool
+    ) -> Bool {
+        workbenchVisible
+            && !presentationProtected
+            && !secureInput
+            && capturesExactFocus
     }
 }
 
@@ -51,6 +53,11 @@ struct BufferWindowLayoutTransitionSmokeResult {
 enum BufferDerivedPresentationStyle: Equatable {
     case liveExpand
     case singleExchange
+}
+
+struct BufferDerivedRailVisibility: Equatable {
+    let showsSource: Bool
+    let showsTarget: Bool
 }
 
 /// Explicit bridge from the React mode taxonomy to native ownership. A
@@ -94,6 +101,48 @@ enum BufferDerivedPresentationRules {
         return phase == .waiting || phase == .translating || outputCount > 0
     }
 
+    /// One pure presentation decision drives both panel geometry and the
+    /// concrete rail tree. Empty live workspaces stay compact: their source
+    /// prompt is enough until real source/output appears. A standalone result
+    /// message replaces that prompt in one target rail instead of creating an
+    /// otherwise empty second row.
+    static func visibleRails(
+        style: BufferDerivedPresentationStyle,
+        snapshot: TranslationRailSnapshot
+    ) -> BufferDerivedRailVisibility {
+        let exchangeTarget = exchangeShowsTarget(
+            style: style,
+            phase: snapshot.phase,
+            outputCount: snapshot.outputBlocks.count
+        )
+        if style == .singleExchange {
+            return BufferDerivedRailVisibility(
+                showsSource: snapshot.showsSourceRail && !exchangeTarget,
+                showsTarget: exchangeTarget || !snapshot.showsSourceRail
+            )
+        }
+
+        let hasSource = snapshot.showsSourceRail && !snapshot.sourceText.isEmpty
+        let hasOutput = !snapshot.outputBlocks.isEmpty
+        let hasExplicitMessage = snapshot.message?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty == false
+        let hasStandaloneResultMessage = hasExplicitMessage
+            || snapshot.phase == .failed
+            || snapshot.phase == .unavailable
+
+        if hasSource {
+            return BufferDerivedRailVisibility(showsSource: true, showsTarget: true)
+        }
+        if hasOutput || hasStandaloneResultMessage {
+            return BufferDerivedRailVisibility(showsSource: false, showsTarget: true)
+        }
+        if snapshot.showsSourceRail {
+            return BufferDerivedRailVisibility(showsSource: true, showsTarget: false)
+        }
+        return BufferDerivedRailVisibility(showsSource: false, showsTarget: true)
+    }
+
     static func layoutMode(
         style: BufferDerivedPresentationStyle,
         snapshot: TranslationRailSnapshot?
@@ -101,14 +150,8 @@ enum BufferDerivedPresentationRules {
         guard let snapshot else {
             return style == .singleExchange ? .singleDerived : .derived(targetRows: 1)
         }
-        let showsTarget = exchangeShowsTarget(
-            style: style,
-            phase: snapshot.phase,
-            outputCount: snapshot.outputBlocks.count
-        )
-        let showsSource = snapshot.showsSourceRail
-            && !(style == .singleExchange && showsTarget)
-        return showsSource && showsTarget
+        let visibility = visibleRails(style: style, snapshot: snapshot)
+        return visibility.showsSource && visibility.showsTarget
             ? .derived(targetRows: 1)
             : .singleDerived
     }
@@ -133,27 +176,6 @@ struct BufferOpeningPlacement: Equatable {
     let side: BufferOpeningSide
 }
 
-enum BufferCandidateSideRules {
-    static func preferredSide(openingSide: BufferOpeningSide,
-                              openingToken: FocusToken?,
-                              candidateOwner: FocusToken?)
-        -> CandidatePanelPreferredSide {
-        openingSide == .aboveTarget
-            && openingToken != nil
-            && openingToken == candidateOwner
-            ? .above
-            : .below
-    }
-
-    static func requiresOutwardPlacement(openingSide: BufferOpeningSide,
-                                         openingToken: FocusToken?,
-                                         candidateOwner: FocusToken?) -> Bool {
-        openingSide != .bottomFallback
-            && openingToken != nil
-            && openingToken == candidateOwner
-    }
-}
-
 /// Pure frame math shared by runtime restoration and the CLI smoke test.
 enum BufferWindowGeometry {
     static let standardMinimumWidth: CGFloat = 520
@@ -175,6 +197,7 @@ enum BufferWindowGeometry {
                mode: .derived(targetRows: 5),
                clipboardRailEnabled: true)
     }
+    static var maximumOpeningHeight: CGFloat { maximumRuntimeHeight }
 
     static func clampedStandardWidth(_ width: CGFloat) -> CGFloat {
         min(max(width, standardMinimumWidth), standardMaximumWidth)
@@ -222,8 +245,7 @@ enum BufferWindowGeometry {
         // The 52pt predecessor and both current states preserve their bottom
         // edge, keeping the candidate panel stationary. Only the legacy 340pt
         // workbench migrates by preserving its old top edge.
-        let maximumCurrentExpandedHeight = maximumRuntimeHeight
-        var y = proposed.height <= maximumCurrentExpandedHeight + 1
+        var y = proposed.height <= maximumRuntimeHeight + 1
             ? proposed.minY
             : proposed.maxY - height
         if proposed == .zero || intersectionArea(proposed, target) == 0 {
@@ -243,7 +265,7 @@ enum BufferWindowGeometry {
                                  targetRect: NSRect?,
                                  visibleFrames: [NSRect],
                                  fallback: NSRect,
-                                 forecastHeight: CGFloat = maximumRuntimeHeight)
+                                 forecastHeight: CGFloat = maximumOpeningHeight)
         -> BufferOpeningPlacement {
         let screens = visibleFrames.isEmpty ? [fallback] : visibleFrames
         let targetScreen = targetRect.flatMap { rect in
@@ -338,13 +360,6 @@ enum BufferWindowGeometry {
             .contains(rect.origin)
     }
 
-    static func candidateAnchor(for frame: NSRect) -> NSRect {
-        NSRect(x: frame.minX + 8,
-               y: frame.minY,
-               width: max(4, frame.width - 16),
-               height: frame.height)
-    }
-
     /// Contextual openings grow away from the input line: a below-target
     /// workbench keeps its top edge fixed, while an above-target workbench
     /// keeps its bottom edge fixed. Manual and fallback layouts retain the
@@ -426,6 +441,20 @@ enum ClipboardWorkbenchIntegrationRules {
     static func allowsAddToBuffer(_ state: ClipboardHistoryCaptureState) -> Bool {
         state.allowsClipboardObservation
     }
+
+    /// Clipboard adds content to the existing Buffer surface without changing
+    /// who owns subsequent physical keys. This keeps the Clipboard rail a
+    /// content source, never an implicit input-route switch.
+    @discardableResult
+    static func addToBuffer(
+        _ text: String,
+        state: ClipboardHistoryCaptureState,
+        contentShielded: Bool,
+        model: BufferModel
+    ) -> Bool {
+        guard allowsAddToBuffer(state), !contentShielded else { return false }
+        return model.insertPastedText(text)
+    }
 }
 
 struct ClipboardRailVisibilityTogglePlan: Equatable {
@@ -455,19 +484,20 @@ enum ClipboardRailVisibilityToggleRules {
     }
 }
 
-/// Keep enabled capture discoverable without turning the passive workbench
+/// Keep a visible workbench discoverable without turning the passive panel
 /// into a caret-following window. A newly trusted text focus may relocate it
-/// only when the panel was stranded on another Space or physical display.
+/// only when the panel was stranded on another Space or physical display;
+/// capture ownership is an independent state.
 enum BufferWindowFocusFollowRules {
     static func shouldRelocate(
-        bufferEnabled: Bool,
+        workbenchVisible: Bool,
         presentationProtected: Bool,
         secureInput: Bool,
         hasTrustedExternalFocus: Bool,
         panelVisibleOnActiveSpace: Bool,
         targetScreenMatchesPanel: Bool
     ) -> Bool {
-        bufferEnabled
+        workbenchVisible
             && !presentationProtected
             && !secureInput
             && hasTrustedExternalFocus
@@ -499,7 +529,6 @@ enum BufferWorkbenchControl: String, Equatable {
     case status
     case pluginActions
     case exchangeEdit
-    case refresh
     case close
 }
 
@@ -636,7 +665,6 @@ enum BufferWorkbenchShelfLayout {
                           flexibleSpace: NSView,
                           statusIndicators: NSView,
                           exchangeEdit: NSView,
-                          refresh: NSView,
                           close: NSView) {
         shelf.orientation = .horizontal
         shelf.alignment = .centerY
@@ -665,7 +693,7 @@ enum BufferWorkbenchShelfLayout {
                                                               for: .horizontal)
 
         [status, pluginActions, flexibleSpace, statusIndicators,
-         exchangeEdit, refresh, close].forEach {
+         exchangeEdit, close].forEach {
             shelf.addArrangedSubview($0)
         }
     }
@@ -677,10 +705,10 @@ enum BufferWorkbenchLayout {
         .bufferRail, .send,
     ]
     static let toolbar: [BufferWorkbenchControl] = [
-        .status, .pluginActions, .exchangeEdit, .refresh, .close,
+        .status, .pluginActions, .exchangeEdit, .close,
     ]
     static let hoverControls: Set<BufferWorkbenchControl> = [
-        .send, .pluginActions, .exchangeEdit, .refresh, .close,
+        .send, .pluginActions, .exchangeEdit, .close,
     ]
     static let passiveControls: Set<BufferWorkbenchControl> = [.bufferRail, .status]
     static let toolbarAlwaysExpanded = true
@@ -704,7 +732,11 @@ enum BufferWorkbenchStatusText {
                 return canGenerateWithoutFocus
                     ? "可生成 · 发送前点选输入框"
                     : "等待输入框"
-            case .composing: return "正在组字"
+            // The inline preedit and detached candidate panel already make
+            // composition visible at the Buffer caret. Repeating that state
+            // in the toolbar adds noise and reserves an otherwise empty 88pt
+            // status column.
+            case .composing: return ""
             case .secureInput: return "安全输入，内容已隐藏"
             case .nothingPending: return "等待内容"
             case .targetChanged: return "焦点已变化"
@@ -760,11 +792,35 @@ enum BufferWorkbenchStatusPresentation {
     /// rail and primary action already communicate those states. Failures,
     /// protection, focus blockers, and active work restore the 88pt column so
     /// compact styling never hides an actionable condition.
+    static func railRendersStatusMessage(
+        snapshot: TranslationRailSnapshot,
+        style: BufferDerivedPresentationStyle
+    ) -> Bool {
+        let visibility = BufferDerivedPresentationRules.visibleRails(
+            style: style,
+            snapshot: snapshot
+        )
+        guard visibility.showsTarget else { return false }
+        if snapshot.outputBlocks.isEmpty {
+            switch snapshot.phase {
+            case .waiting, .translating, .failed, .unavailable:
+                return true
+            case .idle, .ready:
+                return false
+            }
+        }
+        return snapshot.phase == .waiting || snapshot.phase == .translating
+    }
+
     static func text(
         fallback: String,
-        snapshot: TranslationRailSnapshot?
+        snapshot: TranslationRailSnapshot?,
+        style: BufferDerivedPresentationStyle = .liveExpand
     ) -> String {
         if let snapshot {
+            if railRendersStatusMessage(snapshot: snapshot, style: style) {
+                return ""
+            }
             switch snapshot.phase {
             case .idle, .ready:
                 return ""
@@ -788,6 +844,26 @@ enum BufferWorkbenchStatusPresentation {
             return .danger
         }
         return text.isEmpty ? .neutral : .accent
+    }
+}
+
+enum BufferWorkbenchPreferences {
+    static let closeAfterLastDeliveryKey =
+        "bufferWindow.closeAfterLastDelivery.v1"
+
+    static func closeAfterLastDelivery(
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        defaults.object(forKey: closeAfterLastDeliveryKey) == nil
+            ? true
+            : defaults.bool(forKey: closeAfterLastDeliveryKey)
+    }
+
+    static func setCloseAfterLastDelivery(
+        _ enabled: Bool,
+        defaults: UserDefaults = .standard
+    ) {
+        defaults.set(enabled, forKey: closeAfterLastDeliveryKey)
     }
 }
 
@@ -1157,12 +1233,17 @@ private final class BufferChromeView: NSVisualEffectView {
 final class BufferWindowController: NSObject, NSWindowDelegate {
     static let shared = BufferWindowController()
 
+    private struct InlineCompositionProjection: Equatable {
+        let owner: FocusToken
+        let text: String
+        let cursorPosUTF8: Int
+    }
+
     private enum Key {
         static let visible = "bufferWindow.visible.v1"
         static let frame = "bufferWindow.frame.v2"
         static let legacyFrame = "bufferWindow.frame.v1"
         static let pinned = "bufferWindow.pinned.v1"
-        static let placement = "bufferWindow.candidatePlacement.v1"
         static let clipboardRailEnabled = "bufferWindow.clipboardRailEnabled.v1"
     }
 
@@ -1194,10 +1275,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private let sendButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let sendButtonProgressIndicator = NSProgressIndicator()
     private let exchangeEditButton = FirstMouseButton(title: "", target: nil, action: nil)
-    private let refreshButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let closeButton = FirstMouseButton(title: "", target: nil, action: nil)
     private lazy var exchangeEditSlot = BufferToolbarControlSlot(control: exchangeEditButton)
-    private lazy var refreshSlot = BufferToolbarControlSlot(control: refreshButton)
     private lazy var sendSlot = BufferMainControlSlot(control: sendButton, row: .target)
     private var hiddenForSession = false
     private var sessionInactive = false
@@ -1207,7 +1286,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var layoutMode: BufferWorkbenchLayoutMode = .standard
     private var mainBarHeightConstraint: NSLayoutConstraint?
     private var bufferRailHeightConstraint: NSLayoutConstraint?
+    private var inlineCompositionProjection: InlineCompositionProjection?
     private var observers: [NSObjectProtocol] = []
+    private var externalPointerMonitor: Any?
     private var secureInputPollTimer: Timer?
     private var pluginStatusPollTimer: Timer?
     private var pluginSelectorRefreshScheduled = false
@@ -1229,6 +1310,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var lastFocusFollowToken: FocusToken?
     private var scheduledFocusFollowToken: FocusToken?
     private var activeSpaceFocusFollowPending = false
+    private var explicitClipboardCaptureGeneration: UInt64 = 0
+    private(set) var workbenchSessionEpoch: UInt64 = 1
 
     private var pluginSwitchShortcutTitle: String {
         let previous = RimeShortcutPreferences
@@ -1244,22 +1327,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         RimeShortcutPreferences
             .shortcut(for: .deliverBuffer)
             .displayTitle
-    }
-
-    func preferredCandidatePanelSide(for owner: FocusToken?) -> CandidatePanelPreferredSide {
-        BufferCandidateSideRules.preferredSide(
-            openingSide: openingSide,
-            openingToken: openingFocusToken,
-            candidateOwner: owner
-        )
-    }
-
-    func requiresOutwardCandidatePanelPlacement(for owner: FocusToken?) -> Bool {
-        BufferCandidateSideRules.requiresOutwardPlacement(
-            openingSide: openingSide,
-            openingToken: openingFocusToken,
-            candidateOwner: owner
-        )
     }
 
     var isVisible: Bool {
@@ -1286,7 +1353,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             display: true
         )
         saveFrame()
-        candidateWindow.syncWorkbenchAnchor(candidateAnchorRect)
+        candidateWindow.syncWorkbenchLayout()
         IMELog.write("buffer workbench width=\(configuredWidth)")
     }
 
@@ -1302,6 +1369,19 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             guard newValue != clipboardRailEnabled else { return }
             UserDefaults.standard.set(newValue, forKey: Key.clipboardRailEnabled)
             applyClipboardRailEnabledChange(enabled: newValue)
+            if newValue {
+                scheduleExplicitClipboardCapture()
+            } else {
+                explicitClipboardCaptureGeneration &+= 1
+            }
+        }
+    }
+
+    var closeAfterLastDeliveryEnabled: Bool {
+        get { BufferWorkbenchPreferences.closeAfterLastDelivery() }
+        set {
+            BufferWorkbenchPreferences.setCloseAfterLastDelivery(newValue)
+            IMELog.write("setting closeAfterLastDelivery=\(newValue)")
         }
     }
 
@@ -1311,6 +1391,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             railEnabled: clipboardRailEnabled,
             workbenchVisibleOnActiveSpace: isVisible
         )
+        let railStateChanged = clipboardRailEnabled != plan.railEnabled
         if clipboardRailEnabled != plan.railEnabled {
             clipboardRailEnabled = plan.railEnabled
         }
@@ -1318,6 +1399,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             // `show()` preserves BufferModel.enabled. Clipboard can therefore
             // be browsed without silently turning on text capture.
             show()
+        }
+        if plan.railEnabled, !railStateChanged {
+            scheduleExplicitClipboardCapture()
         }
     }
 
@@ -1329,25 +1413,77 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             refresh()
         }
     }
-    var candidatePlacement: BufferCandidatePlacement {
-        get {
-            let raw = UserDefaults.standard.string(forKey: Key.placement)
-            return raw.flatMap(BufferCandidatePlacement.init(rawValue:)) ?? .workbench
+    func shouldPresentCandidatesAtBufferCaret(for owner: FocusToken?) -> Bool {
+        guard let owner else { return false }
+        let capturesExactFocus = BufferModel.shared.capturesInput(for: owner)
+            && InputFocusCoordinator.shared.interactionTarget(expected: owner) != nil
+        return BufferCandidateRoutingRules.shouldFollowBufferCaret(
+            workbenchVisible: isVisible,
+            presentationProtected: hiddenForSession || sessionProtectionActive,
+            secureInput: IsSecureEventInputEnabled(),
+            capturesExactFocus: capturesExactFocus
+        )
+    }
+
+    /// Projects Rime marked text into the passive Buffer rail and returns the
+    /// exact internal caret in screen coordinates. The projection is scoped to
+    /// one FocusToken and never enters BufferModel or plugin source state.
+    func updateInlineComposition(preedit: String,
+                                 cursorPosUTF8: Int,
+                                 owner: FocusToken) -> NSRect? {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard shouldPresentCandidatesAtBufferCaret(for: owner) else {
+            clearInlineComposition(owner: owner)
+            return nil
         }
-        set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: Key.placement)
-            RimeBufferController.refreshActiveUI()
-            refresh()
+        let next = InlineCompositionProjection(
+            owner: owner,
+            text: preedit,
+            cursorPosUTF8: cursorPosUTF8
+        )
+        if inlineCompositionProjection != next {
+            inlineCompositionProjection = next
+            renderInlineRail(preedit: preedit, cursorPosUTF8: cursorPosUTF8)
+        }
+        guard shouldPresentCandidatesAtBufferCaret(for: owner),
+              inlineCompositionProjection?.owner == owner else {
+            clearInlineComposition(owner: owner)
+            return nil
+        }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        bufferRail.reconcileTranslationDocumentGeometry()
+        guard let rect = bufferRail.inputCaretScreenRect,
+              BufferWindowGeometry.isPlausibleInputAnchor(
+                rect,
+                visibleFrames: NSScreen.screens.map(\.visibleFrame)
+              ),
+              shouldPresentCandidatesAtBufferCaret(for: owner) else {
+            clearInlineComposition(owner: owner)
+            return nil
+        }
+        return rect
+    }
+
+    func clearInlineComposition(owner: FocusToken? = nil) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard let current = inlineCompositionProjection,
+              owner == nil || owner == current.owner else { return }
+        inlineCompositionProjection = nil
+        if sessionProtectionActive || hiddenForSession || IsSecureEventInputEnabled() {
+            _ = bufferRail.refresh(shielded: true, translationSnapshot: nil)
+        } else {
+            renderInlineRail(preedit: "", cursorPosUTF8: 0)
         }
     }
-    var shouldProjectCandidates: Bool {
-        isVisible && !hiddenForSession && candidatePlacement == .workbench
-    }
-    var candidateAnchorRect: NSRect? {
-        guard shouldProjectCandidates,
-              !IsSecureEventInputEnabled(),
-              !sessionProtectionActive else { return nil }
-        return BufferWindowGeometry.candidateAnchor(for: panel.frame)
+
+    func inlineInputCaretScreenRect(owner: FocusToken) -> NSRect? {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard shouldPresentCandidatesAtBufferCaret(for: owner),
+              inlineCompositionProjection?.owner == owner else { return nil }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        guard let rect = bufferRail.inputCaretScreenRect,
+              shouldPresentCandidatesAtBufferCaret(for: owner) else { return nil }
+        return rect
     }
 
     private override init() {
@@ -1392,6 +1528,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         bufferRail.onDerivedTargetStep = { [weak self] delta in
             self?.moveDerivedTargetSelection(delta: delta)
         }
+        bufferRail.onCaptureRequested = { [weak self] insertionIndex in
+            self?.activateLogicalInput(at: insertionIndex)
+        }
         MainActor.assumeIsolated {
             clipboardRail.onAddToBuffer = { [weak self] item in
                 self?.addClipboardItemToBuffer(item) ?? false
@@ -1420,6 +1559,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func show(repositionOnOpen: Bool) {
         let wasVisibleOnActiveSpace = isVisible
+        if !wasVisibleOnActiveSpace { workbenchSessionEpoch &+= 1 }
         UserDefaults.standard.set(true, forKey: Key.visible)
         guard !sessionProtectionActive else {
             hiddenForSession = true
@@ -1427,6 +1567,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             return
         }
         hiddenForSession = false
+        BufferModel.shared.resumeWorkbenchProcessing()
         ActionPluginHost.shared.refreshStatuses(force: true)
         refresh()
         if repositionOnOpen, !wasVisibleOnActiveSpace {
@@ -1450,16 +1591,13 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         RimeBufferController.refreshActiveUI()
     }
 
-    /// Explicit user-facing open actions resume capture after a previous
-    /// close-and-pause. Passive restoration uses `show(repositionOnOpen: false)`
-    /// so it neither resumes capture nor replaces the persisted window origin.
+    /// Compatibility entry for explicit “enable Buffer” actions. Visibility
+    /// itself no longer implies capture; this method requests an exact-focus
+    /// capture grant and still shows the workbench when no trusted field exists.
     func openAndResume() {
-        BufferModel.shared.enabled = true
-        // Establish the host's marked-text guard before asking for its caret
-        // rectangle. Chromium/Electron clients commonly return a zero rect
-        // while no marked session exists.
-        RimeBufferController.refreshActiveUI()
-        show()
+        if !activateCaptureForCurrentFocus(showWorkbench: true) {
+            show()
+        }
     }
 
     /// Evaluate a newly trusted text focus on the next main-loop turn, after
@@ -1494,6 +1632,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     func hideWithoutPausing() {
+        workbenchSessionEpoch &+= 1
+        clearInlineComposition()
         UserDefaults.standard.set(false, forKey: Key.visible)
         panel.orderOut(nil)
         syncClipboardHistoryCapture()
@@ -1503,9 +1643,13 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// The optional external-app privacy purge clears staged plaintext and all
     /// plugin state before a different application can become the target.
     func discardForPrivacyTransition() {
+        clearInlineComposition()
         ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
         DerivedBufferWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
         BuiltInBufferActionWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
+        BufferModel.shared.routeDirectPreservingContent(
+            reason: "privacy transition"
+        )
         BufferModel.shared.discardForPrivacy()
         dispatchPrecondition(condition: .onQueue(.main))
         MainActor.assumeIsolated {
@@ -1513,14 +1657,32 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Product default: close means resolve the current composition into the
-    /// buffer, pause capture, keep staged blocks, settle transient state, then hide.
+    /// Product default: close means resolve only a composition currently owned
+    /// by Buffer, pause capture, keep staged blocks, settle transient state,
+    /// then hide. Clipboard-only presentation must not commit host composition.
     func closeAndPause() {
-        if let target = InputFocusCoordinator.shared.owner,
+        pauseAndHide(settleCapturedComposition: true)
+    }
+
+    @discardableResult
+    func dismissFromEscape() -> Bool {
+        guard isVisible else { return false }
+        pauseAndHide(settleCapturedComposition: true)
+        IMELog.write("buffer workbench closed by escape")
+        return true
+    }
+
+    private func pauseAndHide(settleCapturedComposition: Bool) {
+        if settleCapturedComposition,
+           let target = InputFocusCoordinator.shared.owner,
            InputFocusCoordinator.shared.isCurrent(target.token),
+           BufferModel.shared.capturesInput(for: target.token),
            target.compositionActive {
-            target.controller?.resolveCompositionForWorkbenchTransition(target: target)
+            target.controller?.resolveCompositionForWorkbenchTransition(
+                target: target
+            )
         }
+        clearInlineComposition()
         ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
         DerivedBufferWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
         BuiltInBufferActionWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
@@ -1530,6 +1692,39 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     func toggleVisibility() {
         isVisible ? closeAndPause() : openAndResume()
+    }
+
+    /// Selection changes invalidate any delayed plugin-delivery completion
+    /// that was frozen under the previous owner.
+    func notePluginSelectionChanged() {
+        workbenchSessionEpoch &+= 1
+    }
+
+    func closeAfterTerminalDrain(
+        _ context: BufferDeliveryCoordinator.TerminalDrainContext
+    ) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        let currentSource = BufferDeliveryContentRouter.current()
+        guard closeAfterLastDeliveryEnabled,
+              context.workbenchSessionEpoch == workbenchSessionEpoch,
+              context.matchesCurrentSource(currentSource),
+              isVisible,
+              !sessionProtectionActive,
+              !hiddenForSession,
+              !IsSecureEventInputEnabled(),
+              InputFocusCoordinator.shared.liveTarget(
+                expected: context.targetToken,
+                forceOverlayVisibilityRefresh: true
+              ) != nil else {
+            IMELog.write("buffer terminal auto-close ignored workspace=\(context.workspaceID) attempt=\(context.attemptID)")
+            return
+        }
+
+        // Do not settle a host composition here: the receipt belongs to the
+        // completed plugin result, while the user may already have resumed
+        // direct typing during an asynchronous target validation.
+        pauseAndHide(settleCapturedComposition: false)
+        IMELog.write("buffer terminal drain closed workbench workspace=\(context.workspaceID) attempt=\(context.attemptID)")
     }
 
     func moveToCurrentScreen() {
@@ -1548,7 +1743,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                           fallback: target,
                           display: true)
         saveFrame()
-        candidateWindow.syncWorkbenchAnchor(candidateAnchorRect)
+        candidateWindow.syncWorkbenchLayout()
     }
 
     func setEnterHoldProgress(_ progress: Double?) {
@@ -1564,7 +1759,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                           translationSnapshot: TranslationRailSnapshot? = nil,
                           presentationStyle: BufferDerivedPresentationStyle = .liveExpand,
                           statusIndicators: [WorkbenchStatusIndicator]? = nil,
-                          hoveredControl: BufferWorkbenchControl? = nil) -> Bool {
+                          hoveredControl: BufferWorkbenchControl? = nil,
+                          candidatePreview: Bool = false) -> Bool {
         let selectedWorkspace = DerivedBufferWorkspaceRouter.selectedWorkspace
         let previewStyle = translationSnapshot == nil
             ? BufferDerivedPresentationRules.style(
@@ -1590,7 +1786,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         panel.setFrame(NSRect(x: 0, y: 0, width: 760,
                               height: BufferWindowGeometry.height(
                                   expanded: BufferWorkbenchLayout
-                                      .toolbarAlwaysExpanded,
+                                  .toolbarAlwaysExpanded,
                                   mode: previewMode,
                                   clipboardRailEnabled: clipboardRailEnabled
                               )),
@@ -1601,7 +1797,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                 fallback: translationSnapshot.showsSourceRail
                     ? "译文可发送"
                     : translationSnapshot.targetEmptyText,
-                snapshot: translationSnapshot
+                snapshot: translationSnapshot,
+                style: previewStyle
             ))
             _ = bufferRail.renderTranslationForPreview(
                 translationSnapshot,
@@ -1610,6 +1807,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             applyAppearance()
         } else {
             refresh()
+            if candidatePreview {
+                _ = bufferRail.renderStandardForPreview(
+                    preedit: "wai'mian",
+                    preeditCursorPosUTF8: 3
+                )
+            }
         }
         if let statusIndicators {
             reconcileContextualStatusIndicators(statusIndicators)
@@ -1744,6 +1947,66 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         return (try? png.write(to: URL(fileURLWithPath: path), options: .atomic)) != nil
     }
 
+    private func resolvedLayoutMode(
+        workspaceSelected: Bool,
+        style: BufferDerivedPresentationStyle,
+        snapshot: TranslationRailSnapshot?,
+        preedit: String
+    ) -> BufferWorkbenchLayoutMode {
+        guard workspaceSelected else { return .standard }
+        if !preedit.isEmpty,
+           let snapshot,
+           BufferDerivedPresentationRules.visibleRails(
+                style: style,
+                snapshot: snapshot
+           ).showsTarget {
+            return .derived(targetRows: 1)
+        }
+        return BufferDerivedPresentationRules.layoutMode(
+            style: style,
+            snapshot: snapshot
+        )
+    }
+
+    /// Re-renders only the text rail for a composition keystroke. Toolbar,
+    /// provider status and plugin controls do not need to churn at IME speed.
+    private func renderInlineRail(preedit: String, cursorPosUTF8: Int) {
+        let contentProtected = sessionProtectionActive
+            || hiddenForSession
+            || IsSecureEventInputEnabled()
+        guard !contentProtected else {
+            _ = bufferRail.refresh(shielded: true, translationSnapshot: nil)
+            return
+        }
+        let workspace = DerivedBufferWorkspaceRouter.selectedWorkspace
+        let snapshot = workspace?.railSnapshot
+        let style = BufferDerivedPresentationRules.style(
+            for: workspace?.workspacePluginKey
+        )
+        let nextMode = resolvedLayoutMode(
+            workspaceSelected: workspace != nil,
+            style: style,
+            snapshot: snapshot,
+            preedit: preedit
+        )
+        let grows = BufferWorkbenchMetrics.railHeight(for: nextMode)
+            > BufferWorkbenchMetrics.railHeight(for: layoutMode)
+        if nextMode != layoutMode, grows {
+            syncLayoutMode(nextMode)
+            panel.contentView?.layoutSubtreeIfNeeded()
+        }
+        _ = bufferRail.refresh(
+            preedit: preedit,
+            preeditCursorPosUTF8: cursorPosUTF8,
+            shielded: false,
+            translationSnapshot: snapshot,
+            presentationStyle: style
+        )
+        if nextMode != layoutMode { syncLayoutMode(nextMode) }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        bufferRail.reconcileTranslationDocumentGeometry()
+    }
+
     func refresh() {
         guard Thread.isMainThread else {
             DispatchQueue.main.async { [weak self] in self?.refresh() }
@@ -1751,9 +2014,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         let secureInputEnabled = IsSecureEventInputEnabled()
         let contentProtected = secureInputEnabled || sessionProtectionActive
+        syncPanelLevel(secureInputEnabled: secureInputEnabled)
         syncClipboardHistoryCapture(secureInputEnabled: secureInputEnabled)
         if contentProtected {
+            inlineCompositionProjection = nil
             BufferModel.shared.clearAllContentSelection(notify: false)
+            candidateWindow.hideAll()
             // Scrub every text-bearing view before protection notifications or
             // frame changes can synchronously re-enter AppKit and repaint the
             // old source/candidates at a smaller layout.
@@ -1780,6 +2046,15 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         let derivedSnapshot = contentProtected
             ? nil
             : derivedWorkspace?.railSnapshot
+        let inlineComposition: InlineCompositionProjection?
+        if !contentProtected,
+           let projection = inlineCompositionProjection,
+           shouldPresentCandidatesAtBufferCaret(for: projection.owner) {
+            inlineComposition = projection
+        } else {
+            inlineCompositionProjection = nil
+            inlineComposition = nil
+        }
         let availability: BufferDeliveryCoordinator.Availability = contentProtected
             ? .blocked(.secureInput)
             : BufferDeliveryCoordinator.shared.availability()
@@ -1787,12 +2062,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         // Grow before attaching a new row; shrink only after stale rows have
         // been removed. Otherwise NSScrollView captures a 0pt/old document
         // frame and AppKit permanently breaks the third row's constraints.
-        let nextLayoutMode: BufferWorkbenchLayoutMode = derivedWorkspaceSelected
-            ? BufferDerivedPresentationRules.layoutMode(
-                style: derivedPresentationStyle,
-                snapshot: derivedSnapshot
-            )
-            : .standard
+        let nextLayoutMode = resolvedLayoutMode(
+            workspaceSelected: derivedWorkspaceSelected,
+            style: derivedPresentationStyle,
+            snapshot: derivedSnapshot,
+            preedit: inlineComposition?.text ?? ""
+        )
         let layoutChanged = layoutMode != nextLayoutMode
         let grows = BufferWorkbenchMetrics.railHeight(for: nextLayoutMode)
             > BufferWorkbenchMetrics.railHeight(for: layoutMode)
@@ -1804,6 +2079,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             panel.contentView?.layoutSubtreeIfNeeded()
         }
         _ = bufferRail.refresh(
+            preedit: inlineComposition?.text ?? "",
+            preeditCursorPosUTF8: inlineComposition?.cursorPosUTF8 ?? 0,
             shielded: contentProtected,
             translationSnapshot: derivedSnapshot,
             presentationStyle: derivedPresentationStyle
@@ -1840,7 +2117,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         setWorkbenchStatusText(BufferWorkbenchStatusPresentation.text(
             fallback: rawStatusText,
-            snapshot: contentProtected ? nil : derivedSnapshot
+            snapshot: contentProtected ? nil : derivedSnapshot,
+            style: derivedPresentationStyle
         ))
         statusLabel.toolTip = !contentProtected
             && (derivedWorkspaceSelected || builtInActionWorkspaceSelected)
@@ -1876,6 +2154,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         )
         refreshPluginActions()
         applyAppearance()
+        if inlineComposition != nil {
+            candidateWindow.syncWorkbenchLayout()
+        }
     }
 
     private func refreshContextualStatusIndicators(
@@ -1906,21 +2187,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         exchangeEditButton.toolTip = showsExchangeActions
             ? "返回编辑原文（保留原文，放弃当前结果）"
             : nil
-
-        let hasPlugin = BufferPluginSelectionStore.shared.activeKey != nil
-        // Current single-exchange workspaces clear an unsent result as soon as
-        // refresh starts. Do not expose that destructive path: transactional
-        // replacement is required before retry can satisfy retain-until-send.
-        let exposesRefresh = style != .singleExchange
-        refreshSlot.setControlVisible(exposesRefresh)
-        refreshButton.isEnabled = exposesRefresh
-            && hasPlugin
-            && !contentProtected
-        refreshButton.toolTip = refreshButton.isEnabled
-            ? "刷新或重置当前插件（保留缓冲正文）"
-            : (style == .singleExchange
-                ? "返回编辑后可重新生成"
-                : "当前没有可刷新的缓冲插件")
     }
 
     private func reconcileContextualStatusIndicators(
@@ -1971,12 +2237,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             }
         }
         saveFrame()
-        candidateWindow.syncWorkbenchAnchor(candidateAnchorRect)
+        candidateWindow.syncWorkbenchLayout()
     }
     func windowDidResize(_ notification: Notification) {
         guard !adjustingFrame else { return }
         clampFrameToScreens()
-        candidateWindow.syncWorkbenchAnchor(candidateAnchorRect)
+        candidateWindow.syncWorkbenchLayout()
     }
 
     func windowDidChangeBackingProperties(_ notification: Notification) {
@@ -1994,13 +2260,13 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         bufferRail.needsLayout = true
         panel.invalidateShadow()
         saveFrame()
-        candidateWindow.syncWorkbenchAnchor(candidateAnchorRect)
+        candidateWindow.syncWorkbenchLayout()
     }
 
     // MARK: - Construction
 
     private func buildWindow() {
-        panel.level = .floating
+        panel.level = CandidatePanelLevelRules.workbenchStandard
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
@@ -2066,10 +2332,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             sendButtonProgressIndicator.widthAnchor.constraint(equalToConstant: 12),
             sendButtonProgressIndicator.heightAnchor.constraint(equalToConstant: 12),
         ])
-        configureIconButton(refreshButton,
-                            "arrow.clockwise",
-                            "刷新或重置当前插件（保留缓冲正文）",
-                            #selector(refreshPluginTapped))
         configureIconButton(exchangeEditButton,
                             "text.cursor",
                             "返回编辑原文",
@@ -2101,6 +2363,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             pluginSelectorMinimumWidth,
             pluginSelector.widthAnchor.constraint(lessThanOrEqualToConstant: 108),
         ])
+
         pluginSelector.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         pluginSelector.setContentCompressionResistancePriority(.defaultLow,
                                                                for: .horizontal)
@@ -2111,6 +2374,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         pluginButtonRow.spacing = 2
         pluginButtonRow.detachesHiddenViews = false
         pluginButtonRow.userInterfaceLayoutDirection = .leftToRight
+        pluginButtonRow.isHidden = true
         pluginButtonRow.setContentHuggingPriority(.required, for: .horizontal)
         pluginButtonRow.setContentCompressionResistancePriority(.required, for: .horizontal)
 
@@ -2187,7 +2451,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         pluginActionsControl.distribution = .fill
         pluginActionsControl.spacing = 4
         pluginActionsControl.edgeInsets = NSEdgeInsets(top: 1, left: 5, bottom: 1, right: 3)
-        pluginActionsControl.detachesHiddenViews = false
+        // Hidden loading state and an empty action row must leave the layout;
+        // otherwise the shared surface draws a blank tail after every plugin
+        // selector item.
+        pluginActionsControl.detachesHiddenViews = true
         pluginActionsControl.userInterfaceLayoutDirection = .leftToRight
         pluginActionsControl.wantsLayer = true
         pluginActionsControl.layer?.cornerRadius = 6
@@ -2218,7 +2485,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             flexibleSpace: shelfFlexibleSpace,
             statusIndicators: contextualStatusControl,
             exchangeEdit: exchangeEditSlot,
-            refresh: refreshSlot,
             close: closeButton
         )
 
@@ -2285,6 +2551,32 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         updateMainControlAlignment(for: layoutMode)
         applyAppearance()
         rebuildPluginSelector()
+        candidateWindow.syncWorkbenchLayout()
+    }
+
+    /// iShot's verified nonactivating annotation host sits above ordinary
+    /// floating windows. Elevate the passive workbench only while
+    /// that exact capture lease is still current; every other route resets to
+    /// the ordinary floating level.
+    private func syncPanelLevel(secureInputEnabled: Bool) {
+        let resolved: NSWindow.Level
+        if !secureInputEnabled,
+           !sessionProtectionActive,
+           let token = BufferModel.shared.captureFocusToken,
+           BufferModel.shared.capturesInput(for: token),
+           let target = InputFocusCoordinator.shared.interactionTarget(
+                expected: token
+           ) {
+            resolved = CandidatePanelLevelRules.workbenchLevel(
+                bundleID: target.bundleID,
+                hostKind: target.hostKind
+            )
+        } else {
+            resolved = CandidatePanelLevelRules.workbenchStandard
+        }
+        if panel.level != resolved {
+            panel.level = resolved
+        }
     }
 
     private func configureIconButton(_ button: FirstMouseButton,
@@ -2327,7 +2619,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         case .status: return statusLabel
         case .pluginActions: return pluginActionsControl
         case .exchangeEdit: return exchangeEditSlot
-        case .refresh: return refreshButton
         case .close: return closeButton
         }
     }
@@ -2343,7 +2634,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         pluginActionsControl.layer?.backgroundColor = RimeUI.surface2.cgColor
         pluginActionsControl.layer?.borderColor = RimeUI.border.cgColor
         pluginActionsControl.layer?.borderWidth = 1 / max(panel.backingScaleFactor, 1)
-        [exchangeEditButton, refreshButton, closeButton, sendButton].forEach {
+        [exchangeEditButton, closeButton, sendButton].forEach {
             $0.contentTintColor = RimeUI.textSecondary
             $0.refreshInteractionAppearance()
         }
@@ -2368,7 +2659,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func applyPreviewPointerState(_ hoveredControl: BufferWorkbenchControl?) {
-        [sendButton, exchangeEditButton, refreshButton, closeButton].forEach {
+        [sendButton, exchangeEditButton, closeButton].forEach {
             $0.setPreviewPointerState(nil)
         }
         pluginSelector.setPreviewPointerState(nil)
@@ -2386,8 +2677,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             pluginSelector.setPreviewPointerState(.hovered)
         case .exchangeEdit:
             exchangeEditButton.setPreviewPointerState(.hovered)
-        case .refresh:
-            refreshButton.setPreviewPointerState(.hovered)
         case .close:
             closeButton.setPreviewPointerState(.hovered)
         case .bufferRail, .status, .none:
@@ -2472,6 +2761,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func refreshPluginActions() {
+        defer { syncPluginActionRowVisibility() }
         guard !lastSecureInputState, !sessionProtectionActive else {
             resetDerivedControlRendering()
             pluginLoadingIndicator.isHidden = true
@@ -2736,6 +3026,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func syncPluginActionRowVisibility() {
+        pluginButtonRow.isHidden = pluginButtonRow.arrangedSubviews.isEmpty
+    }
+
     private func selectPopup(_ popup: NSPopUpButton, representedValue: String) {
         guard let index = (0..<popup.numberOfItems).first(where: {
             guard let itemValue = popup.item(at: $0)?.representedObject as? String else {
@@ -2783,6 +3077,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func resizeForClipboardRailChange() {
+        resizeForCurrentPresentation()
+        clipboardRail.needsLayout = true
+    }
+
+    private func resizeForCurrentPresentation() {
         let desiredHeight = BufferWindowGeometry.height(
             expanded: BufferWorkbenchLayout.toolbarAlwaysExpanded,
             mode: layoutMode,
@@ -2808,9 +3107,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             display: panel.isVisible
         )
         visual.needsLayout = true
-        clipboardRail.needsLayout = true
         saveFrame()
-        candidateWindow.syncWorkbenchAnchor(candidateAnchorRect)
     }
 
     private func clipboardCaptureState(
@@ -2846,6 +3143,54 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Only an explicit enable/show gesture may import the current item. A
+    /// later hidden/protected/session resume continues through the passive
+    /// baseline-only path in `ClipboardHistoryModel`.
+    private func scheduleExplicitClipboardCapture() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        explicitClipboardCaptureGeneration &+= 1
+        let generation = explicitClipboardCaptureGeneration
+        DispatchQueue.main.async { [weak self] in
+            self?.performExplicitClipboardCapture(
+                generation: generation,
+                mayRetryActiveSpaceSync: true
+            )
+        }
+    }
+
+    private func performExplicitClipboardCapture(
+        generation: UInt64,
+        mayRetryActiveSpaceSync: Bool
+    ) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard generation == explicitClipboardCaptureGeneration,
+              clipboardRailEnabled else { return }
+        syncClipboardHistoryCapture()
+        let state = clipboardCaptureState()
+        if state.allowsClipboardObservation {
+            let captured = MainActor.assumeIsolated {
+                clipboardHistoryModel.captureCurrentIfEligible()
+            }
+            IMELog.write("clipboard explicit current capture accepted=\(captured)")
+            return
+        }
+
+        // `orderFrontRegardless()` can become visible one run-loop turn before
+        // AppKit updates `isOnActiveSpace`. Retry once only while the panel is
+        // actually ordered and no privacy gate is active.
+        guard mayRetryActiveSpaceSync,
+              panel.isVisible,
+              !hiddenForSession,
+              !sessionProtectionActive,
+              !IsSecureEventInputEnabled() else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.performExplicitClipboardCapture(
+                generation: generation,
+                mayRetryActiveSpaceSync: false
+            )
+        }
+    }
+
     private func addClipboardItemToBuffer(_ item: ClipboardHistoryItem) -> Bool {
         let secureInputEnabled = IsSecureEventInputEnabled()
         let state = clipboardCaptureState(
@@ -2858,12 +3203,13 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                 railEnabled: state.railEnabled,
                 protection: state.protection
             )
-            guard ClipboardWorkbenchIntegrationRules.allowsAddToBuffer(state),
-                  !secureInputEnabled,
-                  !clipboardHistoryModel.isContentShielded else {
-                return false
-            }
-            return BufferModel.shared.insertPastedText(item.text)
+            return ClipboardWorkbenchIntegrationRules.addToBuffer(
+                item.text,
+                state: state,
+                contentShielded: secureInputEnabled
+                    || clipboardHistoryModel.isContentShielded,
+                model: BufferModel.shared
+            )
         }
     }
 
@@ -2920,7 +3266,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         visual.needsLayout = true
         bufferRail.needsLayout = true
         saveFrame()
-        candidateWindow.syncWorkbenchAnchor(candidateAnchorRect)
     }
 
     private func updateMainControlAlignment(for mode: BufferWorkbenchLayoutMode) {
@@ -2934,12 +3279,24 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func installObservers() {
+        // The panel deliberately never becomes key, so clicking the same host
+        // field again does not create a new IMK focus token. Observe external
+        // pointer intent separately: any click delivered to another process
+        // returns physical keys to that host, while a click on our logical
+        // Buffer rail is handled locally and explicitly grants capture.
+        externalPointerMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.externalPointerDidRequestHostInput()
+            }
+        }
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                             object: nil,
                                             queue: .main) { [weak self] _ in
             self?.clampFrameToScreens()
-            candidateWindow.syncWorkbenchAnchor(self?.candidateAnchorRect)
+            candidateWindow.syncWorkbenchLayout()
         })
         observers.append(center.addObserver(forName: .rimeAppearanceDidChange,
                                             object: nil,
@@ -3073,6 +3430,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             self.lastSecureInputState = secureInputEnabled
             if secureInputEnabled {
                 ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
+                BufferModel.shared.routeDirectPreservingContent(
+                    reason: "secure input enabled"
+                )
             }
             if self.panel.isVisible {
                 self.refresh()
@@ -3098,6 +3458,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func protectForSession(reason: String) {
         syncClipboardHistoryCapture()
+        inlineCompositionProjection = nil
+        _ = bufferRail.refresh(shielded: true, translationSnapshot: nil)
         ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
         DerivedBufferWorkspaceRouter.setProtectedOnAll(true)
         BuiltInBufferActionWorkspaceRouter.setProtectedOnAll(true)
@@ -3107,6 +3469,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         } else {
             candidateWindow.hideAll()
         }
+        BufferModel.shared.routeDirectPreservingContent(reason: reason)
         if panel.isVisible || UserDefaults.standard.bool(forKey: Key.visible) {
             hiddenForSession = true
             panel.orderOut(nil)
@@ -3163,7 +3526,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     ) -> FocusFollowEvaluation {
         let protected = sessionProtectionActive || hiddenForSession
         let secureInput = IsSecureEventInputEnabled()
-        guard BufferModel.shared.enabled else {
+        let visibilityIntent = UserDefaults.standard.bool(forKey: Key.visible)
+        guard visibilityIntent else {
             return .unchanged
         }
         guard !protected, !secureInput else { return .deferred }
@@ -3188,7 +3552,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         } ?? true
         let wasVisibleOnActiveSpace = isVisible
         guard BufferWindowFocusFollowRules.shouldRelocate(
-            bufferEnabled: BufferModel.shared.enabled,
+            workbenchVisible: visibilityIntent,
             presentationProtected: protected,
             secureInput: secureInput,
             hasTrustedExternalFocus: true,
@@ -3198,10 +3562,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             return .unchanged
         }
 
-        // Closing the workbench pauses capture, so enabled capture is the
-        // authoritative visibility intent. Repair a stale false preference
-        // left by an older build or interrupted UI transition.
-        UserDefaults.standard.set(true, forKey: Key.visible)
         refresh()
         guard !sessionProtectionActive,
               !hiddenForSession,
@@ -3240,7 +3600,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         panel.orderFrontRegardless()
         syncClipboardHistoryCapture()
-        candidateWindow.syncWorkbenchAnchor(candidateAnchorRect)
+        candidateWindow.syncWorkbenchLayout()
         let reason = wasVisibleOnActiveSpace ? "display" : "space"
         IMELog.write("workbench followed focused input token=\(token) reason=\(reason)")
         return .relocated
@@ -3421,6 +3781,75 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     // MARK: - Actions
 
+    /// Switch the logical input surface without making this nonactivating
+    /// panel key. The exact host lease remains the sole later delivery target.
+    @discardableResult
+    func activateCaptureForCurrentFocus(showWorkbench: Bool = true) -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !sessionProtectionActive,
+              !hiddenForSession,
+              !IsSecureEventInputEnabled(),
+              let lease = InputFocusCoordinator.shared.liveTarget(
+                forceOverlayVisibilityRefresh: true
+              ) else {
+            BufferModel.shared.routeDirectPreservingContent(
+                reason: "capture requested without a trusted input target"
+            )
+            refresh()
+            return false
+        }
+
+        // A composition started in direct mode belongs to the host. Settle it
+        // before granting the same physical field's subsequent keys to Buffer.
+        lease.controller?.forceCommit()
+        guard InputFocusCoordinator.shared.liveTarget(
+            expected: lease.token,
+            forceOverlayVisibilityRefresh: true
+        ) === lease else {
+            BufferModel.shared.routeDirectPreservingContent(
+                reason: "capture target changed while switching route"
+            )
+            refresh()
+            return false
+        }
+        BufferModel.shared.activateCapture(for: lease.token)
+        if showWorkbench { show() }
+        refresh()
+        RimeBufferController.refreshActiveUI()
+        return true
+    }
+
+    private func activateLogicalInput(at insertionIndex: Int) {
+        guard activateCaptureForCurrentFocus(showWorkbench: false) else {
+            NSSound.beep()
+            return
+        }
+        _ = BufferModel.shared.setInsertionPoint(insertionIndex)
+        refresh()
+    }
+
+    private func externalPointerDidRequestHostInput() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard BufferModel.shared.active else { return }
+        if let captureToken = BufferModel.shared.captureFocusToken,
+           let target = InputFocusCoordinator.shared.owner,
+           target.token == captureToken {
+            // The global pointer event can arrive while the same host field is
+            // still the active IMK lease. Resolve under the old capture grant
+            // first so a live preedit becomes a Buffer block; clearing the
+            // route first would let a later commit leak into the host or be
+            // discarded by the untrusted-focus recovery path.
+            target.controller?.resolveCompositionForWorkbenchTransition(
+                target: target
+            )
+        }
+        BufferModel.shared.routeDirectPreservingContent(
+            reason: "pointer activated external host"
+        )
+        refresh()
+        RimeBufferController.refreshActiveUI()
+    }
+
     private func schedulePluginSelectorRefresh() {
         guard !pluginSelectorRefreshScheduled else { return }
         pluginSelectorRefreshScheduled = true
@@ -3488,6 +3917,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
             DerivedBufferWorkspaceRouter.setProtectedOnAll(true)
             BuiltInBufferActionWorkspaceRouter.setProtectedOnAll(true)
+            BufferModel.shared.routeDirectPreservingContent(
+                reason: "secure input while sending"
+            )
             refresh()
             return
         }
@@ -3539,34 +3971,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             return
         }
         IMELog.write("buffer single-exchange returned to source")
-        refresh()
-        RimeBufferController.refreshActiveUI()
-    }
-
-    @objc private func refreshPluginTapped() {
-        guard BufferPluginSelectionStore.shared.activeKey != nil,
-              !IsSecureEventInputEnabled() else { return }
-        if BufferDerivedPresentationRules.style(
-            for: DerivedBufferWorkspaceRouter.selectedWorkspace?.workspacePluginKey
-        ) == .singleExchange {
-            // See `refreshExchangeActions`: refreshing this workspace is not
-            // transactional yet and must not discard an unsent result.
-            return
-        }
-        if let workspace = DerivedBufferWorkspaceRouter.selectedWorkspace {
-            _ = workspace.requestRefresh()
-        } else if let workspace = BuiltInBufferActionWorkspaceRouter.selectedWorkspace {
-            _ = workspace.requestRefresh()
-        } else {
-            ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
-            ActionPluginHost.shared.refreshStatuses(force: true)
-        }
-        let kind = DerivedBufferWorkspaceRouter.selectedWorkspace?
-            .deliveryWorkspaceID
-            ?? BuiltInBufferActionWorkspaceRouter.selectedWorkspace?
-                .workbenchDisplayName
-            ?? "action"
-        IMELog.write("buffer plugin refresh requested kind=\(kind)")
         refresh()
         RimeBufferController.refreshActiveUI()
     }

@@ -218,110 +218,6 @@ func runPluginConfigurationSmokeTest() -> Bool {
             return fail("translation runtime bridge")
         }
 
-        let promptModel = try PluginConfigurationCatalog.makeMyPromptModel(
-            defaults: defaults,
-            notificationCenter: center
-        )
-        var promptSnapshot = try promptModel.load()
-        guard promptSnapshot.string(
-                MyPromptPluginConfigurationFieldID.libraryDirectory
-              ) == PluginConfigurationCatalog.defaultMyPromptDataRoot
-                .appendingPathComponent("library", isDirectory: true).path,
-              promptSnapshot.string(
-                MyPromptPluginConfigurationFieldID.remoteRepositories
-              ) == "",
-              promptSnapshot.number(
-                MyPromptPluginConfigurationFieldID.resultLimit
-              ) == 3,
-              promptSnapshot.bool(
-                MyPromptPluginConfigurationFieldID.includeUserPrompt
-              ) == false,
-              promptSnapshot.bool(
-                MyPromptPluginConfigurationFieldID.syncRemoteOnStart
-              ) == true else {
-            return fail("My Prompt defaults")
-        }
-        let promptLibrary = privateRoot.appendingPathComponent(
-            "Prompt Library",
-            isDirectory: true
-        )
-        promptSnapshot[
-            MyPromptPluginConfigurationFieldID.libraryDirectory
-        ] = .string(promptLibrary.path)
-        promptSnapshot[
-            MyPromptPluginConfigurationFieldID.remoteRepositories
-        ] = .string(
-            "https://github.com/danielmiessler/Fabric.git; "
-                + "https://github.com/f/prompts.chat.git"
-        )
-        promptSnapshot[
-            MyPromptPluginConfigurationFieldID.resultLimit
-        ] = .number(2)
-        promptSnapshot[
-            MyPromptPluginConfigurationFieldID.includeUserPrompt
-        ] = .bool(true)
-        promptSnapshot[
-            MyPromptPluginConfigurationFieldID.syncRemoteOnStart
-        ] = .bool(false)
-        _ = try promptModel.save(promptSnapshot)
-        let promptSettings = PluginConfigurationCatalog.myPromptSettings(
-            defaults: defaults
-        )
-        guard promptSettings.libraryDirectoryURL == promptLibrary,
-              promptSettings.remoteRepositoryURLs.count == 2,
-              promptSettings.resultLimit == 2,
-              promptSettings.includeUserPrompt,
-              !promptSettings.syncRemoteOnStart else {
-            return fail("My Prompt runtime bridge")
-        }
-        var unsafePromptSnapshot = promptSnapshot
-        unsafePromptSnapshot[
-            MyPromptPluginConfigurationFieldID.remoteRepositories
-        ] = .string("https://token@example.com/private.git")
-        do {
-            _ = try promptModel.save(unsafePromptSnapshot)
-            return fail("My Prompt credential URL accepted")
-        } catch PluginConfigurationError.invalidField {
-            // Expected: credentials belong in no public repository URL field.
-        }
-
-        let marineModel = try PluginConfigurationCatalog.makeMarineModel(
-            defaults: defaults,
-            selectionStore: selectionStore,
-            notificationCenter: center
-        )
-        var marineSnapshot = try marineModel.load()
-        guard marineSnapshot.number(
-            MarinePluginConfigurationFieldID.invocationTimeoutSeconds
-        ) == ActionPluginHost.defaultInvocationTimeout else {
-            return fail("Marine timeout default")
-        }
-        marineSnapshot[MarinePluginConfigurationFieldID.connector] = .string(
-            AITextProviderKind.claudeCodeCLI.rawValue
-        )
-        marineSnapshot[
-            MarinePluginConfigurationFieldID.invocationTimeoutSeconds
-        ] = .number(330)
-        _ = try marineModel.save(marineSnapshot)
-        guard selectionStore.selectedKind == .claudeCodeCLI,
-              PluginConfigurationCatalog.marineInvocationTimeout(
-                defaults: defaults
-              ) == 330,
-              ActionPluginHost.resolvedInvocationTimeout(
-                fallback: 12,
-                configured: 330
-              ) == 330,
-              ActionPluginHost.resolvedInvocationTimeout(
-                fallback: 12,
-                configured: nil
-              ) == 12,
-              defaults.dictionary(
-                forKey:
-                    "RimeBuffer.PluginConfiguration.\(PluginConfigurationCatalog.marinePluginID)"
-              ) != nil else {
-            return fail("Marine runtime bridge")
-        }
-
         let privateSchema = PluginConfigurationSchema(
             pluginID: "smoke.private",
             title: "Private smoke",
@@ -343,7 +239,7 @@ func runPluginConfigurationSmokeTest() -> Bool {
             notificationCenter: center
         )
         guard pluginConfigurationLayoutIsSafe(
-            models: [streamModel, translationModel, promptModel, privateModel]
+            models: [streamModel, translationModel, privateModel]
         ) else {
             return fail("sheet layout")
         }

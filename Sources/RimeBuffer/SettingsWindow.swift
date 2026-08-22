@@ -519,13 +519,13 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private var appearanceObserver: NSObjectProtocol?
 
     private var encodingRadios: [InputEncoding: RimeFixedAccentChoiceButton] = [:]
-    private var keyingModeRadios: [KeyingMode: RimeFixedAccentChoiceButton] = [:]
+    private var chordSchemaStatusRow: NSView?
     private let appearancePopUp = RimeFixedAccentPopUpButton()
     private let bufferCheck = RimeFixedAccentSwitch(frame: .zero)
     private let bufferWindowVisibleCheck = RimeFixedAccentSwitch(frame: .zero)
     private let clipboardHistoryCheck = RimeFixedAccentSwitch(frame: .zero)
+    private let closeAfterLastDeliveryCheck = RimeFixedAccentSwitch(frame: .zero)
     private let bufferPinnedCheck = RimeFixedAccentSwitch(frame: .zero)
-    private let candidatePlacementPopUp = RimeFixedAccentPopUpButton()
     private let moveBufferWindowButton = NSButton(title: "移到当前屏幕", target: nil, action: nil)
     private let resetOnAppSwitchCheck = RimeFixedAccentSwitch(frame: .zero)
     private let gatewayEnableCheck = RimeFixedAccentSwitch(frame: .zero)
@@ -569,8 +569,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     )
     private let bufferWidthField = NSTextField(string: "760")
     private let shortcutFeedbackLabel = NSTextField(wrappingLabelWithString: "")
-    private let chordDurationField = NSTextField(string: "")
-    private let chordDurationStepper = NSStepper()
     private let statsDatePicker = NSDatePicker()
     private let statsSummary = NSTextField(labelWithString: "")
     private let statsTopKey = NSTextField(labelWithString: "")
@@ -588,6 +586,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private let settingsRouteLabel = NSTextField(labelWithString: "")
     private var pluginDownloadInProgress = false
     private var pluginRefreshScheduled = false
+    private var chordExtensionDeploymentInProgress = false
     private var pluginConfigurationSheet: NSPanel?
 
     private var userDir: URL {
@@ -733,9 +732,11 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             }
         }
 
-        func exactCenterHits<T: NSView>(_ views: [T], label: String) -> Bool {
-            guard views.count == 3 else {
-                print("settings card hit-test smoke: expected 3 \(label), got \(views.count)")
+        func exactCenterHits<T: NSView>(_ views: [T],
+                                        expectedCount: Int,
+                                        label: String) -> Bool {
+            guard views.count == expectedCount else {
+                print("settings card hit-test smoke: expected \(expectedCount) \(label), got \(views.count)")
                 return false
             }
             for view in views {
@@ -762,7 +763,11 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         )
         window.contentView?.layoutSubtreeIfNeeded()
         let themeCards = descendants(of: SettingsThemeCardButton.self, in: contentHost)
-        var themeOK = exactCenterHits(themeCards, label: "theme card")
+        var themeOK = exactCenterHits(
+            themeCards,
+            expectedCount: RimeAppearanceMode.allCases.count,
+            label: "theme card"
+        )
 
         let actionProbe = SettingsCardActionSmokeProbe()
         for mode in RimeAppearanceMode.allCases {
@@ -793,15 +798,22 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         )
         window.contentView?.layoutSubtreeIfNeeded()
         let encodingCards = descendants(of: SettingsChoiceCardView.self, in: contentHost)
-        var encodingOK = exactCenterHits(encodingCards, label: "input encoding card")
-        for (expectedTag, card) in encodingCards.sorted(by: { $0.frame.minX < $1.frame.minX })
-            .enumerated() {
+        var encodingOK = exactCenterHits(
+            encodingCards,
+            expectedCount: InputEncoding.allCases.count,
+            label: "input scheme card"
+        )
+        var taggedCards: [(tag: Int,
+                           card: SettingsChoiceCardView,
+                           choice: RimeFixedAccentChoiceButton)] = []
+        for card in encodingCards {
             let choices = descendants(of: RimeFixedAccentChoiceButton.self, in: card)
             guard choices.count == 1, let choice = choices.first else {
-                print("settings card hit-test smoke: encoding card has \(choices.count) choices")
+                print("settings card hit-test smoke: input scheme card has \(choices.count) choices")
                 encodingOK = false
                 continue
             }
+            taggedCards.append((choice.tag, card, choice))
             let previousTarget = choice.target
             let previousAction = choice.action
             choice.target = actionProbe
@@ -831,58 +843,86 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             choice.target = previousTarget
             choice.action = previousAction
             guard choice.state == .on,
-                  actionProbe.choiceTags.last == expectedTag,
-                  choice.tag == expectedTag else {
-                print("settings card hit-test smoke: wrong encoding action expected=\(expectedTag) actual=\(choice.tag)")
+                  actionProbe.choiceTags.last == choice.tag,
+                  InputEncoding.allCases.indices.contains(choice.tag) else {
+                print("settings card hit-test smoke: wrong input scheme action tag=\(choice.tag)")
                 encodingOK = false
                 continue
             }
         }
         encodingOK = encodingOK
-            && actionProbe.choiceTags == Array(InputEncoding.allCases.indices)
+            && actionProbe.choiceTags.count == InputEncoding.allCases.count
+            && Set(actionProbe.choiceTags) == Set(InputEncoding.allCases.indices)
 
-        selectPreviewTarget(
-            routeID: SettingsCoreRoute.inputMethod.id,
-            subpageID: SettingsSubpageID(rawValue: "typing-mode")
-        )
-        window.contentView?.layoutSubtreeIfNeeded()
-        let keyingCards = descendants(of: SettingsChoiceCardView.self, in: contentHost)
-            .sorted(by: { $0.frame.minX < $1.frame.minX })
-        let keyingChoices = keyingCards.compactMap { card in
-            descendants(of: RimeFixedAccentChoiceButton.self, in: card).first
-        }
-        var visualStateOK = keyingCards.count == 3 && keyingChoices.count == 3
+        taggedCards.sort { $0.tag < $1.tag }
+        var visualStateOK = taggedCards.count >= 3
         if visualStateOK {
-            keyingChoices.forEach { $0.state = .off }
-            keyingCards.forEach { $0.needsDisplay = false }
+            taggedCards.forEach { $0.choice.state = .off }
+            taggedCards.forEach { $0.card.needsDisplay = false }
 
-            keyingChoices[0].state = .on
-            visualStateOK = keyingCards[0].needsDisplay
-                && keyingCards.map(\.visualState) == [.selected, .idle, .idle]
+            taggedCards[0].choice.state = .on
+            visualStateOK = taggedCards[0].card.needsDisplay
+                && taggedCards.enumerated().allSatisfy {
+                    $0.element.card.visualState == ($0.offset == 0 ? .selected : .idle)
+                }
 
-            keyingCards.forEach { $0.needsDisplay = false }
-            keyingChoices[0].state = .off
-            keyingChoices[1].state = .on
+            taggedCards.forEach { $0.card.needsDisplay = false }
+            taggedCards[0].choice.state = .off
+            taggedCards[1].choice.state = .on
             visualStateOK = visualStateOK
-                && keyingCards[0].needsDisplay
-                && keyingCards[1].needsDisplay
-                && keyingCards.map(\.visualState) == [.idle, .selected, .idle]
+                && taggedCards[0].card.needsDisplay
+                && taggedCards[1].card.needsDisplay
+                && taggedCards.enumerated().allSatisfy {
+                    $0.element.card.visualState == ($0.offset == 1 ? .selected : .idle)
+                }
 
-            keyingCards[2].setPointerInsideForSmoke(true)
+            taggedCards[2].card.setPointerInsideForSmoke(true)
             visualStateOK = visualStateOK
-                && keyingCards.map(\.visualState) == [.idle, .selected, .hovered]
-            keyingCards[2].setPointerInsideForSmoke(false)
+                && taggedCards.enumerated().allSatisfy {
+                    let expected: SettingsChoiceCardView.VisualState = $0.offset == 1
+                        ? .selected
+                        : ($0.offset == 2 ? .hovered : .idle)
+                    return $0.element.card.visualState == expected
+                }
+            taggedCards[2].card.setPointerInsideForSmoke(false)
             visualStateOK = visualStateOK
-                && keyingCards.map(\.visualState) == [.idle, .selected, .idle]
+                && taggedCards.enumerated().allSatisfy {
+                    $0.element.card.visualState == ($0.offset == 1 ? .selected : .idle)
+                }
         }
         if !visualStateOK {
             print("settings card visual-state smoke: stale or overlapping state")
         }
 
-        if themeOK && encodingOK && visualStateOK {
+        selectPreviewTarget(
+            routeID: SettingsCoreRoute.inputMethod.id,
+            subpageID: SettingsSubpageID(rawValue: "dictionaries")
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        let lexiconButtons = descendants(of: SettingsLexiconButton.self,
+                                         in: contentHost)
+        let lexiconLabels = Set(
+            descendants(of: NSTextField.self, in: contentHost).map(\.stringValue)
+        )
+        let expectedLexiconTitles: Set<String> = [
+            "雾凇拼音", "五笔86", "Easy English",
+        ]
+        var lexiconOK = expectedLexiconTitles.isSubset(of: lexiconLabels)
+            && lexiconButtons.count == UserLexiconKind.allCases.count * 2
+        for kind in UserLexiconKind.allCases {
+            let actions = lexiconButtons.filter { $0.lexiconKind == kind }
+            lexiconOK = lexiconOK
+                && actions.count == 2
+                && Set(actions.map(\.title)) == ["导入学习…", "导出学习…"]
+        }
+        if !lexiconOK {
+            print("settings lexicon card smoke: missing or misrouted dictionary actions")
+        }
+
+        if themeOK && encodingOK && visualStateOK && lexiconOK {
             print("settings card hit-test smoke: OK")
         }
-        return themeOK && encodingOK && visualStateOK
+        return themeOK && encodingOK && visualStateOK && lexiconOK
     }
 
     @discardableResult
@@ -1319,17 +1359,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             button.translatesAutoresizingMaskIntoConstraints = false
             encodingRadios[encoding] = button
         }
-        for (index, mode) in KeyingMode.allCases.enumerated() {
-            let button = RimeFixedAccentChoiceButton.radio(
-                title: mode.title,
-                target: self,
-                action: #selector(keyingModeSelected(_:))
-            )
-            button.tag = index
-            button.font = .systemFont(ofSize: 13, weight: .medium)
-            button.translatesAutoresizingMaskIntoConstraints = false
-            keyingModeRadios[mode] = button
-        }
         for (index, kind) in AITextProviderKind.allCases.enumerated() {
             let button = RimeFixedAccentChoiceButton.radio(
                 title: kind.displayName,
@@ -1373,16 +1402,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         clipboardHistoryCheck.target = self
         clipboardHistoryCheck.action = #selector(clipboardHistoryToggled)
         clipboardHistoryCheck.setAccessibilityLabel("启用剪贴板历史")
+        closeAfterLastDeliveryCheck.target = self
+        closeAfterLastDeliveryCheck.action = #selector(closeAfterLastDeliveryToggled)
+        closeAfterLastDeliveryCheck.setAccessibilityLabel("最后一块上屏后关闭工作台")
         bufferPinnedCheck.target = self
         bufferPinnedCheck.action = #selector(bufferPinnedToggled)
         bufferPinnedCheck.setAccessibilityLabel("常显于所有桌面与全屏空间")
-        candidatePlacementPopUp.removeAllItems()
-        for placement in BufferCandidatePlacement.allCases {
-            candidatePlacementPopUp.addItem(withTitle: placement.title)
-            candidatePlacementPopUp.lastItem?.representedObject = placement.rawValue
-        }
-        candidatePlacementPopUp.target = self
-        candidatePlacementPopUp.action = #selector(bufferCandidatePlacementChanged)
         moveBufferWindowButton.target = self
         moveBufferWindowButton.action = #selector(moveBufferWindow)
         resetOnAppSwitchCheck.target = self
@@ -1432,7 +1457,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         appearancePopUp.target = self
         appearancePopUp.action = #selector(appearanceChosen)
         configureCandidateMetricControls()
-        configureChordControl()
 
         statsDatePicker.datePickerElements = [.yearMonthDay]
         statsDatePicker.datePickerStyle = .textFieldAndStepper
@@ -1555,31 +1579,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         shortcutFeedbackLabel.font = .systemFont(ofSize: 11)
         shortcutFeedbackLabel.textColor = RimeUI.textMuted
         shortcutFeedbackLabel.isHidden = true
-    }
-
-    private func configureChordControl() {
-        let formatter = NumberFormatter()
-        formatter.minimumFractionDigits = 2
-        formatter.maximumFractionDigits = 2
-        formatter.allowsFloats = true
-        formatter.minimum = NSNumber(value: ChordSettings.range.lowerBound)
-        formatter.maximum = NSNumber(value: ChordSettings.range.upperBound)
-
-        chordDurationField.formatter = formatter
-        chordDurationField.alignment = .right
-        chordDurationField.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        chordDurationField.target = self
-        chordDurationField.action = #selector(chordDurationFieldChanged)
-        chordDurationField.delegate = self
-        chordDurationField.translatesAutoresizingMaskIntoConstraints = false
-        chordDurationField.widthAnchor.constraint(equalToConstant: 64).isActive = true
-
-        chordDurationStepper.minValue = ChordSettings.range.lowerBound
-        chordDurationStepper.maxValue = ChordSettings.range.upperBound
-        chordDurationStepper.increment = 0.01
-        chordDurationStepper.valueWraps = false
-        chordDurationStepper.target = self
-        chordDurationStepper.action = #selector(chordDurationStepperChanged)
     }
 
     private var selectedRoute: SettingsRouteDescriptor? {
@@ -1879,7 +1878,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         case let .core(core):
             switch core {
             case .inputMethod:
-                return "管理输入编码、键入模式、词库与本地学习数据。"
+                return "管理输入方案、词库与本地学习数据；并击能力由扩展单独提供。"
             case .appearance:
                 return "主题同时作用于候选框、缓冲工作台与设置页预览。"
             case .buffer:
@@ -1898,7 +1897,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             case BuiltInPluginID.statistics:
                 return "查看按键分布、每日计数与全部历史。"
             case BuiltInPluginID.flyChordLearning:
-                return "按飞耀互击方案安排课程、练习并保存本地进度。"
+                return "配置飞耀并击或互击输入，并进行课程与专项练习。"
             default:
                 return PluginRegistry.shared.internalPlugin(pluginKey: pluginKey)?
                     .descriptor.summary ?? "管理这个扩展的本地设置与状态。"
@@ -1948,22 +1947,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         note.font = .systemFont(ofSize: 11)
         note.textColor = RimeUI.textMuted
 
-        let chordNote = NSTextField(wrappingLabelWithString:
-            "飞耀方案使用此间隔划分每一击；并击只组合当前时间窗内的按键，单侧击也会正常结算；互击还允许相邻的左侧声母与右侧韵母跨击配对。默认 0.10 秒，修改后立即生效。")
-        chordNote.font = .systemFont(ofSize: 11)
-        chordNote.textColor = RimeUI.textMuted
-
         switch subpageID {
-        case "typing-mode":
-            return contentColumn([
-                title("键入模式"),
-                spacer(8),
-                keyingModeSelectionView(),
-                spacer(16),
-                sectionLabel("飞耀组键间隔"),
-                chordDurationRow(),
-                chordNote,
-            ])
         case "dictionaries":
             let learning = NSTextField(wrappingLabelWithString:
                 "Rime 会在独立的 ~/Library/RimeBuffer 中学习词频。这里导入、导出的只是可移植学习记录，不会复制或替换正在使用的 LevelDB。")
@@ -1971,12 +1955,15 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             learning.textColor = RimeUI.textMuted
             return contentColumn([
                 title("词库"),
-                caption("词库负责候选内容；输入编码与键入模式只决定如何检索它。"),
+                caption("词库负责候选内容；输入方案决定如何检索与组织候选。"),
                 spacer(8),
                 sectionLabel("已安装词库"),
                 lexiconCard(kind: .chinese,
                             title: "雾凇拼音",
-                            detail: "中文主词库 · 全拼、自然码双拼、飞耀互击共享"),
+                            detail: "中文主词库 · 全拼、自然码双拼、小鹤双拼与飞耀方案共享"),
+                lexiconCard(kind: .wubi86,
+                            title: "五笔86",
+                            detail: "五笔86 码表与独立用户词频"),
                 lexiconCard(kind: .english,
                             title: "Easy English",
                             detail: "英文候选、补全、生词兜底与独立学习"),
@@ -1987,10 +1974,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 note,
             ])
         default:
+            let chordStatus = chordSchemaStatusView()
             return contentColumn([
-                title("输入编码"),
+                title("输入方案"),
                 caption("单独轻点 Shift 切换中英；Shift 与字母/标点组合或持续按住 500 ms 后，会保持按下前的输入模式。"),
                 spacer(8),
+                chordStatus,
                 inputEncodingSelectionView(),
             ])
         }
@@ -2156,44 +2145,24 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         return card
     }
 
-    private func chordDurationRow() -> NSView {
-        let label = NSTextField(labelWithString: "组键间隔")
-        label.alignment = .right
-        label.font = .systemFont(ofSize: 12)
-        label.textColor = RimeUI.textSecondary
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.widthAnchor.constraint(equalToConstant: 96).isActive = true
-
-        let unit = NSTextField(labelWithString: "秒")
-        unit.font = .systemFont(ofSize: 11)
-        unit.textColor = RimeUI.textMuted
-        unit.translatesAutoresizingMaskIntoConstraints = false
-        unit.widthAnchor.constraint(equalToConstant: 24).isActive = true
-
-        let resetBtn = NSButton(title: "恢复默认", target: self, action: #selector(resetChordDuration))
-        resetBtn.bezelStyle = .rounded
-
-        chordDurationField.removeFromSuperview()
-        chordDurationStepper.removeFromSuperview()
-        let row = NSStackView(views: [label, chordDurationField, chordDurationStepper, unit, resetBtn])
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 8
-        return row
-    }
-
     private func inputEncodingSelectionView() -> NSView {
         let cards = InputEncoding.allCases.compactMap { encoding -> NSView? in
             guard let button = encodingRadios[encoding] else { return nil }
             let detail: String
             let symbol: String
             switch encoding {
+            case .fullPinyin:
+                detail = "雾凇词库与完整拼音输入"
+                symbol = "textformat.abc"
             case .naturalDoublePinyin:
                 detail = "自然码双拼方案"
                 symbol = "keyboard"
-            case .fullPinyin:
-                detail = "使用完整拼音输入"
-                symbol = "textformat.abc"
+            case .xiaoheDoublePinyin:
+                detail = "小鹤双拼方案"
+                symbol = "bird"
+            case .wubi86:
+                detail = "86 版五笔字型"
+                symbol = "square.grid.3x3"
             case .english:
                 detail = "英文候选与补全"
                 symbol = "character.cursor.ibeam"
@@ -2208,41 +2177,64 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         return choiceGrid(cards)
     }
 
-    private func keyingModeSelectionView() -> NSView {
-        let cards = KeyingMode.allCases.compactMap { mode -> NSView? in
-            guard let button = keyingModeRadios[mode] else { return nil }
-            let detail: String
-            let symbol: String
-            switch mode {
-            case .sequential:
-                detail = "逐键顺序输入"
-                symbol = "1.circle"
-            case .chord:
-                detail = "同一时间窗组合"
-                symbol = "2.circle"
-            case .mutual:
-                detail = "左右手跨击配对"
-                symbol = "arrow.left.arrow.right"
-            }
-            return SettingsChoiceCardView(
-                choice: button,
-                title: mode.title,
-                detail: detail,
-                symbolName: symbol
-            )
-        }
-        return choiceGrid(cards)
+    private func chordSchemaStatusView() -> NSView {
+        let mode = ChordExtensionStore.shared.mode.implementationName
+        let badge = NSTextField(labelWithString: "并击")
+        badge.font = .systemFont(ofSize: 10, weight: .semibold)
+        badge.textColor = themeStatusColor
+        badge.setContentHuggingPriority(.required, for: .horizontal)
+        let row = settingsRow(
+            title: "当前使用并击扩展",
+            detail: "正在使用\(mode)；选择下方任一方案即可切回普通输入。",
+            symbolName: "hands.sparkles",
+            control: badge
+        )
+        row.identifier = NSUserInterfaceItemIdentifier(
+            "settings.input-scheme.chord-status"
+        )
+        row.isHidden = InputConfigurationStore.shared.selectedSchemaID
+            != ChordExtensionStore.schemaID
+        chordSchemaStatusRow = row
+        return row
     }
 
     private func choiceGrid(_ cards: [NSView]) -> NSView {
-        let stack = NSStackView(views: cards)
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.distribution = .fillEqually
-        stack.spacing = 8
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.widthAnchor.constraint(equalToConstant: 650).isActive = true
-        return stack
+        guard !cards.isEmpty else { return NSView() }
+        let columnCount: Int
+        switch cards.count {
+        case 1...3: columnCount = cards.count
+        case 4: columnCount = 2
+        default: columnCount = 3
+        }
+
+        var rows: [NSView] = []
+        var index = 0
+        while index < cards.count {
+            var rowViews = Array(cards[index..<min(index + columnCount, cards.count)])
+            while rowViews.count < columnCount {
+                let placeholder = NSView()
+                placeholder.translatesAutoresizingMaskIntoConstraints = false
+                placeholder.heightAnchor.constraint(equalToConstant: 68).isActive = true
+                rowViews.append(placeholder)
+            }
+            let row = NSStackView(views: rowViews)
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.distribution = .fillEqually
+            row.spacing = 8
+            row.translatesAutoresizingMaskIntoConstraints = false
+            row.widthAnchor.constraint(equalToConstant: 650).isActive = true
+            rows.append(row)
+            index += columnCount
+        }
+
+        let grid = NSStackView(views: rows)
+        grid.orientation = .vertical
+        grid.alignment = .leading
+        grid.spacing = 8
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        grid.widthAnchor.constraint(equalToConstant: 650).isActive = true
+        return grid
     }
 
     private func appearancePage(subpageID: String) -> NSView {
@@ -2299,7 +2291,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             ),
             settingsRow(
                 title: "显示独立缓冲工作台",
-                detail: "聚焦文本框时把工作台带到当前屏幕。",
+                detail: "打开后先由工作台接管输入；当前文本框保留为上屏目标。",
                 symbolName: "eye",
                 control: bufferWindowVisibleCheck
             ),
@@ -2308,6 +2300,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 detail: "仅在工作台实际显示时读取；历史只保留在当前输入法进程。",
                 symbolName: "clipboard",
                 control: clipboardHistoryCheck
+            ),
+            settingsRow(
+                title: "最后一块上屏后关闭工作台",
+                detail: "适用于 Default 与所有缓冲插件；部分失败或内容变化时保持打开。",
+                symbolName: "checkmark.rectangle",
+                control: closeAfterLastDeliveryCheck
             ),
             settingsRow(
                 title: "常显于所有桌面与全屏空间",
@@ -2320,12 +2318,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 detail: "只在没有外部来源块时执行；默认关闭。",
                 symbolName: "trash",
                 control: resetOnAppSwitchCheck
-            ),
-            settingsRow(
-                title: "候选显示位置",
-                detail: "工作台活跃时可跟随输入框或贴靠工作台外沿。",
-                symbolName: "text.bubble",
-                control: candidatePlacementPopUp
             ),
             moveBufferWindowButton,
             note,
@@ -2778,6 +2770,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             toggle.controlSize = .small
             toggle.target = self
             toggle.action = #selector(pluginSwitchToggled(_:))
+            if plugin.descriptor.key.rawID == ChordExtensionStore.pluginID {
+                toggle.isEnabled = !chordExtensionDeploymentInProgress
+            }
             toggle.toolTip = mode == .bufferEnablement
                 ? (toggle.state == .on
                     ? "停用插件并从工作台移除"
@@ -3143,13 +3138,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         clipboardHistoryCheck.state = BufferWindowController.shared.clipboardRailEnabled
             ? .on
             : .off
+        closeAfterLastDeliveryCheck.state = BufferWindowController.shared
+            .closeAfterLastDeliveryEnabled ? .on : .off
         bufferPinnedCheck.state = BufferWindowController.shared.pinned ? .on : .off
-        if let index = (0..<candidatePlacementPopUp.numberOfItems).first(where: {
-            candidatePlacementPopUp.item(at: $0)?.representedObject as? String
-                == BufferWindowController.shared.candidatePlacement.rawValue
-        }) {
-            candidatePlacementPopUp.selectItem(at: index)
-        }
         resetOnAppSwitchCheck.state = BufferModel.shared.resetOnAppSwitch ? .on : .off
         gatewayEnableCheck.state = LocalGateway.shared.enabled ? .on : .off
         gatewayConfigField.stringValue = gatewayConfigJSON()
@@ -3163,18 +3154,22 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         }
         refreshCandidateMetricControls()
         refreshBufferWidthControls()
-        refreshChordDurationControl()
         refreshRemoteStatus()
         refreshStats()
     }
 
     private func refreshInputConfigurationSelection() {
-        let inputConfiguration = InputConfigurationStore.shared.configuration
+        let selectedSchemaID = InputConfigurationStore.shared.selectedSchemaID
+        chordSchemaStatusRow?.isHidden = selectedSchemaID
+            != ChordExtensionStore.schemaID
         for encoding in InputEncoding.allCases {
-            encodingRadios[encoding]?.state = inputConfiguration.encoding == encoding ? .on : .off
-        }
-        for mode in KeyingMode.allCases {
-            keyingModeRadios[mode]?.state = inputConfiguration.keyingMode == mode ? .on : .off
+            let ordinarySchemaID = InputConfigurationResolver.profiles.first {
+                $0.configuration.encoding == encoding
+                    && $0.configuration.keyingMode == .sequential
+            }?.schemaID
+            encodingRadios[encoding]?.state = ordinarySchemaID == selectedSchemaID
+                ? .on
+                : .off
         }
     }
 
@@ -3447,12 +3442,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             candidateFontSize: get(.candidateFontSize),
             labelFontSize: get(.labelFontSize)
         )
-    }
-
-    private func refreshChordDurationControl() {
-        let value = ChordSettings.duration
-        chordDurationField.stringValue = String(format: "%.2f", value)
-        chordDurationStepper.doubleValue = value
     }
 
     private func formatMetricValue(_ value: CGFloat) -> String {
@@ -3744,6 +3733,15 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         let pluginName = PluginRegistry.shared.allPlugins()
             .first(where: { $0.descriptor.key == sender.pluginKey })?
             .descriptor.name ?? sender.pluginKey.rawID
+        if sender.pluginKey.domain == .builtIn,
+           sender.pluginKey.rawID == ChordExtensionStore.pluginID {
+            applyChordExtensionEnablement(
+                on,
+                sender: sender,
+                pluginName: pluginName
+            )
+            return
+        }
         do {
             switch sender.mode {
             case .bufferEnablement:
@@ -3759,6 +3757,130 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         } catch {
             setPluginStatus("更新插件状态失败：\(error.localizedDescription)", isError: true)
             refreshPluginList()
+        }
+    }
+
+    /// Changing the optional chord extension also changes the deployed Rime
+    /// schema set. Runtime gating happens immediately; the schema file and
+    /// compiled deployment then move together, followed by the normal IME
+    /// process relaunch. A failed deploy restores the previous feature state,
+    /// selected schema and schema list before attempting a recovery deploy.
+    private func applyChordExtensionEnablement(
+        _ enabled: Bool,
+        sender: SettingsPluginSwitch,
+        pluginName: String
+    ) {
+        let store = ChordExtensionStore.shared
+        guard !chordExtensionDeploymentInProgress else {
+            sender.state = store.isEnabled ? .on : .off
+            return
+        }
+        let previousEnabled = store.isEnabled
+        guard previousEnabled != enabled else {
+            sender.state = previousEnabled ? .on : .off
+            return
+        }
+
+        let schemaListURL = userDir.appendingPathComponent("default.custom.yaml")
+        let storedPreviousIDs = SchemaListStore.enabledIDs(at: schemaListURL)
+        let previousIDs = storedPreviousIDs.isEmpty
+            ? InputSchemaCatalog.enabledIDs(
+                chordExtensionEnabled: previousEnabled
+              )
+            : storedPreviousIDs
+        let previousSchemaID = InputConfigurationStore.shared.selectedSchemaID
+
+        RimeBufferController.active?.forceCommit()
+        do {
+            try PluginRegistry.shared.setEnabled(enabled, for: sender.pluginKey)
+            let nextIDs = InputSchemaCatalog.enabledIDs(
+                chordExtensionEnabled: store.isEnabled
+            )
+            try persistSchemaSelection(nextIDs)
+        } catch {
+            _ = store.setEnabled(previousEnabled, source: .rollback)
+            _ = InputConfigurationStore.shared.select(schemaID: previousSchemaID)
+            RimeBufferController.applyStoredInputConfiguration()
+            try? SchemaListStore.writeEnabledIDs(previousIDs, to: schemaListURL)
+            sender.state = previousEnabled ? .on : .off
+            setPluginStatus(
+                "无法更新\(pluginName)：\(error.localizedDescription)",
+                isError: true
+            )
+            refreshPluginList()
+            return
+        }
+
+        chordExtensionDeploymentInProgress = true
+        sender.isEnabled = false
+        setPluginStatus(
+            enabled
+                ? "正在启用\(pluginName)并部署输入方案…"
+                : "正在停用\(pluginName)并部署普通输入方案…"
+        )
+        refreshPluginList()
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            _ = rimeEngine.start()
+            let deployed = BBRimeDeploy()
+            if deployed {
+                rimeEngine.invalidateSchemaListCacheAfterDeployment()
+            }
+            IMELog.write(
+                "settings: chord extension enabled=\(enabled) deploy=\(deployed)"
+            )
+            DispatchQueue.main.async { [weak self, weak sender] in
+                guard let self else { return }
+                self.chordExtensionDeploymentInProgress = false
+                if deployed {
+                    self.setPluginStatus(
+                        enabled
+                            ? "已启用\(pluginName)，输入法正在重启"
+                            : "已停用\(pluginName)，输入法正在重启"
+                    )
+                    InputMetricsPersistence.saveNow()
+                    exit(0)
+                }
+
+                _ = store.setEnabled(previousEnabled, source: .rollback)
+                _ = InputConfigurationStore.shared.select(
+                    schemaID: previousSchemaID
+                )
+                RimeBufferController.applyStoredInputConfiguration()
+                let restoredList: Bool
+                do {
+                    try SchemaListStore.writeEnabledIDs(
+                        previousIDs,
+                        to: schemaListURL
+                    )
+                    restoredList = true
+                } catch {
+                    restoredList = false
+                    IMELog.write(
+                        "settings: chord extension rollback schema list failed "
+                            + error.localizedDescription
+                    )
+                }
+                sender?.state = previousEnabled ? .on : .off
+                self.setPluginStatus(
+                    restoredList
+                        ? "部署失败，已恢复之前的\(pluginName)状态；输入法没有重启"
+                        : "部署失败，已恢复运行状态，但方案文件恢复失败；请查看运行日志",
+                    isError: true
+                )
+                self.refreshPluginList()
+
+                guard restoredList else { return }
+                DispatchQueue.global(qos: .utility).async {
+                    let recovered = BBRimeDeploy()
+                    if recovered {
+                        rimeEngine.invalidateSchemaListCacheAfterDeployment()
+                    }
+                    IMELog.write(
+                        "settings: chord extension rollback deploy=\(recovered)"
+                    )
+                }
+            }
         }
     }
 
@@ -3826,18 +3948,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         _ = InputConfigurationStore.shared.select(
             encoding: InputEncoding.allCases[sender.tag]
         )
-        RimeBufferController.applyStoredInputConfiguration()
-        reload()
-    }
-
-    @objc private func keyingModeSelected(_ sender: RimeFixedAccentChoiceButton) {
-        guard KeyingMode.allCases.indices.contains(sender.tag) else { return }
-        let selected = KeyingMode.allCases[sender.tag]
-        guard InputConfigurationStore.shared.select(keyingMode: selected) else {
-            NSSound.beep()
-            reload()
-            return
-        }
         RimeBufferController.applyStoredInputConfiguration()
         reload()
     }
@@ -4005,7 +4115,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     private func persistSchemaSelection(_ ids: [String]? = nil) throws {
-        let enabled = ids ?? InputSchemaCatalog.defaultEnabledIDs
+        let enabled = ids ?? InputSchemaCatalog.enabledIDs(
+            chordExtensionEnabled: ChordExtensionStore.shared.isEnabled
+        )
         try SchemaListStore.writeEnabledIDs(enabled,
                                             to: userDir.appendingPathComponent("default.custom.yaml"))
         let preferred = InputConfigurationStore.shared.runtimeProfile.schemaID
@@ -4124,20 +4236,19 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         reload()
     }
 
+    @objc private func closeAfterLastDeliveryToggled() {
+        BufferWindowController.shared.closeAfterLastDeliveryEnabled =
+            closeAfterLastDeliveryCheck.state == .on
+        reload()
+    }
+
     @objc private func bufferPinnedToggled() {
         BufferWindowController.shared.pinned = bufferPinnedCheck.state == .on
         reload()
     }
 
-    @objc private func bufferCandidatePlacementChanged() {
-        guard let raw = candidatePlacementPopUp.selectedItem?.representedObject as? String,
-              let placement = BufferCandidatePlacement(rawValue: raw) else { return }
-        BufferWindowController.shared.candidatePlacement = placement
-        reload()
-    }
-
     @objc private func moveBufferWindow() {
-        BufferWindowController.shared.openAndResume()
+        BufferWindowController.shared.show()
         BufferWindowController.shared.moveToCurrentScreen()
         reload()
     }
@@ -4186,27 +4297,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         IMELog.write("appearance -> \(sender.mode.rawValue)")
     }
 
-    @objc private func chordDurationFieldChanged() {
-        applyChordDuration(chordDurationField.doubleValue)
-    }
-
-    @objc private func chordDurationStepperChanged() {
-        applyChordDuration(chordDurationStepper.doubleValue)
-    }
-
-    @objc private func resetChordDuration() {
-        window?.makeFirstResponder(nil)
-        ChordSettings.resetToDefault()
-        refreshChordDurationControl()
-    }
-
-    /// Persist + broadcast the new chord window (setter clamps to range), then
-    /// snap the field/stepper back to the stored value.
-    private func applyChordDuration(_ value: Double) {
-        ChordSettings.duration = value
-        refreshChordDurationControl()
-    }
-
     @objc private func candidateMetricSliderChanged(_ sender: NSSlider) {
         handleCandidateMetricEdit(tag: sender.tag, value: sender.doubleValue)
     }
@@ -4217,10 +4307,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
     func controlTextDidEndEditing(_ obj: Notification) {
         guard let field = obj.object as? NSTextField else { return }
-        if field === chordDurationField {
-            applyChordDuration(field.doubleValue)
-            return
-        }
         if field === bufferWidthField {
             applyBufferWidth(field.doubleValue)
             return

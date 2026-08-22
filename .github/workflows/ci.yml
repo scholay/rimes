@@ -240,9 +240,6 @@ jobs:
       - name: No plaintext in logs
         run: python3 scripts/lint-log-privacy.py
 
-      - name: Marine Chrome extension smoke
-        run: node Extensions/marine-chrome/tests/smoke.mjs
-
       # librime is dlopen'd at runtime (see CRimeBridge.cpp), so the build has no
       # link-time dependency on Squirrel — a stock runner compiles it cleanly.
       - name: Build (debug)
@@ -274,7 +271,6 @@ jobs:
             update-package-metadata-smoke
             origin-smoke
             inbound-smoke
-            marine-chrome-smoke
             plugin-smoke
             plugin-stream-smoke
             plugin-platform-smoke
@@ -283,8 +279,6 @@ jobs:
             translation-smoke
             ai-text-smoke
             stream-input-smoke
-            my-prompt-smoke
-            remarkable-plugin-smoke
             settings-routing-smoke
             history-heatmap-smoke
             typing-speed-smoke

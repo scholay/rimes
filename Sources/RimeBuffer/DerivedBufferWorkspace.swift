@@ -163,9 +163,7 @@ enum DerivedBufferWorkspaceRouter {
         [
             AppleTranslationWorkspace.shared,
             AITextPluginRuntimeRegistry.shared.workspace,
-            MarineChromeWorkspace.shared,
             StreamInputWorkspace.shared,
-            MyPromptWorkspace.shared,
         ]
     }
 

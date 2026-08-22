@@ -163,7 +163,7 @@ final class StatusMenu {
     }
 
     func moveBufferWindowToCurrentScreen() {
-        BufferWindowController.shared.openAndResume()
+        BufferWindowController.shared.show()
         BufferWindowController.shared.moveToCurrentScreen()
     }
 

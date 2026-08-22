@@ -566,9 +566,10 @@ private func runActionPluginStreamModelSmokeTest() -> Bool {
         return streamSmokeFail("model did not atomically promote the terminal snapshot")
     }
 
-    // Marine can return several logical blocks in one blocks-v1 response. A
-    // primary send action (Return or paper plane) must validate and consume
-    // exactly one block per activation, preserving the remainder in order.
+    // An external Action Plugin can return several logical blocks in one
+    // blocks-v1 response. A primary send action (Return or paper plane) must
+    // validate and consume exactly one block per activation, preserving the
+    // remainder in order.
     var insertedTexts: [String] = []
     var completedResults: [BufferDeliveryCoordinator.SendResult] = []
     let coordinator = BufferDeliveryCoordinator(
@@ -600,20 +601,23 @@ private func runActionPluginStreamModelSmokeTest() -> Bool {
           insertedTexts == ["最终第一段"],
           model.blocks.map(\.id) == [secondID],
           model.blocks.map(\.text) == ["最终第二段"] else {
-        return streamSmokeFail("primary send did not preserve the next Marine block")
+        return streamSmokeFail("primary send did not preserve the next action block")
     }
     let secondSend = coordinator.sendNext(
         expectedToken: focus,
         completion: { completedResults.append($0) }
     )
     guard secondSend.deferred,
-          completedResults == [
-            .init(sentCount: 1, blockedReason: nil),
-            .init(sentCount: 1, blockedReason: nil),
-          ],
+          completedResults.count == 2,
+          completedResults[0].sentCount == 1,
+          completedResults[0].blockedReason == nil,
+          completedResults[0].terminalDrain == nil,
+          completedResults[1].sentCount == 1,
+          completedResults[1].blockedReason == nil,
+          completedResults[1].terminalDrain != nil,
           insertedTexts == ["最终第一段", "最终第二段"],
           model.blocks.isEmpty else {
-        return streamSmokeFail("repeated primary sends did not advance one Marine block at a time")
+        return streamSmokeFail("repeated primary sends did not advance one action block at a time")
     }
     return true
 }

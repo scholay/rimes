@@ -1,9 +1,0 @@
-{
-  "schemaVersion": 1,
-  "id": "builtin.remarkable",
-  "version": "2.0",
-  "nameZH": "Remarkable",
-  "nameEN": "Remarkable",
-  "summaryZH": "只读导出 reMarkable 当前页，并用 Apple Vision 在 Mac 本地识别；结果先进入缓冲区供核对。",
-  "summaryEN": "Read the current reMarkable page over USB and recognize it locally with Apple Vision before staging the result for review."
-}

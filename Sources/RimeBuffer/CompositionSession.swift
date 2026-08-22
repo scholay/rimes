@@ -29,7 +29,7 @@ enum HostMarkedTextPresentationRules {
         }
         guard bufferControlsActive else { return .normalPreedit }
 
-        // Persistent capture renders all preedit in our panel. A transient
+        // Persistent capture mirrors preedit at the Buffer's logical caret. A transient
         // buffer keeps ordinary inline preedit while Rime is actually active,
         // but still needs the invisible guard while idle so Return cannot leak.
         if capturesRimeCommits || !rimeComposing {
@@ -52,7 +52,7 @@ enum HostMarkedTextPresentationRules {
 ///                 squirrel.yaml `inline_preedit: true`); default.
 ///   .placeholder  marked text = one full-width space "　" (Squirrel's trick to
 ///                 keep hostile fields — iTerm2 etc. — from echoing, while the
-///                 preedit renders in our candidate panel instead).
+///                 preedit renders in our auxiliary composition surface instead).
 final class CompositionSession {
     enum Mode: String { case inline, placeholder }
 
@@ -78,6 +78,13 @@ final class CompositionSession {
             return
         }
         let replacement = NSRange(location: NSNotFound, length: 0)
+        // Host proxy calls may synchronously re-enter the same controller with
+        // a newer focus token. Publish this operation's latch before crossing
+        // that boundary so a newer reentrant operation remains the final
+        // writer when the older call returns.
+        markedTextActive = true
+        composing = true
+        bufferGuardActive = false
         switch mode {
         case .inline:
             let attr = NSMutableAttributedString(string: preedit)
@@ -93,9 +100,6 @@ final class CompositionSession {
                                  selectionRange: NSRange(location: 0, length: 0),
                                  replacementRange: replacement)
         }
-        markedTextActive = true
-        composing = true
-        bufferGuardActive = false
     }
 
     /// Keep the host field connected to IMK for the full lifetime of exact
@@ -103,13 +107,13 @@ final class CompositionSession {
     /// lifetime and Rime's semantic composing state must remain independent:
     /// otherwise an idle Return would only "settle composition" forever.
     func updateBufferGuard(rimeComposing: Bool, client: IMKTextInput) {
+        composing = rimeComposing
         // setMarkedText can synchronously enter the host and trigger expensive
         // focus probes. Keep one guard for the whole buffer-control lease
         // instead of replacing it after every physical key.
         if !bufferGuardActive {
             installBufferGuard(client: client)
         }
-        composing = rimeComposing
     }
 
     /// Reassert the invisible session for the current owned control keyDown.
@@ -117,30 +121,32 @@ final class CompositionSession {
     /// transition, leaving our local guard latch stale. A targeted refresh
     /// makes the same keyDown an explicit IME transaction before its action.
     func reassertBufferGuard(rimeComposing: Bool, client: IMKTextInput) {
-        installBufferGuard(client: client)
         composing = rimeComposing
+        installBufferGuard(client: client)
     }
 
     private func installBufferGuard(client: IMKTextInput) {
+        markedTextActive = true
+        bufferGuardActive = true
         client.setMarkedText(bufferGuardText as NSString,
                              selectionRange: NSRange(
                                 location: (bufferGuardText as NSString).length,
                                 length: 0
                              ),
                              replacementRange: NSRange(location: NSNotFound, length: 0))
-        markedTextActive = true
-        bufferGuardActive = true
     }
 
     /// End the session explicitly (escape / focus loss / commit without insert).
     func clear(client: IMKTextInput) {
         guard markedTextActive else { return }
-        client.setMarkedText("" as NSString,
-                             selectionRange: NSRange(location: 0, length: 0),
-                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        // See `update`: clear the old latch before entering the host so a
+        // reentrant new composition cannot be overwritten on return.
         markedTextActive = false
         composing = false
         bufferGuardActive = false
+        client.setMarkedText("" as NSString,
+                             selectionRange: NSRange(location: 0, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
     }
 
     /// insertText replaces the marked text atomically and closes the session —

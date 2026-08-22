@@ -3984,7 +3984,7 @@ final class AITextPluginWorkspace: BufferDeliveryContentSource {
     var isSelected: Bool { selectionPredicate() }
 
     var isActive: Bool {
-        started && isSelected && sourceModel.active && !protectedSession
+        started && isSelected && sourceModel.processingActive && !protectedSession
     }
 
     var sourceText: String { sourceModel.stagedText }
@@ -4324,7 +4324,7 @@ final class AITextPluginWorkspace: BufferDeliveryContentSource {
         started
             && !protectedSession
             && isSelected
-            && sourceModel.active
+            && sourceModel.processingActive
             && activeJob == job
             && generation == job.generation
             && sourceModel.stagedText == job.sourceText
@@ -4473,14 +4473,27 @@ final class AITextPluginWorkspace: BufferDeliveryContentSource {
     }
 
     func consumeDelivered(blockIDs: [UUID], generation: UInt64) {
+        _ = consumeDeliveredAndReportTerminalDrain(
+            blockIDs: blockIDs,
+            generation: generation
+        )
+    }
+
+    func consumeDeliveredAndReportTerminalDrain(
+        blockIDs: [UUID],
+        generation: UInt64
+    ) -> BufferDeliveryTerminalSourceReceipt? {
         guard self.generation == generation,
-              !blockIDs.isEmpty else { return }
+              !blockIDs.isEmpty else { return nil }
         let ids = Set(blockIDs)
-        let previousCount = outputBlocks.count
+        let consumedIDs = Set(outputBlocks.lazy.filter {
+            ids.contains($0.id)
+        }.map(\.id))
+        guard !consumedIDs.isEmpty else { return nil }
         outputBlocks.removeAll { ids.contains($0.id) }
-        guard outputBlocks.count != previousCount else { return }
         self.generation &+= 1
-        if outputBlocks.isEmpty {
+        let terminal = outputBlocks.isEmpty
+        if terminal {
             let sourceIDs = capturedSourceBlockIDs
             capturedSourceText = ""
             capturedSourceBlockIDs.removeAll()
@@ -4491,6 +4504,13 @@ final class AITextPluginWorkspace: BufferDeliveryContentSource {
             sourceModel.consumeDelivered(blockIDs: sourceIDs)
         }
         notifyChange()
+        guard terminal else { return nil }
+        return BufferDeliveryTerminalSourceReceipt(
+            workspaceID: deliveryWorkspaceID,
+            generation: generation,
+            generationAfterConsumption: self.generation,
+            consumedBlockIDs: consumedIDs
+        )
     }
 
     func markDeliveryBlockStale(id: UUID, generation: UInt64) -> Bool {

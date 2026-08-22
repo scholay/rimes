@@ -24,9 +24,6 @@ enum BuiltInPlugins {
             TypingSpeedInternalPlugin(),
             FlyChordLearningInternalPlugin(),
             AppleTranslationInternalPlugin(),
-            MyPromptInternalPlugin(),
-            RemarkableInternalPlugin(),
-            MarineChromeInternalPlugin(),
             StreamInputInternalPlugin(),
             AITextInternalPlugin(),
         ]
@@ -166,17 +163,18 @@ private final class FlyChordLearningInternalPlugin: InternalPlugin {
     let descriptor = PluginDescriptor(
         key: PluginKey(domain: .builtIn, rawID: BuiltInPluginID.flyChordLearning),
         wireID: nil,
-        name: "飞耀互击学习",
+        name: "并击",
         symbolName: "hands.sparkles",
-        version: "1.0",
-        summary: "从飞耀互击方案生成课程与专项练习，进度只保存在本机。",
+        version: "2.0",
+        summary: "启用飞耀并击或互击输入，配置组键间隔，并提供本地课程与练习。",
         source: .builtIn,
         capabilities: [.settingsPage, .chordLearning, .localStorage],
         settings: PluginSettingsContribution(
             id: "fly-chord-learning",
-            title: "飞耀互击学习",
+            title: "并击",
             symbolName: "hands.sparkles",
             subpages: [
+                PluginSettingsSubpage(id: "settings", title: "设置"),
                 PluginSettingsSubpage(id: "lessons", title: "课程"),
                 PluginSettingsSubpage(id: "practice", title: "练习"),
                 PluginSettingsSubpage(id: "progress", title: "进度"),

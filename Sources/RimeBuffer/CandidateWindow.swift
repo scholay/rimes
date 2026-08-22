@@ -18,8 +18,26 @@ enum CandidatePanelInteractionRules {
     }
 }
 
+enum CandidatePanelSpaceRules {
+    /// A direct-host candidate panel belongs to the Space containing the
+    /// current input target. It must not remain resident on every Space,
+    /// because there is only one live FocusToken and one interaction owner.
+    static let collectionBehavior: NSWindow.CollectionBehavior = [
+        .moveToActiveSpace,
+        .fullScreenAuxiliary,
+    ]
+
+    /// AppKit can keep an already ordered nonactivating panel attached to its
+    /// previous Space. Retire that stale ordering before bringing it forward.
+    static func shouldOrderOutBeforeShow(isVisible: Bool,
+                                         isOnActiveSpace: Bool) -> Bool {
+        isVisible && !isOnActiveSpace
+    }
+}
+
 enum CandidatePanelLevelRules {
     static let standard = NSWindow.Level.popUpMenu
+    static let workbenchStandard = NSWindow.Level.floating
     private static let displayShielding = NSWindow.Level(
         rawValue: Int(CGShieldingWindowLevel())
     )
@@ -33,6 +51,16 @@ enum CandidatePanelLevelRules {
             return standard
         }
         return displayShielding
+    }
+
+    /// The workbench stays at its ordinary floating level except for the same
+    /// exact iShot overlay lease that requires display shielding candidates.
+    static func workbenchLevel(bundleID: String,
+                               hostKind: FocusHostKind) -> NSWindow.Level {
+        let candidateLevel = level(bundleID: bundleID, hostKind: hostKind)
+        return candidateLevel == displayShielding
+            ? displayShielding
+            : workbenchStandard
     }
 }
 
@@ -315,7 +343,7 @@ struct CandidateSelection {
 
 enum CandidatePresentationMode {
     case caret
-    case workbench
+    case bufferCaret
 }
 
 enum CandidatePanelPreferredSide: Equatable {
@@ -377,6 +405,7 @@ struct CandidateMatrixLayoutSnapshot {
     let initialPanelLevel: Int
     let iShotPanelLevel: Int
     let hiddenPanelLevel: Int
+    let panelCollectionBehavior: NSWindow.CollectionBehavior
     let rowCount: Int
     let rowHeights: [CGFloat]
     let expectedRowHeight: CGFloat
@@ -402,6 +431,18 @@ struct CandidateTextRendererSnapshot {
     let verticalInkCenterDelta: CGFloat
 }
 
+struct CandidateBufferCaretSnapshot {
+    let contentStayedInPanel: Bool
+    let renderedCandidateViews: Int
+    let preeditHidden: Bool
+    let stripOnlyHeight: CGFloat
+    let expectedStripOnlyHeight: CGFloat
+    let bufferActionHidden: Bool
+    let rejectedCachedHostAnchor: Bool
+    let scrubbedCandidateViews: Bool
+    let scrubbedPreedit: Bool
+}
+
 /// In-process candidate window. Candidates default to a compact one-line strip
 /// and can expand into a matrix of consecutive Rime pages, one page per row.
 /// The matrix renders at most three rows at a time, but that is a viewport, not
@@ -422,6 +463,7 @@ final class CandidateWindow {
     private static let characterSelectionTagBase = 200_000
 
     private let panel: NSPanel
+    private let panelHost = NSView()
     private let content = NSView()
     private let root = NSStackView()
     private let preeditPill = NSView()
@@ -438,7 +480,7 @@ final class CandidateWindow {
     private var dividerHeightConstraint: NSLayoutConstraint!
     private var barTopConstraint: NSLayoutConstraint!
     private var barBottomConstraint: NSLayoutConstraint!
-    private var lastGoodRect: [String: NSRect] = [:]
+    private var lastGoodCaretRect: NSRect?
 
     private var currentContext = RimeContextModel()
     private var currentSignature = ""
@@ -464,6 +506,8 @@ final class CandidateWindow {
     private var ownerToken: FocusToken?
     private var presentationMode: CandidatePresentationMode = .caret
     private var projectionPreedit = ""
+    private weak var contentHost: NSView?
+    private var contentHostConstraints: [NSLayoutConstraint] = []
 
     var onSelect: ((FocusToken, CandidateSelection) -> Void)?
     var onSettings: (() -> Void)?
@@ -483,8 +527,8 @@ final class CandidateWindow {
             hasInteractionTarget: ownerToken.map {
                 InputFocusCoordinator.shared.interactionTarget(expected: $0) != nil
             } ?? false,
-            panelIsVisible: panel.isVisible,
-            panelIsOnActiveSpace: panel.isOnActiveSpace
+            panelIsVisible: presentationIsVisible,
+            panelIsOnActiveSpace: presentationIsOnActiveSpace
         )
     }
     var isVisible: Bool {
@@ -498,7 +542,7 @@ final class CandidateWindow {
         // Rime context. Callers asking whether candidates are visible must see
         // the WindowServer truth, otherwise a hidden panel can keep steering
         // candidate-only key paths indefinitely.
-        guard panel.isVisible, panel.isOnActiveSpace else { return false }
+        guard presentationIsVisible, presentationIsOnActiveSpace else { return false }
         return !currentContext.candidates.isEmpty || !projectionPreedit.isEmpty
     }
     var isExpanded: Bool { !expandedPages.isEmpty }
@@ -559,7 +603,7 @@ final class CandidateWindow {
         // `.popUpMenu` rather than inheriting that lower level.
         panel.level = CandidatePanelLevelRules.standard
         panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.collectionBehavior = CandidatePanelSpaceRules.collectionBehavior
 
         // React CandidateSurface treats preedit as an independent 20pt pill,
         // not as a full-width row painted by the candidate strip. Preserve the
@@ -663,6 +707,7 @@ final class CandidateWindow {
 
         content.wantsLayer = true
         content.layer?.backgroundColor = NSColor.clear.cgColor
+        content.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(root)
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: content.leadingAnchor),
@@ -674,7 +719,13 @@ final class CandidateWindow {
             preeditPill.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             preeditPill.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor),
         ])
-        panel.contentView = content
+        panelHost.wantsLayer = true
+        panelHost.layer?.backgroundColor = NSColor.clear.cgColor
+        panel.contentView = panelHost
+        attachContent(
+            to: panelHost,
+            insets: NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+        )
 
         applyAppearance()
         NotificationCenter.default.addObserver(
@@ -697,6 +748,50 @@ final class CandidateWindow {
         }
     }
 
+    private var presentationIsVisible: Bool {
+        panel.isVisible
+    }
+
+    private var presentationIsOnActiveSpace: Bool {
+        panel.isOnActiveSpace
+    }
+
+    private func attachContent(to host: NSView, insets: NSEdgeInsets) {
+        guard contentHost !== host else { return }
+        NSLayoutConstraint.deactivate(contentHostConstraints)
+        contentHostConstraints.removeAll()
+        content.removeFromSuperview()
+        host.addSubview(content)
+        contentHost = host
+        contentHostConstraints = [
+            content.leadingAnchor.constraint(
+                equalTo: host.leadingAnchor,
+                constant: insets.left
+            ),
+            content.trailingAnchor.constraint(
+                equalTo: host.trailingAnchor,
+                constant: -insets.right
+            ),
+            content.topAnchor.constraint(
+                equalTo: host.topAnchor,
+                constant: insets.top
+            ),
+            content.bottomAnchor.constraint(
+                equalTo: host.bottomAnchor,
+                constant: -insets.bottom
+            ),
+        ]
+        NSLayoutConstraint.activate(contentHostConstraints)
+        host.needsLayout = true
+    }
+
+    private func attachContentToPanel() {
+        attachContent(
+            to: panelHost,
+            insets: NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+        )
+    }
+
     func update(_ ctx: RimeContextModel,
                 caretRect: NSRect,
                 bundleId: String,
@@ -717,9 +812,11 @@ final class CandidateWindow {
             panel.level = CandidatePanelLevelRules.standard
             resetPresentationState()
         }
+        if presentationMode != presentation {
+            lastGoodCaretRect = nil
+        }
         ownerToken = owner
         presentationMode = presentation
-        strip.isHidden = false
         let signature = contextSignature(ctx)
         let signatureChanged = signature != currentSignature
         if signature != currentSignature {
@@ -730,6 +827,9 @@ final class CandidateWindow {
         }
 
         currentContext = ctx
+        // A preedit-only composition belongs in the Buffer, but it must not
+        // reserve an empty candidate strip or expose an inert settings button.
+        strip.isHidden = ctx.candidates.isEmpty
         lastCaretRect = caretRect
         lastBundleId = bundleId
         if signatureChanged {
@@ -768,6 +868,7 @@ final class CandidateWindow {
     }
 
     private func resetPresentationState() {
+        scrubRenderedCandidateViews()
         visualPageIndex = 0
         selectedIndex = 0
         resetExpandedState()
@@ -779,17 +880,38 @@ final class CandidateWindow {
         presentationMode = .caret
         lastCaretRect = .zero
         lastBundleId = ""
+        lastGoodCaretRect = nil
         preeditLabel.stringValue = ""
         preeditPill.isHidden = true
         strip.isHidden = false
     }
 
-    /// Moving/resizing the passive workbench must not re-read Rime or rebuild
-    /// every candidate button for each drag event. Only the panel origin (and
-    /// its screen-constrained width) depends on this anchor.
-    func syncWorkbenchAnchor(_ anchor: NSRect?) {
-        guard presentationMode == .workbench else { return }
-        lastCaretRect = anchor ?? .zero
+    private func scrubRenderedCandidateViews() {
+        candidateStack.arrangedSubviews.forEach {
+            candidateStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        preeditLabel.stringValue = ""
+        preeditLabel.setAccessibilityValue(nil)
+        candidateScroll.toolTip = nil
+        candidateStack.toolTip = nil
+    }
+
+    /// Moving/resizing the passive workbench does not re-read Rime, but the
+    /// floating panel must re-read the live logical Buffer caret every time.
+    func syncWorkbenchLayout() {
+        guard presentationMode == .bufferCaret,
+              let ownerToken,
+              let caret = BufferWindowController.shared
+                .inlineInputCaretScreenRect(owner: ownerToken) else {
+            if presentationMode == .bufferCaret {
+                hidePanel(reason: "buffer-caret-unavailable",
+                          clearsPresentation: false)
+            }
+            return
+        }
+        lastCaretRect = caret
+        renderCandidates()
         layoutAndShowAccordingToPresentation()
     }
 
@@ -995,9 +1117,9 @@ final class CandidateWindow {
             BufferWindowController.shared.show()
             return
         }
-        BufferModel.shared.enabled = true
-        BufferWindowController.shared.show()
-        IMELog.write("candidate buffer action -> on")
+        let activated = BufferWindowController.shared
+            .activateCaptureForCurrentFocus(showWorkbench: true)
+        IMELog.write("candidate buffer action -> \(activated ? "capture" : "direct")")
         renderCandidates()
         BufferWindowController.shared.refresh()
     }
@@ -1041,9 +1163,12 @@ final class CandidateWindow {
         metrics: CandidateWindowMetrics
     ) -> NSSize {
         let stripHeight = strip.isHidden ? 0 : stripHeightConstraint.constant
-        let height = stripHeight
-            + (preeditPill.isHidden ? 0 : metrics.preeditHeight + root.spacing)
-        return NSSize(width: panelWidth(caretRect: caretRect), height: height)
+        let preeditHeight = preeditPill.isHidden ? 0 : metrics.preeditHeight
+        let interItemSpacing = preeditPill.isHidden || strip.isHidden
+            ? 0
+            : root.spacing
+        let height = stripHeight + preeditHeight + interItemSpacing
+        return NSSize(width: activePanelWidth(), height: height)
     }
 
     /// Resolve the final panel, scroll viewport, and document frame before rows
@@ -1062,13 +1187,13 @@ final class CandidateWindow {
     private func origin(for caretRect: NSRect, bundleId: String) -> NSPoint? {
         var anchor = caretRect
         if isPlausible(anchor) {
-            if presentationMode == .caret {
-                lastGoodRect[bundleId] = anchor
-            }
+            lastGoodCaretRect = anchor
         } else if presentationMode == .caret,
-                  let cached = lastGoodRect[bundleId] {
+                  let cached = lastGoodCaretRect {
             anchor = cached
-        } else if presentationMode == .workbench {
+        } else if presentationMode == .bufferCaret {
+            // A Buffer caret belongs to a short-lived logical surface. Never
+            // jump to a cached host caret when that surface is hidden/stale.
             return nil
         } else {
             let vf = NSScreen.main?.visibleFrame ?? .zero
@@ -1077,18 +1202,12 @@ final class CandidateWindow {
 
         let screen = screen(containing: anchor)
         let vf = screen?.visibleFrame ?? .zero
-        let preferredSide: CandidatePanelPreferredSide = presentationMode == .workbench
-            ? BufferWindowController.shared.preferredCandidatePanelSide(for: ownerToken)
-            : .below
-        let requiresOutwardPlacement = presentationMode == .workbench
-            && BufferWindowController.shared
-                .requiresOutwardCandidatePanelPlacement(for: ownerToken)
         return CandidatePanelGeometry.originIfAvailable(
             anchor: anchor,
             panelSize: panel.frame.size,
             visibleFrame: vf,
-            preferredSide: preferredSide,
-            strictPreferredSide: requiresOutwardPlacement
+            preferredSide: .below,
+            strictPreferredSide: false
         )
     }
 
@@ -1128,23 +1247,26 @@ final class CandidateWindow {
             hidePanel(reason: "empty-content", clearsPresentation: true)
             return
         }
-        // A missing workbench anchor means the bar is privacy-shielded,
-        // protected by Secure Input, or no longer visible on this Space.
-        // Never fall back to a caret location in that case: doing so would
-        // expose the same candidate text the shield is meant to hide.
-        if presentationMode == .workbench, !isPlausible(lastCaretRect) {
-            hidePanel(reason: "workbench-anchor-unavailable",
-                      clearsPresentation: false)
-            return
-        }
-        guard layoutPanel(caretRect: lastCaretRect, bundleId: lastBundleId) else {
-            hidePanel(reason: "layout-unavailable", clearsPresentation: false)
-            return
-        }
         guard CandidatePanelSecurityRules.mayOrderFront(
             secureInputEnabled: IsSecureEventInputEnabled()
         ) else {
             hidePanel(reason: "secure-input-before-level", clearsPresentation: true)
+            return
+        }
+
+        if presentationMode == .bufferCaret {
+            guard let caret = BufferWindowController.shared
+                .inlineInputCaretScreenRect(owner: ownerToken) else {
+                hidePanel(reason: "buffer-caret-unavailable",
+                          clearsPresentation: false)
+                return
+            }
+            lastCaretRect = caret
+        }
+
+        attachContentToPanel()
+        guard layoutPanel(caretRect: lastCaretRect, bundleId: lastBundleId) else {
+            hidePanel(reason: "layout-unavailable", clearsPresentation: false)
             return
         }
         panel.level = CandidatePanelLevelRules.level(
@@ -1165,6 +1287,7 @@ final class CandidateWindow {
         if clearsPresentation {
             resetPresentationState()
         }
+        attachContentToPanel()
         logPanelTransition(
             action: "hide",
             reason: reason,
@@ -1181,6 +1304,12 @@ final class CandidateWindow {
             return
         }
         let snapshot = panelLogSnapshot()
+        if CandidatePanelSpaceRules.shouldOrderOutBeforeShow(
+            isVisible: panel.isVisible,
+            isOnActiveSpace: panel.isOnActiveSpace
+        ) {
+            panel.orderOut(nil)
+        }
         panel.orderFrontRegardless()
         logPanelTransition(
             action: "show",
@@ -1203,15 +1332,15 @@ final class CandidateWindow {
         let presentation: String
         switch presentationMode {
         case .caret: presentation = "caret"
-        case .workbench: presentation = "workbench"
+        case .bufferCaret: presentation = "buffer-caret"
         }
         return PanelLogSnapshot(
             owner: ownerToken?.description ?? "none",
             presentation: presentation,
             candidateCount: currentContext.candidates.count,
             preeditLength: projectionPreedit.count,
-            visible: panel.isVisible,
-            onActiveSpace: panel.isOnActiveSpace
+            visible: presentationIsVisible,
+            onActiveSpace: presentationIsOnActiveSpace
         )
     }
 
@@ -1219,8 +1348,8 @@ final class CandidateWindow {
                                     reason: String,
                                     before: PanelLogSnapshot,
                                     retiredPresentation: Bool) {
-        let afterVisible = panel.isVisible
-        let afterOnActiveSpace = panel.isOnActiveSpace
+        let afterVisible = presentationIsVisible
+        let afterOnActiveSpace = presentationIsOnActiveSpace
         let hadLogicalPresentation = before.owner != "none"
             || before.candidateCount > 0
             || before.preeditLength > 0
@@ -1303,7 +1432,7 @@ final class CandidateWindow {
             ))
         }
 
-        if !BufferModel.shared.active {
+        if showsBufferAction {
             candidateStack.addArrangedSubview(bufferActionButton(width: min(bufferActionWidth(), available)))
         }
     }
@@ -1660,9 +1789,9 @@ final class CandidateWindow {
 
     private func candidateMaxWidth(panelWidth: CGFloat) -> CGFloat {
         let available = candidateAvailableWidth(panelWidth: panelWidth)
-        let bufferSpace = BufferModel.shared.active
-            ? 0
-            : min(bufferActionWidth(), available) + Self.candidateSpacing
+        let bufferSpace = showsBufferAction
+            ? min(bufferActionWidth(), available) + Self.candidateSpacing
+            : 0
         let remaining = available - bufferSpace
         return max(64, remaining)
     }
@@ -1671,9 +1800,9 @@ final class CandidateWindow {
         guard !currentContext.candidates.isEmpty else { return [] }
 
         let available = candidateAvailableWidth(panelWidth: panelWidth)
-        let bufferSpace = BufferModel.shared.active
-            ? 0
-            : min(bufferActionWidth(), available) + Self.candidateSpacing
+        let bufferSpace = showsBufferAction
+            ? min(bufferActionWidth(), available) + Self.candidateSpacing
+            : 0
         let remaining = available - bufferSpace
         let pageWidth = max(64, remaining)
         let maxItemWidth = max(64, pageWidth)
@@ -1804,7 +1933,7 @@ final class CandidateWindow {
     private func candidateAreaHeight(for metrics: CandidateWindowMetrics) -> CGFloat {
         let rowHeight = compactCandidateButtonHeight(for: metrics)
         guard isExpanded, !isSingleCharacterSelectionActive else {
-            return BufferModel.shared.active ? rowHeight : max(rowHeight, Self.actionButtonSize)
+            return showsBufferAction ? max(rowHeight, Self.actionButtonSize) : rowHeight
         }
         return Self.matrixViewportHeight(rowHeight: rowHeight,
                                          rowCount: expandedPages.count)
@@ -1812,6 +1941,10 @@ final class CandidateWindow {
 
     private func effectiveStripHeight(for metrics: CandidateWindowMetrics) -> CGFloat {
         max(metrics.compactStripHeight, candidateAreaHeight(for: metrics) + 2 * barVerticalPadding(for: metrics))
+    }
+
+    private var showsBufferAction: Bool {
+        presentationMode == .caret && !BufferModel.shared.active
     }
 
     /// AppKit-backed seam for `buffer-window-smoke`. Unlike the pure viewport
@@ -1875,6 +2008,7 @@ final class CandidateWindow {
             initialPanelLevel: initialPanelLevel,
             iShotPanelLevel: iShotPanelLevel,
             hiddenPanelLevel: hiddenPanelLevel,
+            panelCollectionBehavior: candidateWindow.panel.collectionBehavior,
             rowCount: document.arrangedSubviews.count,
             rowHeights: document.arrangedSubviews.map(\.frame.height),
             expectedRowHeight: expectedRowHeight,
@@ -1886,6 +2020,58 @@ final class CandidateWindow {
             documentTranslatesAutoresizingMaskIntoConstraints:
                 document.translatesAutoresizingMaskIntoConstraints,
             documentAutoresizingMaskConstraintCount: autoresizingMaskConstraintCount
+        )
+    }
+
+    static func bufferCaretSnapshotForSmoke() -> CandidateBufferCaretSnapshot {
+        let candidateWindow = CandidateWindow()
+        candidateWindow.presentationMode = .bufferCaret
+        var context = RimeContextModel()
+        context.input = "smoke"
+        context.preedit = "smoke"
+        context.candidates = [
+            RimeCandidateModel(text: "候选", comment: "", label: "1"),
+            RimeCandidateModel(text: "测试", comment: "", label: "2"),
+        ]
+        candidateWindow.currentContext = context
+        candidateWindow.projectionPreedit = ""
+        candidateWindow.preeditLabel.stringValue = ""
+        candidateWindow.preeditPill.isHidden = true
+        candidateWindow.strip.isHidden = false
+        candidateWindow.renderCandidates()
+        candidateWindow.panel.layoutIfNeeded()
+        let contentStayedInPanel = candidateWindow.content.superview
+            === candidateWindow.panelHost
+        let renderedCandidateViews = candidateWindow.candidateStack.arrangedSubviews.count
+        let metrics = CandidateWindowMetrics.current
+        let stripOnlyHeight = candidateWindow.desiredPanelContentSize(
+            caretRect: .zero,
+            metrics: metrics
+        ).height
+        let bufferActionHidden = !candidateWindow.showsBufferAction
+        candidateWindow.lastGoodCaretRect = NSRect(
+            x: 200,
+            y: 200,
+            width: 0,
+            height: 20
+        )
+        let rejectedCachedHostAnchor = candidateWindow.origin(
+            for: .zero,
+            bundleId: "smoke"
+        ) == nil
+        candidateWindow.resetPresentationState()
+        let scrubbedCandidateViews = candidateWindow.candidateStack.arrangedSubviews.isEmpty
+        let scrubbedPreedit = candidateWindow.preeditLabel.stringValue.isEmpty
+        return CandidateBufferCaretSnapshot(
+            contentStayedInPanel: contentStayedInPanel,
+            renderedCandidateViews: renderedCandidateViews,
+            preeditHidden: candidateWindow.preeditPill.isHidden,
+            stripOnlyHeight: stripOnlyHeight,
+            expectedStripOnlyHeight: metrics.compactStripHeight,
+            bufferActionHidden: bufferActionHidden,
+            rejectedCachedHostAnchor: rejectedCachedHostAnchor,
+            scrubbedCandidateViews: scrubbedCandidateViews,
+            scrubbedPreedit: scrubbedPreedit
         )
     }
 
@@ -2056,8 +2242,8 @@ final class CandidateWindow {
     @objc private func candidateTapped(_ sender: NSButton) {
         guard let ownerToken,
               InputFocusCoordinator.shared.interactionTarget(expected: ownerToken) != nil,
-              panel.isVisible,
-              panel.isOnActiveSpace else {
+              presentationIsVisible,
+              presentationIsOnActiveSpace else {
             hideAll()
             return
         }

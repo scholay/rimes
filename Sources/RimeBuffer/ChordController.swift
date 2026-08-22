@@ -99,6 +99,13 @@ enum FlyChordRoutingRules {
     static func shouldStage(schemaID: String, asciiMode: Bool) -> Bool {
         schemaID == "my_combo" && !asciiMode
     }
+
+    static func shouldStage(schemaID: String,
+                            asciiMode: Bool,
+                            extensionEnabled: Bool) -> Bool {
+        extensionEnabled && shouldStage(schemaID: schemaID,
+                                        asciiMode: asciiMode)
+    }
 }
 
 /// Every settled multi-key FlyYao batch is one syllable. Rime's speller

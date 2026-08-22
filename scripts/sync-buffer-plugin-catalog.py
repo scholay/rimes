@@ -31,15 +31,12 @@ RELEASE_ASSET_PREFIX = "preset-plugin-"
 
 EXPECTED_IDS = [
     "builtin.ai-text",
-    "builtin.my-prompt",
     "builtin.apple-translation",
     "builtin.stream-input",
-    "builtin.remarkable",
-    "builtin.marine-chrome",
 ]
-DEFAULT_INSTALLED_IDS = set(EXPECTED_IDS[:4])
-DEFAULT_ENABLED_IDS = set(EXPECTED_IDS[:4])
-OPTIONAL_IDS = set(EXPECTED_IDS[4:])
+DEFAULT_INSTALLED_IDS = set(EXPECTED_IDS)
+DEFAULT_ENABLED_IDS = set(EXPECTED_IDS)
+OPTIONAL_IDS: set[str] = set()
 
 ENTRY_KEYS = {
     "id",
@@ -316,7 +313,7 @@ def render_readme_section(entries: list[dict[str, Any]], language: str) -> str:
         lines.extend(
             [
                 "",
-                "预装的四个插件在全新安装后已安装并启用；其他插件不会自动下载，安装后仍默认禁用。",
+                "表中插件均随 RIMES 预装，并在全新安装后默认启用。",
                 README_END,
             ]
         )
@@ -345,7 +342,7 @@ def render_readme_section(entries: list[dict[str, Any]], language: str) -> str:
     lines.extend(
         [
             "",
-            "The four bundled plug-ins are installed and enabled on a clean first run. Other plug-ins are never downloaded automatically and remain disabled after installation.",
+            "Every plug-in in the table is bundled with RIMES and enabled on a clean first run.",
             README_END,
         ]
     )

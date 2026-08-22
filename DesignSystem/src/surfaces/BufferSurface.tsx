@@ -13,11 +13,8 @@ import { IconButton } from "../design-system/primitives";
 export type BufferMode =
   | "normal"
   | "ai"
-  | "prompt"
   | "translation"
-  | "stream"
-  | "remarkable"
-  | "marine";
+  | "stream";
 export type BufferPhase = "idle" | "loading" | "ready" | "protected" | "error";
 
 export type BufferLanguage = {
@@ -103,29 +100,20 @@ type ModeDescriptor = {
 const MODE_ORDER: readonly BufferMode[] = [
   "normal",
   "ai",
-  "prompt",
   "translation",
   "stream",
-  "remarkable",
-  "marine",
 ];
 
 export const BUFFER_MODE_PLUGIN_IDS = {
   ai: "builtin.ai-text",
-  prompt: "builtin.my-prompt",
   translation: "builtin.apple-translation",
   stream: "builtin.stream-input",
-  remarkable: "builtin.remarkable",
-  marine: "builtin.marine-chrome",
 } as const satisfies Record<Exclude<BufferMode, "normal">, string>;
 
 const pluginCatalog = new Map(initialPlugins.map((plugin) => [plugin.id, plugin]));
 const translationPlugin = pluginCatalog.get("builtin.apple-translation");
 const aiPlugin = pluginCatalog.get("builtin.ai-text");
-const promptPlugin = pluginCatalog.get("builtin.my-prompt");
 const streamPlugin = pluginCatalog.get("builtin.stream-input");
-const remarkablePlugin = pluginCatalog.get("builtin.remarkable");
-const marinePlugin = pluginCatalog.get("builtin.marine-chrome");
 
 const MODE_DESCRIPTORS: Record<BufferMode, ModeDescriptor> = {
   normal: {
@@ -156,16 +144,6 @@ const MODE_DESCRIPTORS: Record<BufferMode, ModeDescriptor> = {
     action: "生成",
     loadingAction: "生成中…",
   },
-  prompt: {
-    label: promptPlugin?.name ?? "My Prompt",
-    icon: promptPlugin?.icon ?? "fileSearch",
-    sourceRole: "查",
-    sourceIcon: "search",
-    targetRole: "词",
-    targetIcon: "fileSearch",
-    action: "检索",
-    loadingAction: "检索中…",
-  },
   stream: {
     label: streamPlugin?.name ?? "意识流输入",
     icon: streamPlugin?.icon ?? "waveform",
@@ -175,26 +153,6 @@ const MODE_DESCRIPTORS: Record<BufferMode, ModeDescriptor> = {
     targetIcon: "waveform",
     action: "推测",
     loadingAction: "推测中…",
-  },
-  remarkable: {
-    label: remarkablePlugin?.name ?? "Remarkable",
-    icon: remarkablePlugin?.icon ?? "eye",
-    sourceRole: "页",
-    sourceIcon: "eye",
-    targetRole: "识",
-    targetIcon: "textbox",
-    action: "识别当前页",
-    loadingAction: "识别中…",
-  },
-  marine: {
-    label: marinePlugin?.name ?? "Marine Chrome",
-    icon: marinePlugin?.icon ?? "network",
-    sourceRole: "文",
-    sourceIcon: "textbox",
-    targetRole: "答",
-    targetIcon: "sparkle",
-    action: "提取并生成",
-    loadingAction: "生成中…",
   },
 };
 
@@ -228,7 +186,7 @@ function defaultTargetsFor(_mode: BufferMode): readonly string[] {
 
 function bufferLayoutFor(mode: BufferMode): "single-exchange" | "live-expand" {
   // Live retrieval / parallel drafting: grow a lower rail while typing.
-  return mode === "translation" || mode === "stream" || mode === "prompt"
+  return mode === "translation" || mode === "stream"
     ? "live-expand"
     : "single-exchange";
 }
@@ -273,14 +231,6 @@ function generatedTargetsFor(
       ];
     case "ai":
       return [`已根据“${conciseSource}”生成一段可直接发送的内容。`];
-    case "prompt":
-      return [
-        `${conciseSource} · 产品说明模板`,
-        `${conciseSource} · 设计评审提示词`,
-        `${conciseSource} · 发布检查清单`,
-        `${conciseSource} · 用户调研提纲`,
-        `${conciseSource} · 竞品对比框架`,
-      ];
     case "stream":
       return [
         `${conciseSource}`,
@@ -289,10 +239,6 @@ function generatedTargetsFor(
         `把“${conciseSource}”改成可直接发送的说明。`,
         `基于“${conciseSource}”给出更口语的版本。`,
       ].slice(0, Math.min(5, Math.max(1, Math.trunc(streamCandidateCount))));
-    case "remarkable":
-      return [`已在 Mac 本地识别当前页：${conciseSource}`];
-    case "marine":
-      return [`已结合当前网页上下文处理：${conciseSource}`];
   }
 }
 
@@ -318,10 +264,7 @@ function statusFor(mode: BufferMode, phase: BufferPhase, _hasContent: boolean): 
   if (phase === "protected") return "安全输入，内容已隐藏";
   if (phase === "loading") {
     if (mode === "translation") return "正在翻译";
-    if (mode === "prompt") return "正在检索提示词";
     if (mode === "stream") return "正在推测完整输入";
-    if (mode === "remarkable") return "正在识别当前页";
-    if (mode === "marine") return "正在读取网页上下文";
     return mode === "normal" ? "正在发送" : "插件正在生成";
   }
   if (phase === "error") return "处理失败";
@@ -334,6 +277,7 @@ function BufferTrack({
   kind,
   protectedContent,
   loading,
+  loadingLabel,
   sourceValue,
   targets,
   selectedTarget = 0,
@@ -347,6 +291,7 @@ function BufferTrack({
   kind: "source" | "target";
   protectedContent: boolean;
   loading: boolean;
+  loadingLabel?: string;
   sourceValue?: string;
   targets?: readonly string[];
   selectedTarget?: number;
@@ -355,6 +300,7 @@ function BufferTrack({
   onTargetSelect?: (index: number) => void;
   interactionDisabled?: boolean;
 }) {
+  const [sourceFocused, setSourceFocused] = useState(false);
   const targetCount = targets?.length ?? 0;
   const activeIndex = clampTargetIndex(selectedTarget, targetCount);
   const activeTarget = targetCount > 0 ? targets![activeIndex] : "";
@@ -386,8 +332,10 @@ function BufferTrack({
             aria-label="缓冲正文"
             className="buffer-track__editor"
             disabled={interactionDisabled}
+            onBlur={() => setSourceFocused(false)}
             onChange={(event) => onSourceChange?.(event.target.value)}
-            placeholder="等待暂存内容"
+            onFocus={() => setSourceFocused(true)}
+            placeholder={sourceFocused ? "" : "等待暂存内容"}
             spellCheck={false}
             type="text"
             value={sourceValue ?? ""}
@@ -395,7 +343,7 @@ function BufferTrack({
         ) : loading ? (
           <span className="buffer-track__loading">
             <Icon className="is-spinning" name="refresh" size={13} />
-            正在处理…
+            {loadingLabel ?? "正在处理…"}
           </span>
         ) : targetCount > 0 ? (
           <div
@@ -609,18 +557,17 @@ export function BufferSurface({
     && (phase === "ready" || phase === "error")
     && outputIsCurrent
     && selectedOutput.trim().length > 0;
-  const canRequest = !paused && !protectedContent && !loading && !sending && (
-    effectiveMode === "remarkable"
-    || effectiveMode === "marine"
-    || hasSource
-  );
+  const canRequest = !paused && !protectedContent && !loading && !sending && hasSource;
   const phaseStatus = effectiveMode === "translation" && phase === "loading"
     ? translationProvider === "ai" ? "正在通过 AI 通道翻译" : "正在使用 Apple 本地翻译"
     : statusFor(effectiveMode, phase, hasSource);
   const phaseOverridesDelivery = phase === "protected"
     || phase === "loading"
     || (phase === "error" && deliveryNote.length === 0);
-  const status = phaseOverridesDelivery ? phaseStatus : deliveryNote || phaseStatus;
+  const loadingStatusRenderedInRail = loading && (exchangeDecision || showLiveTargetRail);
+  const status = loadingStatusRenderedInRail
+    ? null
+    : (phaseOverridesDelivery ? phaseStatus : deliveryNote || phaseStatus);
   const statusTone = phaseOverridesDelivery ? phase : deliveryNote ? deliveryTone : phase;
   const retainedErrorAssistiveStatus = phase === "error"
     && deliveryNote.length === 0
@@ -628,7 +575,9 @@ export function BufferSurface({
     && targets.length > 0
     ? `处理失败，已保留上次结果。候选 ${resolvedSelectedTarget + 1} / ${targets.length}：${selectedOutput}`
     : null;
-  const assistiveStatus = retainedErrorAssistiveStatus ?? status ?? (
+  const assistiveStatus = retainedErrorAssistiveStatus
+    ?? (loadingStatusRenderedInRail ? phaseStatus : status)
+    ?? (
     phase === "ready" && outputIsCurrent && targets.length > 0
       ? `已生成，候选 ${resolvedSelectedTarget + 1} / ${targets.length}：${selectedOutput}`
       : ""
@@ -1331,6 +1280,7 @@ export function BufferSurface({
               icon={descriptor.targetIcon ?? "sparkle"}
               kind="target"
               loading={loading}
+              loadingLabel={phaseStatus ?? undefined}
               interactionDisabled={paused || sending}
               onTargetSelect={selectTarget}
               protectedContent={protectedContent}
@@ -1355,13 +1305,12 @@ export function BufferSurface({
               emptyLabel={
                 effectiveMode === "stream"
                   ? "等待推测结果"
-                  : effectiveMode === "prompt"
-                    ? "等待检索结果"
-                    : "等待译文"
+                  : "等待译文"
               }
               icon={descriptor.targetIcon ?? "sparkle"}
               kind="target"
               loading={loading}
+              loadingLabel={phaseStatus ?? undefined}
               interactionDisabled={paused || sending}
               onTargetSelect={selectTarget}
               protectedContent={protectedContent}

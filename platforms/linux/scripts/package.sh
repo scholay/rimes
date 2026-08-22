@@ -134,8 +134,8 @@ while IFS= read -r -d '' file; do
 done < <(find -P "$package_root/data/rime-data" -type f -print0)
 
 staged_count=$(find -P "$package_root/data/rime-data" -type f | wc -l | tr -d '[:space:]')
-[[ "$staged_count" == "46" ]] ||
-    rimes_die "reviewed payload must contain exactly 46 files, found $staged_count"
+[[ "$staged_count" == "52" ]] ||
+    rimes_die "reviewed payload must contain exactly 52 files, found $staged_count"
 [[ ! -e "$package_root/data/rime-data/rime_ai.example.json" ]] ||
     rimes_die "legacy AI example unexpectedly entered the reviewed payload"
 if find -P "$package_root/data/rime-data/lua" -type f -name 'ai_*.lua' -print -quit | grep -q .; then

@@ -6,11 +6,10 @@ RIMES 通过 **GitHub Actions + GitHub Releases + 应用内自动更新** 分发
 
 预置缓冲插件名称、版本与默认安装策略统一维护在
 `Catalog/buffer-plugins.json`。每次插件更新先运行
-`python3 -B scripts/sync-buffer-plugin-catalog.py`，它会同步可选插件的
-Release manifest 资产名、SHA-256、运行时 Swift catalog 以及中英文 README 表；CI
-和 `scripts/release.sh` 都会用 `--check` 阻止版本或文档漂移。
-正式版 workflow 会把这些 manifest 作为当前 `vX.Y.Z` Release 的不可变资产上传；
-客户端只按自身 bundle 版本访问对应 Release，不读取可变的 `main` 分支文件。
+`python3 -B scripts/sync-buffer-plugin-catalog.py`，它会同步运行时 Swift catalog 与中英文
+README 表；CI 和 `scripts/release.sh` 都会用 `--check` 阻止版本或文档漂移。当前维护的三个
+Buffer 插件随已签名应用一起交付，不再生成或上传独立 manifest/插件资产。历史 Release 中的
+旧插件资产按不可变发布政策保留，但不代表当前产品仍维护或安装它们。
 
 唯一发布中心是 [`scholay/rimes`](https://github.com/scholay/rimes/releases)：
 
@@ -27,9 +26,9 @@ Release manifest 资产名、SHA-256、运行时 Swift catalog 以及中英文 R
 ## 一、发布新版本
 
 ```bash
-./scripts/release.sh patch       # 正式版 patch +1；也支持 minor / major
-./scripts/release.sh 0.4.2       # 迁仓首版或需要显式锁定版本时
-./scripts/release.sh --dry-run 0.4.2
+./scripts/release.sh --dry-run 0.5.0  # 当前功能线先做只读发布检查
+./scripts/release.sh 0.5.0            # 门禁、凭据与真机验收齐备后才执行
+./scripts/release.sh patch            # 已发布功能线的后续维护版；也支持 minor / major
 ```
 
 脚本只允许 `origin` 的 fetch/push URL 同时指向 `scholay/rimes`。它会从远端正式 tag 与
@@ -40,8 +39,8 @@ Release manifest 资产名、SHA-256、运行时 Swift catalog 以及中英文 R
 推送 tag 会触发 [`.github/workflows/release.yml`](.github/workflows/release.yml)：
 
 workflow 使用两台彼此隔离的 runner。第一台 `build_and_smoke` 不绑定受保护 Environment、也不
-读取任何发布 Secret：它构建并实际执行 ad-hoc app 的 runtime smoke，再把 app、manifest、
-上下文和校验和作为短期 handoff Artifact 传出。第二台全新的 `sign_and_publish` runner 才进入
+读取任何发布 Secret：它构建并实际执行 ad-hoc app 的 runtime smoke，再把 app、构建上下文和
+校验和作为短期 handoff Artifact 传出。第二台全新的 `sign_and_publish` runner 才进入
 受保护的 `macos-release` Environment；它先按严格成员/路径/权限/大小规则解包 app，并只做
 结构、架构和 ad-hoc 签名等被动校验。只有正式 tag 通过这些校验后才导入签名与公证凭据，且
 凭据所在 runner 不执行 handoff 中的 ETInput。
@@ -62,27 +61,26 @@ workflow 使用两台彼此隔离的 runner。第一台 `build_and_smoke` 不绑
 
 也可在 GitHub Actions 手动运行 `Release macOS` 做发布前演练。手动运行只上传短期
 Artifact，不创建 Release；这条非正式路径使用 ad-hoc app 和 unsigned pkg，通常不能对外
-分发。唯一例外是下面定义的一次性 `v0.4.3` 未签名预览通道。正式 Release 仍必须来自严格的
+分发。历史上的一次性 `v0.4.3` 未签名预览通道已经永久关闭，workflow 会拒绝
+`publish_unsigned_preview=true`。正式 Release 仍必须来自严格的
 `vX.Y.Z` tag，且签名或公证凭据缺失时 fail-closed，绝不回退为未签名产物。
 
-### 一次性未签名预览通道（仅 v0.4.3）
+### 已关闭的一次性未签名预览通道（历史：v0.4.3）
 
-在尚未取得 Apple Developer Program 资格期间，可以人工发布一次 `v0.4.3` GitHub
-**Pre-release**，让明确接受风险的社区用户验证安装修复。这个例外不改变、放宽或旁路上面的
-Developer ID 正式发布流程，并且只允许如下操作：
+`v0.4.3` 曾作为一次性 GitHub **Pre-release**，让明确接受风险的社区用户验证安装修复。
+该通道已经完成并永久关闭；以下内容仅记录当时的发布契约，不是可再次执行的操作手册：
 
-1. 在待发布的已审核、已合并 `main` commit 上手动运行 `Release macOS`：版本输入 `0.4.3`，并
-   勾选 `publish_unsigned_preview`。工作流会再次确认事件 commit 等于当时的 `origin/main`；不要
-   从分支、旧 commit 或本地重打包后发布。
+1. 当时从已审核、已合并的 `main` commit 手动运行 `Release macOS`，版本固定为 `0.4.3`，并由
+   workflow 确认事件 commit 等于当时的 `origin/main`。
 2. 无 secrets 的临时构建机先生成 ad-hoc app 与 unsigned PKG，真实执行一次
    `sudo installer -pkg RIMES-0.4.3.pkg -target /`，并验证安装回执、固定路径、输入法 metadata、
    universal 架构和 ad-hoc 签名。任何安装失败（包括 Code 112）都必须中止发布。
 3. 独立的无 secrets 发布机下载不可变 handoff，只做被动结构、签名状态、版本、成员集、大小和
    SHA-256 复核，不执行 ETInput。验证通过后由工作流创建 `v0.4.3` GitHub Pre-release；不得手工
    上传或替换资产。
-4. 公开资产固定包含 `RIMES-0.4.3.pkg`、`SHA256SUMS` 以及同次构建的可选插件资产，不包含内部
-   `ETInput-handoff.zip`。`SHA256SUMS` 必须覆盖全部公开二进制/manifest 资产；发布机上传前后都
-   要按它复核字节。
+4. 公开资产固定包含 `RIMES-0.4.3.pkg`、`SHA256SUMS` 以及当时同次构建的旧插件/manifest
+   资产，不包含内部 `ETInput-handoff.zip`。这些历史资产不删除、不替换，也不会在新版本继续
+   生成；`SHA256SUMS` 仍是该历史发布的字节基线。
 5. GitHub Release 的版本固定为 `v0.4.3`，必须是 **Pre-release** 且不得设为 `latest`；标题和
    首段必须写明“unsigned / not notarized / Apple 未验证”，并链接
    [`UNSIGNED-PREVIEW.md`](UNSIGNED-PREVIEW.md) 和
@@ -94,8 +92,12 @@ Developer ID 正式发布流程，并且只允许如下操作：
    必须手动下载新的 PKG。
 
 未来首个 Developer ID 签名并经 Apple 公证的正式版必须使用**高于 `0.4.3` 的新版本号**
-（通常为 `v0.4.4`），并完整经过原有 protected Environment、双证书签名、两次公证和
+（当前功能线按 `v0.5.0` 演练），并完整经过原有 protected Environment、双证书签名、两次公证和
 fail-closed 校验。绝不能在 `v0.4.3` 上补签后覆盖原字节。
+
+> 当前 GitHub 仓库尚未配置 `macos-release` Environment、发布 Secrets 与 tag ruleset，开发机
+> 也没有 Developer ID Application/Installer 身份。因此可以运行不带凭据的 `v0.5.0` 手动构建
+> 演练，但在这些门禁补齐前不得创建正式 tag 或把产物标记为正式 Release。
 
 ### 正式发布环境与 Secrets
 

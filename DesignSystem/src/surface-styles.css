@@ -281,6 +281,7 @@
 }
 
 .settings-choice-grid--three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.settings-choice-grid--schemes { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
 .settings-choice-card {
   min-height: 68px;
@@ -1373,8 +1374,7 @@
 
 .buffer-surface--translation .buffer-toolbar__plugin-select > svg,
 .buffer-surface--ai .buffer-toolbar__plugin-select > svg,
-.buffer-surface--stream .buffer-toolbar__plugin-select > svg,
-.buffer-surface--marine .buffer-toolbar__plugin-select > svg {
+.buffer-surface--stream .buffer-toolbar__plugin-select > svg {
   color: var(--r-accent-text);
 }
 

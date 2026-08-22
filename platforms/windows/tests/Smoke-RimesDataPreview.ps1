@@ -95,7 +95,7 @@ try {
     $checksumBytes = [System.IO.File]::ReadAllBytes($buildResult.ChecksumFile)
     Assert-PreviewTest -Condition ($checksumBytes.Length -gt 0 -and $checksumBytes[-1] -eq 10) -Message 'checksum sidecar is not LF-terminated'
     Assert-PreviewTest -Condition (-not ($checksumBytes -contains 13)) -Message 'checksum sidecar contains a non-portable CR byte'
-    Assert-PreviewTest -Condition ([int]$buildResult.PayloadFiles -eq 46) -Message 'reviewed payload is not the expected 46-file closure'
+    Assert-PreviewTest -Condition ([int]$buildResult.PayloadFiles -eq 52) -Message 'reviewed payload is not the expected 52-file closure'
     Assert-PreviewTest -Condition ([System.IO.File]::ReadAllText($stagingSentinel) -eq 'caller-owned staging parent') -Message 'package builder removed caller-owned staging content'
 
     Expand-Archive -LiteralPath $buildResult.Package -DestinationPath $packageRoot
@@ -109,9 +109,11 @@ try {
     Assert-PreviewTest -Condition (Test-Path -LiteralPath (Join-Path $packageRoot 'THIRD_PARTY_NOTICES.md') -PathType Leaf) -Message 'package omitted third-party notices'
 
     $payloadFiles = @(Get-ChildItem -LiteralPath (Join-Path $packageRoot 'payload/rime-data') -File -Recurse)
-    Assert-PreviewTest -Condition ($payloadFiles.Count -eq 46) -Message 'extracted ZIP does not contain exactly 46 payload files'
+    Assert-PreviewTest -Condition ($payloadFiles.Count -eq 52) -Message 'extracted ZIP does not contain exactly 52 payload files'
     Assert-PreviewTest -Condition (Test-Path -LiteralPath (Join-Path $packageRoot 'payload/rime-data/licenses/GPL-3.0.txt') -PathType Leaf) -Message 'package omitted GPL-3.0 text'
     Assert-PreviewTest -Condition (Test-Path -LiteralPath (Join-Path $packageRoot 'payload/rime-data/licenses/rime-ice-SOURCE.md') -PathType Leaf) -Message 'package omitted Rime Ice source notice'
+    Assert-PreviewTest -Condition (Test-Path -LiteralPath (Join-Path $packageRoot 'payload/rime-data/licenses/rime-wubi-LICENSE') -PathType Leaf) -Message 'package omitted Rime Wubi license'
+    Assert-PreviewTest -Condition (Test-Path -LiteralPath (Join-Path $packageRoot 'payload/rime-data/licenses/rime-wubi-SOURCE.md') -PathType Leaf) -Message 'package omitted Rime Wubi source notice'
     $forbidden = @($payloadFiles | Where-Object {
         $_.Name -match '(?i:userdb|rime_ai|\.bin$)' -or $_.FullName -match '(?i:[/\\]lua[/\\](?:ai_box|ai_translator))'
     })

@@ -6,12 +6,12 @@ __include: rime_ice.schema:/
 
 schema:
   schema_id: my_combo
-  name: 飞耀互击
-  version: '1.4'
+  name: 飞耀输入
+  version: '1.5'
   author:
-    - 你的名字
+    - RIMES Contributors
   description: |
-    飞耀互击输入方案
+    “并击”扩展使用的飞耀并击 / 互击输入方案
     基于 Rime 输入法引擎
 
 switches:

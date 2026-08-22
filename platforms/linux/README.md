@@ -3,7 +3,8 @@
 这是一个面向 Linux 的 **Rime 数据与输入方案预览包**，首发目标是
 [Fcitx5 Rime](https://github.com/fcitx/fcitx5-rime)，同时兼容
 [IBus Rime](https://github.com/rime/ibus-rime)。它把仓库审核后的 `rime-data` 最小闭包
-安装到所选前端的用户数据目录，提供 `my_combo` 同批并击、自然码双拼、雾凇拼音和英文方案。
+安装到所选前端的用户数据目录，默认提供雾凇全拼、自然码双拼、小鹤双拼、五笔 86
+和英文五个核心方案；`my_combo` 飞耀方案随包提供，但作为默认关闭的可选并击方案。
 
 这不是完整的 Linux 版 RIMES 应用。它不包含 macOS 版的 Buffer 工作台、AI/翻译、
 OCR、插件 UI、自绘候选窗、焦点租约或设置窗口；候选显示、上屏和部署均由用户已经安装
@@ -15,7 +16,7 @@ OCR、插件 UI、自绘候选窗、焦点租约或设置窗口；候选显示�
 ## 前置条件
 
 - 已安装并能正常使用的 Fcitx5 Rime（推荐）或 IBus Rime。
-- 前端所用的 librime 必须带 Lua 模块；本包的四个方案包含 Lua processor、translator
+- 前端所用的 librime 必须带 Lua 模块；本包的核心和可选方案包含 Lua processor、translator
   和 filter。不同发行版可能把它命名为 `librime-lua`、`librime-plugin-lua` 或随
   `fcitx5-rime`/`ibus-rime` 一起提供，请以发行版的软件包说明为准。
 - 运行时还须提供 Rime/OpenCC 的标准 `opencc/s2t.json` 及其字典；审核工具把它登记为
@@ -115,7 +116,7 @@ tmp_root=$(mktemp -d)
 ```
 
 输出包括 `.tar.gz` 和对应的 `.sha256`。打包脚本必须先调用统一的
-`scripts/platform-preview/preview.py stage`，只收录 policy 审核通过的 46 文件最小
+`scripts/platform-preview/preview.py stage`，只收录 policy 审核通过的 52 文件最小
 依赖闭包；`rime_ai.example.json` 和旧 AI Lua 明确排除。归档内另有覆盖每个 payload
 文件的 `data/PAYLOAD-MANIFEST.tsv`，安装前会自动校验。找不到 Python、统一 staging
 工具或 policy 校验失败时，构建会 fail-closed，不会退回复制整个 `rime-data`。

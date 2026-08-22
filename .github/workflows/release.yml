@@ -11,9 +11,9 @@ on:
       version:
         description: 'Version number (strict X.Y.Z)'
         required: false
-        default: '0.4.3'
+        default: '0.5.0'
       publish_unsigned_preview:
-        description: 'Publish an UNSIGNED / NOT NOTARIZED GitHub pre-release'
+        description: 'Historical v0.4.3 channel is closed; this must remain false'
         required: false
         type: boolean
         default: false
@@ -39,7 +39,6 @@ jobs:
       version: ${{ steps.version.outputs.VERSION }}
       is_release: ${{ steps.version.outputs.IS_RELEASE }}
       is_unsigned_preview: ${{ steps.version.outputs.IS_UNSIGNED_PREVIEW }}
-      marine_zip: ${{ steps.marine_chrome.outputs.ZIP }}
       handoff_artifact: ${{ steps.handoff.outputs.ARTIFACT_NAME }}
       preview_handoff_artifact: ${{ steps.preview_handoff.outputs.ARTIFACT_NAME }}
     steps:
@@ -125,7 +124,6 @@ jobs:
           fi
           python3 -B scripts/sync-buffer-plugin-catalog.py --check
           python3 scripts/lint-log-privacy.py
-          node Extensions/marine-chrome/tests/smoke.mjs
 
       - name: Resolve version
         id: version
@@ -150,13 +148,8 @@ jobs:
           fi
           IS_UNSIGNED_PREVIEW=false
           if [[ "$PUBLISH_UNSIGNED_PREVIEW" == true ]]; then
-            [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
-            [[ "$IS_RELEASE" == false ]]
-            if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-              echo "Unsigned previews require a strict X.Y.Z version: $VERSION" >&2
-              exit 1
-            fi
-            IS_UNSIGNED_PREVIEW=true
+            echo "The one-time v0.4.3 unsigned preview channel is permanently closed." >&2
+            exit 1
           fi
           if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
             echo "Invalid build version: $VERSION" >&2
@@ -214,11 +207,6 @@ jobs:
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist
           /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" Info.plist
 
-      - name: Stage immutable preset plug-in manifests
-        run: |
-          python3 -B scripts/sync-buffer-plugin-catalog.py \
-            --stage-release-assets release-assets/preset-plugins
-
       # Universal (arm64 + x86_64) so the same .app runs on Apple Silicon and
       # Intel. librime is dlopen'd at runtime, so nothing extra is needed here.
       - name: Build (release, universal)
@@ -253,7 +241,7 @@ jobs:
           cp -R Vendor/rime/Frameworks/* "$APP/Contents/Frameworks/"
           cp -R Vendor/rime/SharedSupport/* "$APP/Contents/SharedSupport/"
           find "$APP/Contents/SharedSupport" -maxdepth 1 -type f -name '*.schema.yaml' -delete
-          # Overlay the four product schemas plus their hidden dictionaries and
+          # Overlay the five product schemas plus their hidden dictionaries and
           # reverse-lookup dependencies so a fresh install is self-contained.
           cp -R rime-data/* "$APP/Contents/SharedSupport/"
           [ -f Logo/AppIcon.icns ] && cp Logo/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns" || true
@@ -290,27 +278,6 @@ jobs:
           RIMEBUFFER_FRAMEWORKS_DIR="$FRAMEWORKS" \
             "$BIN" user-lexicon-bridge-smoke
 
-      - name: Package Marine Chrome extension
-        id: marine_chrome
-        run: |
-          set -euo pipefail
-          MARINE_VERSION="$(node -p "require('./Extensions/marine-chrome/manifest.json').version")"
-          [[ "$MARINE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
-            echo "Marine Chrome version must be strict X.Y.Z: $MARINE_VERSION" >&2
-            exit 1
-          }
-          MARINE_ZIP="marine-chrome-${MARINE_VERSION}.zip"
-          # Browser-extension archives need no Finder metadata. Keeping this
-          # archive free of xattrs/resource forks also makes its complete
-          # member set deterministic for the fresh runner's byte-for-byte
-          # passive verification.
-          ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent \
-            "Extensions/marine-chrome" "$MARINE_ZIP"
-          MARINE_SHA256="$(shasum -a 256 "$MARINE_ZIP" | awk '{print $1}')"
-          echo "ZIP=$MARINE_ZIP" >> "$GITHUB_OUTPUT"
-          echo "SHA256=$MARINE_SHA256" >> "$GITHUB_OUTPUT"
-          echo "Marine Chrome ZIP: $MARINE_ZIP  SHA256: $MARINE_SHA256"
-
       # workflow_dispatch is deliberately unsigned/ad-hoc and never enters the
       # protected signing environment. It remains useful for installation and
       # packaging smoke tests, but cannot be mistaken for a releasable build.
@@ -319,7 +286,6 @@ jobs:
         id: manual_package
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
-          MARINE_ZIP: ${{ steps.marine_chrome.outputs.ZIP }}
         run: |
           set -euo pipefail
           APP_ZIP="ETInput-${VERSION}.zip"
@@ -337,9 +303,7 @@ jobs:
           [[ "$pkg_signature_status" -ne 0 ]]
           printf '%s\n' "$pkg_signature" | grep -Fq 'Status: no signature'
 
-          preset_assets=(release-assets/preset-plugins/preset-plugin-*.json)
-          [[ "${#preset_assets[@]}" -gt 0 && -f "${preset_assets[0]}" ]]
-          for asset in "$PKG" "$APP_ZIP" "$MARINE_ZIP" "${preset_assets[@]}"; do
+          for asset in "$PKG" "$APP_ZIP"; do
             [[ -f "$asset" && ! -L "$asset" && -s "$asset" ]]
             bytes="$(stat -f%z "$asset")"
             [[ "$bytes" -le 536870912 ]] || {
@@ -348,7 +312,6 @@ jobs:
             }
           done
           unzip -tq "$APP_ZIP"
-          unzip -tq "$MARINE_ZIP"
           echo "PKG=$PKG" >> "$GITHUB_OUTPUT"
           echo "APP_ZIP=$APP_ZIP" >> "$GITHUB_OUTPUT"
 
@@ -414,8 +377,6 @@ jobs:
           path: |
             ${{ steps.manual_package.outputs.PKG }}
             ${{ steps.manual_package.outputs.APP_ZIP }}
-            ${{ steps.marine_chrome.outputs.ZIP }}
-            release-assets/preset-plugins/preset-plugin-*.json
           if-no-files-found: error
           retention-days: 7
 
@@ -428,20 +389,15 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
           PKG: ${{ steps.manual_package.outputs.PKG }}
-          MARINE_ZIP: ${{ steps.marine_chrome.outputs.ZIP }}
         run: |
           set -euo pipefail
           handoff="$RUNNER_TEMP/rimes-unsigned-preview-inputs"
           [[ ! -e "$handoff" ]]
-          mkdir -m 700 "$handoff" "$handoff/preset-plugins"
+          mkdir -m 700 "$handoff"
           app_archive='ETInput-handoff.zip'
           ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent \
             "$GITHUB_WORKSPACE/ETInput.app" "$handoff/$app_archive"
           cp "$PKG" "$handoff/$PKG"
-          cp "$MARINE_ZIP" "$handoff/$MARINE_ZIP"
-          preset_assets=(release-assets/preset-plugins/preset-plugin-*.json)
-          [[ "${#preset_assets[@]}" -gt 0 && -f "${preset_assets[0]}" ]]
-          cp "${preset_assets[@]}" "$handoff/preset-plugins/"
 
           {
             printf 'schema=rimes-unsigned-preview-v1\n'
@@ -450,7 +406,6 @@ jobs:
             printf 'is_release=false\n'
             printf 'unsigned_preview=true\n'
             printf 'pkg=%s\n' "$PKG"
-            printf 'marine_zip=%s\n' "$MARINE_ZIP"
             printf 'app_archive=%s\n' "$app_archive"
           } >"$handoff/context.txt"
 
@@ -458,7 +413,7 @@ jobs:
           # lists only the exact end-user assets, using their uploaded basenames.
           (
             cd "$handoff"
-            for relative in "$PKG" "$MARINE_ZIP" preset-plugins/preset-plugin-*.json; do
+            for relative in "$PKG"; do
               [[ -f "$relative" && ! -L "$relative" ]]
               digest="$(shasum -a 256 "$relative" | awk '{print $1}')"
               printf '%s  %s\n' "$digest" "$(basename "$relative")"
@@ -500,28 +455,22 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
           IS_RELEASE: ${{ steps.version.outputs.IS_RELEASE }}
-          MARINE_ZIP: ${{ steps.marine_chrome.outputs.ZIP }}
         run: |
           set -euo pipefail
           handoff="$RUNNER_TEMP/rimes-release-inputs"
           [[ ! -e "$handoff" ]]
-          mkdir -m 700 "$handoff" "$handoff/preset-plugins"
+          mkdir -m 700 "$handoff"
 
           # Handoff deliberately carries no xattrs, ACLs, resource forks, or
           # AppleDouble sidecars. The signing runner applies its own strict ZIP
           # member policy and never calls a general-purpose extractor here.
           ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent \
             "$GITHUB_WORKSPACE/ETInput.app" "$handoff/ETInput-handoff.zip"
-          cp "$MARINE_ZIP" "$handoff/$MARINE_ZIP"
-          preset_assets=(release-assets/preset-plugins/preset-plugin-*.json)
-          [[ "${#preset_assets[@]}" -gt 0 && -f "${preset_assets[0]}" ]]
-          cp "${preset_assets[@]}" "$handoff/preset-plugins/"
 
           {
             printf 'commit=%s\n' "$GITHUB_SHA"
             printf 'version=%s\n' "$VERSION"
             printf 'is_release=%s\n' "$IS_RELEASE"
-            printf 'marine_zip=%s\n' "$MARINE_ZIP"
           } >"$handoff/context.txt"
           (
             cd "$handoff"
@@ -621,14 +570,9 @@ jobs:
       - name: Passively verify exact unsigned-preview assets
         env:
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
-          MARINE_ZIP: ${{ needs.build_and_smoke.outputs.marine_zip }}
         run: |
           set -euo pipefail
           [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          [[ "$MARINE_ZIP" =~ ^marine-chrome-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.zip$ ]]
-          marine_version="$(/usr/bin/plutil -extract version raw -o - \
-            Extensions/marine-chrome/manifest.json)"
-          [[ "$MARINE_ZIP" == "marine-chrome-${marine_version}.zip" ]]
 
           handoff="$RUNNER_TEMP/rimes-unsigned-preview-inputs"
           pkg="RIMES-${VERSION}.pkg"
@@ -636,45 +580,34 @@ jobs:
           context="$handoff/context.txt"
           [[ -d "$handoff" && ! -L "$handoff" ]]
           [[ -f "$context" && ! -L "$context" ]]
-          [[ "$(wc -l <"$context" | tr -d '[:space:]')" == 8 ]]
+          [[ "$(wc -l <"$context" | tr -d '[:space:]')" == 7 ]]
           [[ "$(sed -n '1p' "$context")" == 'schema=rimes-unsigned-preview-v1' ]]
           [[ "$(sed -n '2p' "$context")" == "commit=$GITHUB_SHA" ]]
           [[ "$(sed -n '3p' "$context")" == "version=$VERSION" ]]
           [[ "$(sed -n '4p' "$context")" == 'is_release=false' ]]
           [[ "$(sed -n '5p' "$context")" == 'unsigned_preview=true' ]]
           [[ "$(sed -n '6p' "$context")" == "pkg=$pkg" ]]
-          [[ "$(sed -n '7p' "$context")" == "marine_zip=$MARINE_ZIP" ]]
-          [[ "$(sed -n '8p' "$context")" == "app_archive=$app_archive" ]]
+          [[ "$(sed -n '7p' "$context")" == "app_archive=$app_archive" ]]
 
           expected_top="$RUNNER_TEMP/rimes-preview-expected-top.txt"
           actual_top="$RUNNER_TEMP/rimes-preview-actual-top.txt"
           printf '%s\n' \
             HANDOFF-SHA256SUMS SHA256SUMS context.txt "$app_archive" \
-            "$pkg" "$MARINE_ZIP" preset-plugins | LC_ALL=C sort >"$expected_top"
+            "$pkg" | LC_ALL=C sort >"$expected_top"
           find "$handoff" -mindepth 1 -maxdepth 1 -exec basename {} \; \
             | LC_ALL=C sort >"$actual_top"
           cmp "$expected_top" "$actual_top"
           for required_file in \
             HANDOFF-SHA256SUMS SHA256SUMS context.txt "$app_archive" \
-            "$pkg" "$MARINE_ZIP"; do
+            "$pkg"; do
             [[ -f "$handoff/$required_file" && ! -L "$handoff/$required_file" ]]
           done
-          [[ -d "$handoff/preset-plugins" && ! -L "$handoff/preset-plugins" ]]
           if find "$handoff" -mindepth 1 \
               \( -type l -o \( ! -type d ! -type f \) \) \
               -print -quit | grep -q .; then
             echo 'Preview handoff contains a symlink or special file.' >&2
             exit 1
           fi
-          if find "$handoff/preset-plugins" -mindepth 1 \
-              \( ! -type f -o ! -name 'preset-plugin-*.json' \) \
-              -print -quit | grep -q .; then
-            echo 'Preview preset manifest layout is invalid.' >&2
-            exit 1
-          fi
-          preset_assets=("$handoff"/preset-plugins/preset-plugin-*.json)
-          [[ "${#preset_assets[@]}" -gt 0 && -f "${preset_assets[0]}" ]]
-
           checksum_paths="$RUNNER_TEMP/rimes-preview-checksum-paths.txt"
           : >"$checksum_paths"
           checksum_count=0
@@ -685,7 +618,7 @@ jobs:
             }
             relative="${BASH_REMATCH[1]}"
             case "$relative" in
-              SHA256SUMS|context.txt|"$app_archive"|"$pkg"|"$MARINE_ZIP"|preset-plugins/preset-plugin-*.json) ;;
+              SHA256SUMS|context.txt|"$app_archive"|"$pkg") ;;
               *) echo "Unexpected handoff checksum path: $relative" >&2; exit 1 ;;
             esac
             printf '%s\n' "$relative" >>"$checksum_paths"
@@ -698,30 +631,23 @@ jobs:
           cmp "$expected_checksum_paths" "$checksum_paths"
           regular_count="$(find "$handoff" -type f ! -name HANDOFF-SHA256SUMS \
             | wc -l | tr -d '[:space:]')"
-          [[ "$checksum_count" -eq "$regular_count" && "$checksum_count" -ge 6 ]]
+          [[ "$checksum_count" -eq "$regular_count" && "$checksum_count" -eq 4 ]]
           (cd "$handoff" && shasum -a 256 -c HANDOFF-SHA256SUMS)
 
           expected_public_sums="$RUNNER_TEMP/rimes-preview-public-sums.txt"
           (
             cd "$handoff"
-            for relative in "$pkg" "$MARINE_ZIP" preset-plugins/preset-plugin-*.json; do
+            for relative in "$pkg"; do
               digest="$(shasum -a 256 "$relative" | awk '{print $1}')"
               printf '%s  %s\n' "$digest" "$(basename "$relative")"
             done | LC_ALL=C sort -k2
           ) >"$expected_public_sums"
           cmp "$expected_public_sums" "$handoff/SHA256SUMS"
 
-          for bounded_input in "$handoff/$pkg" "$handoff/$app_archive" "$handoff/$MARINE_ZIP"; do
+          for bounded_input in "$handoff/$pkg" "$handoff/$app_archive"; do
             bytes="$(stat -f%z "$bounded_input")"
             [[ "$bytes" -gt 0 && "$bytes" -le 536870912 ]] || {
               echo "Preview binary asset is empty or exceeds 512 MiB: $bounded_input" >&2
-              exit 1
-            }
-          done
-          for manifest in "${preset_assets[@]}"; do
-            bytes="$(stat -f%z "$manifest")"
-            [[ "$bytes" -gt 0 && "$bytes" -le 1048576 ]] || {
-              echo "Preset manifest is empty or exceeds 1 MiB: $manifest" >&2
               exit 1
             }
           done
@@ -858,10 +784,9 @@ jobs:
             fi
           done
 
-          # Compare both ZIPs directly against their trusted source trees. No
+          # Compare the handoff ZIP directly against the package payload. No
           # archive member is extracted and ETInput is never executed here.
-          python3 - "$handoff/$app_archive" "$payload_app" \
-            "$handoff/$MARINE_ZIP" "$GITHUB_WORKSPACE/Extensions/marine-chrome" <<'PY'
+          python3 - "$handoff/$app_archive" "$payload_app" <<'PY'
           import hashlib
           import os
           import stat
@@ -984,22 +909,13 @@ jobs:
                           reject(label, f"bytes differ from source: {name!r}")
 
           compare_archive(sys.argv[1], sys.argv[2], "ETInput handoff")
-          compare_archive(sys.argv[3], sys.argv[4], "Marine")
           PY
-
-          mkdir -p release-assets/preset-plugins
-          cp "$handoff"/preset-plugins/preset-plugin-*.json \
-            release-assets/preset-plugins/
-          python3 -B scripts/sync-buffer-plugin-catalog.py \
-            --check-release-assets release-assets/preset-plugins
 
           publish_dir="$RUNNER_TEMP/rimes-unsigned-preview-assets"
           [[ ! -e "$publish_dir" ]]
           mkdir -m 700 "$publish_dir"
           cp "$handoff/$pkg" "$publish_dir/$pkg"
-          cp "$handoff/$MARINE_ZIP" "$publish_dir/$MARINE_ZIP"
           cp "$handoff/SHA256SUMS" "$publish_dir/SHA256SUMS"
-          cp "$handoff"/preset-plugins/preset-plugin-*.json "$publish_dir/"
           if find "$publish_dir" -mindepth 1 \( ! -type f -o -type l \) \
               -print -quit | grep -q .; then
             echo 'Public preview asset set contains a non-regular file.' >&2
@@ -1017,7 +933,6 @@ jobs:
 
           echo "PREVIEW_PUBLISH_DIR=$publish_dir" >> "$GITHUB_ENV"
           echo "PREVIEW_PKG=$pkg" >> "$GITHUB_ENV"
-          echo "PREVIEW_MARINE_ZIP=$MARINE_ZIP" >> "$GITHUB_ENV"
 
       - name: Reauthorize vacancy and create UNSIGNED pre-release
         env:
@@ -1051,13 +966,9 @@ jobs:
           }
           printf '%s\n' "$release_probe" | grep -Fq 'HTTP 404'
 
-          preset_assets=("$PREVIEW_PUBLISH_DIR"/preset-plugin-*.json)
-          [[ "${#preset_assets[@]}" -gt 0 && -f "${preset_assets[0]}" ]]
           gh release create "$PREVIEW_TAG" --repo "$GH_REPO" \
             "$PREVIEW_PUBLISH_DIR/$PREVIEW_PKG" \
             "$PREVIEW_PUBLISH_DIR/SHA256SUMS" \
-            "$PREVIEW_PUBLISH_DIR/$PREVIEW_MARINE_ZIP" \
-            "${preset_assets[@]}" \
             --target "$GITHUB_SHA" \
             --prerelease \
             --latest=false \
@@ -1073,7 +984,7 @@ jobs:
 
           1. 下载 `RIMES-${{ needs.build_and_smoke.outputs.version }}.pkg` 和 `SHA256SUMS`，在同一目录运行
              `grep -E '  RIMES-${{ needs.build_and_smoke.outputs.version }}\.pkg$' SHA256SUMS | shasum -a 256 -c -`
-             校验安装包。`SHA256SUMS` 还覆盖可选插件资产，未下载那些文件时不要整文件校验。
+             校验安装包。
           2. 双击 PKG。若 macOS 拦截，请仅针对这个文件按 Apple 官方中文说明使用
              “系统设置 → 隐私与安全性 → 仍要打开”：
              https://support.apple.com/zh-cn/102445
@@ -1154,7 +1065,6 @@ jobs:
         env:
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
           IS_RELEASE: ${{ needs.build_and_smoke.outputs.is_release }}
-          MARINE_ZIP: ${{ needs.build_and_smoke.outputs.marine_zip }}
         run: |
           set -euo pipefail
           [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
@@ -1162,38 +1072,23 @@ jobs:
           # downgrade branch here; workflow_dispatch artifacts are completed
           # entirely in build_and_smoke without entering this environment.
           [[ "$IS_RELEASE" == true ]]
-          [[ "$MARINE_ZIP" =~ ^marine-chrome-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.zip$ ]]
-          marine_version="$(/usr/bin/plutil -extract version raw -o - \
-            Extensions/marine-chrome/manifest.json)"
-          [[ "$marine_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          [[ "$MARINE_ZIP" == "marine-chrome-${marine_version}.zip" ]]
 
           handoff="$RUNNER_TEMP/rimes-release-inputs"
           context="$handoff/context.txt"
           [[ -d "$handoff" && ! -L "$handoff" ]]
           [[ -f "$context" && ! -L "$context" ]]
-          [[ "$(wc -l <"$context" | tr -d '[:space:]')" == 4 ]]
+          [[ "$(wc -l <"$context" | tr -d '[:space:]')" == 3 ]]
           [[ "$(sed -n '1p' "$context")" == "commit=$GITHUB_SHA" ]]
           [[ "$(sed -n '2p' "$context")" == "version=$VERSION" ]]
           [[ "$(sed -n '3p' "$context")" == "is_release=$IS_RELEASE" ]]
-          [[ "$(sed -n '4p' "$context")" == "marine_zip=$MARINE_ZIP" ]]
-          [[ "$(find "$handoff" -mindepth 1 -maxdepth 1 | wc -l | tr -d '[:space:]')" == 5 ]]
+          [[ "$(find "$handoff" -mindepth 1 -maxdepth 1 | wc -l | tr -d '[:space:]')" == 3 ]]
           [[ -f "$handoff/ETInput-handoff.zip" && ! -L "$handoff/ETInput-handoff.zip" ]]
-          [[ -f "$handoff/$MARINE_ZIP" && ! -L "$handoff/$MARINE_ZIP" ]]
           [[ -f "$handoff/SHA256SUMS" && ! -L "$handoff/SHA256SUMS" ]]
-          [[ -d "$handoff/preset-plugins" && ! -L "$handoff/preset-plugins" ]]
           if find "$handoff" -mindepth 1 \( -type l -o \( ! -type d ! -type f \) \) \
               -print -quit | grep -q .; then
             echo 'Cross-runner artifact contains a symlink or special file.' >&2
             exit 1
           fi
-          if find "$handoff/preset-plugins" -mindepth 1 \
-              \( ! -type f -o ! -name 'preset-plugin-*.json' \) \
-              -print -quit | grep -q .; then
-            echo 'Cross-runner preset manifest layout is invalid.' >&2
-            exit 1
-          fi
-
           checksum_count=0
           while IFS= read -r checksum_line; do
             [[ "$checksum_line" =~ ^[0-9a-f]{64}\ \ (.+)$ ]] || {
@@ -1202,16 +1097,16 @@ jobs:
             }
             relative="${BASH_REMATCH[1]}"
             case "$relative" in
-              ETInput-handoff.zip|context.txt|"$MARINE_ZIP"|preset-plugins/preset-plugin-*.json) ;;
+              ETInput-handoff.zip|context.txt) ;;
               *) echo "Unexpected handoff checksum path: $relative" >&2; exit 1 ;;
             esac
             checksum_count=$((checksum_count + 1))
           done <"$handoff/SHA256SUMS"
           regular_count="$(find "$handoff" -type f ! -name SHA256SUMS | wc -l | tr -d '[:space:]')"
-          [[ "$checksum_count" -eq "$regular_count" && "$checksum_count" -ge 4 ]]
+          [[ "$checksum_count" -eq "$regular_count" && "$checksum_count" -eq 2 ]]
           (cd "$handoff" && shasum -a 256 -c SHA256SUMS)
 
-          for bounded_input in "$handoff/ETInput-handoff.zip" "$handoff/$MARINE_ZIP"; do
+          for bounded_input in "$handoff/ETInput-handoff.zip"; do
             bytes="$(stat -f%z "$bounded_input")"
             [[ "$bytes" -gt 0 && "$bytes" -le 536870912 ]] || {
               echo "Cross-runner input exceeds 512 MiB: $bounded_input" >&2
@@ -1421,148 +1316,7 @@ jobs:
           done < <(find "$app/Contents/Frameworks" -type f -print0)
           [[ "$nested_mach_o_count" -gt 0 ]]
 
-          # Marine is published unchanged, so accept only the exact checkout
-          # tree. This is intentionally read-only: no untrusted archive member
-          # is ever materialized on the credential-bearing runner.
-          python3 - "$handoff/$MARINE_ZIP" \
-            "$GITHUB_WORKSPACE/Extensions/marine-chrome" <<'PY'
-          import hashlib
-          import os
-          import stat
-          import sys
-          import zipfile
-          from pathlib import Path
-
-          archive_path = Path(sys.argv[1])
-          source_root = Path(sys.argv[2])
-          archive_prefix = "marine-chrome"
-          maximum_entries = 10_000
-          maximum_file_bytes = 128 * 1024 * 1024
-          maximum_expanded_bytes = 512 * 1024 * 1024
-          read_chunk_bytes = 1024 * 1024
-
-          def reject(reason: str) -> None:
-              raise SystemExit(f"unsafe Marine ZIP: {reason}")
-
-          root_metadata = os.lstat(source_root)
-          if not stat.S_ISDIR(root_metadata.st_mode):
-              reject("checkout source is not a directory")
-
-          expected_directories = {f"{archive_prefix}/"}
-          expected_files: dict[str, Path] = {}
-          for directory, directory_names, file_names in os.walk(
-              source_root, topdown=True, followlinks=False
-          ):
-              directory_path = Path(directory)
-              for child_name in directory_names:
-                  child = directory_path / child_name
-                  metadata = os.lstat(child)
-                  if not stat.S_ISDIR(metadata.st_mode):
-                      reject(f"checkout contains a symlink/special directory: {child}")
-                  relative = child.relative_to(source_root).as_posix()
-                  expected_directories.add(f"{archive_prefix}/{relative}/")
-              for child_name in file_names:
-                  child = directory_path / child_name
-                  metadata = os.lstat(child)
-                  if not stat.S_ISREG(metadata.st_mode):
-                      reject(f"checkout contains a symlink/special file: {child}")
-                  relative = child.relative_to(source_root).as_posix()
-                  expected_files[f"{archive_prefix}/{relative}"] = child
-
-          try:
-              archive = zipfile.ZipFile(archive_path, mode="r")
-          except (OSError, zipfile.BadZipFile) as error:
-              reject(f"cannot open archive: {error}")
-
-          with archive:
-              if archive.comment:
-                  reject("archive comments are not permitted")
-              entries = archive.infolist()
-              if not entries or len(entries) > maximum_entries:
-                  reject("entry count is empty or exceeds the limit")
-
-              seen_entries: set[str] = set()
-              actual_directories: set[str] = set()
-              actual_files: dict[str, zipfile.ZipInfo] = {}
-              expanded_bytes = 0
-              for info in entries:
-                  name = info.orig_filename
-                  if not isinstance(name, str) or not name or "\x00" in name:
-                      reject("entry has an empty or NUL-containing name")
-                  if name.startswith("/") or "\\" in name:
-                      reject(f"absolute/backslash path: {name!r}")
-                  parts = name.rstrip("/").split("/")
-                  if any(part in ("", ".", "..") for part in parts):
-                      reject(f"empty, dot, or parent path component: {name!r}")
-                  if any(part == "__MACOSX" or part.startswith("._") for part in parts):
-                      reject(f"AppleDouble/resource-fork entry: {name!r}")
-                  if name in seen_entries:
-                      reject(f"duplicate entry: {name!r}")
-                  seen_entries.add(name)
-                  if info.create_system != 3:
-                      reject(f"entry lacks explicit Unix type/mode: {name!r}")
-
-                  mode = info.external_attr >> 16
-                  file_type = stat.S_IFMT(mode)
-                  if info.is_dir():
-                      if not name.endswith("/") or file_type != stat.S_IFDIR \
-                              or info.file_size != 0:
-                          reject(f"invalid directory entry: {name!r}")
-                      if name not in expected_directories:
-                          reject(f"unexpected directory entry: {name!r}")
-                      actual_directories.add(name)
-                  else:
-                      if name.endswith("/") or file_type != stat.S_IFREG:
-                          reject(f"symlink or special entry: {name!r}")
-                      expected_path = expected_files.get(name)
-                      if expected_path is None:
-                          reject(f"unexpected file entry: {name!r}")
-                      expected_metadata = os.lstat(expected_path)
-                      if bool(mode & 0o111) != bool(expected_metadata.st_mode & 0o111):
-                          reject(f"executable mode drift: {name!r}")
-                      if info.file_size != expected_metadata.st_size \
-                              or info.file_size > maximum_file_bytes:
-                          reject(f"file size drift or limit exceeded: {name!r}")
-                      expanded_bytes += info.file_size
-                      if expanded_bytes > maximum_expanded_bytes:
-                          reject("expanded archive exceeds 512 MiB")
-                      actual_files[name] = info
-
-                  if mode & (stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX | 0o022):
-                      reject(f"unsafe Unix permissions: {name!r}")
-                  if info.flag_bits & 0x1 or info.flag_bits & ~(0x8 | 0x800):
-                      reject(f"encrypted or unsupported ZIP flags: {name!r}")
-                  if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
-                      reject(f"unsupported compression method: {name!r}")
-                  if info.comment:
-                      reject(f"entry comment is not permitted: {name!r}")
-
-              if actual_directories != expected_directories \
-                      or set(actual_files) != set(expected_files):
-                  reject("archive member set does not exactly match the checkout")
-
-              for name, info in actual_files.items():
-                  archive_digest = hashlib.sha256()
-                  with archive.open(info, mode="r") as archived_file:
-                      while chunk := archived_file.read(read_chunk_bytes):
-                          archive_digest.update(chunk)
-                  source_digest = hashlib.sha256()
-                  with expected_files[name].open("rb") as source_file:
-                      while chunk := source_file.read(read_chunk_bytes):
-                          source_digest.update(chunk)
-                  if archive_digest.digest() != source_digest.digest():
-                      reject(f"file bytes differ from the checkout: {name!r}")
-          PY
-          mkdir -p release-assets/preset-plugins
-          cp "$handoff"/preset-plugins/preset-plugin-*.json \
-            release-assets/preset-plugins/
-          python3 -B scripts/sync-buffer-plugin-catalog.py \
-            --check-release-assets release-assets/preset-plugins
-          cp "$handoff/$MARINE_ZIP" "$GITHUB_WORKSPACE/$MARINE_ZIP"
-
           echo "RIMES_APP_PATH=$app" >> "$GITHUB_ENV"
-          echo "MARINE_ZIP=$MARINE_ZIP" >> "$GITHUB_OUTPUT"
-          echo "MARINE_SHA256=$(shasum -a 256 "$handoff/$MARINE_ZIP" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
       # Re-authorize the exact commit on the fresh signing runner before any
       # protected secret is materialized. Runtime output from the prior runner
@@ -1667,17 +1421,12 @@ jobs:
           PKG_SHA256: ${{ steps.pkg.outputs.PKG_SHA256 }}
           APP_ZIP: ${{ steps.package.outputs.ZIP }}
           APP_ZIP_SHA256: ${{ steps.package.outputs.SHA256 }}
-          MARINE_ZIP: ${{ steps.stage_inputs.outputs.MARINE_ZIP }}
-          MARINE_ZIP_SHA256: ${{ steps.stage_inputs.outputs.MARINE_SHA256 }}
         run: |
           set -euo pipefail
           [[ "$(basename "$PKG")" == "RIMES-${VERSION}.pkg" ]]
           [[ "$(basename "$APP_ZIP")" == "ETInput-${VERSION}.zip" ]]
-          [[ "$(basename "$MARINE_ZIP")" == marine-chrome-*.zip ]]
-          preset_assets=(release-assets/preset-plugins/preset-plugin-*.json)
-          [[ "${#preset_assets[@]}" -gt 0 && -f "${preset_assets[0]}" ]]
 
-          for asset in "$PKG" "$APP_ZIP" "$MARINE_ZIP" "${preset_assets[@]}"; do
+          for asset in "$PKG" "$APP_ZIP"; do
             [[ -f "$asset" && ! -L "$asset" && -s "$asset" ]] || {
               echo "Release asset is missing, empty, or a symlink: $asset" >&2
               exit 1
@@ -1690,7 +1439,6 @@ jobs:
           done
           [[ "$(shasum -a 256 "$PKG" | awk '{print $1}')" == "$PKG_SHA256" ]]
           [[ "$(shasum -a 256 "$APP_ZIP" | awk '{print $1}')" == "$APP_ZIP_SHA256" ]]
-          [[ "$(shasum -a 256 "$MARINE_ZIP" | awk '{print $1}')" == "$MARINE_ZIP_SHA256" ]]
 
           unzip -tq "$APP_ZIP"
           verify_root="$(mktemp -d "$RUNNER_TEMP/rimes-macos-release.XXXXXX")"
@@ -1790,10 +1538,6 @@ jobs:
           xcrun stapler validate -v "$PKG"
           spctl --assess --type install --verbose=4 "$PKG"
 
-          unzip -tq "$MARINE_ZIP"
-          unzip -p "$MARINE_ZIP" marine-chrome/manifest.json \
-            | cmp - Extensions/marine-chrome/manifest.json
-
       # No network publisher is invoked while the Developer ID private keys or
       # App Store Connect key remain usable on this runner.
       - name: Destroy signing material before publication
@@ -1836,14 +1580,11 @@ jobs:
           GH_REPO: scholay/rimes
           PKG: ${{ steps.pkg.outputs.PKG }}
           APP_ZIP: ${{ steps.package.outputs.ZIP }}
-          MARINE_ZIP: ${{ steps.stage_inputs.outputs.MARINE_ZIP }}
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
         run: |
           set -euo pipefail
-          preset_assets=(release-assets/preset-plugins/preset-plugin-*.json)
-          [[ "${#preset_assets[@]}" -gt 0 && -f "${preset_assets[0]}" ]]
           gh release create "$GITHUB_REF_NAME" --repo "$GH_REPO" \
-            "$PKG" "$APP_ZIP" "$MARINE_ZIP" "${preset_assets[@]}" \
+            "$PKG" "$APP_ZIP" \
             --verify-tag \
             --latest \
             --title "RIMES v${VERSION}" \
@@ -1867,16 +1608,11 @@ jobs:
           Apple Team 签名、公证状态与包内版本；输入法菜单会显示可安装版本。确认后
           只会打开 macOS 系统安装器，由用户授权完成更新，不再用 ZIP 自替换。
 
-          ### Marine Chrome 扩展
-          需要网页上下文时，下载并解压 **`${{ steps.stage_inputs.outputs.MARINE_ZIP }}`**，
-          在 `chrome://extensions` 开启开发者模式后选择“加载已解压的扩展程序”。
-
           ### 校验和
           | 文件 | SHA256 |
           |------|--------|
           | PKG | `${{ steps.pkg.outputs.PKG_SHA256 }}` |
           | ZIP | `${{ steps.package.outputs.SHA256 }}` |
-          | Marine Chrome | `${{ steps.stage_inputs.outputs.MARINE_SHA256 }}` |
           EOF
 
       - name: Always remove temporary signing material

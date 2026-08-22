@@ -2,11 +2,13 @@ import Foundation
 
 enum UserLexiconKind: String, CaseIterable, Codable, Sendable {
     case chinese
+    case wubi86
     case english
 
     var dictionaryName: String {
         switch self {
         case .chinese: return "rime_ice"
+        case .wubi86: return "wubi86"
         case .english: return "english"
         }
     }
@@ -14,6 +16,7 @@ enum UserLexiconKind: String, CaseIterable, Codable, Sendable {
     var displayName: String {
         switch self {
         case .chinese: return "中文学习词库"
+        case .wubi86: return "五笔86学习词库"
         case .english: return "英文学习词库"
         }
     }
@@ -36,8 +39,8 @@ struct UserLexiconTransferResult: Equatable, Sendable {
     let entryCount: Int
     let fileURL: URL
     /// Old `rime_dict_manager -e` exports have no db metadata. They remain
-    /// importable after the user explicitly chooses Chinese or English, while
-    /// ETInput exports are self-describing and can reject a wrong target.
+    /// importable after the user explicitly chooses a target dictionary, while
+    /// RIMES exports are self-describing and can reject a wrong target.
     let sourceWasSelfDescribing: Bool
 }
 
@@ -170,8 +173,8 @@ final class UserLexiconService {
     }
 
     /// Imports through Rime's UserDbImporter, which merges learning weights;
-    /// it never replaces the live LevelDB. ETInput's self-describing exports
-    /// reject a Chinese/English mismatch. Legacy official TSV exports without
+    /// it never replaces the live LevelDB. RIMES self-describing exports reject
+    /// any cross-dictionary mismatch. Legacy official TSV exports without
     /// metadata are accepted only into the target the user explicitly chose.
     func importLearningData(_ kind: UserLexiconKind,
                             from sourceURL: URL) throws -> UserLexiconTransferResult {

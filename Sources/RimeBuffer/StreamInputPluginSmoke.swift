@@ -53,6 +53,7 @@ private final class StreamInputSmokeRuntimeBox {
     var runtime: StreamInputRuntime {
         StreamInputRuntime(
             bufferEnabled: { [self] in bufferEnabled },
+            capturesFocus: { [self] _ in bufferEnabled && exactFocus },
             pluginSelected: { [self] in pluginSelected },
             secureInput: { [self] in secureInput },
             liveFocus: { [self] _, _ in exactFocus }
@@ -84,6 +85,21 @@ func runStreamInputPluginSmokeTest() -> Bool {
         encoding: .fullPinyin,
         keyingMode: .mutual
     )
+    let disabledChordExtension = ChordExtensionConfiguration(
+        isEnabled: false,
+        mode: .mutual,
+        duration: ChordSettings.defaultDuration
+    )
+    let enabledChordExtension = ChordExtensionConfiguration(
+        isEnabled: true,
+        mode: .chord,
+        duration: ChordSettings.defaultDuration
+    )
+    let enabledMutualExtension = ChordExtensionConfiguration(
+        isEnabled: true,
+        mode: .mutual,
+        duration: ChordSettings.defaultDuration
+    )
     guard InputConfigurationResolver.profile(
         for: chordConfiguration
     )?.schemaID == FlyChordLearningIdentity.schemaID,
@@ -108,10 +124,23 @@ func runStreamInputPluginSmokeTest() -> Bool {
         schemaID: FlyChordLearningIdentity.schemaID,
         policy: .independentHalves
     ),
+    StreamInputChordRoutingRules.route(for: disabledChordExtension) == nil,
+    StreamInputChordRoutingRules.route(
+        for: enabledChordExtension
+    ) == StreamInputChordRoute(
+        schemaID: FlyChordLearningIdentity.schemaID,
+        policy: .sameBatchOnly
+    ),
+    StreamInputChordRoutingRules.route(
+        for: enabledMutualExtension
+    ) == StreamInputChordRoute(
+        schemaID: FlyChordLearningIdentity.schemaID,
+        policy: .independentHalves
+    ),
     StreamInputChordRoutingRules.schemaID(
         for: .init(encoding: .fullPinyin, keyingMode: .sequential)
     ) == nil else {
-        return fail("chord routing must preserve both FlyYao settlement modes")
+        return fail("extension gate must preserve both FlyYao settlement modes")
     }
     for keycode: Int32 in [0x61, 0x7a, 0x2c, 0x2e] {
         guard StreamInputCaptureRules.disposition(
@@ -918,6 +947,133 @@ func runStreamInputPluginSmokeTest() -> Bool {
               mutualWorkspace.automaticSyllableSpaceOffsets == [4, 10, 13],
               mutualWorkspace.railSnapshot.sourceText == "qing qiong ni " else {
             return fail("mutual dv+i must recombine into soft-separated ni")
+        }
+    }
+
+    // Switching only the input route to direct must reject subsequent stream
+    // keystrokes without revoking an already-prepared delivery lease.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false
+        )
+        workspace.start()
+        defer { workspace.stop() }
+
+        guard workspace.capture(letter: "a", focusToken: focus),
+              workspace.settleForReturn(focusToken: focus),
+              provider.pending.count == 1 else {
+            return fail("direct-route ready lease setup")
+        }
+        provider.complete(.success([
+            AITextProviderBlock(index: 0, text: "保留结果", title: nil),
+        ]), at: 0)
+        guard workspace.phase == .ready,
+              workspace.prepareForDelivery(),
+              let ready = workspace.deliveryPendingBlocks.first else {
+            return fail("direct-route prepared lease setup")
+        }
+        let generation = workspace.deliveryGeneration
+        runtime.bufferEnabled = false
+        workspace.bufferStateDidChangeForTesting()
+        let retained = workspace.deliveryBlock(
+            id: ready.id,
+            generation: generation
+        )
+        guard !workspace.capture(letter: "b", focusToken: focus),
+              workspace.rawInput == "a",
+              workspace.outputBlocks.first?.text == "保留结果",
+              workspace.phase == .ready,
+              workspace.deliveryGeneration == generation,
+              workspace.deliveryPendingBlocks.first?.id == ready.id,
+              retained?.id == ready.id,
+              retained?.text == ready.text else {
+            return fail("direct route must preserve ready delivery authority")
+        }
+    }
+
+    // An in-flight request remains focus-authorized after capture is routed to
+    // the host. Its callbacks may finish normally, but no new stream key enters.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false
+        )
+        workspace.start()
+        defer { workspace.stop() }
+
+        guard workspace.capture(letter: "a", focusToken: focus),
+              workspace.settleForReturn(focusToken: focus),
+              provider.pending.count == 1 else {
+            return fail("direct-route in-flight setup")
+        }
+        runtime.bufferEnabled = false
+        workspace.bufferStateDidChangeForTesting()
+        guard !provider.pending[0].task.isCancelled,
+              workspace.rawInput == "a",
+              workspace.phase == .running,
+              !workspace.capture(letter: "b", focusToken: focus) else {
+            return fail("direct route must retain in-flight inference")
+        }
+        provider.emit(.blockSnapshot(
+            AITextProviderBlock(index: 0, text: "在途部分", title: nil)
+        ), at: 0)
+        provider.complete(.success([
+            AITextProviderBlock(index: 0, text: "在途完成", title: nil),
+        ]), at: 0)
+        guard workspace.rawInput == "a",
+              workspace.phase == .ready,
+              workspace.outputBlocks.first?.text == "在途完成",
+              !workspace.deliveryPendingBlocks.isEmpty else {
+            return fail("direct route must accept retained inference callbacks")
+        }
+    }
+
+    // Route changes discard only an uncommitted physical chord batch. Already
+    // settled raw remains visible and direct-mode keys pass through.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let workspace = StreamInputWorkspace(
+            provider: StreamInputSmokeProvider(),
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+
+        guard workspace.capture(letter: "a", focusToken: focus),
+              workspace.captureChordKey(
+                0x71,
+                schemaID: "my_combo",
+                focusToken: focus
+              ),
+              workspace.hasPendingChordForTesting else {
+            return fail("direct-route pending chord setup")
+        }
+        runtime.bufferEnabled = false
+        workspace.bufferStateDidChangeForTesting()
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "a",
+              !workspace.hasPendingChordForTesting,
+              !workspace.captureChordKey(
+                0x79,
+                schemaID: "my_combo",
+                focusToken: focus
+              ) else {
+            return fail("direct route must discard only the pending chord")
         }
     }
 
@@ -1808,13 +1964,17 @@ func runStreamInputPluginSmokeTest() -> Bool {
             return fail("selected alternative semantic segmentation")
         }
         let firstSegmentID = workspace.deliveryPendingBlocks[0].id
-        workspace.consumeDelivered(blockIDs: [firstSegmentID],
-                                   generation: workspace.deliveryGeneration)
+        let firstDeliveryGeneration = workspace.deliveryGeneration
+        let firstReceipt = workspace.consumeDeliveredAndReportTerminalDrain(
+            blockIDs: [firstSegmentID],
+            generation: firstDeliveryGeneration
+        )
         let lockedRemainingIDs = workspace.deliveryPendingBlocks.map(\.id)
         guard workspace.phase == .ready,
               !workspace.rawInput.isEmpty,
               workspace.deliveryPendingBlocks.count == initialSegmentCount - 1,
-              workspace.statusText.contains("正在逐块上屏") else {
+              workspace.statusText.contains("正在逐块上屏"),
+              firstReceipt == nil else {
             return fail("partial selected-alternative delivery retention")
         }
         guard workspace.moveAlternativeSelection(delta: -1, focusToken: focus),
@@ -1823,14 +1983,22 @@ func runStreamInputPluginSmokeTest() -> Bool {
               workspace.deliveryPendingBlocks.map(\.id) == lockedRemainingIDs else {
             return fail("partial delivery must lock the selected alternative")
         }
-        workspace.consumeDelivered(
-            blockIDs: workspace.deliveryPendingBlocks.map(\.id),
-            generation: workspace.deliveryGeneration
+        let finalIDs = workspace.deliveryPendingBlocks.map(\.id)
+        let finalGeneration = workspace.deliveryGeneration
+        let finalReceipt = workspace.consumeDeliveredAndReportTerminalDrain(
+            blockIDs: finalIDs,
+            generation: finalGeneration
         )
         guard workspace.rawInput.isEmpty,
               workspace.outputBlocks.isEmpty,
               workspace.deliveryPendingBlocks.isEmpty,
-              workspace.phase == .idle else {
+              workspace.phase == .idle,
+              finalReceipt == BufferDeliveryTerminalSourceReceipt(
+                workspaceID: workspace.deliveryWorkspaceID,
+                generation: finalGeneration,
+                generationAfterConsumption: workspace.deliveryGeneration,
+                consumedBlockIDs: Set(finalIDs)
+              ) else {
             return fail("selected delivery clears every alternative")
         }
     }

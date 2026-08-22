@@ -1,6 +1,6 @@
 import Foundation
 
-/// Executable coverage for the pure 飞耀互击 learning model. `main.swift` may
+/// Executable coverage for the pure 飞耀输入 learning model. `main.swift` may
 /// wire this to the `fly-chord-learning-smoke` argument without the model layer
 /// importing or touching any input-controller/UI type.
 func runFlyChordLearningSmokeTest() -> Bool {
@@ -43,7 +43,7 @@ func runFlyChordLearningSmokeTest() -> Bool {
             ($0.chord, $0.output)
         })
         guard parsed.schemaID == "my_combo",
-              parsed.displayName == "飞耀互击",
+              parsed.displayName == "飞耀输入",
               parsed.literalRules.map(\.input) == ["ab", "a.", "cd", "m*id"],
               fixtureMap == ["ab": "alpha", "a.": "dot", "cd": "done"],
               fixtureMap["a."] != "wildcard-must-be-skipped",
@@ -207,7 +207,7 @@ func runFlyChordLearningSmokeTest() -> Bool {
             ($0.chord, $0.output)
         })
         guard schema.schemaID == "my_combo",
-              schema.displayName == "飞耀互击",
+              schema.displayName == "飞耀输入",
               schema.literalRules.count > 100,
               schema.mappings.count > 100,
               mappingByChord["qy"] == "qing",
@@ -262,7 +262,7 @@ func runFlyChordLearningSmokeTest() -> Bool {
 
         let curriculum = FlyChordCurriculum(schema: schema)
         guard curriculum.schemaID == "my_combo",
-              curriculum.displayName == "飞耀互击",
+              curriculum.displayName == "飞耀输入",
               curriculum.alphabet == schema.alphabet,
               !curriculum.courses.isEmpty,
               curriculum.courses.map(\.keyCount) == curriculum.courses.map(\.keyCount).sorted(),

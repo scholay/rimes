@@ -14,6 +14,11 @@ The GPL text and a detailed source notice are included as
 `rime-data/licenses/GPL-3.0.txt` and
 `rime-data/licenses/rime-ice-SOURCE.md`.
 
+The Xiaohe double-pinyin mapping and its mixed Chinese/English static table
+are additionally pinned to upstream Rime Ice revision
+`c398c0d4526b012cb3b306f792089abed13e0413`. The schema header and Rime Ice
+source notice record the RIMES adaptation and exact checksums.
+
 `rime-data/lua/search.lua` retains its embedded attribution to Mirtle and is
 licensed separately under
 [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/); its source URL
@@ -26,6 +31,18 @@ is recorded both in the file header and the Rime Ice source notice.
 revision `54a4a07289412efc54134092c0d945f895a71ed3` and is distributed under
 the GNU Lesser General Public License version 3. The license and source notice
 are included under `rime-data/licenses/`.
+
+## Rime Wubi 86
+
+`rime-data/wubi86.schema.yaml` and `rime-data/wubi86.dict.yaml` are imported
+from [`rime/rime-wubi`](https://github.com/rime/rime-wubi) at revision
+`152a0d3f3efe40cae216d1e3b338242446848d07` and are distributed under the GNU
+Lesser General Public License version 3. The dictionary is verbatim; RIMES
+modifies the schema to use the already bundled Rime Ice dictionary for pinyin
+reverse lookup and the bundled default punctuation preset. The exact source,
+modification boundary, checksum, and license text are included as
+`rime-data/licenses/rime-wubi-SOURCE.md` and
+`rime-data/licenses/rime-wubi-LICENSE`.
 
 RIMES-authored application and packaging code remains MIT-licensed. Those MIT
 terms do not replace the licenses above for third-party data.

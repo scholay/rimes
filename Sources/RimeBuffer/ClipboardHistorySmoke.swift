@@ -59,6 +59,90 @@ enum ClipboardHistorySmoke {
             "visible enabled rail did not plan hide in place"
         )
 
+        // Clipboard is a content source for Buffer, not a keyboard-routing
+        // control. Adding while direct keeps host typing direct; adding while
+        // captured preserves the exact capture token. Protection refuses the
+        // mutation without altering staged content.
+        let directBuffer = BufferModel()
+        let eligibleState = ClipboardWorkbenchIntegrationRules.captureState(
+            workbenchVisibleOnActiveSpace: true,
+            hiddenForSession: false,
+            railEnabled: true,
+            secureInput: false,
+            screenLocked: false,
+            sessionInactive: false,
+            sleeping: false
+        )
+        expect(
+            ClipboardWorkbenchIntegrationRules.addToBuffer(
+                "从剪贴板加入",
+                state: eligibleState,
+                contentShielded: false,
+                model: directBuffer
+            ),
+            "eligible Clipboard item was not added to Buffer"
+        )
+        expect(
+            directBuffer.inputRoute == .directToHost,
+            "Clipboard add implicitly enabled Buffer capture"
+        )
+        expect(
+            directBuffer.stagedText == "从剪贴板加入",
+            "Clipboard add changed staged text"
+        )
+
+        var focusEpochs = FocusEpochState()
+        let captureToken = focusEpochs.activate()
+        directBuffer.activateCapture(for: captureToken)
+        expect(
+            ClipboardWorkbenchIntegrationRules.addToBuffer(
+                "继续",
+                state: eligibleState,
+                contentShielded: false,
+                model: directBuffer
+            ),
+            "captured Clipboard add failed"
+        )
+        expect(
+            directBuffer.capturesInput(for: captureToken),
+            "Clipboard add replaced exact Buffer capture"
+        )
+        let stagedTextBeforeDirectRoute = directBuffer.stagedText
+        directBuffer.routeDirectPreservingContent(
+            reason: "clipboard integration smoke"
+        )
+        expect(
+            directBuffer.inputRoute == .directToHost,
+            "Buffer route did not return to direct after Clipboard add"
+        )
+        expect(
+            directBuffer.stagedText == stagedTextBeforeDirectRoute,
+            "Buffer route switch cleared Clipboard-sourced content"
+        )
+        let protectedState = ClipboardWorkbenchIntegrationRules.captureState(
+            workbenchVisibleOnActiveSpace: true,
+            hiddenForSession: false,
+            railEnabled: true,
+            secureInput: true,
+            screenLocked: false,
+            sessionInactive: false,
+            sleeping: false
+        )
+        let textBeforeProtectedAdd = directBuffer.stagedText
+        expect(
+            !ClipboardWorkbenchIntegrationRules.addToBuffer(
+                "不应加入",
+                state: protectedState,
+                contentShielded: true,
+                model: directBuffer
+            ),
+            "protected Clipboard item entered Buffer"
+        )
+        expect(
+            directBuffer.stagedText == textBeforeProtectedAdd,
+            "protected Clipboard add changed Buffer content"
+        )
+
         let pasteboard = ClipboardHistoryPasteboardDouble()
         let configuration = ClipboardHistoryConfiguration(
             maximumItems: 3,
@@ -91,6 +175,76 @@ enum ClipboardHistorySmoke {
         _ = model.pollNow()
         expect(pasteboard.changeCountReadCount == 0, "disabled rail read change count")
 
+        // A direct user enable/show gesture may import the item that already
+        // exists. The same API remains completely silent while hidden or
+        // protected, and ordinary protection resume stays baseline-only.
+        let explicitPasteboard = ClipboardHistoryPasteboardDouble()
+        explicitPasteboard.stubChangeCount = 41
+        explicitPasteboard.stubPlainText = "already copied"
+        let explicitModel = ClipboardHistoryModel(
+            configuration: configuration,
+            pasteboard: explicitPasteboard,
+            schedulesAutomaticPolling: false
+        )
+        explicitModel.start()
+        expect(
+            !explicitModel.captureCurrentIfEligible(),
+            "hidden explicit capture reported content"
+        )
+        expect(
+            explicitPasteboard.changeCountReadCount == 0
+                && explicitPasteboard.plainTextReadCount == 0,
+            "hidden explicit capture touched pasteboard"
+        )
+        explicitModel.update(
+            workbenchVisible: true,
+            railEnabled: true,
+            protection: []
+        )
+        expect(
+            explicitPasteboard.plainTextReadCount == 0,
+            "eligible baseline imported current text without explicit intent"
+        )
+        expect(
+            explicitModel.captureCurrentIfEligible(),
+            "explicit enable did not capture current text"
+        )
+        expect(
+            explicitModel.items.map(\.text) == ["already copied"],
+            "explicit capture stored the wrong projection"
+        )
+        explicitModel.update(
+            workbenchVisible: true,
+            railEnabled: true,
+            protection: [.secureInput]
+        )
+        let explicitProtectedCountReads = explicitPasteboard.changeCountReadCount
+        let explicitProtectedTextReads = explicitPasteboard.plainTextReadCount
+        explicitPasteboard.stubChangeCount = 42
+        explicitPasteboard.stubPlainText = "must stay protected"
+        expect(
+            !explicitModel.captureCurrentIfEligible(),
+            "protected explicit capture reported content"
+        )
+        expect(
+            explicitPasteboard.changeCountReadCount == explicitProtectedCountReads
+                && explicitPasteboard.plainTextReadCount == explicitProtectedTextReads,
+            "protected explicit capture touched pasteboard"
+        )
+        explicitModel.update(
+            workbenchVisible: true,
+            railEnabled: true,
+            protection: []
+        )
+        expect(
+            !explicitModel.pollNow(),
+            "protection resume backfilled clipboard without explicit intent"
+        )
+        expect(
+            explicitPasteboard.plainTextReadCount == explicitProtectedTextReads,
+            "protection resume read clipboard text"
+        )
+
         // Enabling establishes a change-count-only baseline. Text is read only
         // after a later observed change.
         model.update(workbenchVisible: true, railEnabled: true, protection: [])
@@ -102,6 +256,24 @@ enum ClipboardHistorySmoke {
         expect(pasteboard.plainTextReadCount == 1, "changed pasteboard text read count")
         expect(model.items.count == 1, "first item count")
         expect(model.storedByteCount == 5, "first item byte accounting")
+
+        // Input ownership and Clipboard history are independent lifecycles.
+        // Switching the Buffer route in either direction must preserve both
+        // the already-staged blocks and the in-memory Clipboard item.
+        let historyCountBeforeRouteRoundTrip = model.itemCount
+        let stagedTextBeforeRouteRoundTrip = directBuffer.stagedText
+        directBuffer.activateCapture(for: captureToken)
+        directBuffer.routeDirectPreservingContent(
+            reason: "clipboard history route round trip smoke"
+        )
+        expect(
+            model.itemCount == historyCountBeforeRouteRoundTrip,
+            "Buffer route switch cleared Clipboard history"
+        )
+        expect(
+            directBuffer.stagedText == stagedTextBeforeRouteRoundTrip,
+            "Buffer route round trip cleared staged content"
+        )
 
         // Exact duplicates are promoted in place rather than copied.
         let firstID = model.items.first?.id

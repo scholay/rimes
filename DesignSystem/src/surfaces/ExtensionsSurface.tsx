@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
   type SetStateAction,
 } from "react";
-import { Icon } from "../design-system/Icon";
+import { Icon, type IconName } from "../design-system/Icon";
 import {
   Badge,
   Button,
@@ -42,15 +42,17 @@ export type InboxItem = {
   context: string;
   preview: string;
   receivedAt: string;
+  icon: IconName;
 };
 
 const demoInboxItems: readonly InboxItem[] = [
   {
-    id: "marine-chrome-brief",
-    source: "Marine Chrome",
-    context: "网页摘录",
-    preview: "把这一段加入 Buffer，稍后继续整理成产品更新说明。",
+    id: "paired-local-brief",
+    source: "本地配对来源",
+    context: "配对文本",
+    preview: "把这段配对传入的文字加入 Buffer，稍后继续整理。",
     receivedAt: "刚刚",
+    icon: "network",
   },
   {
     id: "paired-iphone-note",
@@ -58,6 +60,7 @@ const demoInboxItems: readonly InboxItem[] = [
     context: "文本传入",
     preview: "下次迭代优先检查候选框切换应用后的可见性。",
     receivedAt: "2 分钟前",
+    icon: "textbox",
   },
 ];
 
@@ -83,11 +86,13 @@ export type PluginConfigurationMap = Record<string, PluginConfiguration>;
 
 export function PluginConfigurationDialog({
   plugin,
+  chordExtensionEnabled = false,
   initialConfiguration,
   onClose,
   onSave,
 }: {
   plugin: PluginRecord | null;
+  chordExtensionEnabled?: boolean;
   initialConfiguration?: PluginConfiguration;
   onClose: () => void;
   onSave?: (plugin: PluginRecord, configuration: PluginConfiguration) => void;
@@ -97,8 +102,6 @@ export function PluginConfigurationDialog({
   const [translationProvider, setTranslationProvider] = useState<TranslationProvider>("apple");
   const [translateContinuously, setTranslateContinuously] = useState(true);
   const [connector, setConnector] = useState("codex");
-  const [promptDirectory, setPromptDirectory] = useState("~/Documents/Prompts");
-  const [syncRemotePrompts, setSyncRemotePrompts] = useState(true);
   const [streamCandidates, setStreamCandidates] = useState("5");
   const [streamLatency, setStreamLatency] = useState("balanced");
   const [saved, setSaved] = useState(false);
@@ -127,16 +130,6 @@ export function PluginConfigurationDialog({
         : true,
     );
     setConnector(typeof configuration.connector === "string" ? configuration.connector : "codex");
-    setPromptDirectory(
-      typeof configuration.promptDirectory === "string"
-        ? configuration.promptDirectory
-        : "~/Documents/Prompts",
-    );
-    setSyncRemotePrompts(
-      typeof configuration.syncRemotePrompts === "boolean"
-        ? configuration.syncRemotePrompts
-        : true,
-    );
     setStreamCandidates(
       typeof configuration.candidateCount === "number"
         && configuration.candidateCount >= 1
@@ -186,8 +179,6 @@ export function PluginConfigurationDialog({
         };
       case "builtin.ai-text":
         return { connector };
-      case "builtin.my-prompt":
-        return { promptDirectory, syncRemotePrompts };
       case "builtin.stream-input":
         return {
           candidateCount: Number(streamCandidates),
@@ -340,37 +331,16 @@ export function PluginConfigurationDialog({
             </Field>
           ) : null}
 
-          {plugin.id === "builtin.my-prompt" ? (
-            <>
-              <Field label="本地提示词目录" hint="支持 Markdown、Obsidian 与 Fabric 风格文件。">
-                <input
-                  className="r-text-input"
-                  onChange={(event) => {
-                    setPromptDirectory(event.target.value);
-                    setSaved(false);
-                  }}
-                  value={promptDirectory}
-                />
-              </Field>
-              <div className="settings-control-row">
-                <span>
-                  <strong>启动时同步远程仓库</strong>
-                  <small>远程内容先同步到本地，再建立检索索引。</small>
-                </span>
-                <Switch
-                  checked={syncRemotePrompts}
-                  label="启动时同步远程提示词仓库"
-                  onChange={(next) => {
-                    setSyncRemotePrompts(next);
-                    setSaved(false);
-                  }}
-                />
-              </div>
-            </>
-          ) : null}
-
           {plugin.id === "builtin.stream-input" ? (
             <>
+              <div className="plugin-dialog__notice" role="status">
+                <Icon name={chordExtensionEnabled ? "hands" : "keyboard"} size={18} weight="duotone" />
+                <span>
+                  {chordExtensionEnabled
+                    ? "并击扩展已启用：意识流输入支持并击键序，并在生成前转换为连续全拼。"
+                    : "并击扩展已停用：意识流输入保持顺序全拼，不处理并击键序。"}
+                </span>
+              </div>
               <Field label="候选数量" hint="连续全拼可展示一至五个完整猜测，多项结果使用分页切换。">
                 <Segmented
                   ariaLabel="意识流候选数量"
@@ -409,7 +379,6 @@ export function PluginConfigurationDialog({
           {![
             "builtin.apple-translation",
             "builtin.ai-text",
-            "builtin.my-prompt",
             "builtin.stream-input",
           ].includes(plugin.id) ? (
             <div className="plugin-dialog__notice">
@@ -805,7 +774,18 @@ export function ExtensionsSurface({
                       <strong>{plugin.name}</strong>
                       <small>v{plugin.version} · {pluginStatusLabel(plugin)}</small>
                     </span>
-                    {available && plugin.configurable ? (
+                    {available
+                    && plugin.id === "builtin.fly-chord-learning"
+                    && plugin.enabled ? (
+                      <IconButton
+                        icon="gear"
+                        label={`配置 ${plugin.name}`}
+                        onClick={() => {
+                          onOpenSettings?.("extension.fly-chord-learning");
+                          setActivity("已打开并击扩展设置");
+                        }}
+                      />
+                    ) : available && plugin.configurable ? (
                       <IconButton
                         icon="gear"
                         label={`配置 ${plugin.name}`}
@@ -837,6 +817,9 @@ export function ExtensionsSurface({
       </MacWindow>
 
       <PluginConfigurationDialog
+        chordExtensionEnabled={plugins.some((plugin) => (
+          plugin.id === "builtin.fly-chord-learning" && plugin.enabled
+        ))}
         initialConfiguration={selectedPlugin ? pluginConfigurations[selectedPlugin.id] : undefined}
         onClose={() => setSelectedPlugin(null)}
         onSave={(plugin, configuration) => {
@@ -907,7 +890,7 @@ export function ExtensionsSurface({
                   {inboxItems.map((item) => (
                     <article className="inbox-review-item" key={item.id} role="listitem">
                       <span className="inbox-review-item__icon">
-                        <Icon name={item.source === "Marine Chrome" ? "network" : "textbox"} size={18} weight="duotone" />
+                        <Icon name={item.icon} size={18} weight="duotone" />
                       </span>
                       <span className="inbox-review-item__content">
                         <span className="inbox-review-item__meta">

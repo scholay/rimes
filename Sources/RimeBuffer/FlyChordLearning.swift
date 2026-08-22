@@ -5,7 +5,7 @@ import Foundation
 /// name can evolve independently.
 enum FlyChordLearningIdentity {
     static let schemaID = "my_combo"
-    static let displayName = "飞耀互击"
+    static let displayName = "飞耀输入"
     static let schemaFileName = "my_combo.schema.yaml"
     static let maximumSchemaBytes = 2 * 1_024 * 1_024
 }
@@ -45,9 +45,9 @@ enum FlyChordSchemaError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .schemaNotFound:
-            return "未找到飞耀互击方案文件（my_combo.schema.yaml）"
+            return "未找到飞耀输入方案文件（my_combo.schema.yaml）"
         case let .unreadableSchema(path):
-            return "无法读取飞耀互击方案：\(path)"
+            return "无法读取飞耀输入方案：\(path)"
         case let .unexpectedSchemaID(id):
             return "并击方案 ID 不匹配：\(id)"
         case .missingChordComposer:
@@ -664,11 +664,11 @@ enum FlyChordProgressStoreError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidProgressFile:
-            return "飞耀互击学习进度文件无效"
+            return "并击学习进度文件无效"
         case let .invalidMappingID(id):
-            return "未知的飞耀互击练习项：\(id)"
+            return "未知的并击练习项：\(id)"
         case let .fileOperation(message):
-            return "保存飞耀互击学习进度失败：\(message)"
+            return "保存并击学习进度失败：\(message)"
         }
     }
 }

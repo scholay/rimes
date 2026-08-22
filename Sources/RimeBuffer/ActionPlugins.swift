@@ -3605,12 +3605,61 @@ extension ActionPluginHost: WorkbenchManualGenerationControls,
         return block
     }
 
-    func consumeDelivered(blockIDs: [UUID], generation _: UInt64) {
+    func consumeDelivered(blockIDs: [UUID], generation: UInt64) {
+        _ = consumeDeliveredAndReportTerminalDrain(
+            blockIDs: blockIDs,
+            generation: generation
+        )
+    }
+
+    func consumeDeliveredAndReportTerminalDrain(
+        blockIDs: [UUID],
+        generation: UInt64
+    ) -> BufferDeliveryTerminalSourceReceipt? {
         // Delivery.insert already accepted these exact stable UUIDs. Consume
         // them even if unrelated BufferModel input advanced the global model
         // generation while a later block's async target validation was held;
         // otherwise an accepted block could be offered a second time.
+        let generationBeforeConsumption = deliveryGeneration
+        let presentation = primaryGenerationPresentation
+        let workspaceID = presentation.map {
+            "action-prepared:\($0.presentationKey.pluginId):\($0.presentationKey.presentationId)"
+        }
+        let matchingBefore = presentation.map { presentation in
+            self.bufferModel.blocks.filter { block in
+                blockIDs.contains(block.id)
+                    && self.preparedDeliveryBlock(
+                        block,
+                        matches: presentation,
+                        requireFinal: true
+                    )
+            }
+        } ?? []
         bufferModel.consumeDelivered(blockIDs: blockIDs)
+
+        let consumedIDs = Set(matchingBefore.lazy.filter {
+            self.bufferModel.block(id: $0.id) == nil
+        }.map(\.id))
+        guard let presentation,
+              let workspaceID,
+              generationBeforeConsumption == generation,
+              !consumedIDs.isEmpty,
+              !presentation.running,
+              !bufferModel.blocks.contains(where: {
+                self.preparedDeliveryBlock(
+                    $0,
+                    matches: presentation,
+                    requireFinal: false
+                )
+              }) else {
+            return nil
+        }
+        return BufferDeliveryTerminalSourceReceipt(
+            workspaceID: workspaceID,
+            generation: generationBeforeConsumption,
+            generationAfterConsumption: deliveryGeneration,
+            consumedBlockIDs: consumedIDs
+        )
     }
 
     @discardableResult

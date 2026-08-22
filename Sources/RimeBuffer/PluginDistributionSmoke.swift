@@ -92,13 +92,19 @@ func runPluginDistributionSmokeTest() -> Bool {
     let fileManager = FileManager.default
     let expectedDefaultIDs: Set<String> = [
         BuiltInPluginID.aiText,
-        BuiltInPluginID.myPrompt,
         BuiltInPluginID.appleTranslation,
         BuiltInPluginID.streamInput,
     ]
-    let expectedOptionalIDs: Set<String> = [
+    let expectedOptionalIDs: Set<String> = []
+    let retiredProductIDs: Set<String> = [
+        BuiltInPluginID.myPrompt,
         BuiltInPluginID.remarkable,
         BuiltInPluginID.marineChrome,
+    ]
+    let expectedVersions = [
+        BuiltInPluginID.aiText: "2.1",
+        BuiltInPluginID.appleTranslation: "2.1",
+        BuiltInPluginID.streamInput: "1.3",
     ]
 
     func fail(_ message: String) -> Bool {
@@ -265,17 +271,29 @@ func runPluginDistributionSmokeTest() -> Bool {
     guard Set(catalogIDs).count == catalogIDs.count else {
         return fail("catalog contains duplicate IDs")
     }
-    guard Set(PresetBufferPluginCatalog.entries.filter(\.defaultInstalled).map(\.id))
+    guard Set(catalogIDs) == expectedDefaultIDs,
+          Dictionary(uniqueKeysWithValues: PresetBufferPluginCatalog.entries.map {
+              ($0.id, $0.version)
+          }) == expectedVersions,
+          Set(PresetBufferPluginCatalog.entries.filter(\.defaultInstalled).map(\.id))
             == expectedDefaultIDs,
           Set(PresetBufferPluginCatalog.entries.filter(\.defaultEnabled).map(\.id))
             == expectedDefaultIDs,
           Set(PresetBufferPluginCatalog.entries.filter { !$0.defaultInstalled }.map(\.id))
             == expectedOptionalIDs else {
-        return fail("fresh catalog must contain exactly four bundled/enabled presets")
+        return fail("fresh catalog must contain exactly three bundled/enabled presets")
+    }
+    let registeredIDs = Set(BuiltInPlugins.makeAll().map {
+        $0.descriptor.key.rawID
+    })
+    guard retiredProductIDs.isDisjoint(with: Set(catalogIDs)),
+          retiredProductIDs.isDisjoint(with: registeredIDs),
+          expectedDefaultIDs.isSubset(of: registeredIDs) else {
+        return fail("retired product plug-ins remain catalogued or registered")
     }
 
     do {
-        // Fresh profile: only the exact four defaults are installed and
+        // Fresh profile: only the exact three defaults are installed and
         // running. Disabling one must survive a full registry/store rebuild.
         let sandbox = fileManager.temporaryDirectory.appendingPathComponent(
             "rimebuffer-plugin-distribution-fresh-\(UUID().uuidString)",
@@ -359,74 +377,6 @@ func runPluginDistributionSmokeTest() -> Bool {
     }
 
     do {
-        // A profile with the old disabled-ID preference is grandfathered once:
-        // optional plugins remain installed, while its explicit disabled set wins.
-        let sandbox = fileManager.temporaryDirectory.appendingPathComponent(
-            "rimebuffer-plugin-distribution-legacy-\(UUID().uuidString)",
-            isDirectory: true
-        )
-        let suiteName = "RimeBuffer.PluginDistributionLegacy.\(UUID().uuidString)"
-        guard let defaults = UserDefaults(suiteName: suiteName) else {
-            return fail("legacy defaults suite")
-        }
-        defaults.removePersistentDomain(forName: suiteName)
-        defaults.set(
-            [BuiltInPluginID.marineChrome],
-            forKey: PluginRegistry.disabledInternalPluginIDsKey
-        )
-        defer {
-            defaults.removePersistentDomain(forName: suiteName)
-            try? fileManager.removeItem(at: sandbox)
-        }
-
-        let store = PresetBufferPluginInstallationStore(
-            defaults: defaults,
-            rootURL: sandbox.appendingPathComponent("preset", isDirectory: true)
-        )
-        let fixtures = PresetBufferPluginCatalog.entries.map(
-            PluginDistributionSmokeInternalPlugin.init(entry:)
-        )
-        let registry = makeRegistry(
-            defaults: defaults,
-            sandbox: sandbox,
-            store: store,
-            fixtures: fixtures
-        )
-        let snapshot = registry.allPlugins()
-        guard Set(snapshot.filter(\.isInstalled).map { $0.id.rawID })
-                == Set(catalogIDs),
-              snapshot.first(where: {
-                $0.id.rawID == BuiltInPluginID.remarkable
-              })?.isEnabled == true,
-              snapshot.first(where: {
-                $0.id.rawID == BuiltInPluginID.marineChrome
-              })?.isEnabled == false,
-              store.isOptionalEnabled(id: BuiltInPluginID.remarkable),
-              !store.isOptionalEnabled(id: BuiltInPluginID.marineChrome) else {
-            return fail("legacy optional-plugin grandfathering")
-        }
-
-        guard let restartedDefaults = UserDefaults(suiteName: suiteName) else {
-            return fail("legacy restart defaults suite")
-        }
-        let restartedStore = PresetBufferPluginInstallationStore(
-            defaults: restartedDefaults,
-            rootURL: sandbox.appendingPathComponent("preset", isDirectory: true)
-        )
-        restartedStore.bootstrap(
-            hadLegacyEnablement: true,
-            legacyDisabledIDs: []
-        )
-        guard restartedStore.isInstalled(id: BuiltInPluginID.remarkable),
-              restartedStore.isOptionalEnabled(id: BuiltInPluginID.remarkable),
-              restartedStore.isInstalled(id: BuiltInPluginID.marineChrome),
-              !restartedStore.isOptionalEnabled(id: BuiltInPluginID.marineChrome) else {
-            return fail("legacy grandfathering restart persistence")
-        }
-        _ = registry
-    }
-
-    do {
         // A verified optional package installs as present-but-disabled and the
         // receipt remains valid after rebuilding the store with no downloader use.
         let sandbox = fileManager.temporaryDirectory.appendingPathComponent(
@@ -443,9 +393,9 @@ func runPluginDistributionSmokeTest() -> Bool {
             try? fileManager.removeItem(at: sandbox)
         }
 
-        let id = BuiltInPluginID.remarkable
-        let data = try encodedManifest(id: id, version: "2.0")
-        let entry = catalogEntry(id: id, version: "2.0", sha256: digest(data))
+        let id = "builtin.optional-smoke"
+        let data = try encodedManifest(id: id, version: "1.0")
+        let entry = catalogEntry(id: id, version: "1.0", sha256: digest(data))
         let downloader = PluginDistributionSmokeDownloader(result: .success(data))
         let root = sandbox.appendingPathComponent("preset", isDirectory: true)
         let store = PresetBufferPluginInstallationStore(
@@ -569,8 +519,8 @@ func runPluginDistributionSmokeTest() -> Bool {
             try? fileManager.removeItem(at: sandbox)
         }
 
-        let id = BuiltInPluginID.remarkable
-        let version = "2.0"
+        let id = "builtin.grant-smoke"
+        let version = "1.0"
         let oldData = try encodedManifest(
             id: id,
             version: version,

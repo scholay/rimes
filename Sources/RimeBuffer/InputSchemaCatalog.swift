@@ -1,19 +1,26 @@
 import Foundation
 
 enum InputEncoding: String, CaseIterable, Codable {
-    case naturalDoublePinyin
     case fullPinyin
+    case naturalDoublePinyin
+    case xiaoheDoublePinyin
+    case wubi86
     case english
 
     var title: String {
         switch self {
+        case .fullPinyin: return "雾凇全拼"
         case .naturalDoublePinyin: return "自然码双拼"
-        case .fullPinyin: return "全拼"
+        case .xiaoheDoublePinyin: return "小鹤双拼"
+        case .wubi86: return "五笔86"
         case .english: return "英文"
         }
     }
 }
 
+/// Legacy compatibility model retained while old preferences and smoke tests
+/// migrate. Product UI no longer exposes sequential/chord/mutual as a global
+/// axis; chord and mutual now belong to `ChordExtensionStore`.
 enum KeyingMode: String, CaseIterable, Codable {
     case sequential
     case chord
@@ -41,12 +48,13 @@ struct InputConfiguration: Equatable, Codable {
     var keyingMode: KeyingMode
 
     static let defaultValue = InputConfiguration(encoding: .fullPinyin,
-                                                 keyingMode: .mutual)
+                                                 keyingMode: .sequential)
 }
 
 struct RuntimeInputProfile: Equatable {
     enum LexiconFamily: String {
         case chinese
+        case wubi86
         case english
     }
 
@@ -58,16 +66,28 @@ struct RuntimeInputProfile: Equatable {
 enum InputConfigurationResolver {
     static let profiles: [RuntimeInputProfile] = [
         RuntimeInputProfile(
+            configuration: .init(encoding: .fullPinyin,
+                                 keyingMode: .sequential),
+            schemaID: "rime_ice",
+            lexiconFamily: .chinese
+        ),
+        RuntimeInputProfile(
             configuration: .init(encoding: .naturalDoublePinyin,
                                  keyingMode: .sequential),
             schemaID: "double_pinyin",
             lexiconFamily: .chinese
         ),
         RuntimeInputProfile(
-            configuration: .init(encoding: .fullPinyin,
+            configuration: .init(encoding: .xiaoheDoublePinyin,
                                  keyingMode: .sequential),
-            schemaID: "rime_ice",
+            schemaID: "double_pinyin_flypy",
             lexiconFamily: .chinese
+        ),
+        RuntimeInputProfile(
+            configuration: .init(encoding: .wubi86,
+                                 keyingMode: .sequential),
+            schemaID: "wubi86",
+            lexiconFamily: .wubi86
         ),
         RuntimeInputProfile(
             configuration: .init(encoding: .fullPinyin,
@@ -104,6 +124,16 @@ enum InputConfigurationResolver {
         return profiles.first { $0.schemaID == schemaID }
     }
 
+    static func profile(schemaID: String,
+                        chordMode: ChordExtensionMode) -> RuntimeInputProfile? {
+        guard schemaID == ChordExtensionStore.schemaID else {
+            return profile(schemaID: schemaID)
+        }
+        let keyingMode: KeyingMode = chordMode == .chord ? .chord : .mutual
+        return profile(for: .init(encoding: .fullPinyin,
+                                  keyingMode: keyingMode))
+    }
+
     static func selecting(_ encoding: InputEncoding,
                           from current: InputConfiguration) -> InputConfiguration {
         var next = current
@@ -135,6 +165,9 @@ final class InputConfigurationStore {
     static let shared = InputConfigurationStore()
 
     private enum Key {
+        static let selectedSchemaID = "input.configuration.schemaID.v2"
+        static let lastOrdinarySchemaID =
+            "input.configuration.lastOrdinarySchemaID.v2"
         static let encoding = "input.configuration.encoding.v1"
         static let keyingMode = "input.configuration.keyingMode.v1"
         static let preferredSchema = "preferredSchema"
@@ -144,55 +177,65 @@ final class InputConfigurationStore {
     private static let currentSemanticsVersion = 2
 
     private let defaults: UserDefaults
+    private let chordExtensionStore: ChordExtensionStore
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard,
+         chordExtensionStore: ChordExtensionStore? = nil) {
         self.defaults = defaults
+        if let chordExtensionStore {
+            self.chordExtensionStore = chordExtensionStore
+        } else if defaults === UserDefaults.standard {
+            self.chordExtensionStore = .shared
+        } else {
+            self.chordExtensionStore = ChordExtensionStore(defaults: defaults)
+        }
     }
 
+    /// Compatibility projection for callers that still speak the old
+    /// InputEncoding x KeyingMode model. Runtime selection is schema-driven;
+    /// the FlyYao mode comes from the optional extension's own store.
     var configuration: InputConfiguration {
-        if let encodingRaw = defaults.string(forKey: Key.encoding),
-           let keyingRaw = defaults.string(forKey: Key.keyingMode),
-           let encoding = InputEncoding(rawValue: encodingRaw),
-           let keyingMode = KeyingMode(rawValue: keyingRaw) {
-            let stored = InputConfiguration(encoding: encoding, keyingMode: keyingMode)
-            if InputConfigurationResolver.profile(for: stored) != nil {
-                let semanticsVersion = defaults.integer(forKey: Key.semanticsVersion)
-                // Before 互击 existed, every FlyYao user was necessarily saved
-                // as `.chord` even though the runtime already allowed one-sided
-                // keys.  Reclassify that one legacy state exactly once; a user
-                // selecting same-batch 并击 after this version is then preserved.
-                if semanticsVersion < Self.currentSemanticsVersion,
-                   stored == .init(encoding: .fullPinyin, keyingMode: .chord) {
-                    let migrated = InputConfiguration(
-                        encoding: .fullPinyin,
-                        keyingMode: .mutual
-                    )
-                    persist(migrated, notify: false)
-                    return migrated
-                }
-                if semanticsVersion < Self.currentSemanticsVersion {
-                    defaults.set(Self.currentSemanticsVersion,
-                                 forKey: Key.semanticsVersion)
-                }
-                return stored
-            }
-        }
+        runtimeProfile.configuration
+    }
 
-        let migrated = defaults.string(forKey: Key.preferredSchema)
-            .flatMap(InputConfigurationResolver.profile(schemaID:))?
-            .configuration ?? .defaultValue
-        persist(migrated, notify: false)
-        return migrated
+    var selectedSchemaID: String {
+        migrateSchemaSelectionIfNeeded()
+        return defaults.string(forKey: Key.selectedSchemaID)
+            ?? InputConfigurationResolver.profile(for: .defaultValue)!.schemaID
+    }
+
+    var lastOrdinarySchemaID: String {
+        migrateSchemaSelectionIfNeeded()
+        let stored = defaults.string(forKey: Key.lastOrdinarySchemaID)
+        if let stored,
+           stored != ChordExtensionStore.schemaID,
+           InputConfigurationResolver.profile(schemaID: stored) != nil {
+            return stored
+        }
+        return InputConfigurationResolver.profile(for: .defaultValue)!.schemaID
     }
 
     var runtimeProfile: RuntimeInputProfile {
-        InputConfigurationResolver.profile(for: configuration)
+        let schemaID = selectedSchemaID
+        if schemaID == ChordExtensionStore.schemaID,
+           chordExtensionStore.isEnabled,
+           let profile = InputConfigurationResolver.profile(
+                schemaID: schemaID,
+                chordMode: chordExtensionStore.mode
+           ) {
+            return profile
+        }
+        return InputConfigurationResolver.profile(schemaID: schemaID)
             ?? InputConfigurationResolver.profile(for: .defaultValue)!
     }
 
     @discardableResult
     func select(encoding: InputEncoding) -> Bool {
-        set(InputConfigurationResolver.selecting(encoding, from: configuration))
+        guard let profile = InputConfigurationResolver.profiles.first(where: {
+            $0.configuration.encoding == encoding
+                && $0.configuration.keyingMode == .sequential
+        }) else { return false }
+        return select(schemaID: profile.schemaID)
     }
 
     /// Returns false for a mode that has no installed runtime implementation.
@@ -200,23 +243,41 @@ final class InputConfigurationStore {
     /// live IME pointing at a schema that does not exist.
     @discardableResult
     func select(keyingMode: KeyingMode) -> Bool {
-        guard let next = InputConfigurationResolver.selecting(
-            keyingMode,
-            from: configuration
-        ) else { return false }
-        return set(next)
+        switch keyingMode {
+        case .sequential:
+            if selectedSchemaID == ChordExtensionStore.schemaID {
+                return fallBackFromChordScheme()
+            }
+            return true
+        case .chord:
+            _ = chordExtensionStore.setMode(.chord, source: .migration)
+            return select(schemaID: ChordExtensionStore.schemaID)
+        case .mutual:
+            _ = chordExtensionStore.setMode(.mutual, source: .migration)
+            return select(schemaID: ChordExtensionStore.schemaID)
+        }
+    }
+
+    /// Selects one concrete deployed schema. Choosing FlyYao is also an
+    /// explicit request to enable its owning extension; choosing an ordinary
+    /// schema remembers a safe fallback without disabling the extension.
+    @discardableResult
+    func select(schemaID: String) -> Bool {
+        select(schemaID: schemaID, source: .schemaSelection)
     }
 
     @discardableResult
     func adoptRuntimeSchema(_ schemaID: String) -> Bool {
-        let current = configuration
-        if InputConfigurationResolver.profile(for: current)?.schemaID == schemaID {
-            return set(current)
-        }
-        guard let profile = InputConfigurationResolver.profile(schemaID: schemaID) else {
+        // A stale F4 list from an older deployment is not an enable gesture.
+        // Once the user turns the extension off, runtime switcher residue must
+        // fail closed instead of silently resurrecting it.
+        if schemaID == ChordExtensionStore.schemaID,
+           !chordExtensionStore.isEnabled {
+            _ = fallBackFromChordScheme()
+            IMELog.write("input_schema rejected disabled runtime chord schema")
             return false
         }
-        return set(profile.configuration)
+        return select(schemaID: schemaID, source: .runtimeSchema)
     }
 
     @discardableResult
@@ -224,25 +285,165 @@ final class InputConfigurationStore {
         guard let profile = InputConfigurationResolver.profile(for: configuration) else {
             return false
         }
-        let changed = self.configuration != configuration
-            || defaults.string(forKey: Key.preferredSchema) != profile.schemaID
-        persist(configuration, notify: changed)
+        switch configuration.keyingMode {
+        case .chord:
+            _ = chordExtensionStore.setMode(.chord, source: .migration)
+        case .mutual:
+            _ = chordExtensionStore.setMode(.mutual, source: .migration)
+        case .sequential:
+            break
+        }
+        return select(schemaID: profile.schemaID, source: .migration)
+    }
+
+    /// Called by the extension lifecycle before it publishes the disabled
+    /// state. Pending session-local chords are retired by live controllers when
+    /// they receive that later notification; the persisted target is already
+    /// an ordinary schema by then.
+    @discardableResult
+    func fallBackFromChordScheme() -> Bool {
+        guard selectedSchemaID == ChordExtensionStore.schemaID else {
+            return false
+        }
+        return select(schemaID: lastOrdinarySchemaID, source: .rollback)
+    }
+
+    private func select(schemaID: String,
+                        source: ChordExtensionChangeSource) -> Bool {
+        guard let profile = InputConfigurationResolver.profile(
+            schemaID: schemaID,
+            chordMode: chordExtensionStore.mode
+        ) else { return false }
+
+        if schemaID == ChordExtensionStore.schemaID {
+            _ = chordExtensionStore.setEnabled(true, source: source)
+        }
+
+        migrateSchemaSelectionIfNeeded()
+        let changed = defaults.string(forKey: Key.selectedSchemaID) != schemaID
+            || defaults.string(forKey: Key.preferredSchema) != schemaID
+        defaults.set(schemaID, forKey: Key.selectedSchemaID)
+        defaults.set(schemaID, forKey: Key.preferredSchema)
+        if schemaID != ChordExtensionStore.schemaID {
+            defaults.set(schemaID, forKey: Key.lastOrdinarySchemaID)
+        }
+        persistLegacyProjection(profile.configuration)
+        if changed {
+            IMELog.write("input_schema selected=\(schemaID) source=\(source.rawValue)")
+            NotificationCenter.default.post(name: .inputConfigurationDidChange,
+                                            object: self)
+        }
         return true
     }
 
-    private func persist(_ configuration: InputConfiguration, notify: Bool) {
-        guard let profile = InputConfigurationResolver.profile(for: configuration) else {
+    private func migrateSchemaSelectionIfNeeded() {
+        if let stored = defaults.string(forKey: Key.selectedSchemaID),
+           InputConfigurationResolver.profile(schemaID: stored) != nil {
+            // `selectedSchemaID` can outlive a deploy or a crashed settings
+            // transaction. Once the extension has an explicit disabled state,
+            // that residue is not an enable gesture: fail closed to the last
+            // ordinary schema. Legacy profiles without the extension key are
+            // still enabled by ChordExtensionStore's one-time migration.
+            if stored == ChordExtensionStore.schemaID,
+               !chordExtensionStore.isEnabled {
+                let fallback = storedOrdinaryFallback()
+                defaults.set(fallback, forKey: Key.selectedSchemaID)
+                defaults.set(fallback, forKey: Key.preferredSchema)
+                defaults.set(fallback, forKey: Key.lastOrdinarySchemaID)
+                if let profile = InputConfigurationResolver.profile(
+                    schemaID: fallback
+                ) {
+                    persistLegacyProjection(profile.configuration)
+                }
+                IMELog.write(
+                    "input_schema retired disabled persisted chord schema "
+                        + "fallback=\(fallback)"
+                )
+                return
+            }
+            ensureOrdinaryFallbackExists(selectedSchemaID: stored)
             return
         }
+
+        let legacyConfiguration: InputConfiguration? = {
+            guard let encodingRaw = defaults.string(forKey: Key.encoding),
+                  let keyingRaw = defaults.string(forKey: Key.keyingMode),
+                  let encoding = InputEncoding(rawValue: encodingRaw),
+                  let keyingMode = KeyingMode(rawValue: keyingRaw) else {
+                return nil
+            }
+            var stored = InputConfiguration(encoding: encoding,
+                                            keyingMode: keyingMode)
+            // Preserve the one historical semantic migration: pre-v2 `.chord`
+            // already behaved as today's independent-halves mode.
+            if defaults.integer(forKey: Key.semanticsVersion)
+                    < Self.currentSemanticsVersion,
+               stored == .init(encoding: .fullPinyin, keyingMode: .chord) {
+                stored.keyingMode = .mutual
+            }
+            return InputConfigurationResolver.profile(for: stored) == nil
+                ? nil : stored
+        }()
+
+        let legacySchemaID = legacyConfiguration
+            .flatMap(InputConfigurationResolver.profile(for:))?.schemaID
+            ?? defaults.string(forKey: Key.preferredSchema)
+                .flatMap(InputConfigurationResolver.profile(schemaID:))?.schemaID
+        var schemaID = legacySchemaID
+            ?? InputConfigurationResolver.profile(for: .defaultValue)!.schemaID
+
+        // ChordExtensionStore owns the migration decision. It enables genuine
+        // legacy chord users, but an already-persisted explicit `false` must
+        // win over stale v1 keying/preferred-schema residue.
+        if schemaID == ChordExtensionStore.schemaID,
+           !chordExtensionStore.isEnabled {
+            schemaID = storedOrdinaryFallback()
+            IMELog.write(
+                "input_schema rejected disabled legacy chord preference "
+                    + "fallback=\(schemaID)"
+            )
+        }
+        defaults.set(schemaID, forKey: Key.selectedSchemaID)
+        defaults.set(schemaID, forKey: Key.preferredSchema)
+        ensureOrdinaryFallbackExists(selectedSchemaID: schemaID)
+        if let profile = InputConfigurationResolver.profile(
+            schemaID: schemaID,
+            chordMode: chordExtensionStore.mode
+        ) {
+            persistLegacyProjection(profile.configuration)
+        }
+    }
+
+    private func ensureOrdinaryFallbackExists(selectedSchemaID: String) {
+        if selectedSchemaID != ChordExtensionStore.schemaID {
+            defaults.set(selectedSchemaID, forKey: Key.lastOrdinarySchemaID)
+            return
+        }
+        let existing = defaults.string(forKey: Key.lastOrdinarySchemaID)
+        if existing == nil
+            || existing == ChordExtensionStore.schemaID
+            || InputConfigurationResolver.profile(schemaID: existing!) == nil {
+            defaults.set(
+                InputConfigurationResolver.profile(for: .defaultValue)!.schemaID,
+                forKey: Key.lastOrdinarySchemaID
+            )
+        }
+    }
+
+    private func storedOrdinaryFallback() -> String {
+        if let stored = defaults.string(forKey: Key.lastOrdinarySchemaID),
+           stored != ChordExtensionStore.schemaID,
+           InputConfigurationResolver.profile(schemaID: stored) != nil {
+            return stored
+        }
+        return InputConfigurationResolver.profile(for: .defaultValue)!.schemaID
+    }
+
+    private func persistLegacyProjection(_ configuration: InputConfiguration) {
         defaults.set(configuration.encoding.rawValue, forKey: Key.encoding)
         defaults.set(configuration.keyingMode.rawValue, forKey: Key.keyingMode)
-        defaults.set(profile.schemaID, forKey: Key.preferredSchema)
         if defaults.integer(forKey: Key.semanticsVersion) < Self.currentSemanticsVersion {
             defaults.set(Self.currentSemanticsVersion, forKey: Key.semanticsVersion)
-        }
-        if notify {
-            NotificationCenter.default.post(name: .inputConfigurationDidChange,
-                                            object: self)
         }
     }
 }
@@ -251,6 +452,17 @@ struct InputSchemaOption {
     let id: String
     let name: String
     let detail: String
+    let requiresChordExtension: Bool
+
+    init(id: String,
+         name: String,
+         detail: String,
+         requiresChordExtension: Bool = false) {
+        self.id = id
+        self.name = name
+        self.detail = detail
+        self.requiresChordExtension = requiresChordExtension
+    }
 }
 
 /// The product-level schema catalog. Supporting schemas such as melt_eng and
@@ -258,13 +470,29 @@ struct InputSchemaOption {
 /// the user's F4 switcher.
 enum InputSchemaCatalog {
     static let options: [InputSchemaOption] = [
-        InputSchemaOption(id: "my_combo", name: "飞耀互击", detail: "内部运行方案"),
-        InputSchemaOption(id: "double_pinyin", name: "自然码双拼", detail: "内部运行方案"),
-        InputSchemaOption(id: "rime_ice", name: "雾凇拼音", detail: "内部运行方案"),
-        InputSchemaOption(id: "english", name: "英文", detail: "内部运行方案"),
+        InputSchemaOption(id: "rime_ice", name: "雾凇全拼", detail: "完整拼音输入"),
+        InputSchemaOption(id: "double_pinyin", name: "自然码双拼", detail: "自然码双拼方案"),
+        InputSchemaOption(id: "double_pinyin_flypy", name: "小鹤双拼", detail: "小鹤双拼方案"),
+        InputSchemaOption(id: "wubi86", name: "五笔86", detail: "86 版五笔字型"),
+        InputSchemaOption(id: "english", name: "英文", detail: "英文候选与补全"),
+        InputSchemaOption(id: ChordExtensionStore.schemaID,
+                          name: "飞耀输入",
+                          detail: "由并击扩展提供",
+                          requiresChordExtension: true),
     ]
 
-    static var defaultEnabledIDs: [String] { options.map(\.id) }
+    /// Fresh profiles expose ordinary schemes only. Enabling the optional
+    /// chord extension appends `my_combo` through the same catalog order.
+    static var defaultEnabledIDs: [String] {
+        enabledIDs(chordExtensionEnabled: false)
+    }
+
+    static func enabledIDs(chordExtensionEnabled: Bool) -> [String] {
+        options.compactMap { option in
+            (!option.requiresChordExtension || chordExtensionEnabled)
+                ? option.id : nil
+        }
+    }
 
     static func normalized(_ ids: [String]) -> [String] {
         let requested = Set(ids)

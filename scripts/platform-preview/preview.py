@@ -19,7 +19,14 @@ import sys
 import zipfile
 
 
-EXPECTED_SCHEMAS = ("my_combo", "double_pinyin", "rime_ice", "english")
+EXPECTED_SCHEMAS = (
+    "rime_ice",
+    "double_pinyin",
+    "double_pinyin_flypy",
+    "wubi86",
+    "english",
+)
+EXPECTED_EXTENSION_SCHEMAS = ("my_combo",)
 MANIFEST_NAME = "MANIFEST.json"
 NOTICE_NAME = "PREVIEW-NOTICE.txt"
 MAX_FILE_BYTES = 128 * 1024 * 1024
@@ -78,7 +85,12 @@ def load_policy() -> dict:
     if policy.get("formatVersion") != 1:
         fail("policy formatVersion must be 1")
     if tuple(policy.get("productSchemas", ())) != EXPECTED_SCHEMAS:
-        fail(f"policy must freeze the four product schemas in order: {EXPECTED_SCHEMAS}")
+        fail(f"policy must freeze the core product schemas in order: {EXPECTED_SCHEMAS}")
+    if tuple(policy.get("optionalExtensionSchemas", ())) != EXPECTED_EXTENSION_SCHEMAS:
+        fail(
+            "policy must freeze the optional extension schemas in order: "
+            f"{EXPECTED_EXTENSION_SCHEMAS}"
+        )
 
     for key in ("sourceRoot", "archiveRoot"):
         policy[key] = canonical_relative_path(policy.get(key), f"policy {key}")
@@ -315,7 +327,7 @@ def validate_product_schemas(data_root: Path) -> None:
         if tuple(schema_ids) != EXPECTED_SCHEMAS:
             fail(f"{filename} must list exactly {EXPECTED_SCHEMAS}, found {tuple(schema_ids)}")
 
-    for schema_id in EXPECTED_SCHEMAS:
+    for schema_id in EXPECTED_SCHEMAS + EXPECTED_EXTENSION_SCHEMAS:
         path = data_root / f"{schema_id}.schema.yaml"
         values = scalar_values(active_yaml_lines(read_text(path)), "schema_id")
         if values != [schema_id]:
@@ -530,6 +542,7 @@ def validate_repo(repo_root: Path) -> dict:
     print(
         "platform-preview verify OK: "
         f"schemas={','.join(EXPECTED_SCHEMAS)} files={len(included)} "
+        f"extensionSchemas={','.join(EXPECTED_EXTENSION_SCHEMAS)} "
         f"bytes={total_bytes} excluded={len(result['excludedPresent'])} "
         f"external={','.join(result['external']) or 'none'}"
     )
@@ -555,6 +568,7 @@ def manifest_for(result: dict) -> dict:
         "kind": "rimes-platform-preview-data-only",
         "nativeApplicationIncluded": False,
         "productSchemas": list(EXPECTED_SCHEMAS),
+        "optionalExtensionSchemas": list(EXPECTED_EXTENSION_SCHEMAS),
         "policySha256": sha256_file(policy_path()),
         "externalRuntimeFiles": policy["externalRuntimeFiles"],
         "runtimeRequirements": policy["runtimeRequirements"],
@@ -701,6 +715,8 @@ def inspect_archive(archive_path: Path) -> None:
                 fail("preview manifest must explicitly state that no native app is included")
             if tuple(manifest.get("productSchemas", ())) != EXPECTED_SCHEMAS:
                 fail("preview manifest schema list drifted")
+            if tuple(manifest.get("optionalExtensionSchemas", ())) != EXPECTED_EXTENSION_SCHEMAS:
+                fail("preview manifest optional extension schema list drifted")
 
             expected = {f"{root}/{MANIFEST_NAME}", f"{root}/{NOTICE_NAME}"}
             manifest_members: set[str] = set()

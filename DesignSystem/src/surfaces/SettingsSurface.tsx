@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { Icon, type IconName } from "../design-system/Icon";
-import type { PluginRecord } from "../design-system/data";
+import { inputSchemes, type PluginRecord } from "../design-system/data";
 import {
   Badge,
   Button,
@@ -49,12 +49,11 @@ const coreRoutes: readonly SettingsRoute[] = [
   {
     id: "core.input-method",
     title: "输入法",
-    description: "管理输入编码、键入模式、词库与本地学习数据。",
+    description: "管理输入方案、词库与本地学习数据；并击能力由独立扩展提供。",
     icon: "keyboard",
     section: "设置",
     subpages: [
-      { id: "encoding", title: "输入编码" },
-      { id: "typing-mode", title: "键入模式" },
+      { id: "schemes", title: "输入方案" },
       { id: "dictionaries", title: "词库" },
     ],
   },
@@ -130,8 +129,9 @@ const extensionRouteDetails: Record<string, Pick<SettingsRoute, "subpages" | "de
     ],
   },
   "builtin.fly-chord-learning": {
-    description: "按飞耀互击方案安排课程、练习并保存本地进度。",
+    description: "启用飞耀并击或互击输入，并管理课程、练习与本地进度。",
     subpages: [
+      { id: "settings", title: "设置" },
       { id: "lessons", title: "课程" },
       { id: "practice", title: "练习" },
       { id: "progress", title: "进度" },
@@ -261,13 +261,16 @@ export function SettingsSurface({
   const [selectedPlugin, setSelectedPlugin] = useState<PluginRecord | null>(null);
   const [status, setStatus] = useState("所有设置仅作用于当前设计场景");
 
-  const [encoding, setEncoding] = useState("double-pinyin");
-  const [typingMode, setTypingMode] = useState("chinese");
-  const [candidateLayout, setCandidateLayout] = useState("horizontal");
+  const [selectedSchemeID, setSelectedSchemeID] = useState("rime_ice");
+  const [chordMode, setChordMode] = useState<"chord" | "mutual">("mutual");
+  const [chordInterval, setChordInterval] = useState(0.10);
+  const [chordIsCurrentScheme, setChordIsCurrentScheme] = useState(false);
   const [candidateScale, setCandidateScale] = useState(100);
   const [bufferEnabled, setBufferEnabled] = useState(true);
   const [bufferWindowVisible, setBufferWindowVisible] = useState(true);
   const [bufferPinned, setBufferPinned] = useState(true);
+  const [closeAfterLastDelivery, setCloseAfterLastDelivery] = useState(true);
+  const [clipboardHistoryEnabled, setClipboardHistoryEnabled] = useState(false);
   const [resetOnAppSwitch, setResetOnAppSwitch] = useState(false);
   const [gatewayEnabled, setGatewayEnabled] = useState(true);
   const [remoteTypingEnabled, setRemoteTypingEnabled] = useState(false);
@@ -275,7 +278,10 @@ export function SettingsSurface({
   const [automaticUpdates, setAutomaticUpdates] = useState(true);
 
   const extensionRoutes = useMemo<SettingsRoute[]>(() => plugins
-    .filter((plugin) => plugin.category === "extension" && plugin.enabled)
+    .filter((plugin) => (
+      plugin.category === "extension"
+      && plugin.enabled
+    ))
     .map((plugin) => {
       const detail = extensionRouteDetails[plugin.id] ?? {
         description: plugin.summary,
@@ -442,6 +448,149 @@ export function SettingsSurface({
       );
     }
 
+    if (plugin.id === "builtin.fly-chord-learning") {
+      if (currentSubpage === "settings") {
+        const activeModeName = chordMode === "chord" ? "飞耀并击" : "飞耀互击";
+        return (
+          <SettingsSection
+            title="并击设置"
+            description="扩展开关是并击能力的唯一入口；停用后普通输入和意识流输入都不会再处理并击按键。"
+          >
+            <SettingRow
+              title="启用并击扩展"
+              detail={plugin.enabled
+                ? "意识流输入可将并击键序转换为连续全拼；普通输入仍需把并击设为当前方案。"
+                : "意识流输入保持顺序全拼，普通输入方案不受影响。"}
+              icon="hands"
+              control={(
+                <Switch
+                  checked={plugin.enabled}
+                  label="启用并击扩展"
+                  onChange={(enabled) => {
+                    updatePlugin(plugin.id, { enabled });
+                    if (!enabled) setChordIsCurrentScheme(false);
+                    setStatus(`并击扩展已${enabled ? "启用" : "停用"}`);
+                  }}
+                />
+              )}
+            />
+            <Field label="输入方式" hint="切换方式不会清除课程进度或已经学习的数据。">
+              <div className="settings-choice-grid">
+                <ChoiceCard
+                  icon="hands"
+                  title="飞耀并击"
+                  detail="同一时间窗内组合按键"
+                  selected={chordMode === "chord"}
+                  onClick={() => {
+                    setChordMode("chord");
+                    setStatus("并击输入方式已切换为飞耀并击");
+                  }}
+                />
+                <ChoiceCard
+                  icon="swap"
+                  title="飞耀互击"
+                  detail="左右手跨击配对"
+                  selected={chordMode === "mutual"}
+                  onClick={() => {
+                    setChordMode("mutual");
+                    setStatus("并击输入方式已切换为飞耀互击");
+                  }}
+                />
+              </div>
+            </Field>
+            <Field
+              label={`并击间隔 · ${chordInterval.toFixed(2)} 秒`}
+              hint="允许范围 0.02–0.50 秒；修改会保留到下一次启用。"
+            >
+              <input
+                aria-label="并击间隔"
+                className="r-range"
+                max="0.50"
+                min="0.02"
+                onChange={(event) => setChordInterval(Number(event.target.value))}
+                step="0.01"
+                type="range"
+                value={chordInterval}
+              />
+            </Field>
+            <div className="settings-action-row">
+              <Button
+                disabled={!plugin.enabled || chordIsCurrentScheme}
+                icon="keyboard"
+                kind="primary"
+                onClick={() => {
+                  setChordIsCurrentScheme(true);
+                  setStatus(`${activeModeName}已设为当前输入方案`);
+                }}
+              >
+                {!plugin.enabled
+                  ? "先启用扩展"
+                  : chordIsCurrentScheme
+                    ? "已是当前输入方案"
+                    : "设为当前输入方案"}
+              </Button>
+              <Button
+                kind="ghost"
+                onClick={() => {
+                  setChordInterval(0.10);
+                  setStatus("并击间隔已恢复为 0.10 秒");
+                }}
+              >
+                恢复默认间隔
+              </Button>
+              <Badge tone={chordIsCurrentScheme ? "accent" : "neutral"}>
+                {chordIsCurrentScheme ? `当前：${activeModeName}` : "未设为当前方案"}
+              </Badge>
+            </div>
+          </SettingsSection>
+        );
+      }
+
+      if (currentSubpage === "progress") {
+        return (
+          <SettingsSection title="并击进度" description="课程、练习和熟练度只保存在本机。">
+            <div className="metric-card-grid">
+              <article className="metric-card"><small>课程完成</small><strong>12</strong><span>节</span></article>
+              <article className="metric-card"><small>练习组合</small><strong>286</strong><span>组</span></article>
+              <article className="metric-card"><small>当前准确率</small><strong>93</strong><span>%</span></article>
+            </div>
+          </SettingsSection>
+        );
+      }
+
+      const isPractice = currentSubpage === "practice";
+      return (
+        <SettingsSection
+          title={isPractice ? "并击练习" : "并击课程"}
+          description={isPractice ? "按当前飞耀模式进行专项练习。" : "从键位、组合到连续输入逐步学习。"}
+        >
+          <div className="lesson-card-grid">
+            {(isPractice ? [
+              ["左右手热身", "20 组"],
+              ["易错组合", "12 组"],
+              ["连续全拼", "自由练习"],
+            ] : [
+              ["基础键位", "8 / 12 完成"],
+              ["左右手互击", "4 / 10 完成"],
+              ["常用组合", "尚未开始"],
+            ]).map(([title, detail], index) => (
+              <article className="lesson-card" key={title}>
+                <Icon name={!isPractice && index === 2 ? "lock" : "hands"} size={21} weight="duotone" />
+                <strong>{title}</strong>
+                <small>{detail}</small>
+                <Button
+                  kind="ghost"
+                  onClick={() => setStatus(`已打开${title}`)}
+                >
+                  {!isPractice && index === 2 ? "查看要求" : "开始"}
+                </Button>
+              </article>
+            ))}
+          </div>
+        </SettingsSection>
+      );
+    }
+
     return (
       <SettingsSection title={route.subpages.find((page) => page.id === currentSubpage)?.title ?? "课程"}>
         <div className="lesson-card-grid">
@@ -471,54 +620,37 @@ export function SettingsSurface({
     if (currentRoute.section === "扩展") return renderExtensionPage(currentRoute);
 
     if (currentRoute.id === "core.input-method") {
-      if (currentSubpage === "encoding") {
+      if (currentSubpage === "schemes") {
         return (
-          <SettingsSection title="输入编码" description="选择 Rime 使用的主要拼音编码方案。">
-            <div className="settings-choice-grid">
-              <ChoiceCard icon="textbox" title="全拼" detail="使用完整拼音进行输入" selected={encoding === "full-pinyin"} onClick={() => setEncoding("full-pinyin")} />
-              <ChoiceCard icon="keyboard" title="双拼" detail="当前使用自然码双拼" selected={encoding === "double-pinyin"} onClick={() => setEncoding("double-pinyin")} />
+          <SettingsSection
+            title="输入方案"
+            description="选择普通输入使用的 Rime 方案；并击输入在“并击”扩展中单独启用和设为当前方案。"
+          >
+            {chordIsCurrentScheme ? (
+              <SettingRow
+                title="当前使用并击扩展"
+                detail={`正在使用${chordMode === "chord" ? "飞耀并击" : "飞耀互击"}；选择下方任一方案即可切回普通输入。`}
+                icon="hands"
+                control={<Badge tone="accent">并击</Badge>}
+              />
+            ) : null}
+            <div className="settings-choice-grid settings-choice-grid--schemes">
+              {inputSchemes.map((scheme) => (
+                <ChoiceCard
+                  detail={scheme.summary}
+                  icon={scheme.icon}
+                  key={scheme.id}
+                  onClick={() => {
+                    setSelectedSchemeID(scheme.id);
+                    setChordIsCurrentScheme(false);
+                    setStatus(`${scheme.name}已设为当前输入方案`);
+                  }}
+                  selected={!chordIsCurrentScheme && selectedSchemeID === scheme.id}
+                  title={scheme.name}
+                />
+              ))}
             </div>
-            <SettingRow
-              title="双拼方案"
-              detail="更换方案后将重新部署 Rime 配置。"
-              control={(
-                <select className="r-native-select" disabled={encoding !== "double-pinyin"} defaultValue="natural">
-                  <option value="natural">自然码</option>
-                  <option value="flypy">小鹤双拼</option>
-                  <option value="mspy">微软双拼</option>
-                </select>
-              )}
-            />
-          </SettingsSection>
-        );
-      }
-
-      if (currentSubpage === "typing-mode") {
-        return (
-          <SettingsSection title="键入模式">
-            <Field label="默认语言">
-              <Segmented
-                ariaLabel="默认键入语言"
-                onChange={setTypingMode}
-                options={[
-                  { value: "chinese", label: "中文" },
-                  { value: "english", label: "英文直通" },
-                ]}
-                value={typingMode}
-              />
-            </Field>
-            <Field label="候选布局">
-              <Segmented
-                ariaLabel="候选框布局"
-                onChange={setCandidateLayout}
-                options={[
-                  { value: "horizontal", label: "横向" },
-                  { value: "matrix", label: "矩阵" },
-                ]}
-                value={candidateLayout}
-              />
-            </Field>
-            <SettingRow title="输入法切换快捷键" detail="使用 Ctrl + Space 切换到 RIMES。" icon="keyboard" control={<Badge tone="accent">⌃ Space</Badge>} />
+            <SettingRow title="方案切换" detail="更换输入方案后将重新部署 Rime 配置；用户学习数据不会被清除。" icon="refresh" control={<Badge>需要部署</Badge>} />
           </SettingsSection>
         );
       }
@@ -526,6 +658,7 @@ export function SettingsSurface({
       return (
         <SettingsSection title="词库" description="内置词库与用户学习数据使用独立的 RimeBuffer 数据目录。">
           <SettingRow title="雾凇拼音" detail="主要中文词库 · 已启用" icon="book" control={<Badge tone="accent">可用</Badge>} />
+          <SettingRow title="五笔86" detail="五笔86 码表与用户词频 · 已启用" icon="grid" control={<Badge tone="accent">可用</Badge>} />
           <SettingRow title="Easy English" detail="中英混输补充词库 · 已启用" icon="book" control={<Badge tone="accent">可用</Badge>} />
           <SettingRow
             title="用户学习数据"
@@ -570,7 +703,7 @@ export function SettingsSurface({
           <Field label={`候选框缩放 · ${candidateScale}%`} hint="同时影响候选字体、行高和内部间距。">
             <input aria-label="候选框缩放" className="r-range" max="130" min="80" onChange={(event) => setCandidateScale(Number(event.target.value))} type="range" value={candidateScale} />
           </Field>
-          <SettingRow title="候选框位置" detail="优先跟随当前文本光标；工作台活跃时贴靠工作台外沿。" icon="textbox" control={<Badge tone="accent">自动</Badge>} />
+          <SettingRow title="候选框位置" detail="始终跟随当前逻辑输入光标；Buffer 捕获时悬浮在工作台输入光标附近，不占用工作台布局。" icon="textbox" control={<Badge tone="accent">自动</Badge>} />
           <Button kind="secondary" onClick={() => setCandidateScale(100)}>恢复默认尺寸</Button>
         </SettingsSection>
       );
@@ -582,6 +715,8 @@ export function SettingsSurface({
           <SettingRow title="启用缓冲模式" detail="提交内容先暂存，确认后再发送到当前文本框。" icon="tray" control={<Switch checked={bufferEnabled} label="启用缓冲模式" onChange={setBufferEnabled} />} />
           <SettingRow title="显示独立缓冲工作台" detail="聚焦文本框时把工作台带到当前屏幕。" icon="eye" control={<Switch checked={bufferWindowVisible} label="显示独立缓冲工作台" onChange={setBufferWindowVisible} />} />
           <SettingRow title="常显于所有桌面与全屏空间" detail="适合在应用和全屏空间之间切换时持续使用。" icon="pin" control={<Switch checked={bufferPinned} label="跨桌面常显" onChange={setBufferPinned} />} />
+          <SettingRow title="最后一块上屏后关闭工作台" detail="适用于 Default 与所有缓冲插件；部分失败或内容变化时保持打开。" icon="check" control={<Switch checked={closeAfterLastDelivery} label="最后一块上屏后关闭工作台" onChange={setCloseAfterLastDelivery} />} />
+          <SettingRow title="启用剪贴板历史" detail="仅在工作台可见且不处于安全输入时收录；默认关闭。" icon="clipboard" control={<Switch checked={clipboardHistoryEnabled} label="启用剪贴板历史" onChange={setClipboardHistoryEnabled} />} />
           <SettingRow title="切换应用时清空本地缓冲" detail="只在没有外部来源块时执行；默认关闭。" icon="trash" control={<Switch checked={resetOnAppSwitch} label="切换应用时清空本地缓冲" onChange={setResetOnAppSwitch} />} />
           <div className="settings-action-row">
             <Button icon="export" kind="secondary" onClick={() => setStatus("缓冲工作台已移到当前屏幕")}>移到当前屏幕</Button>
@@ -715,6 +850,9 @@ export function SettingsSurface({
       </MacWindow>
 
       <PluginConfigurationDialog
+        chordExtensionEnabled={plugins.some((plugin) => (
+          plugin.id === "builtin.fly-chord-learning" && plugin.enabled
+        ))}
         initialConfiguration={selectedPlugin ? pluginConfigurations[selectedPlugin.id] : undefined}
         onClose={() => setSelectedPlugin(null)}
         onSave={(plugin, configuration) => {

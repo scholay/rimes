@@ -108,5 +108,35 @@ recognizer:
                 preview.validate_my_combo_v(root)
 
 
+class ProductSchemaInvariantTests(unittest.TestCase):
+    def write_schema_fixture(self, root: Path, *, expose_extension: bool = False) -> None:
+        schemas = list(preview.EXPECTED_SCHEMAS)
+        if expose_extension:
+            schemas.insert(0, preview.EXPECTED_EXTENSION_SCHEMAS[0])
+        schema_list = "schema_list:\n" + "".join(
+            f"  - schema: {schema_id}\n" for schema_id in schemas
+        )
+        for filename in ("default.yaml", "default.custom.yaml"):
+            (root / filename).write_text(schema_list, encoding="utf-8")
+        for schema_id in preview.EXPECTED_SCHEMAS + preview.EXPECTED_EXTENSION_SCHEMAS:
+            (root / f"{schema_id}.schema.yaml").write_text(
+                f"schema:\n  schema_id: {schema_id}\n",
+                encoding="utf-8",
+            )
+
+    def test_core_schemas_do_not_expose_optional_extension_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_schema_fixture(root)
+            preview.validate_product_schemas(root)
+
+    def test_default_schema_list_rejects_enabled_optional_extension(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_schema_fixture(root, expose_extension=True)
+            with self.assertRaises(preview.PreviewError):
+                preview.validate_product_schemas(root)
+
+
 if __name__ == "__main__":
     unittest.main()

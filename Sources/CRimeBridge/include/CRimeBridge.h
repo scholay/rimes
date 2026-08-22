@@ -107,7 +107,8 @@ void BBRimeFreeString(char* value);
 // the Swift caller MUST first settle composition and invalidate its cached
 // per-controller session ids. The operations are synchronous and return an
 // entry count, or -1 on failure. `dictName` is the translator's user_dict
-// name (currently `rime_ice` for Chinese and `english` for English).
+// name (currently `rime_ice` for pinyin, `wubi86` for Wubi 86, and `english`
+// for English).
 int BBRimeExportUserDictionary(const char* dictName, const char* textFile);
 int BBRimeImportUserDictionary(const char* dictName, const char* textFile);
 bool BBRimeRestoreUserDictionarySnapshot(const char* snapshotFile);

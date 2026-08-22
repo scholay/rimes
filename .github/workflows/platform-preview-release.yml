@@ -214,7 +214,8 @@ jobs:
 
           - Windows 包需要先安装官方 Weasel。
           - Linux 包需要先安装 Fcitx5 Rime 或 IBus Rime。
-          - 包含四套 Rime 方案、词库、审核过的 Lua/OpenCC 数据与同批并击配置。
+          - 默认包含雾凇全拼、自然码双拼、小鹤双拼、五笔 86、英文五套核心方案。
+          - 同批并击 schema 仍随包提供，但只由默认关闭的“并击”扩展启用。
           - 不包含缓冲工作台、AI/翻译/OCR、RIMES 原生设置 UI 或跨批互击前端。
           - 安装器不会写入 `build/`、userdb 或学习词库；配置冲突默认停止。
 

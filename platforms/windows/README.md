@@ -79,7 +79,7 @@ $sandbox = Join-Path $env:TEMP ([guid]::NewGuid())
 
 ## Build the offline ZIP
 
-From a repository checkout, Python 3 plus PowerShell 5.1 or 7 can run the repository's reviewed platform-preview policy, stage its exact 46-file dependency closure, and create a self-contained ZIP without network access:
+From a repository checkout, Python 3 plus PowerShell 5.1 or 7 can run the repository's reviewed platform-preview policy, stage its exact 52-file dependency closure, and create a self-contained ZIP without network access:
 
 ```powershell
 pwsh -File platforms/windows/scripts/New-RimesDataPreviewPackage.ps1 `

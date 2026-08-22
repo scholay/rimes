@@ -355,21 +355,31 @@ final class PluginRegistry {
     private let externalManager: ActionPluginManager
     private let bufferPluginSelection: BufferPluginSelectionStore
     private let presetInstallationStore: PresetBufferPluginInstallationStore?
+    private let chordExtensionStore: ChordExtensionStore
     private var internalPlugins: [String: any InternalPlugin] = [:]
     private var disabledInternalIDs: Set<String>
     private var actionPluginObserver: NSObjectProtocol?
     private var manifestSetObserver: NSObjectProtocol?
     private var presetInstallationObserver: NSObjectProtocol?
+    private var chordExtensionObserver: NSObjectProtocol?
 
     init(internalPlugins plugins: [any InternalPlugin],
          defaults: UserDefaults = .standard,
          externalManager: ActionPluginManager = .shared,
          bufferPluginSelection: BufferPluginSelectionStore = .shared,
-         presetInstallationStore: PresetBufferPluginInstallationStore? = nil) {
+         presetInstallationStore: PresetBufferPluginInstallationStore? = nil,
+         chordExtensionStore: ChordExtensionStore? = nil) {
         self.defaults = defaults
         self.externalManager = externalManager
         self.bufferPluginSelection = bufferPluginSelection
         self.presetInstallationStore = presetInstallationStore
+        if let chordExtensionStore {
+            self.chordExtensionStore = chordExtensionStore
+        } else if defaults === UserDefaults.standard {
+            self.chordExtensionStore = .shared
+        } else {
+            self.chordExtensionStore = ChordExtensionStore(defaults: defaults)
+        }
         let hadLegacyEnablement = defaults.object(
             forKey: Self.disabledInternalPluginIDsKey
         ) != nil
@@ -388,12 +398,21 @@ final class PluginRegistry {
                          "Duplicate internal plugin ID: \(descriptor.key.rawID)")
             internalPlugins[descriptor.key.rawID] = plugin
         }
+        // The former learning-only plugin ID is retained for routes and user
+        // preferences, but enablement now belongs to the chord feature store.
+        // Bootstrap the legacy schema/keying preferences, then retire this ID
+        // from the old disabled-ID set. The former learning-page switch was
+        // never authoritative for input-feature enablement.
+        if internalPlugins[ChordExtensionStore.pluginID] != nil {
+            _ = self.chordExtensionStore.bootstrap()
+            disabledInternalIDs.remove(ChordExtensionStore.pluginID)
+        }
         presetInstallationStore?.bootstrap(
             hadLegacyEnablement: hadLegacyEnablement,
             legacyDisabledIDs: disabledInternalIDs
         )
         // A clean first run has no legacy preference. Catalog defaults are
-        // the sole authority: the four bundled presets start enabled, while
+        // the sole authority: the three bundled Buffer presets start enabled, while
         // optional presets remain absent and disabled until downloaded.
         if !hadLegacyEnablement, let presetInstallationStore {
             let managedIDs = Set(internalPlugins.keys).intersection(
@@ -413,6 +432,25 @@ final class PluginRegistry {
         persistInternalEnablement()
         for plugin in internalPlugins.values where isInternalPluginEnabled(plugin.descriptor.key.rawID) {
             plugin.start()
+        }
+        chordExtensionObserver = NotificationCenter.default.addObserver(
+            forName: .chordExtensionDidChange,
+            object: self.chordExtensionStore,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let previous = notification.userInfo?[
+                    ChordExtensionNotificationKey.previousEnabled
+                  ] as? Bool,
+                  let current = notification.userInfo?[
+                    ChordExtensionNotificationKey.currentEnabled
+                  ] as? Bool,
+                  previous != current,
+                  let plugin = self.internalPlugins[ChordExtensionStore.pluginID]
+            else { return }
+            if current { plugin.start() }
+            else { plugin.stop() }
+            self.notifyChange()
         }
         actionPluginObserver = NotificationCenter.default.addObserver(
             forName: ActionPluginManager.didChangeNotification,
@@ -475,6 +513,9 @@ final class PluginRegistry {
         }
         if let presetInstallationObserver {
             NotificationCenter.default.removeObserver(presetInstallationObserver)
+        }
+        if let chordExtensionObserver {
+            NotificationCenter.default.removeObserver(chordExtensionObserver)
         }
         for plugin in internalPlugins.values { plugin.stop() }
     }
@@ -557,6 +598,18 @@ final class PluginRegistry {
     }
 
     func setEnabled(_ enabled: Bool, for key: PluginKey) throws {
+        if key.domain == .builtIn,
+           key.rawID == ChordExtensionStore.pluginID,
+           internalPlugins[key.rawID] != nil {
+            guard !enabled || isInternalPluginInstalled(key.rawID) else {
+                throw BufferPluginActivationError.notInstalled(key)
+            }
+            _ = chordExtensionStore.setEnabled(
+                enabled,
+                source: .pluginLifecycle
+            )
+            return
+        }
         if key.domain == .builtIn, let plugin = internalPlugins[key.rawID] {
             guard !enabled || isInternalPluginInstalled(key.rawID) else {
                 throw BufferPluginActivationError.notInstalled(key)
@@ -683,8 +736,11 @@ final class PluginRegistry {
     }
 
     private func isInternalPluginEnabled(_ rawID: String) -> Bool {
-        guard isInternalPluginInstalled(rawID),
-              !disabledInternalIDs.contains(rawID) else { return false }
+        guard isInternalPluginInstalled(rawID) else { return false }
+        if rawID == ChordExtensionStore.pluginID {
+            return chordExtensionStore.isEnabled
+        }
+        guard !disabledInternalIDs.contains(rawID) else { return false }
         guard let presetInstallationStore,
               presetInstallationStore.isOptional(id: rawID) else {
             return true
