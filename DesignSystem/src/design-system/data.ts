@@ -49,13 +49,13 @@ export const initialPlugins: PluginRecord[] = [
   },
   {
     id: "builtin.fly-chord-learning",
-    name: "飞耀互击学习",
-    version: "1.0",
-    summary: "从飞耀互击方案生成课程与专项练习，进度只保存在本机。",
+    name: "并击",
+    version: "2.0",
+    summary: "启用飞耀并击或互击输入，配置组键间隔，并提供本地课程与练习。",
     icon: "hands",
     category: "extension",
     installState: "bundled",
-    enabled: false,
+    enabled: true,
     configurable: false,
   },
   {

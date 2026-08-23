@@ -314,6 +314,20 @@
   background: color-mix(in srgb, var(--r-accent) 10%, var(--r-surface-2));
 }
 
+.settings-choice-card__radio {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--r-border-strong);
+  border-radius: 999px;
+  background: transparent;
+  justify-self: end;
+}
+
+.settings-choice-card__radio.is-selected {
+  border-color: var(--r-accent-text);
+  box-shadow: inset 0 0 0 3.5px var(--r-accent-text);
+}
+
 .theme-choice-list,
 .plugin-management-list {
   display: flex;

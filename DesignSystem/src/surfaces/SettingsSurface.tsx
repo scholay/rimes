@@ -49,12 +49,11 @@ const coreRoutes: readonly SettingsRoute[] = [
   {
     id: "core.input-method",
     title: "输入法",
-    description: "管理输入编码、键入模式、词库与本地学习数据。",
+    description: "管理输入方案、词库与本地学习数据；并击能力由扩展单独提供。",
     icon: "keyboard",
     section: "设置",
     subpages: [
-      { id: "encoding", title: "输入编码" },
-      { id: "typing-mode", title: "键入模式" },
+      { id: "encoding", title: "输入方案" },
       { id: "dictionaries", title: "词库" },
     ],
   },
@@ -130,8 +129,9 @@ const extensionRouteDetails: Record<string, Pick<SettingsRoute, "subpages" | "de
     ],
   },
   "builtin.fly-chord-learning": {
-    description: "按飞耀互击方案安排课程、练习并保存本地进度。",
+    description: "配置飞耀并击或互击输入，并进行课程与专项练习。",
     subpages: [
+      { id: "settings", title: "设置" },
       { id: "lessons", title: "课程" },
       { id: "practice", title: "练习" },
       { id: "progress", title: "进度" },
@@ -207,12 +207,14 @@ function ChoiceCard({
   selected,
   onClick,
   icon,
+  marker = "check",
 }: {
   title: string;
   detail: string;
   selected: boolean;
   onClick: () => void;
   icon: IconName;
+  marker?: "check" | "radio";
 }) {
   return (
     <button
@@ -226,10 +228,63 @@ function ChoiceCard({
         <strong>{title}</strong>
         <small>{detail}</small>
       </span>
-      {selected ? <Icon name="check" size={16} weight="bold" /> : null}
+      {marker === "radio" ? (
+        <span
+          aria-hidden="true"
+          className={`settings-choice-card__radio${selected ? " is-selected" : ""}`}
+        />
+      ) : selected ? (
+        <Icon name="check" size={16} weight="bold" />
+      ) : null}
     </button>
   );
 }
+
+type InputScheme =
+  | "full-pinyin"
+  | "natural"
+  | "flypy"
+  | "wubi86"
+  | "english"
+  | "chord";
+
+const INPUT_SCHEMES: readonly {
+  id: Exclude<InputScheme, "chord">;
+  title: string;
+  detail: string;
+  icon: IconName;
+}[] = [
+  {
+    id: "full-pinyin",
+    title: "雾凇全拼",
+    detail: "雾凇词库与完整拼音输入",
+    icon: "textbox",
+  },
+  {
+    id: "natural",
+    title: "自然码双拼",
+    detail: "自然码双拼方案",
+    icon: "keyboard",
+  },
+  {
+    id: "flypy",
+    title: "小鹤双拼",
+    detail: "小鹤双拼方案",
+    icon: "bird",
+  },
+  {
+    id: "wubi86",
+    title: "五笔86",
+    detail: "86 版五笔字型",
+    icon: "grid",
+  },
+  {
+    id: "english",
+    title: "英文",
+    detail: "英文候选与补全",
+    icon: "textbox",
+  },
+];
 
 export type SettingsSurfaceProps = {
   plugins: PluginRecord[];
@@ -261,9 +316,7 @@ export function SettingsSurface({
   const [selectedPlugin, setSelectedPlugin] = useState<PluginRecord | null>(null);
   const [status, setStatus] = useState("所有设置仅作用于当前设计场景");
 
-  const [encoding, setEncoding] = useState("double-pinyin");
-  const [typingMode, setTypingMode] = useState("chinese");
-  const [candidateLayout, setCandidateLayout] = useState("horizontal");
+  const [inputScheme, setInputScheme] = useState<InputScheme>("chord");
   const [candidateScale, setCandidateScale] = useState(100);
   const [bufferEnabled, setBufferEnabled] = useState(true);
   const [bufferWindowVisible, setBufferWindowVisible] = useState(true);
@@ -312,6 +365,17 @@ export function SettingsSurface({
     setActiveThemeID(themeID);
   }, [themeID]);
 
+  const chordExtensionEnabled = plugins.some(
+    (plugin) => plugin.id === "builtin.fly-chord-learning" && plugin.enabled,
+  );
+  const usingChordScheme = chordExtensionEnabled && inputScheme === "chord";
+
+  useEffect(() => {
+    if (!chordExtensionEnabled && inputScheme === "chord") {
+      setInputScheme("natural");
+    }
+  }, [chordExtensionEnabled, inputScheme]);
+
   const selectRoute = (route: SettingsRoute) => {
     setCurrentRouteID(route.id);
     setSelectedSubpageByRoute((current) => ({
@@ -331,6 +395,19 @@ export function SettingsSurface({
     setPlugins((current) => current.map((plugin) => (
       plugin.id === pluginID ? { ...plugin, ...update } : plugin
     )));
+    if (
+      pluginID === "builtin.fly-chord-learning"
+      && update.enabled === true
+    ) {
+      setInputScheme("chord");
+    }
+    if (
+      pluginID === "builtin.fly-chord-learning"
+      && update.enabled === false
+      && inputScheme === "chord"
+    ) {
+      setInputScheme("natural");
+    }
   };
 
   const downloadPlugin = (plugin: PluginRecord) => {
@@ -442,6 +519,37 @@ export function SettingsSurface({
       );
     }
 
+    if (plugin.id === "builtin.fly-chord-learning" && currentSubpage === "settings") {
+      return (
+        <SettingsSection
+          title="并击设置"
+          description="并击作为独立扩展提供；启用后会占用输入方案，直到你在输入法页切回普通方案。"
+        >
+          <SettingRow
+            title="启用并击输入"
+            detail="当前实现：飞耀并击。可在输入法 › 输入方案中切回普通方案。"
+            icon="hands"
+            control={(
+              <Switch
+                checked={plugin.enabled}
+                label="启用并击输入"
+                onChange={(enabled) => {
+                  updatePlugin(plugin.id, { enabled });
+                  setStatus(enabled ? "已启用并击扩展" : "已停用并击扩展");
+                }}
+              />
+            )}
+          />
+          <SettingRow
+            title="当前实现"
+            detail="选择下方普通输入方案即可退出并击。"
+            icon="info"
+            control={<Badge tone="accent">飞耀并击</Badge>}
+          />
+        </SettingsSection>
+      );
+    }
+
     return (
       <SettingsSection title={route.subpages.find((page) => page.id === currentSubpage)?.title ?? "课程"}>
         <div className="lesson-card-grid">
@@ -473,65 +581,85 @@ export function SettingsSurface({
     if (currentRoute.id === "core.input-method") {
       if (currentSubpage === "encoding") {
         return (
-          <SettingsSection title="输入编码" description="选择 Rime 使用的主要拼音编码方案。">
-            <div className="settings-choice-grid">
-              <ChoiceCard icon="textbox" title="全拼" detail="使用完整拼音进行输入" selected={encoding === "full-pinyin"} onClick={() => setEncoding("full-pinyin")} />
-              <ChoiceCard icon="keyboard" title="双拼" detail="当前使用自然码双拼" selected={encoding === "double-pinyin"} onClick={() => setEncoding("double-pinyin")} />
+          <SettingsSection
+            title="输入方案"
+            description="单独轻点 Shift 切换中英；Shift 与字母/标点组合或持续按住 500 ms 后，会保持按下前的输入模式。"
+          >
+            {usingChordScheme ? (
+              <SettingRow
+                title="当前使用并击扩展"
+                detail="正在使用飞耀并击；选择下方任一方案即可切回普通输入。"
+                icon="hands"
+                control={<Badge tone="accent">并击</Badge>}
+              />
+            ) : null}
+            <div className="settings-choice-grid settings-choice-grid--three" role="radiogroup" aria-label="输入方案">
+              {INPUT_SCHEMES.map((scheme) => (
+                <ChoiceCard
+                  key={scheme.id}
+                  detail={scheme.detail}
+                  icon={scheme.icon}
+                  marker="radio"
+                  selected={inputScheme === scheme.id}
+                  title={scheme.title}
+                  onClick={() => {
+                    setInputScheme(scheme.id);
+                    setStatus(`已切换到${scheme.title}`);
+                  }}
+                />
+              ))}
             </div>
-            <SettingRow
-              title="双拼方案"
-              detail="更换方案后将重新部署 Rime 配置。"
-              control={(
-                <select className="r-native-select" disabled={encoding !== "double-pinyin"} defaultValue="natural">
-                  <option value="natural">自然码</option>
-                  <option value="flypy">小鹤双拼</option>
-                  <option value="mspy">微软双拼</option>
-                </select>
-              )}
-            />
-          </SettingsSection>
-        );
-      }
-
-      if (currentSubpage === "typing-mode") {
-        return (
-          <SettingsSection title="键入模式">
-            <Field label="默认语言">
-              <Segmented
-                ariaLabel="默认键入语言"
-                onChange={setTypingMode}
-                options={[
-                  { value: "chinese", label: "中文" },
-                  { value: "english", label: "英文直通" },
-                ]}
-                value={typingMode}
-              />
-            </Field>
-            <Field label="候选布局">
-              <Segmented
-                ariaLabel="候选框布局"
-                onChange={setCandidateLayout}
-                options={[
-                  { value: "horizontal", label: "横向" },
-                  { value: "matrix", label: "矩阵" },
-                ]}
-                value={candidateLayout}
-              />
-            </Field>
-            <SettingRow title="输入法切换快捷键" detail="使用 Ctrl + Space 切换到 RIMES。" icon="keyboard" control={<Badge tone="accent">⌃ Space</Badge>} />
           </SettingsSection>
         );
       }
 
       return (
-        <SettingsSection title="词库" description="内置词库与用户学习数据使用独立的 RimeBuffer 数据目录。">
-          <SettingRow title="雾凇拼音" detail="主要中文词库 · 已启用" icon="book" control={<Badge tone="accent">可用</Badge>} />
-          <SettingRow title="Easy English" detail="中英混输补充词库 · 已启用" icon="book" control={<Badge tone="accent">可用</Badge>} />
+        <SettingsSection
+          title="词库"
+          description="词库负责候选内容；输入方案决定如何检索与组织候选。"
+        >
           <SettingRow
-            title="用户学习数据"
-            detail="导入或导出当前用户词频，不包含缓冲正文。"
+            title="雾凇拼音"
+            detail="中文主词库 · 全拼、自然码双拼、小鹤双拼与飞耀方案共享"
+            icon="book"
+            control={(
+              <span className="settings-inline-actions">
+                <Button icon="download" kind="ghost" onClick={() => setStatus("已打开雾凇拼音学习导入预览")}>导入学习…</Button>
+                <Button icon="export" kind="ghost" onClick={() => setStatus("雾凇拼音学习导出任务已模拟")}>导出学习…</Button>
+              </span>
+            )}
+          />
+          <SettingRow
+            title="五笔86"
+            detail="五笔86 码表与独立用户词频"
+            icon="grid"
+            control={(
+              <span className="settings-inline-actions">
+                <Button icon="download" kind="ghost" onClick={() => setStatus("已打开五笔86学习导入预览")}>导入学习…</Button>
+                <Button icon="export" kind="ghost" onClick={() => setStatus("五笔86学习导出任务已模拟")}>导出学习…</Button>
+              </span>
+            )}
+          />
+          <SettingRow
+            title="Easy English"
+            detail="英文候选、补全、生词兜底与独立学习"
+            icon="book"
+            control={(
+              <span className="settings-inline-actions">
+                <Button icon="download" kind="ghost" onClick={() => setStatus("已打开 Easy English 学习导入预览")}>导入学习…</Button>
+                <Button icon="export" kind="ghost" onClick={() => setStatus("Easy English 学习导出任务已模拟")}>导出学习…</Button>
+              </span>
+            )}
+          />
+          <SettingRow
+            title="配置目录"
+            detail="~/Library/RimeBuffer · 未显示的方案文件仅作词典或反查依赖"
             icon="database"
-            control={<span className="settings-inline-actions"><Button icon="download" kind="ghost" onClick={() => setStatus("已打开用户词频导入预览")}>导入…</Button><Button icon="export" kind="ghost" onClick={() => setStatus("用户词频导出任务已模拟")}>导出…</Button></span>}
+            control={(
+              <Button kind="secondary" onClick={() => setStatus("已模拟打开配置目录")}>
+                打开配置目录
+              </Button>
+            )}
           />
         </SettingsSection>
       );
