@@ -28,6 +28,7 @@ import type {
   PluginConfiguration,
   PluginConfigurationMap,
 } from "./surfaces/ExtensionsSurface";
+import { MailboxSurface } from "./surfaces/MailboxSurface";
 import { SettingsSurface, type SettingsRouteID } from "./surfaces/SettingsSurface";
 
 const themeOptions = (Object.entries(themes) as [ThemeID, ThemeTokens][]).map(
@@ -124,6 +125,32 @@ export function App() {
   useEffect(() => {
     setThemeOverrides({});
   }, [themeID]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey) return;
+      if (event.key.toLowerCase() !== "m") return;
+      if (event.altKey) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement
+        && (
+          target.isContentEditable
+          || target.tagName === "INPUT"
+          || target.tagName === "TEXTAREA"
+          || target.tagName === "SELECT"
+        )
+      ) {
+        return;
+      }
+      event.preventDefault();
+      setBufferPaused(true);
+      setSurfaceID("mailbox");
+      setNotice("已用 ⌘⇧M 打开 Mailbox");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const updateThemeColor = (
     key: "accent" | "accentText" | "selection" | "settingsBackground" | "surface" | "surfaceSecondary",
@@ -240,6 +267,17 @@ export function App() {
         return null;
       case "clipboard":
         return <ClipboardSurface onFeedback={(feedback) => setNotice(feedback.message)} />;
+      case "mailbox":
+        return (
+          <MailboxSurface
+            onActivity={setNotice}
+            onClose={() => {
+              setSurfaceID("buffer");
+              setBufferPaused(false);
+              setNotice("已关闭 Mailbox，回到 Buffer");
+            }}
+          />
+        );
     }
   };
 
@@ -277,7 +315,7 @@ export function App() {
       <aside className="studio-navigation">
         <header className="studio-navigation__header">
           <span>产品界面</span>
-          <small>5 个可操作场景</small>
+          <small>{surfaces.length} 个可操作场景</small>
         </header>
         <nav aria-label="设计场景">
           {surfaces.map((surface) => (

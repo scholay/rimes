@@ -811,6 +811,64 @@
   font-size: 11px;
 }
 
+.mailbox-surface {
+  width: min(860px, 100%);
+}
+
+.mailbox-window {
+  width: 100%;
+}
+
+.mailbox-window__shortcut {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 7px;
+  color: var(--r-accent-text);
+  border: 1px solid color-mix(in srgb, var(--r-accent-text) 34%, var(--r-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--r-accent) 12%, var(--r-surface-3));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.mailbox-surface__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.mailbox-surface__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mailbox-surface__heading > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mailbox-surface__heading strong {
+  color: var(--r-text);
+  font-size: 14px;
+}
+
+.mailbox-surface__heading small {
+  color: var(--r-text-3);
+  font-size: 10px;
+}
+
+.mailbox-pane--surface {
+  min-height: 460px;
+  height: min(560px, 68vh);
+}
+
 .settings-status-bar,
 .extensions-status-bar {
   min-width: 0;

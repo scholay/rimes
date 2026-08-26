@@ -1,6 +1,12 @@
 import type { IconName } from "./Icon";
 
-export type SurfaceID = "settings" | "extensions" | "candidate" | "buffer" | "clipboard";
+export type SurfaceID =
+  | "settings"
+  | "extensions"
+  | "candidate"
+  | "buffer"
+  | "clipboard"
+  | "mailbox";
 
 export const surfaces: { id: SurfaceID; title: string; caption: string; icon: IconName }[] = [
   { id: "settings", title: "设置后台", caption: "完整路由与配置状态", icon: "sliders" },
@@ -8,6 +14,7 @@ export const surfaces: { id: SurfaceID; title: string; caption: string; icon: Ic
   { id: "candidate", title: "候选框", caption: "单行、矩阵与锚点状态", icon: "textbox" },
   { id: "buffer", title: "Buffer", caption: "普通与派生双轨工作台", icon: "tray" },
   { id: "clipboard", title: "剪贴板", caption: "进程内历史与安全状态", icon: "clipboard" },
+  { id: "mailbox", title: "Mailbox", caption: "外部推送会话 · ⌘⇧M", icon: "book" },
 ];
 
 export type PluginInstallState = "bundled" | "not-downloaded" | "downloading" | "installed" | "failed";
