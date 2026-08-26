@@ -79,13 +79,12 @@ const coreRoutes: readonly SettingsRoute[] = [
   {
     id: "core.connectors",
     title: "连接器",
-    description: "管理 AI 模型、本地网关与已配对设备。",
+    description: "管理 AI 模型与本地网关。",
     icon: "link",
     section: "设置",
     subpages: [
       { id: "ai-model", title: "AI 模型" },
       { id: "local-gateway", title: "本地网关" },
-      { id: "remote-typing", title: "隔空传字" },
     ],
   },
   {
@@ -324,7 +323,6 @@ export function SettingsSurface({
   const [resetOnAppSwitch, setResetOnAppSwitch] = useState(false);
   const [gatewayEnabled, setGatewayEnabled] = useState(true);
   const [gatewayClaudeOpen, setGatewayClaudeOpen] = useState(false);
-  const [remoteTypingEnabled, setRemoteTypingEnabled] = useState(false);
   const [connector, setConnector] = useState<"codex" | "claude" | "openai">("codex");
   const [openAPIBaseURL, setOpenAPIBaseURL] = useState("https://api.cometapi.com/v1");
   const [openAPIModel, setOpenAPIModel] = useState("deepseek-v4-flash");
@@ -350,9 +348,20 @@ export function SettingsSurface({
 
   const routes = useMemo(() => [...coreRoutes, ...extensionRoutes], [extensionRoutes]);
   const currentRoute = routes.find((route) => route.id === currentRouteID) ?? coreRoutes[0];
-  const currentSubpage = selectedSubpageByRoute[currentRoute.id]
+  const requestedSubpage = selectedSubpageByRoute[currentRoute.id]
     ?? currentRoute.subpages[0]?.id
     ?? "";
+  const currentSubpage = currentRoute.subpages.some((page) => page.id === requestedSubpage)
+    ? requestedSubpage
+    : (currentRoute.subpages[0]?.id ?? "");
+
+  useEffect(() => {
+    if (requestedSubpage === currentSubpage) return;
+    setSelectedSubpageByRoute((current) => ({
+      ...current,
+      [currentRoute.id]: currentSubpage,
+    }));
+  }, [currentRoute.id, currentSubpage, requestedSubpage]);
 
   useEffect(() => {
     setCurrentRouteID(initialRouteID);
@@ -931,13 +940,7 @@ export function SettingsSurface({
         );
       }
 
-      return (
-        <SettingsSection title="隔空传字" description="配对设备使用端到端加密通道；收到的文字按既有直通规则处理。">
-          <SettingRow title="启用隔空传字" detail="允许已配对的 RIMES 设备发现这台 Mac。" icon="network" control={<Switch checked={remoteTypingEnabled} label="启用隔空传字" onChange={setRemoteTypingEnabled} />} />
-          <Field label="这台 Mac 的名称"><input className="r-text-input" defaultValue="Isaac 的 Mac" /></Field>
-          <SettingRow title="MacBook Pro" detail="上次在线：刚刚 · 已配对" icon="check" control={<Button kind="danger" onClick={() => setStatus("已模拟取消 MacBook Pro 配对")}>取消配对</Button>} />
-        </SettingsSection>
-      );
+      return null;
     }
 
     if (currentRoute.id === "core.plugins") return renderPluginManager();
