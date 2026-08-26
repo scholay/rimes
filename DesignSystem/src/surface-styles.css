@@ -328,6 +328,104 @@
   box-shadow: inset 0 0 0 3.5px var(--r-accent-text);
 }
 
+.connector-detail-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--r-border);
+  border-radius: 10px;
+  background: var(--r-surface-2);
+}
+
+.connector-detail-panel.is-disabled {
+  opacity: 0.55;
+}
+
+.connector-detail-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.connector-detail-panel__header > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.connector-detail-panel__header strong {
+  color: var(--r-text);
+  font-size: 11px;
+}
+
+.connector-detail-panel__header small,
+.connector-detail-panel__note {
+  color: var(--r-text-3);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.connector-detail-panel__note {
+  margin: 0;
+}
+
+.settings-code-block {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  color: var(--r-text-2);
+  border: 1px solid var(--r-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--r-surface) 88%, black);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.settings-code-block--single {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.connector-disclosure {
+  width: 100%;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  color: var(--r-text-2);
+  border: 1px dashed var(--r-border);
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+  text-align: left;
+}
+
+.connector-disclosure:hover:not(:disabled),
+.connector-disclosure:focus-visible:not(:disabled) {
+  color: var(--r-text);
+  border-color: var(--r-border-strong);
+  outline: 0;
+}
+
+.connector-disclosure:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.connector-disclosure__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .theme-choice-list,
 .plugin-management-list {
   display: flex;

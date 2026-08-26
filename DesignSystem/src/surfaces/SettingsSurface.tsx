@@ -323,8 +323,11 @@ export function SettingsSurface({
   const [bufferPinned, setBufferPinned] = useState(true);
   const [resetOnAppSwitch, setResetOnAppSwitch] = useState(false);
   const [gatewayEnabled, setGatewayEnabled] = useState(true);
+  const [gatewayClaudeOpen, setGatewayClaudeOpen] = useState(false);
   const [remoteTypingEnabled, setRemoteTypingEnabled] = useState(false);
-  const [connector, setConnector] = useState("codex");
+  const [connector, setConnector] = useState<"codex" | "claude" | "openai">("codex");
+  const [openAPIBaseURL, setOpenAPIBaseURL] = useState("https://api.cometapi.com/v1");
+  const [openAPIModel, setOpenAPIModel] = useState("deepseek-v4-flash");
   const [automaticUpdates, setAutomaticUpdates] = useState(true);
 
   const extensionRoutes = useMemo<SettingsRoute[]>(() => plugins
@@ -722,23 +725,208 @@ export function SettingsSurface({
     if (currentRoute.id === "core.connectors") {
       if (currentSubpage === "ai-model") {
         return (
-          <SettingsSection title="AI 模型" description="正文只会在用户明确点击生成时交给所选连接器。">
-            <div className="settings-choice-grid settings-choice-grid--three">
-              <ChoiceCard icon="code" title="Codex CLI" detail="浏览器授权 · 已就绪" selected={connector === "codex"} onClick={() => setConnector("codex")} />
-              <ChoiceCard icon="sparkle" title="Claude Code" detail="官方 CLI 授权" selected={connector === "claude"} onClick={() => setConnector("claude")} />
-              <ChoiceCard icon="network" title="OpenAI API" detail="自定义兼容端点" selected={connector === "openai"} onClick={() => setConnector("openai")} />
+          <SettingsSection
+            title="AI 模型"
+            description="“AI 生成”是统一缓冲插件；在这里切换它使用的模型连接器。正文只会在你明确点击生成时发送。"
+          >
+            <div className="settings-choice-grid settings-choice-grid--three" role="radiogroup" aria-label="当前连接器">
+              <ChoiceCard
+                icon="code"
+                marker="radio"
+                title="Codex CLI"
+                detail="浏览器授权 · 隔离运行"
+                selected={connector === "codex"}
+                onClick={() => {
+                  setConnector("codex");
+                  setStatus("已切换到 Codex CLI");
+                }}
+              />
+              <ChoiceCard
+                icon="sparkle"
+                marker="radio"
+                title="Claude Code"
+                detail="官方 CLI 授权"
+                selected={connector === "claude"}
+                onClick={() => {
+                  setConnector("claude");
+                  setStatus("已切换到 Claude Code");
+                }}
+              />
+              <ChoiceCard
+                icon="network"
+                marker="radio"
+                title="OpenAI API"
+                detail="自定义兼容端点"
+                selected={connector === "openai"}
+                onClick={() => {
+                  setConnector("openai");
+                  setStatus("已切换到 OpenAI API");
+                }}
+              />
             </div>
-            <SettingRow title="连接器状态" detail={connector === "codex" ? "Codex 隔离握手与登录均已通过。" : "选择后将检查对应登录和能力。"} icon="check" control={<Button kind="secondary" onClick={() => setStatus(`${connector} 连接检查通过`)}>检查连接</Button>} />
+
+            {connector === "codex" ? (
+              <div className="connector-detail-panel">
+                <SettingRow
+                  title="Codex CLI"
+                  detail="使用 RIMES 专用 ChatGPT 登录；不会读取 ~/.codex 中的 MCP、工具、Hook 或技能。"
+                  icon="code"
+                  control={<Badge tone="accent">可用</Badge>}
+                />
+                <div className="settings-action-row">
+                  <Button kind="secondary" onClick={() => setStatus("已模拟重新授权 Codex")}>
+                    重新授权 Codex
+                  </Button>
+                </div>
+                <p className="connector-detail-panel__note">
+                  CLI 在本机启动，但不代表本地推理：点击生成后，缓冲全文会经已登录服务发送。RIMES 不会把环境中的 API Key 透传给 Codex。
+                </p>
+              </div>
+            ) : null}
+
+            {connector === "claude" ? (
+              <div className="connector-detail-panel">
+                <SettingRow
+                  title="Claude Code CLI"
+                  detail="未找到具备所需流式生成能力的 Claude Code CLI。"
+                  icon="sparkle"
+                  control={<Badge>不可用</Badge>}
+                />
+                <div className="settings-action-row">
+                  <Button kind="secondary" onClick={() => setStatus("已模拟发起 Claude 授权")}>
+                    授权 Claude
+                  </Button>
+                </div>
+                <p className="connector-detail-panel__note">
+                  CLI 在本机启动，但不代表本地推理：点击生成后，缓冲全文会经已登录服务发送。RIMES 不会把环境中的 API Key 透传给 Claude Code。
+                </p>
+              </div>
+            ) : null}
+
+            {connector === "openai" ? (
+              <div className="connector-detail-panel">
+                <Field label="Base URL" hint="应包含 API 前缀（例如 /v1）；程序会追加 /chat/completions。">
+                  <input
+                    className="r-text-input"
+                    onChange={(event) => setOpenAPIBaseURL(event.target.value)}
+                    spellCheck={false}
+                    value={openAPIBaseURL}
+                  />
+                </Field>
+                <Field label="模型">
+                  <input
+                    className="r-text-input"
+                    onChange={(event) => setOpenAPIModel(event.target.value)}
+                    spellCheck={false}
+                    value={openAPIModel}
+                  />
+                </Field>
+                <Field label="API Key" hint="密钥保存在权限为 0600 的本地配置文件，不写入偏好设置或日志。">
+                  <input
+                    className="r-text-input"
+                    defaultValue=""
+                    placeholder="已保存（留空则保持不变）"
+                    spellCheck={false}
+                    type="password"
+                  />
+                </Field>
+                <div className="settings-action-row">
+                  <Button kind="secondary" onClick={() => setStatus("通用 Open API 配置已保存")}>
+                    保存配置
+                  </Button>
+                  <Button kind="ghost" onClick={() => setStatus("已清除本地 API Key")}>
+                    清除密钥
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </SettingsSection>
         );
       }
 
       if (currentSubpage === "local-gateway") {
+        const gatewayJSON = `{
+  "mcpServers": {
+    "etinput": {
+      "type": "http",
+      "url": "http://127.0.0.1:47700/mcp",
+      "headers": {
+        "Authorization": "Bearer ••••••••"
+      }
+    }
+  }
+}`;
+        const claudeCommand = "claude mcp add --transport http etinput http://127.0.0.1:47700/mcp --header \"Authorization: Bearer ••••••••\"";
+
         return (
-          <SettingsSection title="本地网关" description="仅监听 127.0.0.1，并要求 Token 鉴权。">
-            <SettingRow title="启用本地网关" detail="允许本机 Claude Code、Codex 等工具推送待确认内容。" icon="network" control={<Switch checked={gatewayEnabled} label="启用本地网关" onChange={setGatewayEnabled} />} />
-            <Field label="网关地址"><input className="r-text-input" readOnly value="http://127.0.0.1:17321" /></Field>
-            <div className="settings-action-row"><Button icon="copy" kind="secondary" onClick={() => setStatus("本地网关配置 JSON 已复制到模拟状态")}>复制配置 JSON</Button><Button icon="copy" kind="ghost" onClick={() => setStatus("Claude Code 命令已复制到模拟状态")}>复制 Claude Code 命令</Button></div>
+          <SettingsSection
+            title="本地网关"
+            description="仅监听 127.0.0.1，并要求 Token 鉴权；推入内容仍需你在收件箱逐条确认。"
+          >
+            <SettingRow
+              title="启用本地网关"
+              detail="允许本机智能体通过标准 MCP / HTTP 推送待确认内容。"
+              icon="network"
+              control={(
+                <Switch
+                  checked={gatewayEnabled}
+                  label="启用本地网关"
+                  onChange={(enabled) => {
+                    setGatewayEnabled(enabled);
+                    setStatus(enabled ? "已启用本地网关" : "已关闭本地网关");
+                  }}
+                />
+              )}
+            />
+
+            <div className={`connector-detail-panel${gatewayEnabled ? "" : " is-disabled"}`}>
+              <header className="connector-detail-panel__header">
+                <span>
+                  <strong>接入配置</strong>
+                  <small>标准 MCP（Streamable HTTP）。Cursor、Codex、Claude Code 等客户端通用。</small>
+                </span>
+                <Button
+                  disabled={!gatewayEnabled}
+                  icon="copy"
+                  kind="secondary"
+                  onClick={() => setStatus("已复制通用 MCP 配置 JSON")}
+                >
+                  复制配置
+                </Button>
+              </header>
+              <pre aria-label="MCP 配置 JSON" className="settings-code-block">{gatewayJSON}</pre>
+
+              <button
+                aria-expanded={gatewayClaudeOpen}
+                className="connector-disclosure"
+                disabled={!gatewayEnabled}
+                onClick={() => setGatewayClaudeOpen((open) => !open)}
+                type="button"
+              >
+                <span>Claude Code 一键注册（可选）</span>
+                <Icon name={gatewayClaudeOpen ? "up" : "down"} size={12} weight="bold" />
+              </button>
+              {gatewayClaudeOpen ? (
+                <div className="connector-disclosure__body">
+                  <p className="connector-detail-panel__note">
+                    等价于上方通用配置；仅在已安装 Claude Code CLI 时需要。
+                  </p>
+                  <pre aria-label="Claude Code 注册命令" className="settings-code-block settings-code-block--single">
+                    {claudeCommand}
+                  </pre>
+                  <div className="settings-action-row">
+                    <Button
+                      disabled={!gatewayEnabled}
+                      icon="copy"
+                      kind="ghost"
+                      onClick={() => setStatus("已复制 Claude Code 注册命令")}
+                    >
+                      复制 Claude Code 命令
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </SettingsSection>
         );
       }
