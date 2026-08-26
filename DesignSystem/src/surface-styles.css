@@ -560,6 +560,25 @@
 
 .settings-data-placeholder > svg { color: var(--r-accent-text); }
 
+.settings-data-placeholder > span {
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: center;
+}
+
+.settings-data-placeholder strong {
+  color: var(--r-text-2);
+  font-size: 12px;
+}
+
+.settings-data-placeholder small {
+  color: var(--r-text-3);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .settings-status-bar,
 .extensions-status-bar {
   min-width: 0;

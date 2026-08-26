@@ -70,11 +70,15 @@ const coreRoutes: readonly SettingsRoute[] = [
   },
   {
     id: "core.buffer",
-    title: "缓冲区",
-    description: "控制暂存、独立工作台、跨桌面显示与切换应用行为。",
-    icon: "tray",
+    title: "窗口",
+    description: "管理 Buffer、Clip 与即将到来的 Mailbox。",
+    icon: "grid",
     section: "设置",
-    subpages: [{ id: "buffer", title: "缓冲区" }],
+    subpages: [
+      { id: "buffer", title: "Buffer" },
+      { id: "clip", title: "Clip" },
+      { id: "mailbox", title: "Mailbox" },
+    ],
   },
   {
     id: "core.connectors",
@@ -321,6 +325,8 @@ export function SettingsSurface({
   const [bufferWindowVisible, setBufferWindowVisible] = useState(true);
   const [bufferPinned, setBufferPinned] = useState(true);
   const [resetOnAppSwitch, setResetOnAppSwitch] = useState(false);
+  const [closeAfterLastDelivery, setCloseAfterLastDelivery] = useState(false);
+  const [clipboardHistoryEnabled, setClipboardHistoryEnabled] = useState(true);
   const [gatewayEnabled, setGatewayEnabled] = useState(true);
   const [gatewayClaudeOpen, setGatewayClaudeOpen] = useState(false);
   const [connector, setConnector] = useState<"codex" | "claude" | "openai">("codex");
@@ -717,16 +723,140 @@ export function SettingsSurface({
     }
 
     if (currentRoute.id === "core.buffer") {
+      if (currentSubpage === "clip") {
+        return (
+          <SettingsSection
+            title="Clip"
+            description="剪贴板历史只保留在当前输入法进程；不会写入磁盘。"
+          >
+            <SettingRow
+              title="启用剪贴板历史"
+              detail="仅在工作台实际显示时读取系统剪贴板。"
+              icon="clipboard"
+              control={(
+                <Switch
+                  checked={clipboardHistoryEnabled}
+                  label="启用剪贴板历史"
+                  onChange={(enabled) => {
+                    setClipboardHistoryEnabled(enabled);
+                    setStatus(enabled ? "已启用剪贴板历史" : "已关闭剪贴板历史");
+                  }}
+                />
+              )}
+            />
+            <p className="connector-detail-panel__note">
+              Clip 是工作台内的历史轨，不是独立窗口。关闭 Buffer 工作台后，历史读取也会暂停。
+            </p>
+          </SettingsSection>
+        );
+      }
+
+      if (currentSubpage === "mailbox") {
+        return (
+          <SettingsSection
+            title="Mailbox"
+            description="外部来源收件箱的窗口能力即将制作；当前仍通过输入法菜单打开临时收件箱。"
+          >
+            <div className="settings-data-placeholder" role="status">
+              <Icon name="tray" size={24} weight="duotone" />
+              <span>
+                <strong>即将制作</strong>
+                <small>
+                  Mailbox 将承接 MCP / 本地网关推入的待审内容，与 Buffer、Clip 共用同一窗口框架。
+                </small>
+              </span>
+            </div>
+          </SettingsSection>
+        );
+      }
+
       return (
-        <SettingsSection title="缓冲区" description="关闭工作台会暂停捕获并收束瞬态状态，但保留已经形成的块。">
-          <SettingRow title="启用缓冲模式" detail="提交内容先暂存，确认后再发送到当前文本框。" icon="tray" control={<Switch checked={bufferEnabled} label="启用缓冲模式" onChange={setBufferEnabled} />} />
-          <SettingRow title="显示独立缓冲工作台" detail="聚焦文本框时把工作台带到当前屏幕。" icon="eye" control={<Switch checked={bufferWindowVisible} label="显示独立缓冲工作台" onChange={setBufferWindowVisible} />} />
-          <SettingRow title="常显于所有桌面与全屏空间" detail="适合在应用和全屏空间之间切换时持续使用。" icon="pin" control={<Switch checked={bufferPinned} label="跨桌面常显" onChange={setBufferPinned} />} />
-          <SettingRow title="切换应用时清空本地缓冲" detail="只在没有外部来源块时执行；默认关闭。" icon="trash" control={<Switch checked={resetOnAppSwitch} label="切换应用时清空本地缓冲" onChange={setResetOnAppSwitch} />} />
+        <SettingsSection
+          title="Buffer"
+          description="关闭工作台会暂停捕获并收束瞬态状态，但保留已经形成的块。"
+        >
+          <SettingRow
+            title="启用缓冲模式"
+            detail="提交内容先暂存，确认后再发送到当前文本框。"
+            icon="tray"
+            control={(
+              <Switch
+                checked={bufferEnabled}
+                label="启用缓冲模式"
+                onChange={setBufferEnabled}
+              />
+            )}
+          />
+          <SettingRow
+            title="显示独立缓冲工作台"
+            detail="打开后先由工作台接管输入；当前文本框保留为上屏目标。"
+            icon="eye"
+            control={(
+              <Switch
+                checked={bufferWindowVisible}
+                label="显示独立缓冲工作台"
+                onChange={setBufferWindowVisible}
+              />
+            )}
+          />
+          <SettingRow
+            title="最后一块上屏后关闭工作台"
+            detail="适用于 Default 与所有缓冲插件；部分失败或内容变化时保持打开。"
+            icon="check"
+            control={(
+              <Switch
+                checked={closeAfterLastDelivery}
+                label="最后一块上屏后关闭工作台"
+                onChange={setCloseAfterLastDelivery}
+              />
+            )}
+          />
+          <SettingRow
+            title="常显于所有桌面与全屏空间"
+            detail="适合在应用和全屏空间之间切换时持续使用。"
+            icon="pin"
+            control={(
+              <Switch
+                checked={bufferPinned}
+                label="跨桌面常显"
+                onChange={setBufferPinned}
+              />
+            )}
+          />
+          <SettingRow
+            title="切换应用时清空本地缓冲"
+            detail="只在没有外部来源块时执行；默认关闭。"
+            icon="trash"
+            control={(
+              <Switch
+                checked={resetOnAppSwitch}
+                label="切换应用时清空本地缓冲"
+                onChange={setResetOnAppSwitch}
+              />
+            )}
+          />
           <div className="settings-action-row">
-            <Button icon="export" kind="secondary" onClick={() => setStatus("缓冲工作台已移到当前屏幕")}>移到当前屏幕</Button>
-            <Button icon="eye" kind="ghost" onClick={() => setBufferWindowVisible(true)}>显示工作台</Button>
+            <Button
+              icon="export"
+              kind="secondary"
+              onClick={() => setStatus("缓冲工作台已移到当前屏幕")}
+            >
+              移到当前屏幕
+            </Button>
+            <Button
+              icon="eye"
+              kind="ghost"
+              onClick={() => {
+                setBufferWindowVisible(true);
+                setStatus("已显示缓冲工作台");
+              }}
+            >
+              显示工作台
+            </Button>
           </div>
+          <p className="connector-detail-panel__note">
+            安全输入生效时，工作台会隐藏正文并禁用发送与插件操作；此保护始终开启。
+          </p>
         </SettingsSection>
       );
     }
