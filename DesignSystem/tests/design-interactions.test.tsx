@@ -12,6 +12,7 @@ import { App } from "../src/App";
 import { initialPlugins, type PluginRecord } from "../src/design-system/data";
 import {
   BufferSurface,
+  DEFAULT_AI_GENERATION_OPTIONS,
   bufferInputContextKey,
 } from "../src/surfaces/BufferSurface";
 import { ExtensionsSurface } from "../src/surfaces/ExtensionsSurface";
@@ -515,6 +516,7 @@ describe("Buffer generation and delivery", () => {
           requestID: "request-1",
           contextKey: bufferInputContextKey(
             "ai", "first source", "zh-Hans", "en", "apple", 5, "balanced",
+            DEFAULT_AI_GENERATION_OPTIONS,
           ),
         }}
         targets={["first result"]}
@@ -533,6 +535,7 @@ describe("Buffer generation and delivery", () => {
           requestID: "request-1",
           contextKey: bufferInputContextKey(
             "ai", "first source", "zh-Hans", "en", "apple", 5, "balanced",
+            DEFAULT_AI_GENERATION_OPTIONS,
           ),
         }}
         targets={["first result"]}
@@ -743,6 +746,7 @@ describe("Buffer generation and delivery", () => {
           requestID: "request-1",
           contextKey: bufferInputContextKey(
             "ai", "source", "zh-Hans", "en", "apple", 5, "balanced",
+            DEFAULT_AI_GENERATION_OPTIONS,
           ),
         }}
         targets={["only result"]}

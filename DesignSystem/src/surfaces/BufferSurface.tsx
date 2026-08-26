@@ -208,6 +208,131 @@ const DEFAULT_LANGUAGES: readonly BufferLanguage[] = [
   { value: "es", label: "西班牙语" },
 ];
 
+type AIProviderID = "codex-cli" | "claude-cli" | "openapi-comet" | "openapi-local";
+type AIModeID = "ask" | "polish" | "translate" | "summarize";
+type AIOutputFormat = "plain" | "markdown" | "json" | "mailbox";
+
+type AIProviderOption = {
+  id: AIProviderID;
+  label: string;
+  kind: "cli" | "openapi";
+  ready: boolean;
+  models: readonly { id: string; label: string }[];
+};
+
+const AI_PROVIDERS: readonly AIProviderOption[] = [
+  {
+    id: "codex-cli",
+    label: "Codex CLI",
+    kind: "cli",
+    ready: true,
+    models: [
+      { id: "gpt-5.3-codex", label: "gpt-5.3-codex" },
+      { id: "gpt-5-mini", label: "gpt-5-mini" },
+    ],
+  },
+  {
+    id: "claude-cli",
+    label: "Claude Code",
+    kind: "cli",
+    ready: true,
+    models: [
+      { id: "claude-opus-4", label: "Opus 4" },
+      { id: "claude-sonnet-4", label: "Sonnet 4" },
+    ],
+  },
+  {
+    id: "openapi-comet",
+    label: "Comet API",
+    kind: "openapi",
+    ready: true,
+    models: [
+      { id: "deepseek-v4-flash", label: "deepseek-v4-flash" },
+      { id: "gpt-4o-mini", label: "gpt-4o-mini" },
+    ],
+  },
+  {
+    id: "openapi-local",
+    label: "本地 OpenAPI",
+    kind: "openapi",
+    ready: true,
+    models: [
+      { id: "qwen2.5-7b", label: "qwen2.5-7b" },
+      { id: "llama-3.1-8b", label: "llama-3.1-8b" },
+    ],
+  },
+];
+
+const AI_MODES: readonly { id: AIModeID; label: string }[] = [
+  { id: "ask", label: "提问" },
+  { id: "polish", label: "润色" },
+  { id: "translate", label: "翻译" },
+  { id: "summarize", label: "摘要" },
+];
+
+const AI_OUTPUT_FORMATS: readonly { id: AIOutputFormat; label: string }[] = [
+  { id: "plain", label: "Plain" },
+  { id: "markdown", label: "Markdown" },
+  { id: "json", label: "JSON" },
+  { id: "mailbox", label: "Mailbox" },
+];
+
+export const DEFAULT_AI_GENERATION_OPTIONS = {
+  providerID: "codex-cli" as AIProviderID,
+  modelID: "gpt-5.3-codex",
+  modeID: "ask" as AIModeID,
+  outputFormat: "plain" as AIOutputFormat,
+};
+
+function aiProviderByID(id: AIProviderID): AIProviderOption {
+  return AI_PROVIDERS.find((provider) => provider.id === id) ?? AI_PROVIDERS[0]!;
+}
+
+function formatAIGeneratedTarget(
+  source: string,
+  mode: AIModeID,
+  output: AIOutputFormat,
+  providerLabel: string,
+  modelLabel: string,
+): string {
+  const conciseSource = source.trim() || "当前缓冲内容";
+  const modeLabel = AI_MODES.find((item) => item.id === mode)?.label ?? "提问";
+  const body = (() => {
+    switch (mode) {
+      case "polish":
+        return `已润色：${conciseSource}`;
+      case "translate":
+        return `Translated: ${conciseSource}`;
+      case "summarize":
+        return `摘要：${conciseSource.slice(0, 48)}${conciseSource.length > 48 ? "…" : ""}`;
+      case "ask":
+      default:
+        return `已根据“${conciseSource}”生成一段可直接使用的回答。`;
+    }
+  })();
+
+  switch (output) {
+    case "markdown":
+      return `## ${modeLabel}\n\n${body}\n\n_via ${providerLabel} · ${modelLabel}_`;
+    case "json":
+      return JSON.stringify(
+        {
+          mode: modeLabel,
+          provider: providerLabel,
+          model: modelLabel,
+          text: body,
+        },
+        null,
+        2,
+      );
+    case "mailbox":
+      return `已写入 Mailbox #04（${modeLabel}）\n${body}`;
+    case "plain":
+    default:
+      return body;
+  }
+}
+
 const DEFAULT_SOURCE = "请把这段缓冲内容整理为一段清晰的产品说明。";
 const LIVE_GENERATION_DEBOUNCE_MS = 420;
 const LIVE_GENERATION_PREVIEW_MS = 420;
@@ -276,6 +401,12 @@ export function bufferInputContextKey(
   translationProvider: "apple" | "ai",
   streamCandidateCount: number,
   streamLatency: "fast" | "balanced" | "stable",
+  aiOptions?: {
+    providerID: AIProviderID;
+    modelID: string;
+    modeID: AIModeID;
+    outputFormat: AIOutputFormat;
+  },
 ): string {
   if (mode === "translation") {
     return JSON.stringify([
@@ -289,6 +420,16 @@ export function bufferInputContextKey(
   if (mode === "stream") {
     return JSON.stringify([mode, sourceText, streamCandidateCount, streamLatency]);
   }
+  if (mode === "ai" && aiOptions) {
+    return JSON.stringify([
+      mode,
+      sourceText,
+      aiOptions.providerID,
+      aiOptions.modelID,
+      aiOptions.modeID,
+      aiOptions.outputFormat,
+    ]);
+  }
   return JSON.stringify([mode, sourceText]);
 }
 
@@ -297,6 +438,12 @@ function generatedTargetsFor(
   source: string,
   streamCandidateCount = 5,
   translationProvider: "apple" | "ai" = "apple",
+  aiOptions?: {
+    providerID: AIProviderID;
+    modelID: string;
+    modeID: AIModeID;
+    outputFormat: AIOutputFormat;
+  },
 ): readonly string[] {
   const conciseSource = source.trim() || "当前缓冲内容";
   switch (mode) {
@@ -306,8 +453,20 @@ function generatedTargetsFor(
       return [
         `${translationProvider === "ai" ? "AI 通道" : "Apple 本地"}译文：${conciseSource}`,
       ];
-    case "ai":
-      return [`已根据“${conciseSource}”生成一段可直接发送的内容。`];
+    case "ai": {
+      const provider = aiProviderByID(aiOptions?.providerID ?? "codex-cli");
+      const model = provider.models.find((item) => item.id === aiOptions?.modelID)
+        ?? provider.models[0]!;
+      return [
+        formatAIGeneratedTarget(
+          conciseSource,
+          aiOptions?.modeID ?? "ask",
+          aiOptions?.outputFormat ?? "plain",
+          provider.label,
+          model.label,
+        ),
+      ];
+    }
     case "prompt":
       return [
         `${conciseSource} · 产品说明模板`,
@@ -558,6 +717,10 @@ export function BufferSurface({
     controlledTargetLanguage,
     defaultTargetLanguage,
   );
+  const [aiProviderID, setAIProviderID] = useState<AIProviderID>("codex-cli");
+  const [aiModelID, setAIModelID] = useState(aiProviderByID("codex-cli").models[0]!.id);
+  const [aiModeID, setAIModeID] = useState<AIModeID>("ask");
+  const [aiOutputFormat, setAIOutputFormat] = useState<AIOutputFormat>("plain");
   const [deliveryNote, setDeliveryNote] = useState("");
   const [deliveryTone, setDeliveryTone] = useState<BufferPhase>("ready");
   const [sending, setSending] = useState(false);
@@ -610,6 +773,17 @@ export function BufferSurface({
   const showLiveTargetRail = liveExpand && !protectedContent && hasSource;
   // Exchange plugins keep one rail: write first, then swap to waiting/results.
   const exchangeDecision = exchange && !protectedContent && (loading || targets.length > 0);
+  const activeAIProvider = aiProviderByID(aiProviderID);
+  const activeAIModels = activeAIProvider.models;
+  const resolvedAIModelID = activeAIModels.some((model) => model.id === aiModelID)
+    ? aiModelID
+    : activeAIModels[0]!.id;
+  const aiOptions = useMemo(() => ({
+    providerID: aiProviderID,
+    modelID: resolvedAIModelID,
+    modeID: aiModeID,
+    outputFormat: aiOutputFormat,
+  }), [aiModeID, aiOutputFormat, aiProviderID, resolvedAIModelID]);
   const inputContextKey = bufferInputContextKey(
     effectiveMode,
     sourceText,
@@ -618,6 +792,7 @@ export function BufferSurface({
     translationProvider,
     streamCandidateCount,
     streamLatency,
+    aiOptions,
   );
   const [internalTargetContextKey, setInternalTargetContextKey] = useState<string | null>(
     () => controlledTargets === undefined && targets.length > 0 ? inputContextKey : null,
@@ -778,6 +953,7 @@ export function BufferSurface({
       translationProvider,
       streamCandidateCount,
       streamLatency,
+      aiOptions,
     );
     clearDeliveryStatus();
     if (!preservesPriorResult) {
@@ -808,6 +984,7 @@ export function BufferSurface({
           requestSource,
           streamCandidateCount,
           translationProvider,
+          aiOptions,
         );
         setTargets(nextTargets);
         setSelectedTarget(0);
@@ -822,6 +999,7 @@ export function BufferSurface({
       generationTimer.current = timerID;
     }
   }, [
+    aiOptions,
     cancelPendingGeneration,
     clearDeliveryStatus,
     issueGenerationRequest,
@@ -995,6 +1173,7 @@ export function BufferSurface({
           requestSource,
           streamCandidateCount,
           translationProvider,
+          aiOptions,
         );
         setTargets(nextTargets);
         setSelectedTarget(0);
@@ -1350,6 +1529,88 @@ export function BufferSurface({
             >
               {targetLanguageOptions.map((language) => (
                 <option key={`target-${language.value}`} value={language.value}>{language.label}</option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+
+        {effectiveMode === "ai" ? (
+          <div aria-label="AI 生成配置" className="buffer-toolbar__ai-controls" role="group">
+            <select
+              aria-label="供应商"
+              disabled={paused || protectedContent || loading || sending}
+              onChange={(event) => {
+                const nextProvider = event.target.value as AIProviderID;
+                const provider = aiProviderByID(nextProvider);
+                cancelPendingGeneration();
+                clearDeliveryStatus();
+                setTargetsAreCurrent(false);
+                if (exchange && targets.length > 0) setTargets([]);
+                setAIProviderID(nextProvider);
+                setAIModelID(provider.models[0]!.id);
+                if (!protectedContent) setPhase(hasSource ? "ready" : "idle");
+              }}
+              title="供应商"
+              value={aiProviderID}
+            >
+              {AI_PROVIDERS.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.kind === "cli" ? `CLI · ${provider.label}` : `API · ${provider.label}`}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="模型"
+              disabled={paused || protectedContent || loading || sending}
+              onChange={(event) => {
+                cancelPendingGeneration();
+                clearDeliveryStatus();
+                setTargetsAreCurrent(false);
+                if (exchange && targets.length > 0) setTargets([]);
+                setAIModelID(event.target.value);
+                if (!protectedContent) setPhase(hasSource ? "ready" : "idle");
+              }}
+              title="模型"
+              value={resolvedAIModelID}
+            >
+              {activeAIModels.map((model) => (
+                <option key={model.id} value={model.id}>{model.label}</option>
+              ))}
+            </select>
+            <select
+              aria-label="模式"
+              disabled={paused || protectedContent || loading || sending}
+              onChange={(event) => {
+                cancelPendingGeneration();
+                clearDeliveryStatus();
+                setTargetsAreCurrent(false);
+                if (exchange && targets.length > 0) setTargets([]);
+                setAIModeID(event.target.value as AIModeID);
+                if (!protectedContent) setPhase(hasSource ? "ready" : "idle");
+              }}
+              title="模式"
+              value={aiModeID}
+            >
+              {AI_MODES.map((modeOption) => (
+                <option key={modeOption.id} value={modeOption.id}>{modeOption.label}</option>
+              ))}
+            </select>
+            <select
+              aria-label="输出内容"
+              disabled={paused || protectedContent || loading || sending}
+              onChange={(event) => {
+                cancelPendingGeneration();
+                clearDeliveryStatus();
+                setTargetsAreCurrent(false);
+                if (exchange && targets.length > 0) setTargets([]);
+                setAIOutputFormat(event.target.value as AIOutputFormat);
+                if (!protectedContent) setPhase(hasSource ? "ready" : "idle");
+              }}
+              title="输出内容"
+              value={aiOutputFormat}
+            >
+              {AI_OUTPUT_FORMATS.map((format) => (
+                <option key={format.id} value={format.id}>{format.label}</option>
               ))}
             </select>
           </div>
