@@ -51,12 +51,21 @@ enum CapsuleWindowSelectionRules {
 }
 
 struct CapsulePaneLayoutSnapshot {
+    let rootFrame: NSRect
     let subtitleToTabsGap: CGFloat
     let formTopGap: CGFloat
     let tabsTop: CGFloat
     let editorTop: CGFloat
     let kindControlFrame: NSRect
+    let listFrame: NSRect
     let editorFrame: NSRect
+    let actionsFrame: NSRect
+    let previewFrame: NSRect?
+    let copyButtonFrame: NSRect?
+    let horizontalContentFits: Bool
+    let actionsAreVisible: Bool
+    let previewFitsEditorWidth: Bool
+    let copyButtonIsVisible: Bool
     let hasAmbiguousLayout: Bool
 }
 
@@ -64,6 +73,256 @@ enum CapsuleMediaPreviewResult {
     case image(CGImage)
     case pdf(image: CGImage, pageCount: Int)
     case unavailable
+}
+
+enum CapsuleFilePasteboardError: LocalizedError, Equatable {
+    case unsupportedKind
+    case invalidPath
+    case unavailableFile
+    case fileTooLarge
+    case undecodableImage
+    case pasteboardWriteFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedKind:
+            return "该条目没有可复制的本机文件"
+        case .invalidPath:
+            return "请先选择有效的绝对路径"
+        case .unavailableFile:
+            return "文件或文件夹不存在、不受支持或使用了符号链接"
+        case .fileTooLarge:
+            return "图片过大，无法安全复制"
+        case .undecodableImage:
+            return "无法解码图片"
+        case .pasteboardWriteFailed:
+            return "无法写入系统剪贴板"
+        }
+    }
+}
+
+/// A prepared payload contains no live file handle and can be constructed away
+/// from the main thread. The final AppKit pasteboard mutation remains explicit
+/// and never synthesizes Command-V, Paste, a context menu, or an AX event.
+struct CapsuleFilePasteboardPayload {
+    let kind: CapsuleEntryKind
+    let fileURL: URL
+    let imagePNG: Data?
+    let imageTIFF: Data?
+    let originalImageType: NSPasteboard.PasteboardType?
+    let originalImageData: Data?
+}
+
+enum CapsuleFilePasteboardWriter {
+    static let maximumSourcePixelCount: UInt64 = 128_000_000
+    static let maximumSourceDimension: UInt64 = 32_768
+    static let maximumFallbackRepresentationDimension = 4_096
+
+    static func prepare(
+        kind: CapsuleEntryKind,
+        path: String
+    ) throws -> CapsuleFilePasteboardPayload {
+        guard NSString(string: path).isAbsolutePath else {
+            throw CapsuleFilePasteboardError.invalidPath
+        }
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+
+        switch kind {
+        case .skill:
+            var info = stat()
+            guard lstat(url.path, &info) == 0,
+                  (info.st_mode & S_IFMT) == S_IFDIR
+                    || (info.st_mode & S_IFMT) == S_IFREG else {
+                throw CapsuleFilePasteboardError.unavailableFile
+            }
+            return CapsuleFilePasteboardPayload(
+                kind: kind,
+                fileURL: url,
+                imagePNG: nil,
+                imageTIFF: nil,
+                originalImageType: nil,
+                originalImageData: nil
+            )
+        case .pdf:
+            try validateOrdinaryFile(url)
+            return CapsuleFilePasteboardPayload(
+                kind: kind,
+                fileURL: url,
+                imagePNG: nil,
+                imageTIFF: nil,
+                originalImageType: nil,
+                originalImageData: nil
+            )
+        case .image:
+            let data = try readImageData(url)
+            guard let source = CGImageSourceCreateWithData(
+                data as CFData,
+                nil
+            ) else {
+                throw CapsuleFilePasteboardError.undecodableImage
+            }
+            guard sourceDimensionsAreSafe(source) else {
+                throw CapsuleFilePasteboardError.fileTooLarge
+            }
+            guard let image = CGImageSourceCreateThumbnailAtIndex(
+                source,
+                0,
+                [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceShouldCacheImmediately: true,
+                    kCGImageSourceThumbnailMaxPixelSize:
+                        maximumFallbackRepresentationDimension,
+                ] as CFDictionary
+            ) else {
+                throw CapsuleFilePasteboardError.undecodableImage
+            }
+            let sourceType = CGImageSourceGetType(source) as String?
+            let png = sourceType == UTType.png.identifier
+                ? data
+                : encode(image, as: UTType.png.identifier)
+            let tiff = sourceType == UTType.tiff.identifier
+                ? data
+                : encode(image, as: UTType.tiff.identifier)
+            guard let png, let tiff else {
+                throw CapsuleFilePasteboardError.undecodableImage
+            }
+            return CapsuleFilePasteboardPayload(
+                kind: kind,
+                fileURL: url,
+                imagePNG: png,
+                imageTIFF: tiff,
+                originalImageType: sourceType.map {
+                    NSPasteboard.PasteboardType($0)
+                },
+                originalImageData: data
+            )
+        case .prompt, .memory, .password, .note, .url:
+            throw CapsuleFilePasteboardError.unsupportedKind
+        }
+    }
+
+    /// Build the complete pasteboard item before clearing the destination. A
+    /// validation or decode failure therefore leaves the user's clipboard
+    /// untouched. Image representations and the file URL live on one item so
+    /// image-aware and file-aware targets can each choose their native format.
+    @discardableResult
+    static func write(
+        _ payload: CapsuleFilePasteboardPayload,
+        to pasteboard: NSPasteboard = .general
+    ) throws -> Int {
+        let item = NSPasteboardItem()
+        if payload.kind == .image {
+            guard let png = payload.imagePNG,
+                  let tiff = payload.imageTIFF,
+                  item.setData(png, forType: .png),
+                  item.setData(tiff, forType: .tiff) else {
+                throw CapsuleFilePasteboardError.pasteboardWriteFailed
+            }
+            if let originalType = payload.originalImageType,
+               originalType != .png,
+               originalType != .tiff,
+               let originalData = payload.originalImageData {
+                guard item.setData(originalData, forType: originalType) else {
+                    throw CapsuleFilePasteboardError.pasteboardWriteFailed
+                }
+            }
+        }
+        guard item.setString(
+            payload.fileURL.absoluteString,
+            forType: .fileURL
+        ) else {
+            throw CapsuleFilePasteboardError.pasteboardWriteFailed
+        }
+        pasteboard.clearContents()
+        guard pasteboard.writeObjects([item]) else {
+            throw CapsuleFilePasteboardError.pasteboardWriteFailed
+        }
+        return pasteboard.changeCount
+    }
+
+    @discardableResult
+    static func copy(
+        kind: CapsuleEntryKind,
+        path: String,
+        to pasteboard: NSPasteboard = .general
+    ) throws -> Int {
+        try write(prepare(kind: kind, path: path), to: pasteboard)
+    }
+
+    private static func validateOrdinaryFile(_ url: URL) throws {
+        let descriptor = open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            throw CapsuleFilePasteboardError.unavailableFile
+        }
+        defer { close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_size > 0 else {
+            throw CapsuleFilePasteboardError.unavailableFile
+        }
+    }
+
+    private static func readImageData(_ url: URL) throws -> Data {
+        let descriptor = open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            throw CapsuleFilePasteboardError.unavailableFile
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_size > 0 else {
+            throw CapsuleFilePasteboardError.unavailableFile
+        }
+        guard info.st_size <= off_t(CapsuleMediaPreviewLoader.maximumImageBytes)
+        else {
+            throw CapsuleFilePasteboardError.fileTooLarge
+        }
+        guard let data = try handle.readToEnd(),
+              !data.isEmpty,
+              data.count == Int(info.st_size) else {
+            throw CapsuleFilePasteboardError.unavailableFile
+        }
+        return data
+    }
+
+    private static func sourceDimensionsAreSafe(
+        _ source: CGImageSource
+    ) -> Bool {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(
+            source,
+            0,
+            nil
+        ) as? [CFString: Any],
+        let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?
+            .uint64Value,
+        let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?
+            .uint64Value,
+        width > 0,
+        height > 0,
+        width <= maximumSourceDimension,
+        height <= maximumSourceDimension,
+        width <= maximumSourcePixelCount / height else {
+            return false
+        }
+        return true
+    }
+
+    private static func encode(_ image: CGImage, as type: String) -> Data? {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data,
+            type as CFString,
+            1,
+            nil
+        ) else { return nil }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return data as Data
+    }
 }
 
 /// Media files are user-managed and can be large. Validate and decode them off
@@ -787,7 +1046,7 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
         )
         window.title = "RIMES Capsule"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 820, height: 560)
+        window.minSize = NSSize(width: 620, height: 430)
         window.appearance = RimeUI.appKitAppearance
         window.animationBehavior = .documentWindow
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
@@ -829,6 +1088,10 @@ final class CapsulePaneViewController: NSViewController,
     private let repository: CapsuleWindowRepository
     private let cloudSyncController: CapsuleCloudSyncController?
     private let mediaPreviewLoader = CapsuleMediaPreviewLoader.shared
+    private let fileCopyQueue = DispatchQueue(
+        label: "RIMES.CapsuleWindow.file-copy",
+        qos: .userInitiated
+    )
     private let reloadQueue = DispatchQueue(
         label: "RIMES.CapsuleWindow.reload",
         qos: .userInitiated
@@ -889,6 +1152,8 @@ final class CapsulePaneViewController: NSViewController,
     private var assetPathField: NSTextField?
     private weak var assetPreviewContainer: NSView?
     private var imagePreviewView: NSImageView?
+    private weak var fileCopyButton: NSButton?
+    private weak var editorActions: NSStackView?
     private var passwordURLField: NSSecureTextField?
     private var passwordAppField: NSSecureTextField?
     private var passwordUsernameField: NSSecureTextField?
@@ -901,6 +1166,7 @@ final class CapsulePaneViewController: NSViewController,
     private var reloadGeneration: UInt64 = 0
     private var mediaPreviewGeneration: UInt64 = 0
     private var mediaPreviewOperation: Operation?
+    private var fileCopyGeneration: UInt64 = 0
     private var applyingSelection = false
     private var editorDirty = false
     private var storeObserver: NSObjectProtocol?
@@ -948,11 +1214,25 @@ final class CapsulePaneViewController: NSViewController,
             ofSize: 15,
             weight: .semibold
         )
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.setContentCompressionResistancePriority(
+            .defaultLow,
+            for: .horizontal
+        )
         subtitleLabel.font = MailboxTerminalTypography.font(ofSize: 10)
+        subtitleLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.setContentCompressionResistancePriority(
+            .defaultLow,
+            for: .horizontal
+        )
         let heading = NSStackView(views: [titleLabel, subtitleLabel])
         heading.orientation = .vertical
         heading.alignment = .leading
         heading.spacing = 2
+        heading.setContentCompressionResistancePriority(
+            .defaultLow,
+            for: .horizontal
+        )
 
         syncStatusLabel.font = MailboxTerminalTypography.font(ofSize: 9)
         syncStatusLabel.lineBreakMode = .byTruncatingTail
@@ -1083,14 +1363,15 @@ final class CapsulePaneViewController: NSViewController,
 
             toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
             toolbar.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 14),
-            toolbar.widthAnchor.constraint(equalToConstant: 286),
+            toolbar.widthAnchor.constraint(equalTo: listContainer.widthAnchor),
             kindControl.widthAnchor.constraint(equalTo: toolbar.widthAnchor),
             searchRow.widthAnchor.constraint(equalTo: toolbar.widthAnchor),
 
             listContainer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
             listContainer.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 12),
             listContainer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
-            listContainer.widthAnchor.constraint(equalToConstant: 286),
+            listContainer.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
+            listContainer.widthAnchor.constraint(lessThanOrEqualToConstant: 286),
 
             divider.leadingAnchor.constraint(equalTo: listContainer.trailingAnchor, constant: 12),
             divider.topAnchor.constraint(equalTo: toolbar.topAnchor),
@@ -1101,7 +1382,14 @@ final class CapsulePaneViewController: NSViewController,
             editorContainer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
             editorContainer.topAnchor.constraint(equalTo: toolbar.topAnchor),
             editorContainer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
+            editorContainer.widthAnchor.constraint(greaterThanOrEqualToConstant: 280),
         ])
+        let preferredListWidth = listContainer.widthAnchor.constraint(
+            equalTo: root.widthAnchor,
+            multiplier: 0.31
+        )
+        preferredListWidth.priority = .defaultHigh
+        preferredListWidth.isActive = true
 
         view = root
         renderCloudSyncStatus()
@@ -1140,6 +1428,19 @@ final class CapsulePaneViewController: NSViewController,
         super.viewDidAppear()
         reloadFromStore()
         cloudSyncController?.requestSync(after: 0)
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        // Keep the two explicit iCloud actions reachable on compact surfaces.
+        // The status remains available as their tooltip and returns as soon as
+        // enough width is available.
+        let hidesInlineSyncStatus = view.bounds.width < 760
+        let shouldHideSyncStatus = cloudSyncController == nil
+            || hidesInlineSyncStatus
+        if syncStatusLabel.isHidden != shouldHideSyncStatus {
+            syncStatusLabel.isHidden = shouldHideSyncStatus
+        }
     }
 
     override func viewWillDisappear() {
@@ -1241,7 +1542,7 @@ final class CapsulePaneViewController: NSViewController,
             return
         }
         let status = cloudSyncController.status
-        syncStatusLabel.isHidden = false
+        syncStatusLabel.isHidden = view.bounds.width < 760
         syncNowButton.isHidden = false
         syncManageButton.isHidden = false
         switch status.phase {
@@ -1272,9 +1573,17 @@ final class CapsulePaneViewController: NSViewController,
         case .failed:
             syncStatusLabel.stringValue = "iCloud 同步失败"
         }
-        syncStatusLabel.toolTip = [status.folderName, status.message]
+        let statusDetail = [status.folderName, status.message]
             .compactMap { $0 }
             .joined(separator: " · ")
+        syncStatusLabel.toolTip = statusDetail
+        let visibleStatus = [syncStatusLabel.stringValue, statusDetail]
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+        for button in [syncNowButton, syncManageButton] {
+            button.toolTip = visibleStatus
+            button.setAccessibilityHelp(visibleStatus)
+        }
         syncNowButton.isEnabled = status.isConfigured
             && status.phase != .unavailable
             && !status.isBusy
@@ -1392,14 +1701,28 @@ final class CapsulePaneViewController: NSViewController,
         renderEditor()
 
         view.frame = NSRect(origin: .zero, size: size)
+        view.bounds = NSRect(origin: .zero, size: size)
+        view.needsUpdateConstraints = true
+        view.updateConstraintsForSubtreeIfNeeded()
         view.needsLayout = true
         view.layoutSubtreeIfNeeded()
         editorScrollView.layoutSubtreeIfNeeded()
         formStack.layoutSubtreeIfNeeded()
+        scrollEditorToTop()
 
         let subtitleFrame = subtitleLabel.convert(subtitleLabel.bounds, to: view)
         let kindFrame = kindControl.convert(kindControl.bounds, to: view)
+        let listFrame = listContainer.convert(listContainer.bounds, to: view)
         let editorFrame = editorContainer.convert(editorContainer.bounds, to: view)
+        let actionsFrame = editorActions.map {
+            $0.convert($0.bounds, to: view)
+        } ?? .zero
+        let previewFrame = assetPreviewContainer.map {
+            $0.convert($0.bounds, to: view)
+        }
+        let copyButtonFrame = fileCopyButton.map {
+            $0.convert($0.bounds, to: view)
+        }
         let subtitleToTabsGap: CGFloat
         let tabsTop: CGFloat
         let editorTop: CGFloat
@@ -1424,13 +1747,43 @@ final class CapsulePaneViewController: NSViewController,
             formTopGap = .infinity
         }
 
+        let bounds = view.bounds
+        let horizontallyContained: (NSRect, NSRect) -> Bool = { outer, inner in
+            inner.minX >= outer.minX - 0.5
+                && inner.maxX <= outer.maxX + 0.5
+                && inner.width > 0
+        }
+        let fullyContained: (NSRect, NSRect) -> Bool = { outer, inner in
+            horizontallyContained(outer, inner)
+                && inner.minY >= outer.minY - 0.5
+                && inner.maxY <= outer.maxY + 0.5
+                && inner.height > 0
+        }
+        let fileKind = kind == .image || kind == .pdf || kind == .skill
+
         return CapsulePaneLayoutSnapshot(
+            rootFrame: view.frame,
             subtitleToTabsGap: subtitleToTabsGap,
             formTopGap: formTopGap,
             tabsTop: tabsTop,
             editorTop: editorTop,
             kindControlFrame: kindFrame,
+            listFrame: listFrame,
             editorFrame: editorFrame,
+            actionsFrame: actionsFrame,
+            previewFrame: previewFrame,
+            copyButtonFrame: copyButtonFrame,
+            horizontalContentFits: horizontallyContained(bounds, listFrame)
+                && horizontallyContained(bounds, editorFrame)
+                && listFrame.maxX < editorFrame.minX,
+            actionsAreVisible: fullyContained(editorFrame, actionsFrame),
+            previewFitsEditorWidth: previewFrame.map {
+                horizontallyContained(editorFrame, $0)
+                    && (159...361).contains($0.height)
+            } ?? true,
+            copyButtonIsVisible: !fileKind || copyButtonFrame.map {
+                fullyContained(editorFrame, $0)
+            } == true,
             hasAmbiguousLayout: view.hasAmbiguousLayout
                 || editorContainer.hasAmbiguousLayout
                 || listContainer.hasAmbiguousLayout
@@ -1513,8 +1866,13 @@ final class CapsulePaneViewController: NSViewController,
 
     func controlTextDidChange(_ notification: Notification) {
         editorDirty = true
-        guard let field = notification.object as? NSTextField,
-              field === assetPathField,
+        guard let field = notification.object as? NSTextField else { return }
+        if field === assetPathField || field === skillPathField {
+            fileCopyButton?.isEnabled = !field.stringValue.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty
+        }
+        guard field === assetPathField,
               draft.kind == .image || draft.kind == .pdf,
               let preview = assetPreviewContainer else { return }
         // Keep the preview guard in sync with the visible field immediately.
@@ -1686,6 +2044,11 @@ final class CapsulePaneViewController: NSViewController,
 
         statusLabel.font = MailboxTerminalTypography.font(ofSize: 9)
         statusLabel.lineBreakMode = .byTruncatingMiddle
+        statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        statusLabel.setContentCompressionResistancePriority(
+            .defaultLow,
+            for: .horizontal
+        )
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
 
         deleteButton.target = self
@@ -1704,6 +2067,7 @@ final class CapsulePaneViewController: NSViewController,
         actions.alignment = .centerY
         actions.spacing = 8
         actions.translatesAutoresizingMaskIntoConstraints = false
+        editorActions = actions
 
         editorContainer.addSubview(editorScrollView)
         editorContainer.addSubview(actions)
@@ -1716,15 +2080,15 @@ final class CapsulePaneViewController: NSViewController,
             actions.leadingAnchor.constraint(equalTo: editorContainer.leadingAnchor, constant: 16),
             actions.trailingAnchor.constraint(equalTo: editorContainer.trailingAnchor, constant: -16),
             actions.bottomAnchor.constraint(equalTo: editorContainer.bottomAnchor, constant: -12),
-            statusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 140),
         ])
     }
 
-    private func renderEditor() {
+    private func renderEditor(scrollToTop: Bool = true) {
         guard isViewLoaded else { return }
         mediaPreviewOperation?.cancel()
         mediaPreviewOperation = nil
         mediaPreviewGeneration &+= 1
+        fileCopyGeneration &+= 1
         for view in formStack.arrangedSubviews {
             formStack.removeArrangedSubview(view)
             view.removeFromSuperview()
@@ -1736,6 +2100,7 @@ final class CapsulePaneViewController: NSViewController,
         assetPathField = nil
         assetPreviewContainer = nil
         imagePreviewView = nil
+        fileCopyButton = nil
         passwordURLField = nil
         passwordAppField = nil
         passwordUsernameField = nil
@@ -1816,15 +2181,28 @@ final class CapsulePaneViewController: NSViewController,
             pathField.font = MailboxTerminalTypography.font(ofSize: 11)
             pathField.setAccessibilityLabel("Skill 绝对路径")
             pathField.delegate = self
+            pathField.setContentCompressionResistancePriority(
+                .defaultLow,
+                for: .horizontal
+            )
             skillPathField = pathField
             let chooseButton = RimePointingHandButton(
-                title: "选择文件夹…",
+                title: "选择…",
                 target: self,
                 action: #selector(chooseSkillFolder)
             )
             chooseButton.bezelStyle = .rounded
             chooseButton.font = MailboxTerminalTypography.font(ofSize: 10)
-            let row = NSStackView(views: [pathField, chooseButton])
+            chooseButton.setContentHuggingPriority(.required, for: .horizontal)
+            let copyButton = makeFileCopyButton(
+                title: "复制文件/文件夹",
+                accessibilityLabel: "复制 Skill 文件或文件夹"
+            )
+            let row = NSStackView(views: [
+                pathField,
+                chooseButton,
+                copyButton,
+            ])
             row.orientation = .horizontal
             row.alignment = .centerY
             row.spacing = 8
@@ -1837,6 +2215,29 @@ final class CapsulePaneViewController: NSViewController,
 
         deleteButton.isEnabled = draft.id != nil
         saveButton.title = draft.id == nil ? "创建" : "保存"
+        if scrollToTop {
+            let generation = mediaPreviewGeneration
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      generation == self.mediaPreviewGeneration,
+                      self.isViewLoaded else { return }
+                self.scrollEditorToTop()
+            }
+        }
+    }
+
+    private func scrollEditorToTop() {
+        editorScrollView.layoutSubtreeIfNeeded()
+        formStack.layoutSubtreeIfNeeded()
+        let clip = editorScrollView.contentView
+        let y = formStack.isFlipped
+            ? formStack.bounds.minY
+            : max(
+                formStack.bounds.minY,
+                formStack.bounds.maxY - clip.bounds.height
+            )
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y))
+        editorScrollView.reflectScrolledClipView(clip)
     }
 
     private func addPasswordFields() {
@@ -1935,7 +2336,7 @@ final class CapsulePaneViewController: NSViewController,
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.borderType = .bezelBorder
-        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 280).isActive = true
+        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
         addField(label: label, field: scroll)
     }
 
@@ -1948,6 +2349,10 @@ final class CapsulePaneViewController: NSViewController,
         pathField.font = MailboxTerminalTypography.font(ofSize: 11)
         pathField.setAccessibilityLabel("\(kind.displayName) 绝对路径")
         pathField.delegate = self
+        pathField.setContentCompressionResistancePriority(
+            .defaultLow,
+            for: .horizontal
+        )
         assetPathField = pathField
 
         let chooseButton = RimePointingHandButton(
@@ -1957,7 +2362,14 @@ final class CapsulePaneViewController: NSViewController,
         )
         chooseButton.bezelStyle = .rounded
         chooseButton.font = MailboxTerminalTypography.font(ofSize: 10)
-        let pathRow = NSStackView(views: [pathField, chooseButton])
+        chooseButton.setContentHuggingPriority(.required, for: .horizontal)
+        let copyButton = makeFileCopyButton(
+            title: kind == .image ? "复制图片" : "复制文件",
+            accessibilityLabel: kind == .image
+                ? "复制 Capsule 图片"
+                : "复制 Capsule PDF 文件"
+        )
+        let pathRow = NSStackView(views: [pathField, chooseButton, copyButton])
         pathRow.orientation = .horizontal
         pathRow.alignment = .centerY
         pathRow.spacing = 8
@@ -1969,11 +2381,40 @@ final class CapsulePaneViewController: NSViewController,
         preview.layer?.borderColor = RimeUI.border.cgColor
         preview.layer?.borderWidth = 1
         preview.layer?.cornerRadius = 5
-        preview.heightAnchor.constraint(equalToConstant: 360).isActive = true
+        let adaptiveHeight = preview.heightAnchor.constraint(
+            equalTo: preview.widthAnchor,
+            multiplier: 0.64
+        )
+        adaptiveHeight.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            preview.heightAnchor.constraint(greaterThanOrEqualToConstant: 160),
+            preview.heightAnchor.constraint(lessThanOrEqualToConstant: 360),
+            adaptiveHeight,
+        ])
         assetPreviewContainer = preview
 
         loadAssetPreview(kind: kind, path: draft.content, in: preview)
         addField(label: "PREVIEW", field: preview)
+    }
+
+    private func makeFileCopyButton(
+        title: String,
+        accessibilityLabel: String
+    ) -> NSButton {
+        let button = RimePointingHandButton(
+            title: title,
+            target: self,
+            action: #selector(copyCurrentFile)
+        )
+        button.bezelStyle = .rounded
+        button.font = MailboxTerminalTypography.font(ofSize: 10)
+        button.setAccessibilityLabel(accessibilityLabel)
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.isEnabled = !draft.content.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty
+        fileCopyButton = button
+        return button
     }
 
     private func loadAssetPreview(
@@ -2227,7 +2668,7 @@ final class CapsulePaneViewController: NSViewController,
                 return
             }
             self.captureDraftFromFields()
-            self.renderEditor()
+            self.renderEditor(scrollToTop: false)
         }
     }
 
@@ -2362,16 +2803,17 @@ final class CapsulePaneViewController: NSViewController,
     @objc private func chooseSkillFolder() {
         guard let window = view.window else { return }
         let panel = NSOpenPanel()
-        panel.title = "选择 Skill 文件夹"
-        panel.message = "Capsule 会保存该文件夹在当前电脑中的绝对路径。"
+        panel.title = "选择 Skill 文件或文件夹"
+        panel.message = "Capsule 会保存所选项目在当前电脑中的绝对路径。"
         panel.prompt = "选择"
         panel.canChooseDirectories = true
-        panel.canChooseFiles = false
+        panel.canChooseFiles = true
         panel.allowsMultipleSelection = false
         panel.resolvesAliases = true
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let path = panel.url?.path else { return }
             self?.skillPathField?.stringValue = path
+            self?.fileCopyButton?.isEnabled = true
             self?.editorDirty = true
             self?.setStatus("Skill 路径尚未保存")
         }
@@ -2406,12 +2848,66 @@ final class CapsulePaneViewController: NSViewController,
         }
     }
 
+    @objc private func copyCurrentFile() {
+        captureDraftFromFields()
+        let kind = draft.kind
+        guard kind == .image || kind == .pdf || kind == .skill else {
+            setStatus(
+                CapsuleFilePasteboardError.unsupportedKind.localizedDescription,
+                isError: true
+            )
+            return
+        }
+        let path = draft.content
+        fileCopyGeneration &+= 1
+        let generation = fileCopyGeneration
+        fileCopyButton?.isEnabled = false
+        setStatus("正在准备复制…")
+
+        fileCopyQueue.async { [weak self] in
+            let result = Result {
+                try CapsuleFilePasteboardWriter.prepare(kind: kind, path: path)
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, generation == self.fileCopyGeneration else {
+                    return
+                }
+                self.fileCopyButton?.isEnabled = !path.isEmpty
+                switch result {
+                case let .success(payload):
+                    do {
+                        try CapsuleFilePasteboardWriter.write(payload)
+                        switch kind {
+                        case .image:
+                            self.setStatus("已复制图片")
+                        case .pdf:
+                            self.setStatus("已复制 PDF 文件")
+                        case .skill:
+                            self.setStatus("已复制 Skill 文件或文件夹")
+                        case .prompt, .memory, .password, .note, .url:
+                            break
+                        }
+                    } catch {
+                        self.setStatus(error.localizedDescription, isError: true)
+                    }
+                case let .failure(error):
+                    self.setStatus(error.localizedDescription, isError: true)
+                }
+            }
+        }
+    }
+
     @objc private func addPreviousPassword() {
         captureDraftFromFields()
         draft.previousPasswords.append("")
         editorDirty = true
-        renderEditor()
-        view.window?.makeFirstResponder(previousPasswordFields.last)
+        renderEditor(scrollToTop: false)
+        if let field = previousPasswordFields.last {
+            editorScrollView.layoutSubtreeIfNeeded()
+            formStack.layoutSubtreeIfNeeded()
+            view.window?.makeFirstResponder(field)
+            field.scrollToVisible(field.bounds)
+        }
     }
 
     @objc private func removePreviousPassword(_ sender: NSButton) {
@@ -2419,7 +2915,7 @@ final class CapsulePaneViewController: NSViewController,
         guard draft.previousPasswords.indices.contains(sender.tag) else { return }
         draft.previousPasswords.remove(at: sender.tag)
         editorDirty = true
-        renderEditor()
+        renderEditor(scrollToTop: false)
     }
 
     @objc private func togglePasswordPlaintext() {
@@ -2433,7 +2929,7 @@ final class CapsulePaneViewController: NSViewController,
             passwordRevealState.reveal(now: Date())
             schedulePasswordAutoConceal()
         }
-        renderEditor()
+        renderEditor(scrollToTop: false)
     }
 
     private func installPrivacyObservers() {

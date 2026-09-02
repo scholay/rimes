@@ -87,6 +87,7 @@ Drive 时，界面保持「iCloud Drive 不可用/未设置」，本机 CRUD 不
 - `⌘⇧C` 全局打开或关闭 Capsule；也可以从输入法菜单或「设置 → Capsule」进入。
 - 窗口按八类内容搜索，并提供新增、查看、修改和删除。它是可输入的普通 AppKit 管理窗口，不是 Buffer，也不是上屏目标。
 - Prompt、Memory 与 Note 编辑 Markdown 正文；URL 保存完整 HTTP(S) 地址；Skill 保存本机文件或文件夹的绝对路径；Image/PDF 保存普通、非符号链接文件的绝对路径并提供内嵌预览；Password 编辑网址、App、用户名、当前密码与曾用密码。
+- Image 的「复制图片」会把原格式图像表示、至少一种最长边不超过 4096 px 的 PNG/TIFF 兼容表示与原文件 URL 写入同一个系统剪贴板条目；复制前先限制源文件大小、像素数和单边尺寸，避免恶意或异常图片耗尽输入法进程内存。PDF 的「复制文件」与 Skill 的「复制文件/文件夹」写入本机 file URL。复制只更新剪贴板，不合成 `Command+V`、Paste、右键菜单或 Accessibility 事件。左侧列表、媒体预览和底部操作区使用弹性宽高，在窄窗口和较小高度下仍保留滚动与操作按钮；紧凑宽度隐藏的 iCloud 状态仍可从同步按钮的提示与辅助功能帮助读取。
 - Password 列表只显示标题与固定长度掩码；网址、App、用户名始终使用安全文本控件。当前密码与曾用密码可通过「查看明文」短时查看，15 秒后自动恢复掩码；窗口失焦、应用失活、锁屏/睡眠/会话退出，以及切换条目或类型、新建、保存、删除、重载和关闭都会立即隐藏。明文视图不可选择、不可复制，也不会写入日志、tooltip、辅助功能标签或 UserDefaults。
 - 未保存草稿在切换条目、类型、页面或关闭窗口前会要求确认；保存与删除携带已加载文件的 SHA-256 revision，并在 Store 文件锁内比较，另一窗口或 CLI 已更新时拒绝覆盖。直接在 Obsidian 修改普通 Markdown 后，旧窗口也必须重新载入才能保存。
 - 当前独立管理窗口只负责内容管理，不直接向外部输入框上屏。原先依附 Buffer workspace 的 Capsule 搜索、保护投递和并击拦截已经移除，因此 Capsule 不参与普通输入按键路径。后续若增加独立上屏，应采用 Capsule 自己的非激活快速面板和外部焦点授权协议，不能重新依附 Buffer，也不能退化为剪贴板或 Accessibility 注入。
@@ -146,4 +147,4 @@ RimeBuffer capsule entry audit-media
 .build/debug/RimeBuffer capsule-sync-smoke
 ```
 
-Smoke 使用临时目录和测试凭据，覆盖默认词条的一次性预设、八类 Markdown/密文往返、独立窗口 CRUD、真实 PNG/PDF 解码、缺失/符号链接媒体拒绝、URL 列表脱敏、并发 revision 规则、目录/文件权限、密码明文边界、加解密、标题篡改拒绝和固定脱敏。同步 smoke 以两个隔离的本机目录和一个 fake cloud root 模拟跨设备，验证媒体资产、离线媒体 deferred/recovery、共享与最终引用删除后的保守 asset/cache 留存、冲突、tombstone、幂等同步，以及 `master-key`/Password 永不进入镜像。测试不会读写用户真实 Capsule 或 iCloud 目录。
+Smoke 使用临时目录、具名临时剪贴板和测试凭据，覆盖默认词条的一次性预设、八类 Markdown/密文往返、独立窗口 CRUD、窄宽/较小高度布局、真实 PNG/PDF 解码、Image 原格式与有界兼容表示复制、PDF/Skill 文件与文件夹的 file URL 复制、复制失败不清空既有剪贴板、缺失/符号链接媒体拒绝、URL 列表脱敏、并发 revision 规则、目录/文件权限、密码明文边界、加解密、标题篡改拒绝和固定脱敏。同步 smoke 以两个隔离的本机目录和一个 fake cloud root 模拟跨设备，验证媒体资产、离线媒体 deferred/recovery、共享与最终引用删除后的保守 asset/cache 留存、冲突、tombstone、幂等同步，以及 `master-key`/Password 永不进入镜像。测试不会读写用户真实 Capsule、通用系统剪贴板或 iCloud 目录。

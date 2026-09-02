@@ -29,12 +29,29 @@ func runCapsuleWindowSmokeTest() -> Bool {
         let layoutSizes = [
             NSSize(width: 940, height: 660),
             NSSize(width: 940, height: 1_040),
+            NSSize(width: 680, height: 460),
+            NSSize(width: 620, height: 430),
         ]
         for size in layoutSizes {
+            // AppKit does not drive resize passes for an unattached root view.
+            // A fresh pane makes each requested geometry its initial layout,
+            // matching how Settings/standalone windows attach the controller.
+            let layoutPane = CapsulePaneViewController(
+                repository: repository,
+                cloudSyncController: nil
+            )
+            let layoutWindow = NSWindow(
+                contentRect: NSRect(origin: .zero, size: size),
+                styleMask: [.titled, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            layoutWindow.contentViewController = layoutPane
+            layoutWindow.setContentSize(size)
             let layouts = CapsuleEntryKind.allCases.map { kind in
                 (
                     kind,
-                    pane.layoutSnapshotForSmoke(kind: kind, size: size)
+                    layoutPane.layoutSnapshotForSmoke(kind: kind, size: size)
                 )
             }
             guard let reference = layouts.first?.1,
@@ -44,8 +61,13 @@ func runCapsuleWindowSmokeTest() -> Bool {
                     && abs(layout.tabsTop - layout.editorTop) <= 1.5
                     && layout.kindControlFrame.width > 0
                     && layout.kindControlFrame.height > 0
+                    && layout.listFrame.width >= 199
                     && layout.editorFrame.width > 0
                     && layout.editorFrame.height > 0
+                    && layout.horizontalContentFits
+                    && layout.actionsAreVisible
+                    && layout.previewFitsEditorWidth
+                    && layout.copyButtonIsVisible
                     && !layout.hasAmbiguousLayout
                   }),
                   layouts.allSatisfy({ _, layout in
@@ -152,6 +174,141 @@ func runCapsuleWindowSmokeTest() -> Bool {
         let pdfData = pdfFixture.dataWithPDF(inside: pdfFixture.bounds)
         try pdfData.write(to: pdfURL, options: .atomic)
 
+        let imagePasteboard = NSPasteboard(
+            name: NSPasteboard.Name(
+                "RIMES.CapsuleWindowSmoke.image.\(UUID().uuidString)"
+            )
+        )
+        try CapsuleFilePasteboardWriter.copy(
+            kind: .image,
+            path: imageURL.path,
+            to: imagePasteboard
+        )
+        guard let imageItem = imagePasteboard.pasteboardItems?.first,
+              imagePasteboard.pasteboardItems?.count == 1,
+              let copiedPNG = imageItem.data(forType: .png),
+              NSImage(data: copiedPNG) != nil,
+              imageItem.data(forType: .tiff) != nil,
+              imageItem.string(forType: .fileURL)
+                == imageURL.standardizedFileURL.absoluteString else {
+            return capsuleWindowSmokeFail(
+                "image copy representations/file URL"
+            )
+        }
+
+        let wideImageURL = root.appendingPathComponent("fixture-wide.jpg")
+        guard let wideBitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: 5_000,
+            pixelsHigh: 1,
+            bitsPerSample: 8,
+            samplesPerPixel: 3,
+            hasAlpha: false,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ), let wideJPEG = wideBitmap.representation(
+            using: .jpeg,
+            properties: [.compressionFactor: 0.8]
+        ) else {
+            return capsuleWindowSmokeFail("wide image fixture creation")
+        }
+        try wideJPEG.write(to: wideImageURL, options: .atomic)
+        let widePasteboard = NSPasteboard(
+            name: NSPasteboard.Name(
+                "RIMES.CapsuleWindowSmoke.wide.\(UUID().uuidString)"
+            )
+        )
+        try CapsuleFilePasteboardWriter.copy(
+            kind: .image,
+            path: wideImageURL.path,
+            to: widePasteboard
+        )
+        let jpegType = NSPasteboard.PasteboardType("public.jpeg")
+        guard let wideItem = widePasteboard.pasteboardItems?.first,
+              wideItem.data(forType: jpegType) == wideJPEG,
+              let fallbackPNG = wideItem.data(forType: .png),
+              let fallbackRep = NSBitmapImageRep(data: fallbackPNG),
+              fallbackRep.pixelsWide
+                <= CapsuleFilePasteboardWriter
+                    .maximumFallbackRepresentationDimension,
+              fallbackRep.pixelsHigh
+                <= CapsuleFilePasteboardWriter
+                    .maximumFallbackRepresentationDimension else {
+            return capsuleWindowSmokeFail(
+                "bounded image fallback/original representation"
+            )
+        }
+
+        let pdfPasteboard = NSPasteboard(
+            name: NSPasteboard.Name(
+                "RIMES.CapsuleWindowSmoke.pdf.\(UUID().uuidString)"
+            )
+        )
+        try CapsuleFilePasteboardWriter.copy(
+            kind: .pdf,
+            path: pdfURL.path,
+            to: pdfPasteboard
+        )
+        guard let pdfItem = pdfPasteboard.pasteboardItems?.first,
+              pdfPasteboard.pasteboardItems?.count == 1,
+              pdfItem.string(forType: .fileURL)
+                == pdfURL.standardizedFileURL.absoluteString,
+              pdfItem.data(forType: .png) == nil,
+              pdfItem.data(forType: .tiff) == nil else {
+            return capsuleWindowSmokeFail("PDF copy as file URL")
+        }
+
+        let skillPasteboard = NSPasteboard(
+            name: NSPasteboard.Name(
+                "RIMES.CapsuleWindowSmoke.skill.\(UUID().uuidString)"
+            )
+        )
+        try CapsuleFilePasteboardWriter.copy(
+            kind: .skill,
+            path: skillDirectory.path,
+            to: skillPasteboard
+        )
+        guard skillPasteboard.pasteboardItems?.first?.string(forType: .fileURL)
+                == skillDirectory.standardizedFileURL.absoluteString else {
+            return capsuleWindowSmokeFail("Skill folder copy as file URL")
+        }
+        let skillFileURL = skillDirectory.appendingPathComponent("SKILL.md")
+        try Data("# Fixture Skill".utf8).write(to: skillFileURL, options: .atomic)
+        try CapsuleFilePasteboardWriter.copy(
+            kind: .skill,
+            path: skillFileURL.path,
+            to: skillPasteboard
+        )
+        guard skillPasteboard.pasteboardItems?.first?.string(forType: .fileURL)
+                == skillFileURL.standardizedFileURL.absoluteString else {
+            return capsuleWindowSmokeFail("Skill file copy as file URL")
+        }
+
+        let failurePasteboard = NSPasteboard(
+            name: NSPasteboard.Name(
+                "RIMES.CapsuleWindowSmoke.failure.\(UUID().uuidString)"
+            )
+        )
+        failurePasteboard.clearContents()
+        failurePasteboard.setString("keep-existing", forType: .string)
+        do {
+            try CapsuleFilePasteboardWriter.copy(
+                kind: .image,
+                path: root.appendingPathComponent("missing-copy.png").path,
+                to: failurePasteboard
+            )
+            return capsuleWindowSmokeFail("missing image copied")
+        } catch CapsuleFilePasteboardError.unavailableFile {
+            // Expected: validation happens before the pasteboard is cleared.
+        }
+        guard failurePasteboard.string(forType: .string) == "keep-existing" else {
+            return capsuleWindowSmokeFail(
+                "failed copy cleared existing pasteboard"
+            )
+        }
+
         var image = CapsuleWindowDraft.empty(kind: .image)
         image.title = "Smoke Image"
         image.content = imageURL.path
@@ -248,6 +405,16 @@ func runCapsuleWindowSmokeTest() -> Bool {
             path: root.appendingPathComponent("missing.pdf").path
         ) else {
             return capsuleWindowSmokeFail("unsafe/missing media preview rejection")
+        }
+        do {
+            try CapsuleFilePasteboardWriter.copy(
+                kind: .image,
+                path: linkedImageURL.path,
+                to: failurePasteboard
+            )
+            return capsuleWindowSmokeFail("symlink image copied")
+        } catch CapsuleFilePasteboardError.unavailableFile {
+            // Expected: copy follows the same O_NOFOLLOW boundary as preview.
         }
 
         guard passwordRow.preview == "••••••••",

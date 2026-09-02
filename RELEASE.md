@@ -152,6 +152,13 @@ Installer 身份/Team、公证票据，以及四个 universal dylib 的独立 SH
 任何一项漂移都会在展开和 RIMES 重签之前 fail-closed。正式 workflow 总是 `--force` 下载，
 不信任 runner 上已有的 `Vendor/` 缓存。升级 Squirrel 必须在 PR 中重新审计并更新 allowlist。
 
+简体 Octagram 模型保持为已审计的 40,925,228-byte compact 字节。获取时先复用
+`RB_OCTAGRAM_MODEL_PATH` 指定文件或 `Vendor/.cache`（两者都重新校验长度和 SHA-256），
+再以官方 `rime-octagram-data` 20260712 Release 资产为主源、固定 revision 的 raw 文件为
+备源；每个网络源都有有界重试和超时。所有模型来源在写入缓存和替换现有
+`Vendor/rime` 之前完成最终校验，因此失败不会破坏上一次可用 runtime。`--force` 会跳过
+本地来源，正式发布仍只接受从已审计网络源重新取得的完全相同字节。
+
 - **`Vendor/` 是 gitignore 的**——二进制不进 git，构建时按锁定版本拉取，可复现。
 - 运行时 `CRimeBridge` 优先 `dlopen` app bundle 内的 librime（找不到才回退系统 Squirrel），
   `shared_data_dir` 指向 bundle 的 `SharedSupport`；首启自动 `start_maintenance` 部署词库到

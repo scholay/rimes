@@ -13,6 +13,8 @@
 #
 #   ./scripts/fetch-rime.sh            # 已存在则跳过
 #   ./scripts/fetch-rime.sh --force    # 强制重新拉取
+#   RB_OCTAGRAM_MODEL_PATH=/path/to/zh-hans-t-essay-bgw.gram \
+#       ./scripts/fetch-rime.sh        # 离线复用同一份已审计模型
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -23,6 +25,8 @@ SQUIRREL_PACKAGE_SHA256="614746013212937623d5bbab9901e9c43d1ec937aa32307d6b6092a
 SQUIRREL_TEAM_ID="28HU5A7B46"
 SQUIRREL_INSTALLER_IDENTITY="Developer ID Installer: Yuncao Liu (${SQUIRREL_TEAM_ID})"
 SQUIRREL_BUNDLE_ID="im.rime.inputmethod.Squirrel"
+OCTAGRAM_RELEASE_TAG="20260712"
+OCTAGRAM_RELEASE_ASSET="zh-hans-t-essay-bgw-compact.gram"
 OCTAGRAM_REVISION="f8ce3b534733e489a8470a7c2adf5a154e8ea069"
 OCTAGRAM_MODEL="zh-hans-t-essay-bgw.gram"
 OCTAGRAM_MODEL_BYTES="40925228"
@@ -35,6 +39,57 @@ CACHE_PKG="$CACHE_DIR/Squirrel-${SQUIRREL_VERSION}.pkg"
 die() {
     echo "fetch-rime: $*" >&2
     exit 1
+}
+
+warn() {
+    echo "fetch-rime: $*" >&2
+}
+
+octagram_model_is_valid() {
+    local candidate="$1"
+    [[ -f "$candidate" && ! -L "$candidate" ]] \
+        && [[ "$(/usr/bin/stat -f%z "$candidate")" == "$OCTAGRAM_MODEL_BYTES" ]] \
+        && [[ "$(/usr/bin/shasum -a 256 "$candidate" | /usr/bin/awk '{print $1}')" \
+            == "$OCTAGRAM_MODEL_SHA256" ]]
+}
+
+download_octagram_model() {
+    local label="$1"
+    local url="$2"
+    local output="$3"
+    local partial="$TMP/.${OCTAGRAM_MODEL}.${label}.partial"
+    local effective_url
+
+    /bin/rm -f "$partial"
+    echo "==> 下载 Octagram 模型（${label}）"
+    if ! effective_url="$(
+        curl --fail --location --show-error --silent \
+            --retry 2 --retry-delay 1 --retry-all-errors \
+            --retry-max-time 600 \
+            --connect-timeout 10 --max-time 600 \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --output "$partial" \
+            --write-out '%{url_effective}' \
+            "$url"
+    )"; then
+        /bin/rm -f "$partial"
+        warn "$label Octagram source failed"
+        return 1
+    fi
+    case "$effective_url" in
+        https://github.com/*|https://release-assets.githubusercontent.com/*|https://raw.githubusercontent.com/*) ;;
+        *)
+            /bin/rm -f "$partial"
+            warn "$label Octagram download left the reviewed GitHub HTTPS hosts: $effective_url"
+            return 1
+            ;;
+    esac
+    if ! octagram_model_is_valid "$partial"; then
+        /bin/rm -f "$partial"
+        warn "$label Octagram source returned unexpected bytes"
+        return 1
+    fi
+    /bin/mv -f "$partial" "$output"
 }
 
 [[ -z "$FORCE" || "$FORCE" == "--force" ]] \
@@ -138,6 +193,41 @@ done < <(/usr/bin/find "$SRC/Frameworks/rime-plugins" -type f -maxdepth 1 -print
 [[ "${#plugin_files[@]}" -eq 3 ]] \
     || die "unexpected files in the reviewed rime-plugins directory"
 
+echo "==> 获取已审计的简体 Octagram 模型"
+octagram_cache="$CACHE_DIR/$OCTAGRAM_MODEL"
+octagram_tmp="$TMP/$OCTAGRAM_MODEL"
+octagram_used_cache=false
+if [[ "$FORCE" != "--force" && -n "${RB_OCTAGRAM_MODEL_PATH:-}" ]]; then
+    octagram_local="$RB_OCTAGRAM_MODEL_PATH"
+    octagram_model_is_valid "$octagram_local" \
+        || die "RB_OCTAGRAM_MODEL_PATH is not the reviewed $OCTAGRAM_MODEL bytes"
+    echo "==> 使用 RB_OCTAGRAM_MODEL_PATH 指定的已校验模型"
+    /usr/bin/ditto "$octagram_local" "$octagram_tmp"
+elif [[ "$FORCE" != "--force" ]] && octagram_model_is_valid "$octagram_cache"; then
+    echo "==> 使用已校验字节的本地 Octagram 模型缓存"
+    /usr/bin/ditto "$octagram_cache" "$octagram_tmp"
+    octagram_used_cache=true
+else
+    octagram_release_url="https://github.com/lotem/rime-octagram-data/releases/download/${OCTAGRAM_RELEASE_TAG}/${OCTAGRAM_RELEASE_ASSET}"
+    octagram_raw_url="https://raw.githubusercontent.com/lotem/rime-octagram-data/${OCTAGRAM_REVISION}/${OCTAGRAM_MODEL}"
+    if ! download_octagram_model "release" "$octagram_release_url" "$octagram_tmp"; then
+        echo "==> Release 资产不可用，回退到固定 revision 的 raw 源"
+        download_octagram_model "raw" "$octagram_raw_url" "$octagram_tmp" \
+            || die "all reviewed Octagram model sources failed"
+    fi
+fi
+octagram_model_is_valid "$octagram_tmp" \
+    || die "Octagram model failed final byte and SHA-256 verification"
+if [[ "$octagram_used_cache" != true ]]; then
+    /bin/mkdir -p "$CACHE_DIR"
+    octagram_cache_tmp="$(/usr/bin/mktemp "$CACHE_DIR/.Octagram.XXXXXX")"
+    /usr/bin/ditto "$octagram_tmp" "$octagram_cache_tmp"
+    /bin/chmod 600 "$octagram_cache_tmp"
+    /bin/mv -f "$octagram_cache_tmp" "$octagram_cache"
+fi
+
+# Resolve and verify the external model before replacing a previously usable
+# Vendor runtime. This also permits an explicit model path inside the old DEST.
 echo "==> 提取到 $DEST"
 rm -rf "$DEST"
 mkdir -p "$DEST/Frameworks"
@@ -146,42 +236,6 @@ mkdir -p "$DEST/Frameworks/rime-plugins"
 cp "${runtime_files[@]:1}" "$DEST/Frameworks/rime-plugins/"
 cp -R "$SRC/SharedSupport" "$DEST/SharedSupport"
 
-echo "==> 获取已审计的简体 Octagram 模型"
-octagram_cache="$CACHE_DIR/$OCTAGRAM_MODEL"
-octagram_tmp="$TMP/$OCTAGRAM_MODEL"
-octagram_used_cache=false
-if [[ "$FORCE" != "--force" && -f "$octagram_cache" && ! -L "$octagram_cache" ]] \
-    && [[ "$(/usr/bin/stat -f%z "$octagram_cache")" == "$OCTAGRAM_MODEL_BYTES" ]] \
-    && [[ "$(/usr/bin/shasum -a 256 "$octagram_cache" | /usr/bin/awk '{print $1}')" \
-        == "$OCTAGRAM_MODEL_SHA256" ]]; then
-    /usr/bin/ditto "$octagram_cache" "$octagram_tmp"
-    octagram_used_cache=true
-else
-    octagram_url="https://raw.githubusercontent.com/lotem/rime-octagram-data/${OCTAGRAM_REVISION}/${OCTAGRAM_MODEL}"
-    octagram_effective_url="$(
-        curl --fail --location --show-error --silent \
-            --proto '=https' --tlsv1.2 \
-            --output "$octagram_tmp" \
-            --write-out '%{url_effective}' \
-            "$octagram_url"
-    )"
-    case "$octagram_effective_url" in
-        https://raw.githubusercontent.com/*) ;;
-        *) die "Octagram download left the reviewed GitHub HTTPS host: $octagram_effective_url" ;;
-    esac
-fi
-[[ "$(/usr/bin/stat -f%z "$octagram_tmp")" == "$OCTAGRAM_MODEL_BYTES" ]] \
-    || die "unexpected Octagram model size"
-[[ "$(/usr/bin/shasum -a 256 "$octagram_tmp" | /usr/bin/awk '{print $1}')" \
-    == "$OCTAGRAM_MODEL_SHA256" ]] \
-    || die "Octagram model SHA-256 mismatch"
-if [[ "$octagram_used_cache" != true ]]; then
-    /bin/mkdir -p "$CACHE_DIR"
-    octagram_cache_tmp="$(/usr/bin/mktemp "$CACHE_DIR/.Octagram.XXXXXX")"
-    /usr/bin/ditto "$octagram_tmp" "$octagram_cache_tmp"
-    /bin/chmod 600 "$octagram_cache_tmp"
-    /bin/mv -f "$octagram_cache_tmp" "$octagram_cache"
-fi
 /usr/bin/ditto "$octagram_tmp" "$DEST/SharedSupport/$OCTAGRAM_MODEL"
 /bin/chmod 0644 "$DEST/SharedSupport/$OCTAGRAM_MODEL"
 
