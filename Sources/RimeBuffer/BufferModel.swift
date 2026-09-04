@@ -654,7 +654,7 @@ final class BufferModel {
     /// behavior aligned with AI/translation/plugin output while preserving the
     /// exact concatenated text, including whitespace-only input.
     @discardableResult
-    func insertPastedText(_ text: String) -> Bool {
+    func insertPastedText(_ text: String, origin: Origin = .rime) -> Bool {
         guard !text.isEmpty else { return false }
         var segments = SemanticBlockSegmenter.segments(from: text)
         guard !segments.isEmpty else { return false }
@@ -678,11 +678,14 @@ final class BufferModel {
         directInputRun = nil
         var insertion = clampedInsertionIndex()
         for segment in segments {
-            blocks.insert(Block(text: segment), at: insertion)
+            blocks.insert(Block(text: segment, origin: origin), at: insertion)
             insertion += 1
         }
         insertionIndex = insertion
-        IMELog.write("buffer pasted chars=\(text.count) fragments=\(segments.count)")
+        IMELog.write(
+            "buffer pasted chars=\(text.count) fragments=\(segments.count) "
+                + "origin=\(origin.tag)"
+        )
         notifyChange()
         return true
     }

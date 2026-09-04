@@ -937,9 +937,21 @@ final class InputFocusCoordinator {
                           eventType: NSEvent.EventType?,
                           eventFloor: TimeInterval?) -> Activation? {
         dispatchPrecondition(condition: .onQueue(.main))
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            IMELog.write("focus callback rejected; RIMES authority retired")
+            return nil
+        }
         let identity = ObjectIdentifier(client as AnyObject)
         let bundleID = client.bundleIdentifier() ?? "unknown"
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            IMELog.write("focus callback abandoned after bundle identity read")
+            return nil
+        }
         let controllerClient = controller.client()
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            IMELog.write("focus callback abandoned after current client read")
+            return nil
+        }
         let controllerClientMatches = controllerClient.map {
             ObjectIdentifier($0 as AnyObject) == identity
         } ?? false
@@ -954,7 +966,9 @@ final class InputFocusCoordinator {
         let frontmostBundleID = frontmostApplication?.bundleIdentifier
         let frontmostProcessIdentifier = frontmostApplication?.processIdentifier
 
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
         _ = pruneExpiredOwner()
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
 
         let reusesExactOwner = owner.map {
             epochs.isCurrent($0.token)
@@ -1292,6 +1306,9 @@ final class InputFocusCoordinator {
             resolvedIdentityWasVerified:
                 resolvedClientProcessIdentityWasVerified
         ) {
+            guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+                return nil
+            }
             if let knownProcess,
                knownProcess.int32Value
                 != hostResolution.clientProcessIdentifier {
@@ -1311,6 +1328,9 @@ final class InputFocusCoordinator {
            let owner,
            owner.awaitingSystemSurfaceKeyDown,
            epochs.isCurrent(owner.token) {
+            guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+                return nil
+            }
             // The activation already minted a fresh token. Promote that same
             // lease after the first positive key proof; manufacturing another
             // same-proxy epoch would make all lifecycle callbacks ambiguous.
@@ -1333,6 +1353,10 @@ final class InputFocusCoordinator {
             } ?? "service-owned"
             IMELog.write("focus transient surface promoted token=\(owner.token) bundle=\(bundleID) window=\(windowDescription)")
             onChange?()
+            guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+                owner.deliverySuspended = true
+                return nil
+            }
             return Activation(token: owner.token, displaced: nil)
         }
 
@@ -1366,8 +1390,19 @@ final class InputFocusCoordinator {
             && owner?.compositionActive == true
             && owner?.markedRangeReliable == true
             && owner?.markedRangeWasObservable == true
-        let markedRangeIsMissing = shouldInspectMarkedRange
-            && client.markedRange().location == NSNotFound
+        let markedRangeIsMissing: Bool
+        if shouldInspectMarkedRange {
+            guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+                return nil
+            }
+            let markedRange = client.markedRange()
+            guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+                return nil
+            }
+            markedRangeIsMissing = markedRange.location == NSNotFound
+        } else {
+            markedRangeIsMissing = false
+        }
         let eventRevealsFieldChange = FocusActivationRules.eventRevealsFieldChange(
             hasEvent: eventTimestamp != nil,
             reusesExactOwner: reusesExactOwner,
@@ -1395,12 +1430,19 @@ final class InputFocusCoordinator {
         // Some hosts deliver the first key before activateServer. That event
         // creates a provisional epoch; a matching activation confirms it.
         if confirmsProvisionalEvent, let owner {
+            guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+                return nil
+            }
             owner.provisionalFromEvent = false
             if let eventFloor {
                 owner.activationEventFloor = max(
                     owner.activationEventFloor ?? eventFloor,
                     eventFloor
                 )
+            }
+            guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+                owner.deliverySuspended = true
+                return nil
             }
             return Activation(token: owner.token, displaced: nil)
         }
@@ -1411,22 +1453,22 @@ final class InputFocusCoordinator {
            reusesExactOwner,
            hostResolutionMatchesOwner,
            epochs.isCurrent(owner.token) {
+            guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+                return nil
+            }
             if let eventTimestamp {
                 owner.lastAcceptedEventTimestamp = eventTimestamp
             }
             confirmReusedClientLifecycleIfNeeded(owner, eventType: eventType)
+            guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+                owner.deliverySuspended = true
+                return nil
+            }
             return Activation(token: owner.token, displaced: nil)
         }
 
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
         let displaced = owner
-        if let displaced,
-           FocusHostRules.displacedLeaseRequiresNoClientCleanup(
-            hostKind: displaced.hostKind
-           ) {
-            displaced.deliverySuspended = true
-            displaced.awaitingSystemSurfaceKeyDown = false
-        }
-        let token = epochs.activate()
         let ownBundleID = Bundle.main.bundleIdentifier
             ?? "com.isaac.inputmethod.RimeBuffer"
         let ownProcessIdentifier = ProcessInfo.processInfo.processIdentifier
@@ -1455,6 +1497,20 @@ final class InputFocusCoordinator {
                 confirmationUptime: activationNow
             )
             : initialLifecycleSuppression
+        // Everything above this point is preparation only. Re-check source
+        // authority before changing either side of the owner/epoch invariant,
+        // then publish both synchronously. If the source changes immediately
+        // afterwards, the caller's apply guard or the TIS observer retires this
+        // complete lease; neither can observe an orphan epoch.
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
+        if let displaced,
+           FocusHostRules.displacedLeaseRequiresNoClientCleanup(
+            hostKind: displaced.hostKind
+           ) {
+            displaced.deliverySuspended = true
+            displaced.awaitingSystemSurfaceKeyDown = false
+        }
+        let token = epochs.activate()
         let newOwner = FocusLease(
             token: token,
             controller: controller,
@@ -1534,8 +1590,12 @@ final class InputFocusCoordinator {
            markedRangeReliable,
            !owner.markedRangeWasObservable,
            let client = owner.client,
-           client.markedRange().location != NSNotFound {
-            owner.markedRangeWasObservable = true
+           RimeInputSourceAuthority.currentSourceIsOwn() {
+            let markedRange = client.markedRange()
+            guard RimeInputSourceAuthority.currentSourceIsOwn() else { return }
+            if markedRange.location != NSNotFound {
+                owner.markedRangeWasObservable = true
+            }
         } else if !active || !markedRangeReliable {
             owner.markedRangeWasObservable = false
         }
@@ -1579,6 +1639,31 @@ final class InputFocusCoordinator {
 
     func lease(for token: FocusToken) -> FocusLease? {
         guard isCurrent(token) else { return nil }
+        return owner
+    }
+
+    /// Revalidate only the exact owner/epoch/client identity that was just
+    /// published by an activation callback. This deliberately does not require
+    /// delivery eligibility: a trusted transient system surface begins with a
+    /// suspended lease until its first fresh keyDown establishes window
+    /// authority. Activation bookkeeping and keyboard-layout setup still need
+    /// to survive that pending state without treating it as a source switch.
+    func exactCurrentLease(
+        expected token: FocusToken,
+        controller: RimeBufferController,
+        clientIdentity: ObjectIdentifier
+    ) -> FocusLease? {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
+        _ = pruneExpiredOwner()
+        guard let owner,
+              owner.token == token,
+              epochs.isCurrent(token),
+              owner.controller === controller,
+              owner.clientIdentity == clientIdentity,
+              let client = owner.client,
+              ObjectIdentifier(client as AnyObject) == clientIdentity,
+              RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
         return owner
     }
 
@@ -1669,10 +1754,16 @@ final class InputFocusCoordinator {
     private func validatedTarget(expected token: FocusToken?,
                                  requireExternal: Bool,
                                  forceOverlayVisibilityRefresh: Bool) -> FocusLease? {
+        // Utility windows may call focus probes while another input method is
+        // active. A frozen RIMES lease is then bookkeeping only; never resolve
+        // or inspect either IMK proxy under foreign input-source authority.
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
         if Thread.isMainThread { _ = pruneExpiredOwner() }
         guard let owner else { return nil }
         let client = owner.client
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
         let controllerClient = owner.controller?.client()
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
         let frontmostApplication = NSWorkspace.shared.frontmostApplication
         var currentTrustedOverlayProcessIdentifier: pid_t?
         var trustedSurfaceAuthority = false
@@ -1777,7 +1868,12 @@ final class InputFocusCoordinator {
                 )
             }
         }
-        guard FocusTargetRules.allows(
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
+        let clientBundleMatches = client.map {
+            ($0.bundleIdentifier() ?? "unknown") == owner.bundleID
+        } ?? false
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              FocusTargetRules.allows(
             tokenIsCurrent: epochs.isCurrent(owner.token),
             expectedTokenMatches: token == nil || owner.token == token,
             externalTarget: !requireExternal || owner.isExternalTarget,
@@ -1788,7 +1884,7 @@ final class InputFocusCoordinator {
             controllerClientIdentityMatches: controllerClient.map {
                 ObjectIdentifier($0 as AnyObject) == owner.clientIdentity
             } ?? false,
-            clientBundleMatches: client.map { ($0.bundleIdentifier() ?? "unknown") == owner.bundleID } ?? false,
+            clientBundleMatches: clientBundleMatches,
             frontmostApplicationMatches: authority.bundle,
             frontmostProcessMatches: authority.process
         ) else { return nil }

@@ -42,21 +42,91 @@ enum ClipboardHistoryActivationRules {
     ) -> Bool {
         guard !items.isEmpty, items.count == archives.count else { return false }
         return zip(items, archives).allSatisfy { pair in
-            let (item, _) = pair
-            // "Use" is an IME-style plain-text delivery action for readable
-            // text and links. Rich representations remain intact in history and
-            // are still restored by Copy; they must not force Return/double-click
-            // through synthetic Command-V or an extra system permission.
+            let (item, archive) = pair
+            // Direct IME insertion is lossless only when the stored payload is
+            // ordinary plain text. Rich or future representations must be
+            // restored to the pasteboard for the user's normal Command-V.
             return (item.kind == .text || item.kind == .link)
                 && item.textCompleteness == .complete
                 && !(item.canonicalText ?? "").isEmpty
+                && !archive.requiresPasteboardRestorationForTextInsertion
         }
+    }
+
+    static func shouldAttemptDirectTextDelivery(
+        mode: ClipboardHistoryPresentationMode,
+        currentSourceIsOwn: Bool,
+        allItemsAreCompletePlainText: Bool
+    ) -> Bool {
+        mode == .borrowedRime
+            && currentSourceIsOwn
+            && allItemsAreCompletePlainText
+    }
+}
+
+enum ClipboardHistoryPresentationMode: Equatable {
+    case borrowedRime
+    case standalonePasteboard
+
+    static func resolve(currentSourceIsOwn: Bool) -> Self {
+        currentSourceIsOwn ? .borrowedRime : .standalonePasteboard
     }
 }
 
 private final class ClipboardHistoryPanel: NSPanel {
-    override var canBecomeKey: Bool { false }
+    var acceptsKeyInput = false
+    var standaloneKeyEquivalentHandler: ((NSEvent) -> Bool)?
+    override var canBecomeKey: Bool { acceptsKeyInput }
     override var canBecomeMain: Bool { false }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if acceptsKeyInput,
+           standaloneKeyEquivalentHandler?(event) == true {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
+func clipboardHistoryStandalonePanelKeyboardProbe() -> Bool {
+    let panel = ClipboardHistoryPanel(
+        contentRect: NSRect(x: 0, y: 0, width: 320, height: 80),
+        styleMask: [.borderless, .nonactivatingPanel],
+        backing: .buffered,
+        defer: false
+    )
+    let field = NSTextField(frame: NSRect(x: 10, y: 10, width: 300, height: 24))
+    panel.contentView = NSView(frame: panel.contentRect(forFrameRect: panel.frame))
+    panel.contentView?.addSubview(field)
+    let rejectsBorrowedKeyInput = !panel.canBecomeKey
+    panel.acceptsKeyInput = true
+    let acceptsStandaloneKeyInput = panel.canBecomeKey
+        && panel.makeFirstResponder(field)
+        && panel.firstResponder != nil
+    var routedKeyEquivalent = false
+    panel.standaloneKeyEquivalentHandler = { _ in
+        routedKeyEquivalent = true
+        return true
+    }
+    let commandC = NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: .command,
+        timestamp: 1,
+        windowNumber: 0,
+        context: nil,
+        characters: "c",
+        charactersIgnoringModifiers: "c",
+        isARepeat: false,
+        keyCode: UInt16(kVK_ANSI_C)
+    )
+    let handlesStandaloneKeyEquivalent = commandC.map {
+        panel.performKeyEquivalent(with: $0)
+    } == true && routedKeyEquivalent
+    panel.orderOut(nil)
+    return rejectsBorrowedKeyInput
+        && acceptsStandaloneKeyInput
+        && handlesStandaloneKeyEquivalent
 }
 
 private final class ClipboardHistoryChromeView: NSVisualEffectView {
@@ -99,9 +169,11 @@ private final class ClipboardHistoryChromeView: NSVisualEffectView {
     }
 }
 
-/// Standalone Clipboard History surface. It deliberately remains
-/// nonactivating so the exact external FocusToken survives while the user
-/// searches and selects. It is not a Buffer source or destination.
+/// Clipboard History has two explicit presentation modes. With RIMES selected,
+/// the nonactivating panel borrows an exact external FocusToken for logical
+/// search and plain-text delivery. With another input method selected, it is a
+/// key-capable AppKit search surface whose activation only prepares the system
+/// pasteboard. It is never a Buffer source or destination.
 final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
     static let shared = ClipboardHistoryWindowController()
 
@@ -124,6 +196,8 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
     private var presentationIntent = false
     private var presentationTargetToken: FocusToken?
     private weak var presentationTargetController: RimeBufferController?
+    private var presentationMode: ClipboardHistoryPresentationMode = .borrowedRime
+    private var standaloneFocusRegistered = false
     private var explicitCaptureGeneration: UInt64 = 0
     private var consumedKeyCodes: Set<UInt16> = []
     private var lastHandledKeyCode: UInt16?
@@ -210,57 +284,88 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
 
     func show() {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
-            IMELog.write("clipboard window open ignored; RIMES is not selected")
+        let secureInputAtInvocation = IsSecureEventInputEnabled()
+        guard !sessionProtectionActive, !secureInputAtInvocation else {
+            syncCaptureState(secureInputEnabled: secureInputAtInvocation)
+            IMELog.write("clipboard window show blocked by protection")
             return
         }
-        guard !sessionProtectionActive else { return }
 
+        let mode = ClipboardHistoryPresentationMode.resolve(
+            currentSourceIsOwn: RimeInputSourceAuthority.currentSourceIsOwn()
+        )
+        presentationMode = mode
         presentationIntent = true
         hiddenForSession = false
         consumedKeyCodes.removeAll()
-        MainActor.assumeIsolated { pane.resetSearch() }
+        MainActor.assumeIsolated {
+            pane.resetSearch()
+            pane.setStandaloneSearchEnabled(mode == .standalonePasteboard)
+        }
 
-        let initialTarget = InputFocusCoordinator.shared.liveTarget(
-            forceOverlayVisibilityRefresh: true
-        )
-        if let initialTarget,
-           initialTarget.isExternalTarget,
-           initialTarget.compositionActive {
-            initialTarget.controller?.resolveCompositionForWorkbenchTransition(
-                target: initialTarget
+        let initialTarget: FocusLease?
+        switch mode {
+        case .borrowedRime:
+            initialTarget = InputFocusCoordinator.shared.liveTarget(
+                forceOverlayVisibilityRefresh: true
             )
-        }
-        presentationTargetToken = initialTarget.flatMap { target in
-            guard target.isExternalTarget,
-                  InputFocusCoordinator.shared.liveTarget(
-                    expected: target.token,
-                    forceOverlayVisibilityRefresh: true
-                  ) === target else { return nil }
-            return target.token
-        }
-        presentationTargetController = presentationTargetToken == nil
-            ? nil
-            : initialTarget?.controller
-        if let initialTarget,
-           presentationTargetToken == initialTarget.token,
-           initialTarget.controller?.beginClipboardSearch(
-            expected: initialTarget
-           ) != true {
-            presentationTargetToken = nil
-            presentationTargetController = nil
-            IMELog.write("clipboard search target preparation rejected")
+            if let initialTarget,
+               initialTarget.isExternalTarget,
+               initialTarget.compositionActive {
+                initialTarget.controller?.resolveCompositionForWorkbenchTransition(
+                    target: initialTarget
+                )
+            }
+            presentationTargetToken = initialTarget.flatMap { target in
+                guard target.isExternalTarget,
+                      InputFocusCoordinator.shared.liveTarget(
+                        expected: target.token,
+                        forceOverlayVisibilityRefresh: true
+                      ) === target else { return nil }
+                return target.token
+            }
+            presentationTargetController = presentationTargetToken == nil
+                ? nil
+                : initialTarget?.controller
+            if let initialTarget,
+               presentationTargetToken == initialTarget.token,
+               initialTarget.controller?.beginClipboardSearch(
+                expected: initialTarget
+               ) != true {
+                presentationTargetToken = nil
+                presentationTargetController = nil
+                IMELog.write("clipboard search target preparation rejected")
+            }
+        case .standalonePasteboard:
+            initialTarget = nil
+            detachPresentationTargetAndRetireSearch(
+                restoreHostPresentation: false
+            )
         }
 
         positionOnCurrentScreen(target: initialTarget)
         if panel.isVisible, !panel.isOnActiveSpace { panel.orderOut(nil) }
         applyAppearance()
-        panel.orderFrontRegardless()
+        panel.acceptsKeyInput = mode == .standalonePasteboard
+        if mode == .standalonePasteboard {
+            registerStandaloneFocusIfNeeded()
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.pane.focusStandaloneSearch()
+                }
+            }
+        } else {
+            panel.orderFrontRegardless()
+        }
         syncCaptureState()
         scheduleExplicitCapture()
         RimeBufferController.refreshActiveUI()
         let targetDescription = presentationTargetToken?.description ?? "none"
-        IMELog.write("clipboard window shown target=\(targetDescription)")
+        IMELog.write(
+            "clipboard window shown mode=\(mode) target=\(targetDescription)"
+        )
     }
 
     func hide() {
@@ -279,8 +384,17 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
         richActivationInFlight = false
         hiddenForSession = false
         explicitCaptureGeneration &+= 1
-        MainActor.assumeIsolated { pane.resetSearch() }
+        MainActor.assumeIsolated {
+            pane.resetSearch()
+            pane.setStandaloneSearchEnabled(false)
+        }
         panel.orderOut(nil)
+        panel.acceptsKeyInput = false
+        if standaloneFocusRegistered {
+            StandaloneWindowFocusCoordinator.shared.windowWillClose(panel)
+            standaloneFocusRegistered = false
+        }
+        presentationMode = .borrowedRime
         syncCaptureState()
         IMELog.write("clipboard window hidden")
     }
@@ -378,20 +492,35 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
         hide()
     }
 
-    /// A foreign input source cannot retain Clip's search or delivery authority.
+    /// A foreign input source retires only borrowed IMK authority. The visible
+    /// surface remains usable through its native AppKit field and pasteboard.
     func inputSourceDidChangeAwayFromRIMES() {
         dispatchPrecondition(condition: .onQueue(.main))
+        detachPresentationTargetAndRetireSearch(
+            restoreHostPresentation: false
+        )
+        presentationMode = .standalonePasteboard
+        // Configure key/search behavior even while the panel is ordered on a
+        // different Space or temporarily hidden for lock/sleep protection.
+        // Those transitions do not call `show()` again before restoring it.
+        panel.acceptsKeyInput = true
+        MainActor.assumeIsolated {
+            pane.setStandaloneSearchEnabled(true)
+        }
+        if presentationIntent, panel.isVisible {
+            registerStandaloneFocusIfNeeded()
+        }
         if isVisible {
-            hide()
-        } else {
-            detachPresentationTargetAndRetireSearch(
-                restoreHostPresentation: false
-            )
+            // Source-change observation itself stays passive. Activating the
+            // application here could race macOS per-document input-source
+            // restoration; the native field takes focus on the user's next
+            // click without selecting or switching any input source in code.
+            panel.orderFrontRegardless()
         }
         consumedKeyCodes.removeAll()
         lastHandledKeyCode = nil
         lastHandledClientIdentity = nil
-        IMELog.write("clipboard retired for non-RIMES input source")
+        IMELog.write("clipboard switched to standalone pasteboard mode")
     }
 
     /// IMK routing entry. Key-up ownership survives a successful Return that
@@ -585,6 +714,15 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
         panel.isMovableByWindowBackground = false
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary, .transient]
         panel.delegate = self
+        panel.standaloneKeyEquivalentHandler = { [weak self] event in
+            guard let self,
+                  self.presentationMode == .standalonePasteboard else {
+                return false
+            }
+            return MainActor.assumeIsolated {
+                self.pane.handleStandaloneKeyEquivalent(event)
+            }
+        }
         panel.setAccessibilityTitle("RIMES Clipboard History")
 
         chrome.translatesAutoresizingMaskIntoConstraints = false
@@ -694,12 +832,10 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
 
     private func deliver(_ items: [ClipboardHistoryItem]) -> Bool {
         guard isVisible,
-              RimeInputSourceAuthority.currentSourceIsOwn(),
               captureState().allowsContentPresentation,
               !items.isEmpty else {
-            NSSound.beep()
             IMELog.write(
-                "clipboard delivery rejected visible=\(isVisible) "
+                "clipboard activation rejected visible=\(isVisible) "
                     + "presentable=\(captureState().allowsContentPresentation) "
                     + "items=\(items.count)"
             )
@@ -741,6 +877,7 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
 
         richActivationGeneration &+= 1
         let generation = richActivationGeneration
+        let expectedPasteboardChangeCount = NSPasteboard.general.changeCount
         richActivationInFlight = true
         let itemIDs = items.map(\.id)
         IMELog.write(
@@ -756,8 +893,6 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
                 }
                 self.richActivationInFlight = false
                 guard self.isVisible,
-                      (!closesAfterWrite
-                        || RimeInputSourceAuthority.currentSourceIsOwn()),
                       self.captureState().allowsContentPresentation,
                       let archives,
                       archives.count == items.count else {
@@ -774,18 +909,19 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
                 )
 
                 if closesAfterWrite {
-                    guard RimeInputSourceAuthority.currentSourceIsOwn() else {
-                        IMELog.write(
-                            "clipboard activation rejected for foreign input source"
-                        )
-                        return
-                    }
                     let canInsertEveryItem = ClipboardHistoryActivationRules
                         .canInsertEveryItemAsPlainText(
                             items: items,
                             archives: archives
                         )
-                    if canInsertEveryItem {
+                    let canUseBorrowedRimeTarget = ClipboardHistoryActivationRules
+                        .shouldAttemptDirectTextDelivery(
+                            mode: self.presentationMode,
+                            currentSourceIsOwn: RimeInputSourceAuthority
+                                .currentSourceIsOwn(),
+                            allItemsAreCompletePlainText: canInsertEveryItem
+                        )
+                    if canUseBorrowedRimeTarget {
                         let target = expectedToken.flatMap {
                             InputFocusCoordinator.shared.liveTarget(
                                 expected: $0,
@@ -843,7 +979,10 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
                                 + "falling back to pasteboard"
                         )
                     }
-                    IMELog.write("clipboard rich activation preparing pasteboard")
+                    IMELog.write(
+                        "clipboard activation preparing pasteboard mode="
+                            + "\(self.presentationMode)"
+                    )
                 }
 
                 // IMKit can insert complete plain text through the exact focus
@@ -853,17 +992,17 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
                 // user can then paste the prepared value with ordinary Command-V.
                 do {
                     let merged = try ClipboardPasteboardArchive.merging(archives)
-                    guard !closesAfterWrite
-                            || (RimeInputSourceAuthority.currentSourceIsOwn()
-                                && !IsSecureEventInputEnabled()
-                                && !self.sessionProtectionActive)
-                    else {
+                    guard !IsSecureEventInputEnabled(),
+                          !self.sessionProtectionActive else {
                         IMELog.write(
                             "clipboard archive restore rejected by live protection"
                         )
                         return
                     }
-                    let writtenChangeCount = try merged.write(to: .general)
+                    let writtenChangeCount = try merged.write(
+                        to: .general,
+                        expectedChangeCount: expectedPasteboardChangeCount
+                    )
                     MainActor.assumeIsolated {
                         _ = self.historyModel.promote(ids: itemIDs)
                         _ = self.historyModel.baselineAfterOwnPasteboardWrite(
@@ -1003,6 +1142,9 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
         guard hiddenForSession, presentationIntent, !sessionProtectionActive else { return }
         hiddenForSession = false
         positionOnCurrentScreen(target: nil)
+        if presentationMode == .standalonePasteboard {
+            registerStandaloneFocusIfNeeded()
+        }
         panel.orderFrontRegardless()
         syncCaptureState()
         // Passive restore deliberately establishes only a baseline; content
@@ -1011,6 +1153,14 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
 
     private var sessionProtectionActive: Bool {
         sessionInactive || screenLocked || sleeping
+    }
+
+    private func registerStandaloneFocusIfNeeded() {
+        guard presentationIntent,
+              presentationMode == .standalonePasteboard,
+              !standaloneFocusRegistered else { return }
+        StandaloneWindowFocusCoordinator.shared.windowWillPresent(panel)
+        standaloneFocusRegistered = true
     }
 
     private func retireSearchCompositionIfNeeded() {

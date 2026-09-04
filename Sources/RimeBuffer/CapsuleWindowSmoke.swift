@@ -18,7 +18,270 @@ func runCapsuleWindowSmokeTest() -> Bool {
     )
 
     do {
+        let passcodeSuite =
+            "RimeBuffer.CapsuleRevealPasscodeSmoke.\(UUID().uuidString)"
+        guard let passcodeDefaults = UserDefaults(suiteName: passcodeSuite)
+        else {
+            return capsuleWindowSmokeFail("passcode defaults fixture")
+        }
+        defer {
+            passcodeDefaults.removePersistentDomain(forName: passcodeSuite)
+        }
+        let passcodeStore = CapsuleRevealPasscodeStore(
+            defaults: passcodeDefaults
+        )
+        let customChords = ["ab", "df", "jk", "mn"].compactMap(
+            CapsuleRevealChord.init
+        )
+        let defaultChordKeyCodes: [[UInt16]] = [
+            [15, 4], [13, 31], [8, 9, 45], [12, 32],
+        ]
+        let customChordKeyCodes: [[UInt16]] = [
+            [0, 11], [2, 3], [38, 40], [46, 45],
+        ]
+        guard CapsuleRevealChord("hr") == CapsuleRevealChord("rh"),
+              CapsuleRevealChord("r1") == nil,
+              CapsuleRevealChord.character(forPhysicalKeyCode: 15) == "r",
+              CapsuleRevealChord.character(forPhysicalKeyCode: 4) == "h",
+              CapsuleRevealChord.character(forPhysicalKeyCode: 18) == nil,
+              let customPasscode = CapsuleRevealPasscode(
+                chords: customChords
+              ),
+              passcodeStore.matches(.defaultValue),
+              !passcodeStore.matches(customPasscode) else {
+            return capsuleWindowSmokeFail("default chord passcode rules")
+        }
+        var attempt = CapsuleRevealPasscodeAttempt()
+        for chord in customChords.dropLast() {
+            guard attempt.append(chord) == nil else {
+                return capsuleWindowSmokeFail("passcode completed early")
+            }
+        }
+        guard attempt.append(customChords.last!) == customPasscode,
+              attempt.isComplete else {
+            return capsuleWindowSmokeFail("four-slot passcode completion")
+        }
+        passcodeStore.set(customPasscode)
+        let storedPasscodeDomain = passcodeDefaults.persistentDomain(
+            forName: passcodeSuite
+        ) ?? [:]
+        guard passcodeStore.isCustomized,
+              passcodeStore.matches(customPasscode),
+              !passcodeStore.matches(.defaultValue),
+              storedPasscodeDomain.count == 1,
+              storedPasscodeDomain.values.allSatisfy({ $0 is String }) else {
+            return capsuleWindowSmokeFail("custom passcode digest storage")
+        }
+        let storedCredentialKey = storedPasscodeDomain.keys.first!
+        passcodeDefaults.set("damaged", forKey: storedCredentialKey)
+        guard passcodeStore.isCustomized,
+              !passcodeStore.matches(customPasscode),
+              !passcodeStore.matches(.defaultValue) else {
+            return capsuleWindowSmokeFail(
+                "damaged custom passcode must fail closed"
+            )
+        }
+        passcodeStore.resetToDefault()
+        guard !passcodeStore.isCustomized,
+              passcodeStore.matches(.defaultValue) else {
+            return capsuleWindowSmokeFail("passcode default reset")
+        }
+        passcodeDefaults.set(
+            Data([0x01, 0x02]).base64EncodedString(),
+            forKey: "capsule.passwordRevealPasscode.salt.v1"
+        )
+        guard passcodeStore.isCustomized,
+              !passcodeStore.matches(.defaultValue),
+              !passcodeStore.matches(customPasscode) else {
+            return capsuleWindowSmokeFail(
+                "legacy passcode residue must fail closed"
+            )
+        }
+        passcodeStore.resetToDefault()
+        guard !passcodeStore.isCustomized,
+              passcodeStore.matches(.defaultValue) else {
+            return capsuleWindowSmokeFail("legacy passcode recovery reset")
+        }
+
         _ = NSApplication.shared
+
+        // Beginning a sheet necessarily makes its parent resign key. That
+        // transition must not cancel authentication, while a real loss of the
+        // challenge sheet itself must fail closed and discard partial input.
+        let passcodeParent = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 430),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        passcodeParent.contentView = NSView()
+        passcodeParent.orderFront(nil)
+        let lifecycleChallenge = CapsuleRevealPasscodeChallengeController(
+            purpose: .verify,
+            store: passcodeStore
+        )
+        var lifecycleResult: Bool?
+        lifecycleChallenge.beginSheet(for: passcodeParent) { success in
+            lifecycleResult = success
+        }
+        _ = RunLoop.current.run(
+            mode: .default,
+            before: Date(timeIntervalSinceNow: 0.05)
+        )
+        guard let challengeSheet = passcodeParent.attachedSheet,
+              lifecycleResult == nil,
+              challengeSheet.contentView?.hasAmbiguousLayout == false,
+              challengeSheet.contentView.map({ root in
+                capsuleDescendants(in: root).allSatisfy {
+                    !$0.hasAmbiguousLayout
+                }
+              }) == true else {
+            return capsuleWindowSmokeFail(
+                "passcode sheet attach/lifecycle/layout"
+            )
+        }
+        NotificationCenter.default.post(
+            name: NSWindow.didResignKeyNotification,
+            object: passcodeParent
+        )
+        guard passcodeParent.attachedSheet === challengeSheet,
+              lifecycleResult == nil else {
+            return capsuleWindowSmokeFail(
+                "parent resign must preserve passcode sheet"
+            )
+        }
+        lifecycleChallenge.windowDidResignKey(Notification(
+            name: NSWindow.didResignKeyNotification,
+            object: challengeSheet
+        ))
+        guard lifecycleResult == false,
+              passcodeParent.attachedSheet == nil else {
+            return capsuleWindowSmokeFail(
+                "challenge resign must cancel passcode sheet"
+            )
+        }
+
+        let eventChallenge = CapsuleRevealPasscodeChallengeController(
+            purpose: .verify,
+            store: passcodeStore
+        )
+        var eventResult: Bool?
+        eventChallenge.beginSheet(for: passcodeParent) { success in
+            eventResult = success
+        }
+        _ = RunLoop.current.run(
+            mode: .default,
+            before: Date(timeIntervalSinceNow: 0.05)
+        )
+        guard let eventSheet = passcodeParent.attachedSheet,
+              capsuleSendPasscodeChord(
+                [15, 4, 18],
+                to: eventSheet
+              ),
+              eventResult == nil else {
+            return capsuleWindowSmokeFail(
+                "unsupported physical key must reject whole chord"
+            )
+        }
+        guard capsuleSendPasscode(
+                defaultChordKeyCodes,
+                to: eventSheet
+              ),
+              eventResult == true,
+              passcodeParent.attachedSheet == nil else {
+            return capsuleWindowSmokeFail(
+                "physical four-chord event verification"
+            )
+        }
+
+        let passcodeSettings = CapsuleRevealPasscodeSettingsView(
+            store: passcodeStore
+        )
+        passcodeSettings.frame = NSRect(x: 0, y: 0, width: 650, height: 150)
+        passcodeParent.contentView = passcodeSettings
+        passcodeParent.layoutIfNeeded()
+        let passcodeButtons = capsuleDescendants(in: passcodeSettings)
+            .compactMap { $0 as? NSButton }
+        guard !passcodeSettings.hasAmbiguousLayout,
+              capsuleDescendants(in: passcodeSettings).allSatisfy({
+                !$0.hasAmbiguousLayout
+              }),
+              let setPasscodeButton = passcodeButtons.first(where: {
+            $0.title == "设置口令…"
+        }), let resetPasscodeButton = passcodeButtons.first(where: {
+            $0.title == "恢复默认"
+        }) else {
+            return capsuleWindowSmokeFail("passcode settings controls")
+        }
+
+        setPasscodeButton.performClick(nil)
+        _ = RunLoop.current.run(
+            mode: .default,
+            before: Date(timeIntervalSinceNow: 0.05)
+        )
+        guard let currentCodeSheet = passcodeParent.attachedSheet,
+              passcodeStore.matches(.defaultValue) else {
+            return capsuleWindowSmokeFail(
+                "changing passcode must verify current code first"
+            )
+        }
+        guard capsuleSendPasscode(
+            defaultChordKeyCodes,
+            to: currentCodeSheet
+        ) else {
+            return capsuleWindowSmokeFail("current passcode event fixture")
+        }
+        _ = RunLoop.current.run(
+            mode: .default,
+            before: Date(timeIntervalSinceNow: 0.05)
+        )
+        guard let configurationSheet = passcodeParent.attachedSheet else {
+            return capsuleWindowSmokeFail("passcode configuration sheet")
+        }
+        guard capsuleSendPasscode(
+                customChordKeyCodes,
+                to: configurationSheet
+              ),
+              capsuleSendPasscode(
+                customChordKeyCodes,
+                to: configurationSheet
+              ) else {
+            return capsuleWindowSmokeFail("new passcode event fixture")
+        }
+        guard passcodeParent.attachedSheet == nil,
+              passcodeStore.matches(customPasscode),
+              !passcodeStore.matches(.defaultValue) else {
+            return capsuleWindowSmokeFail("authenticated passcode change")
+        }
+
+        resetPasscodeButton.performClick(nil)
+        _ = RunLoop.current.run(
+            mode: .default,
+            before: Date(timeIntervalSinceNow: 0.05)
+        )
+        guard let resetVerificationSheet = passcodeParent.attachedSheet,
+              passcodeStore.matches(customPasscode) else {
+            return capsuleWindowSmokeFail(
+                "reset must verify current passcode first"
+            )
+        }
+        guard capsuleSendPasscode(
+            customChordKeyCodes,
+            to: resetVerificationSheet
+        ) else {
+            return capsuleWindowSmokeFail("reset passcode event fixture")
+        }
+        _ = RunLoop.current.run(
+            mode: .default,
+            before: Date(timeIntervalSinceNow: 0.05)
+        )
+        guard passcodeParent.attachedSheet == nil,
+              passcodeStore.matches(.defaultValue),
+              !passcodeStore.isCustomized else {
+            return capsuleWindowSmokeFail("authenticated default reset")
+        }
+        passcodeParent.orderOut(nil)
+
         let pane = CapsulePaneViewController(
             repository: repository,
             cloudSyncController: nil
@@ -31,6 +294,9 @@ func runCapsuleWindowSmokeTest() -> Bool {
             NSSize(width: 940, height: 1_040),
             NSSize(width: 680, height: 460),
             NSSize(width: 620, height: 430),
+        ]
+        let fixedFormKinds: Set<CapsuleEntryKind> = [
+            .url, .skill, .image, .pdf, .password,
         ]
         for size in layoutSizes {
             // AppKit does not drive resize passes for an unattached root view.
@@ -55,7 +321,7 @@ func runCapsuleWindowSmokeTest() -> Bool {
                 )
             }
             guard let reference = layouts.first?.1,
-                  layouts.allSatisfy({ _, layout in
+                  layouts.allSatisfy({ kind, layout in
                     (10...18).contains(layout.subtitleToTabsGap)
                     && (15...17).contains(layout.formTopGap)
                     && abs(layout.tabsTop - layout.editorTop) <= 1.5
@@ -67,7 +333,19 @@ func runCapsuleWindowSmokeTest() -> Bool {
                     && layout.horizontalContentFits
                     && layout.actionsAreVisible
                     && layout.previewFitsEditorWidth
+                    && layout.imagePreviewFitsContainer
+                    && layout.imagePreviewUsesAspectFit
+                    && layout.formMatchesClipWidth
                     && layout.copyButtonIsVisible
+                    && layout.titleRowHeight.map { (35...50).contains($0) }
+                        == true
+                    && layout.titleToFirstDetailGap.map {
+                        (8...12).contains($0)
+                    } == true
+                    && (!fixedFormKinds.contains(kind)
+                        || layout.firstDetailRowHeight.map { $0 <= 50 } == true)
+                    && (fixedFormKinds.contains(kind)
+                        == (layout.bottomSpacerHeight != nil))
                     && !layout.hasAmbiguousLayout
                   }),
                   layouts.allSatisfy({ _, layout in
@@ -79,6 +357,40 @@ func runCapsuleWindowSmokeTest() -> Bool {
                         + "layouts=\(layouts)"
                 )
             }
+            if size.height >= 1_000 {
+                guard layouts.allSatisfy({ kind, layout in
+                    if fixedFormKinds.contains(kind) {
+                        return layout.bottomSpacerHeight.map { $0 > 100 } == true
+                    }
+                    return layout.bottomSpacerHeight == nil
+                        && layout.firstDetailRowHeight.map { $0 > 500 } == true
+                }) else {
+                    return capsuleWindowSmokeFail(
+                        "editor vertical expansion size=\(size) layouts=\(layouts)"
+                    )
+                }
+            }
+        }
+
+        let visibleFrame = NSRect(x: 0, y: 0, width: 1_280, height: 720)
+        let safeFrame = visibleFrame.insetBy(dx: 12, dy: 12)
+        let oversized = CapsuleWindowGeometry.constrainedFrame(
+            NSRect(x: -400, y: -300, width: 1_800, height: 1_000),
+            visibleFrames: [visibleFrame]
+        )
+        let offscreen = CapsuleWindowGeometry.constrainedFrame(
+            NSRect(x: 3_000, y: 2_000, width: 900, height: 600),
+            visibleFrames: [],
+            fallbackVisibleFrame: visibleFrame
+        )
+        let alreadySafe = NSRect(x: 80, y: 30, width: 940, height: 660)
+        guard safeFrame.contains(oversized),
+              safeFrame.contains(offscreen),
+              CapsuleWindowGeometry.constrainedFrame(
+                alreadySafe,
+                visibleFrames: [visibleFrame]
+              ) == alreadySafe else {
+            return capsuleWindowSmokeFail("restored window frame containment")
         }
         for kind in CapsuleEntryKind.allCases {
             _ = pane.layoutSnapshotForSmoke(kind: kind, size: layoutSizes[0])
@@ -215,6 +527,105 @@ func runCapsuleWindowSmokeTest() -> Bool {
             return capsuleWindowSmokeFail("wide image fixture creation")
         }
         try wideJPEG.write(to: wideImageURL, options: .atomic)
+
+        let tallImageURL = root.appendingPathComponent("fixture-tall.jpg")
+        guard let tallBitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: 1,
+            pixelsHigh: 5_000,
+            bitsPerSample: 8,
+            samplesPerPixel: 3,
+            hasAlpha: false,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ), let tallJPEG = tallBitmap.representation(
+            using: .jpeg,
+            properties: [.compressionFactor: 0.8]
+        ) else {
+            return capsuleWindowSmokeFail("tall image fixture creation")
+        }
+        try tallJPEG.write(to: tallImageURL, options: .atomic)
+
+        let mediaFixtures: [(CapsuleEntryKind, URL, String)] = [
+            (.image, wideImageURL, "wide image"),
+            (.image, tallImageURL, "tall image"),
+            (.pdf, pdfURL, "PDF"),
+        ]
+        let mediaContentSizes = [
+            CapsuleWindowGeometry.defaultContentSize,
+            NSSize(width: 680, height: 460),
+            CapsuleWindowGeometry.minimumContentSize,
+        ]
+        for contentSize in mediaContentSizes {
+            for (kind, url, label) in mediaFixtures {
+                let mediaPane = CapsulePaneViewController(
+                    repository: repository,
+                    cloudSyncController: nil
+                )
+                let mediaWindow = NSWindow(
+                    contentRect: NSRect(origin: .zero, size: contentSize),
+                    styleMask: [.titled, .resizable],
+                    backing: .buffered,
+                    defer: false
+                )
+                mediaWindow.contentMinSize = CapsuleWindowGeometry.minimumContentSize
+                CapsuleWindowGeometry.install(
+                    contentController: mediaPane,
+                    in: mediaWindow
+                )
+                mediaWindow.setContentSize(contentSize)
+                mediaPane.beginMediaPreviewForSmoke(kind: kind, path: url.path)
+                let frameBeforeLoad = mediaWindow.frame
+                let contentLayoutSizeBeforeLoad = mediaWindow.contentLayoutRect.size
+                let contentViewSizeBeforeLoad = mediaWindow.contentView?.bounds.size
+                let previewDeadline = Date().addingTimeInterval(5)
+                while !mediaPane.mediaPreviewIsReadyForSmoke,
+                      Date() < previewDeadline {
+                    RunLoop.current.run(
+                        mode: .default,
+                        before: Date().addingTimeInterval(0.01)
+                    )
+                }
+                mediaWindow.layoutIfNeeded()
+                let mediaLayout = mediaPane.currentLayoutSnapshotForSmoke(
+                    kind: kind
+                )
+                guard mediaPane.mediaPreviewIsReadyForSmoke,
+                      capsuleSizesMatch(
+                        frameBeforeLoad.size,
+                        mediaWindow.frame.size
+                      ),
+                      capsuleSizesMatch(
+                        contentLayoutSizeBeforeLoad,
+                        mediaWindow.contentLayoutRect.size
+                      ),
+                      (contentViewSizeBeforeLoad.map {
+                        capsuleSizesMatch(
+                            $0,
+                            mediaWindow.contentView?.bounds.size ?? .zero
+                        )
+                      } == true),
+                      (mediaLayout.previewFrame.map {
+                        $0.width <= 640.5 && (159...361).contains($0.height)
+                      } == true),
+                      mediaLayout.imagePreviewFrame != nil,
+                      mediaLayout.imagePreviewFitsContainer,
+                      mediaLayout.imagePreviewUsesAspectFit,
+                      mediaLayout.formMatchesClipWidth,
+                      mediaLayout.horizontalContentFits,
+                      !mediaLayout.hasAmbiguousLayout else {
+                    return capsuleWindowSmokeFail(
+                        "async \(label) preview changed window geometry at "
+                            + "contentSize=\(contentSize): "
+                            + "before=\(frameBeforeLoad) "
+                            + "after=\(mediaWindow.frame) layout=\(mediaLayout)"
+                    )
+                }
+            }
+        }
+
         let widePasteboard = NSPasteboard(
             name: NSPasteboard.Name(
                 "RIMES.CapsuleWindowSmoke.wide.\(UUID().uuidString)"
@@ -284,6 +695,34 @@ func runCapsuleWindowSmokeTest() -> Bool {
         guard skillPasteboard.pasteboardItems?.first?.string(forType: .fileURL)
                 == skillFileURL.standardizedFileURL.absoluteString else {
             return capsuleWindowSmokeFail("Skill file copy as file URL")
+        }
+
+        let stalePayload = try CapsuleFilePasteboardWriter.prepare(
+            kind: .pdf,
+            path: pdfURL.path
+        )
+        skillPasteboard.clearContents()
+        skillPasteboard.setString("older", forType: .string)
+        let expectedChangeCount = skillPasteboard.changeCount
+        skillPasteboard.clearContents()
+        skillPasteboard.setString("newer-user-clipboard", forType: .string)
+        do {
+            _ = try CapsuleFilePasteboardWriter.write(
+                stalePayload,
+                to: skillPasteboard,
+                expectedChangeCount: expectedChangeCount
+            )
+            return capsuleWindowSmokeFail(
+                "stale async copy overwrote newer pasteboard"
+            )
+        } catch CapsuleFilePasteboardError.pasteboardChanged {
+            // Expected: preparation completion is compare-before-write.
+        }
+        guard skillPasteboard.string(forType: .string)
+                == "newer-user-clipboard" else {
+            return capsuleWindowSmokeFail(
+                "stale async copy cleared newer pasteboard"
+            )
         }
 
         let failurePasteboard = NSPasteboard(
@@ -474,6 +913,7 @@ func runCapsuleWindowSmokeTest() -> Bool {
                 plaintextVisible: true
               ),
               hiddenEditor.revealButtonTitle == "查看明文",
+              hiddenEditor.revealRequiresChordAuthentication,
               hiddenEditor.urlUsesSecureControl,
               hiddenEditor.appUsesSecureControl,
               hiddenEditor.usernameUsesSecureControl,
@@ -481,6 +921,7 @@ func runCapsuleWindowSmokeTest() -> Bool {
               hiddenEditor.previousPasswordsUseSecureControls,
               !hiddenEditor.hasUnsavedChanges,
               revealedEditor.revealButtonTitle == "隐藏明文",
+              revealedEditor.revealRequiresChordAuthentication,
               revealedEditor.urlUsesSecureControl,
               revealedEditor.appUsesSecureControl,
               revealedEditor.usernameUsesSecureControl,
@@ -690,6 +1131,59 @@ func runCapsuleWindowSmokeTest() -> Bool {
 private func capsuleWindowSmokeFail(_ message: String) -> Bool {
     fputs("capsule-window-smoke: FAIL: \(message)\n", stderr)
     return false
+}
+
+private func capsuleSendPasscodeChord(
+    _ keyCodes: [UInt16],
+    to window: NSWindow
+) -> Bool {
+    func event(
+        type: NSEvent.EventType,
+        keyCode: UInt16
+    ) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: type,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: false,
+            keyCode: keyCode
+        )
+    }
+
+    for keyCode in keyCodes {
+        guard let keyDown = event(type: .keyDown, keyCode: keyCode) else {
+            return false
+        }
+        window.sendEvent(keyDown)
+    }
+    for keyCode in keyCodes.reversed() {
+        guard let keyUp = event(type: .keyUp, keyCode: keyCode) else {
+            return false
+        }
+        window.sendEvent(keyUp)
+    }
+    return true
+}
+
+private func capsuleSendPasscode(
+    _ chords: [[UInt16]],
+    to window: NSWindow
+) -> Bool {
+    chords.allSatisfy { capsuleSendPasscodeChord($0, to: window) }
+}
+
+private func capsuleSizesMatch(
+    _ lhs: NSSize,
+    _ rhs: NSSize,
+    tolerance: CGFloat = 0.5
+) -> Bool {
+    abs(lhs.width - rhs.width) <= tolerance
+        && abs(lhs.height - rhs.height) <= tolerance
 }
 
 private func capsulePointingHandControlsAreValid(in root: NSView) -> Bool {

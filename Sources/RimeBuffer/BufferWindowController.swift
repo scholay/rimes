@@ -497,11 +497,37 @@ enum BufferWindowOrderingRules {
     }
 }
 
+enum BufferDetachedClipboardRules {
+    static let maximumUTF8Bytes = 1_048_576
+
+    static func acceptedText(_ text: String?) -> String? {
+        guard let text,
+              !text.isEmpty,
+              !text.contains("\0"),
+              text.utf8.count <= maximumUTF8Bytes else { return nil }
+        return text
+    }
+}
+
+enum BufferTextPasteboardWriter {
+    /// Build the complete object before clearing the destination. AppKit does
+    /// not offer a transactional pasteboard swap, but a payload-construction
+    /// failure must never destroy the user's existing clipboard.
+    static func write(_ text: String, to pasteboard: NSPasteboard) -> Bool {
+        guard !text.isEmpty else { return false }
+        let item = NSPasteboardItem()
+        guard item.setString(text, forType: .string) else { return false }
+        pasteboard.clearContents()
+        return pasteboard.writeObjects([item])
+    }
+}
+
 enum BufferWorkbenchControl: String, Equatable {
     case bufferRail
     case copyResult
     case send
     case status
+    case clipboardImport
     case pluginActions
     case exchangeEdit
     case close
@@ -636,6 +662,7 @@ enum BufferWorkbenchShelfLayout {
 
     static func configure(_ shelf: NSStackView,
                           status: NSView,
+                          clipboardImport: NSView,
                           pluginActions: NSView,
                           flexibleSpace: NSView,
                           statusIndicators: NSView,
@@ -667,7 +694,7 @@ enum BufferWorkbenchShelfLayout {
         flexibleSpace.setContentCompressionResistancePriority(flexiblePriority,
                                                               for: .horizontal)
 
-        [status, pluginActions, flexibleSpace, statusIndicators,
+        [status, clipboardImport, pluginActions, flexibleSpace, statusIndicators,
          exchangeEdit, close].forEach {
             shelf.addArrangedSubview($0)
         }
@@ -680,10 +707,10 @@ enum BufferWorkbenchLayout {
         .bufferRail, .send,
     ]
     static let toolbar: [BufferWorkbenchControl] = [
-        .status, .pluginActions, .exchangeEdit, .close,
+        .status, .clipboardImport, .pluginActions, .exchangeEdit, .close,
     ]
     static let hoverControls: Set<BufferWorkbenchControl> = [
-        .copyResult, .send, .pluginActions, .exchangeEdit, .close,
+        .copyResult, .send, .clipboardImport, .pluginActions, .exchangeEdit, .close,
     ]
     static let passiveControls: Set<BufferWorkbenchControl> = [.bufferRail, .status]
     static let toolbarInitiallyExpanded = true
@@ -1269,6 +1296,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private let utilityShelf = BufferWorkbenchToolbarView()
     private let shelfDivider = NSView()
     private let statusLabel = NSTextField(labelWithString: "")
+    private let clipboardImportButton = FirstMouseButton(
+        title: "",
+        target: nil,
+        action: nil
+    )
     private let pluginActionsControl = NSStackView()
     private let shelfFlexibleSpace = NSView()
     private let contextualStatusControl = NSStackView()
@@ -1526,9 +1558,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func show(repositionOnOpen: Bool) {
-        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
-            IMELog.write("buffer window open ignored; RIMES is not selected")
-            return
+        let rimeOwnsInput = RimeInputSourceAuthority.currentSourceIsOwn()
+        if !rimeOwnsInput {
+            BufferModel.shared.routeDirectPreservingContent(
+                reason: "external input source workbench"
+            )
         }
         let wasVisibleOnActiveSpace = isVisible
         if !wasVisibleOnActiveSpace { workbenchSessionEpoch &+= 1 }
@@ -1561,7 +1595,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             panel.orderOut(nil)
         }
         panel.orderFrontRegardless()
-        RimeBufferController.refreshActiveUI()
+        if rimeOwnsInput {
+            RimeBufferController.refreshActiveUI()
+        }
     }
 
     /// Compatibility entry for explicit “enable Buffer” actions. Visibility
@@ -1569,7 +1605,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// capture grant and still shows the workbench when no trusted field exists.
     func openAndResume() {
         guard RimeInputSourceAuthority.currentSourceIsOwn() else {
-            IMELog.write("buffer capture open ignored; RIMES is not selected")
+            BufferModel.shared.routeDirectPreservingContent(
+                reason: "external input source clipboard channel"
+            )
+            show()
+            IMELog.write("buffer opened with detached clipboard channel")
             return
         }
         if !activateCaptureForCurrentFocus(showWorkbench: true) {
@@ -1685,9 +1725,13 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                 return false
             }
         }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        guard pasteboard.setString(text, forType: .string) else {
+        guard !sessionProtectionActive,
+              !hiddenForSession,
+              !IsSecureEventInputEnabled(),
+              BufferTextPasteboardWriter.write(
+                text,
+                to: NSPasteboard.general
+              ) else {
             NSSound.beep()
             return false
         }
@@ -1702,6 +1746,65 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         return true
     }
 
+    /// External input methods use Buffer as a clipboard-backed workbench. The
+    /// copy path never manufactures a focus token or writes to an IMK client.
+    @discardableResult
+    func copyDetachedBufferAndClose() -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !RimeInputSourceAuthority.currentSourceIsOwn(),
+              isVisible,
+              !hiddenForSession,
+              !sessionProtectionActive,
+              !IsSecureEventInputEnabled() else { return false }
+        if canCopyGeneratedResult,
+           copyGeneratedResultAndClose() {
+            return true
+        }
+        let text = BufferModel.shared.stagedText
+        guard !text.isEmpty else { return false }
+        guard !sessionProtectionActive,
+              !hiddenForSession,
+              !IsSecureEventInputEnabled(),
+              BufferTextPasteboardWriter.write(
+                text,
+                to: NSPasteboard.general
+              ) else { return false }
+        IMELog.write(
+            "buffer detached content copied chars=\(text.count) blocks="
+                + "\(BufferModel.shared.blocks.count)"
+        )
+        pauseAndHide(settleCapturedComposition: false)
+        return true
+    }
+
+    @discardableResult
+    private func importClipboardText() -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard isVisible,
+              !hiddenForSession,
+              !sessionProtectionActive,
+              !IsSecureEventInputEnabled() else { return false }
+        let pasteboard = NSPasteboard.general
+        let expectedChangeCount = pasteboard.changeCount
+        guard let text = BufferDetachedClipboardRules.acceptedText(
+            pasteboard.string(forType: .string)
+        ), pasteboard.changeCount == expectedChangeCount,
+           !sessionProtectionActive,
+           !IsSecureEventInputEnabled() else { return false }
+        if !RimeInputSourceAuthority.currentSourceIsOwn() {
+            BufferModel.shared.routeDirectPreservingContent(
+                reason: "clipboard import under external input source"
+            )
+        }
+        guard BufferModel.shared.insertPastedText(
+            text,
+            origin: .clipboard
+        ) else { return false }
+        refresh()
+        IMELog.write("buffer clipboard import accepted chars=\(text.count)")
+        return true
+    }
+
     @discardableResult
     func dismissFromEscape() -> Bool {
         guard isVisible else { return false }
@@ -1712,6 +1815,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func pauseAndHide(settleCapturedComposition: Bool) {
         if settleCapturedComposition,
+           RimeInputSourceAuthority.currentSourceIsOwn(),
            let target = InputFocusCoordinator.shared.owner,
            InputFocusCoordinator.shared.isCurrent(target.token),
            BufferModel.shared.capturesInput(for: target.token),
@@ -1748,6 +1852,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         dispatchPrecondition(condition: .onQueue(.main))
         let currentSource = BufferDeliveryContentRouter.current()
         guard closeAfterLastDeliveryEnabled,
+              RimeInputSourceAuthority.currentSourceIsOwn(),
               context.workbenchSessionEpoch == workbenchSessionEpoch,
               context.matchesCurrentSource(currentSource),
               isVisible,
@@ -2107,11 +2212,15 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             return
         }
         let secureInputEnabled = IsSecureEventInputEnabled()
+        let rimeOwnsInput = RimeInputSourceAuthority.currentSourceIsOwn()
         let contentProtected = secureInputEnabled || sessionProtectionActive
         if contentProtected {
             setToolbarExpanded(false, resize: true)
         }
-        syncPanelLevel(secureInputEnabled: secureInputEnabled)
+        syncPanelLevel(
+            secureInputEnabled: secureInputEnabled,
+            rimeOwnsInput: rimeOwnsInput
+        )
         if contentProtected {
             inlineCompositionProjection = nil
             BufferModel.shared.clearAllContentSelection(notify: false)
@@ -2125,6 +2234,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             )
         }
         pluginSelector.isEnabled = !contentProtected
+        clipboardImportButton.isEnabled = !contentProtected
+        clipboardImportButton.toolTip = contentProtected
+            ? "受保护状态下不能读取剪贴板"
+            : "从系统剪贴板导入文字"
         // Protect every stable derived singleton before resolving presentation
         // state. A secure refresh must not ask any source for a text snapshot.
         DerivedBufferWorkspaceRouter.setProtectedOnAll(contentProtected)
@@ -2143,7 +2256,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             ? nil
             : derivedWorkspace?.railSnapshot
         let inlineComposition: InlineCompositionProjection?
-        if !contentProtected,
+        if rimeOwnsInput,
+           !contentProtected,
            let projection = inlineCompositionProjection,
            shouldPresentCandidatesAtBufferCaret(for: projection.owner) {
             inlineComposition = projection
@@ -2151,9 +2265,15 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             inlineCompositionProjection = nil
             inlineComposition = nil
         }
-        let availability: BufferDeliveryCoordinator.Availability = contentProtected
-            ? .blocked(.secureInput)
-            : BufferDeliveryCoordinator.shared.availability()
+        let availability: BufferDeliveryCoordinator.Availability
+        if contentProtected {
+            availability = .blocked(.secureInput)
+        } else if rimeOwnsInput {
+            availability = BufferDeliveryCoordinator.shared.availability()
+        } else {
+            // Detached mode must not resolve a FocusToken merely to render UI.
+            availability = .blocked(.noFocusedField)
+        }
         // Row reconciliation and panel geometry are one visual transaction.
         // Grow before attaching a new row; shrink only after stale rows have
         // been removed. Otherwise NSScrollView captures a 0pt/old document
@@ -2204,6 +2324,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             rawStatusText = derivedWorkspace.statusText
         } else if !contentProtected, let builtInActionWorkspace {
             rawStatusText = builtInActionWorkspace.actionPresentation.statusText
+        } else if !contentProtected, !rimeOwnsInput {
+            rawStatusText = BufferModel.shared.stagedText.isEmpty
+                ? "剪贴板通道 · 可导入"
+                : "剪贴板通道 · 可复制"
         } else {
             rawStatusText = BufferWorkbenchStatusText.text(
                 for: availability,
@@ -2246,7 +2370,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         )
         refreshPrimaryAction(controls: WorkbenchManualGenerationRouter.selectedControls,
                              availability: availability,
-                             contentProtected: contentProtected)
+                             contentProtected: contentProtected,
+                             detachedClipboardMode: !rimeOwnsInput)
         refreshExchangeActions(
             style: derivedPresentationStyle,
             snapshot: derivedSnapshot,
@@ -2475,6 +2600,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             sendButtonProgressIndicator.heightAnchor.constraint(equalToConstant: 12),
         ])
         configureIconButton(
+            clipboardImportButton,
+            "doc.on.clipboard",
+            "从系统剪贴板导入文字",
+            #selector(importClipboardTapped)
+        )
+        configureIconButton(
             exchangeEditButton,
             "text.cursor",
             "返回编辑原文",
@@ -2674,6 +2805,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         BufferWorkbenchShelfLayout.configure(
             utilityShelf,
             status: statusLabel,
+            clipboardImport: clipboardImportButton,
             pluginActions: pluginActionsControl,
             flexibleSpace: shelfFlexibleSpace,
             statusIndicators: contextualStatusControl,
@@ -2739,9 +2871,13 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// floating windows. Elevate the passive workbench only while
     /// that exact capture lease is still current; every other route resets to
     /// the ordinary floating level.
-    private func syncPanelLevel(secureInputEnabled: Bool) {
+    private func syncPanelLevel(
+        secureInputEnabled: Bool,
+        rimeOwnsInput: Bool
+    ) {
         let resolved: NSWindow.Level
-        if !secureInputEnabled,
+        if rimeOwnsInput,
+           !secureInputEnabled,
            !sessionProtectionActive,
            let token = BufferModel.shared.captureFocusToken,
            BufferModel.shared.capturesInput(for: token),
@@ -2799,6 +2935,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         case .copyResult: return copyResultButton
         case .send: return sendSlot
         case .status: return statusLabel
+        case .clipboardImport: return clipboardImportButton
         case .pluginActions: return pluginActionsControl
         case .exchangeEdit: return exchangeEditSlot
         case .close: return closeButton
@@ -2815,7 +2952,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         pluginActionsControl.layer?.backgroundColor = RimeUI.surface2.cgColor
         pluginActionsControl.layer?.borderColor = RimeUI.border.cgColor
         pluginActionsControl.layer?.borderWidth = 1 / max(panel.backingScaleFactor, 1)
-        [exchangeEditButton, closeButton, copyResultButton, sendButton].forEach {
+        [clipboardImportButton, exchangeEditButton, closeButton,
+         copyResultButton, sendButton].forEach {
             $0.contentTintColor = RimeUI.textSecondary
             $0.refreshInteractionAppearance()
         }
@@ -2848,7 +2986,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func applyPreviewPointerState(_ hoveredControl: BufferWorkbenchControl?) {
-        [copyResultButton, sendButton, exchangeEditButton, closeButton].forEach {
+        [copyResultButton, sendButton, clipboardImportButton,
+         exchangeEditButton, closeButton].forEach {
             $0.setPreviewPointerState(nil)
         }
         pluginSelector.setPreviewPointerState(nil)
@@ -2868,6 +3007,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             copyResultButton.setPreviewPointerState(.hovered)
         case .send:
             sendButton.setPreviewPointerState(.hovered)
+        case .clipboardImport:
+            clipboardImportButton.setPreviewPointerState(.hovered)
         case .pluginActions:
             pluginSelector.setPreviewPointerState(.hovered)
         case .exchangeEdit:
@@ -2882,19 +3023,30 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private func refreshPrimaryAction(
         controls: (any WorkbenchManualGenerationControls)?,
         availability: BufferDeliveryCoordinator.Availability,
-        contentProtected: Bool
+        contentProtected: Bool,
+        detachedClipboardMode: Bool
     ) {
         sendButton.imagePosition = .imageOnly
         sendButton.title = ""
         sendButtonUsesAccent = false
         guard let controls else {
             setSendButtonGenerating(false)
-            setSendButtonSymbol("paperplane.fill")
-            sendButton.isEnabled = availability.canSend && !contentProtected
-            sendButton.toolTip = availability.canSend
-                ? "发送下一块（\(deliveryShortcutTitle)）"
-                : availability.label
-            sendButton.setAccessibilityLabel("发送下一块")
+            if detachedClipboardMode {
+                setSendButtonSymbol("doc.on.doc")
+                sendButton.isEnabled = !contentProtected
+                    && !BufferModel.shared.stagedText.isEmpty
+                sendButton.toolTip = sendButton.isEnabled
+                    ? "复制 Buffer 内容并关闭"
+                    : "先从剪贴板导入文字"
+                sendButton.setAccessibilityLabel("复制 Buffer 内容")
+            } else {
+                setSendButtonSymbol("paperplane.fill")
+                sendButton.isEnabled = availability.canSend && !contentProtected
+                sendButton.toolTip = availability.canSend
+                    ? "发送下一块（\(deliveryShortcutTitle)）"
+                    : availability.label
+                sendButton.setAccessibilityLabel("发送下一块")
+            }
             return
         }
 
@@ -2928,12 +3080,22 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             setSendButtonGenerating(true)
         case .deliver:
             setSendButtonGenerating(false)
-            setSendButtonSymbol("paperplane.fill")
-            sendButton.isEnabled = availability.canSend && !contentProtected
-            sendButton.toolTip = availability.canSend
-                ? "发送下一块（\(deliveryShortcutTitle)）"
-                : availability.label
-            sendButton.setAccessibilityLabel("发送下一块 AI 内容")
+            setSendButtonSymbol(
+                detachedClipboardMode ? "doc.on.doc" : "paperplane.fill"
+            )
+            sendButton.isEnabled = !contentProtected
+                && (detachedClipboardMode
+                    ? (BufferGeneratedResultCopyRules.freeze(protected: false) != nil
+                        || !BufferModel.shared.stagedText.isEmpty)
+                    : availability.canSend)
+            sendButton.toolTip = detachedClipboardMode
+                ? "复制生成结果并关闭"
+                : (availability.canSend
+                    ? "发送下一块（\(deliveryShortcutTitle)）"
+                    : availability.label)
+            sendButton.setAccessibilityLabel(
+                detachedClipboardMode ? "复制 AI 生成结果" : "发送下一块 AI 内容"
+            )
             sendButtonUsesAccent = true
         }
     }
@@ -3647,6 +3809,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         DerivedBufferWorkspaceRouter.setProtectedOnAll(true)
         BuiltInBufferActionWorkspaceRouter.setProtectedOnAll(true)
         if let lease = InputFocusCoordinator.shared.invalidateAll(reason: reason) {
+            // This abandons only process-local Rime composition and never calls
+            // the retired IMK client, so it remains safe under another IME.
             lease.controller?.finalizeProtectedSession(lease, reason: reason)
             candidateWindow.hide(owner: lease.token)
         } else {
@@ -3704,6 +3868,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private func evaluateFocusedInputFollow(
         expected token: FocusToken
     ) -> FocusFollowEvaluation {
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            return .deferred
+        }
         let protected = sessionProtectionActive || hiddenForSession
         let secureInput = IsSecureEventInputEnabled()
         let visibilityIntent = UserDefaults.standard.bool(forKey: Key.visible)
@@ -3818,7 +3985,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private func freshFocusedInputAnchor(
         expected token: FocusToken? = nil
     ) -> (rect: NSRect, token: FocusToken)? {
-        guard !IsSecureEventInputEnabled(),
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              !IsSecureEventInputEnabled(),
               let lease = InputFocusCoordinator.shared.liveTarget(
                 expected: token,
                 forceOverlayVisibilityRefresh: true
@@ -3892,16 +4060,24 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
               !lastSecureInputState,
               !IsSecureEventInputEnabled(),
               !sessionProtectionActive,
-              let lease = InputFocusCoordinator.shared.interactionTarget(),
-              lease.isExternalTarget,
               let controls = DerivedBufferWorkspaceRouter
                 .selectedWorkspace as? any DerivedResultSelectionControls,
-              controls.ownsResultNavigation,
-              controls.selectResult(blockID: blockID),
-              InputFocusCoordinator.shared.interactionTarget(
-                expected: lease.token
-              ) === lease else {
+              controls.ownsResultNavigation else {
             return
+        }
+        if RimeInputSourceAuthority.currentSourceIsOwn() {
+            guard let lease = InputFocusCoordinator.shared.interactionTarget(),
+                  lease.isExternalTarget,
+                  controls.selectResult(blockID: blockID),
+                  RimeInputSourceAuthority.currentSourceIsOwn(),
+                  InputFocusCoordinator.shared.interactionTarget(
+                    expected: lease.token
+                  ) === lease else { return }
+        } else {
+            // Result paging is local presentation state. Detached Buffer can
+            // choose which completed alternative will be copied without an
+            // IMK destination lease.
+            guard controls.selectResult(blockID: blockID) else { return }
         }
         refresh()
         RimeBufferController.refreshActiveUI()
@@ -3913,31 +4089,40 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
               isVisible,
               !lastSecureInputState,
               !IsSecureEventInputEnabled(),
-              !sessionProtectionActive,
-              let lease = InputFocusCoordinator.shared.interactionTarget(),
-              lease.isExternalTarget else {
+              !sessionProtectionActive else {
             return
         }
 
-        let moved: Bool
         if let controls = DerivedBufferWorkspaceRouter.selectedWorkspace
             as? any DerivedResultSelectionControls,
            controls.ownsResultNavigation {
-            moved = controls.moveResultSelection(delta: delta)
+            if RimeInputSourceAuthority.currentSourceIsOwn() {
+                guard let lease = InputFocusCoordinator.shared.interactionTarget(),
+                      lease.isExternalTarget,
+                      controls.moveResultSelection(delta: delta),
+                      RimeInputSourceAuthority.currentSourceIsOwn(),
+                      InputFocusCoordinator.shared.interactionTarget(
+                        expected: lease.token
+                      ) === lease else { return }
+            } else {
+                guard controls.moveResultSelection(delta: delta) else { return }
+            }
         } else if DerivedBufferWorkspaceRouter.selectedWorkspace
                     === StreamInputWorkspace.shared,
                   StreamInputWorkspace.shared.ownsAlternativeNavigation {
-            moved = StreamInputWorkspace.shared.moveAlternativeSelection(
+            // Stream alternatives remain bound to their RIMES focus token.
+            guard RimeInputSourceAuthority.currentSourceIsOwn(),
+                  let lease = InputFocusCoordinator.shared.interactionTarget(),
+                  lease.isExternalTarget,
+                  StreamInputWorkspace.shared.moveAlternativeSelection(
                 delta: delta,
                 focusToken: lease.token
-            )
+                  ),
+                  RimeInputSourceAuthority.currentSourceIsOwn(),
+                  InputFocusCoordinator.shared.interactionTarget(
+                    expected: lease.token
+                  ) === lease else { return }
         } else {
-            return
-        }
-        guard moved,
-              InputFocusCoordinator.shared.interactionTarget(
-                expected: lease.token
-              ) === lease else {
             return
         }
         refresh()
@@ -3963,7 +4148,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     @discardableResult
     func activateCaptureForCurrentFocus(showWorkbench: Bool = true) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard !sessionProtectionActive,
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              !sessionProtectionActive,
               !hiddenForSession,
               !IsSecureEventInputEnabled(),
               let lease = InputFocusCoordinator.shared.liveTarget(
@@ -4008,6 +4194,13 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private func externalPointerDidRequestHostInput() {
         dispatchPrecondition(condition: .onQueue(.main))
         guard BufferModel.shared.active else { return }
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            clearInlineComposition()
+            BufferModel.shared.routeDirectPreservingContent(
+                reason: "external input source pointer event"
+            )
+            return
+        }
         if let captureToken = BufferModel.shared.captureFocusToken,
            let target = InputFocusCoordinator.shared.owner,
            target.token == captureToken {
@@ -4132,10 +4325,14 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             refresh()
             return
         }
+        let rimeOwnsInput = RimeInputSourceAuthority.currentSourceIsOwn()
         if let controls = WorkbenchManualGenerationRouter.selectedControls {
             switch controls.primaryAction {
             case .requestGeneration:
-                let availability = BufferDeliveryCoordinator.shared.availability()
+                let availability: BufferDeliveryCoordinator.Availability =
+                    rimeOwnsInput
+                    ? BufferDeliveryCoordinator.shared.availability()
+                    : .blocked(.noFocusedField)
                 guard !availability.blocksManualGenerationRequest else {
                     NSSound.beep()
                     refresh()
@@ -4161,6 +4358,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                 break
             }
         }
+        if !rimeOwnsInput || !RimeInputSourceAuthority.currentSourceIsOwn() {
+            _ = copyDetachedBufferAndClose()
+            return
+        }
         _ = BufferDeliveryCoordinator.shared.sendNext(resolveCompositionIfNeeded: true)
         // Delivery.insert atomically replaces the idle marked guard. Restore it
         // for the still-current external lease before the next Return.
@@ -4173,6 +4374,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     @objc private func copyResultTapped() {
         _ = copyGeneratedResultAndClose()
+    }
+
+    @objc private func importClipboardTapped() {
+        _ = importClipboardText()
     }
 
     @objc private func closeTapped() { closeAndPause() }

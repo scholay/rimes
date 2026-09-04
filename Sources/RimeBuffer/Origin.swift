@@ -7,6 +7,9 @@ import Foundation
 enum Origin: Equatable {
     /// Local Rime commit — the only origin that exists before the workbench.
     case rime
+    /// Text explicitly imported from the system pasteboard while the workbench
+    /// is operating without an IMK capture target.
+    case clipboard
     /// Marine local-agent draft (transitional; folds into `.mcp` once Marine
     /// moves onto the MCP gateway).
     case marine
@@ -47,6 +50,7 @@ enum Origin: Equatable {
     var tag: String {
         switch self {
         case .rime: return "rime"
+        case .clipboard: return "clipboard"
         case .marine: return "marine"
         case let .plugin(id): return "plugin:\(id)"
         case let .processor(id, _): return "processor:\(id)"

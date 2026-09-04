@@ -183,8 +183,29 @@ ASCII fallback，不再要求 v0.4.1 等旧 binary 理解新参数。所有可�
 GUI 用户的 Aqua 会话中按独立子进程分阶段执行 `register → enable parent →
 enable child → best-effort select`。注册/启用在 90 秒总预算内未收敛时，pkg 仍成功，
 并为当前用户安排一个仅在下次 Aqua 登录执行的 one-shot repair LaunchAgent；
-成功后 marker 与 LaunchAgent 会自删除。无 GUI 用户的安装只安装 payload，下次登录
-后由用户在系统设置中激活。任何路径都不结束 `imklaunchagent`/`TextInputMenuAgent`。
+成功后 marker 与 LaunchAgent 会自删除。开发安装另用一个不带 `KeepAlive` 的用户级
+companion LaunchAgent：新定义在同一目录完成构造、lint 与字段校验后原子替换，只执行一次
+`open -g` 用户 App。系统包在替换 payload 前枚举所有本机普通账户的
+准确 home 记录：只允许当前 GUI 用户存在可验证、可由 postinstall 退休的 dev app/agent；
+任何其他账户存在同 ID dev 安装、home 无法安全遍历或记录不一致都会在 payload 改动前
+fail-closed。postinstall 退休当前用户的 dev 安装后再次全量审计，再发布另一个系统级 Aqua
+LaunchAgent。它在每次冷登录时只运行一次短命 guard：若后来又出现用户级 dev 痕迹则直接
+退出，否则执行 `/usr/bin/open -g /Library/Input Methods/ETInput.app`；它不设 `KeepAlive`，
+也不承载第二份 UI/IME 服务。这个登录 guard 只是对安装后异常残留的防御，不能代替包安装前
+的全账户冲突审计。postinstall 在替换这个 system agent 前保存原始字节，后续
+旧进程退出或新进程启动检查失败会恢复旧 agent（原来不存在则恢复为不存在）。这样即使
+登录后选用其他输入法，Buffer、Clipboard、Mailbox 与 Capsule 的 Carbon 快捷键仍由同一
+个 RIMES 进程提供。无 GUI 用户时仅在所有本机账户都无 dev 冲突后安装 payload 与冷登录
+bootstrap；TIS 激活留到 GUI 会话建立后处理。任何路径都不结束
+`imklaunchagent`/`TextInputMenuAgent`。
+
+发布回归还必须固定周边窗口的权限边界：在其他输入法下，四个全局快捷键仍可开关对应窗口，
+但不得访问外部 IMK client、切换输入源、合成粘贴/其他按键、调用 Accessibility/Post Event，
+或读取、提交、取消外部输入法组字。设置窗口只在 RIMES 输入源下打开；其中 Mailbox 与 Capsule
+必须是配置/状态页，不能嵌入实际会话或内容管理 pane。Capsule Password 的查看入口必须显示
+四个槽位，并用原生物理键事件验证四组 chord（默认 `RH / WO / CVN / QU`）；更换和恢复默认
+都先验证当前凭据，自定义原码不落盘或同步，只保留一个加盐摘要凭据，验证成功后的明文最多
+显示 15 秒。
 
 输入法 bundle id 刻意保留 `com.isaac.inputmethod.RimeBuffer`，即使对外产品名已经是 RIMES；
 可选择的输入模式使用独立 id `com.isaac.inputmethod.RimeBuffer.Hans`。父输入法与

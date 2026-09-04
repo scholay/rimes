@@ -18,6 +18,7 @@ EXPECTED_CONFIG="$TEST_STATE_ROOT/expected-openai-compatible.json"
 EXPECTED_PLUGIN_CONFIG="$TEST_STATE_ROOT/expected-remarkable-credentials.json"
 EXPECTED_PROMPT="$TEST_STATE_ROOT/expected-prompt.md"
 EXPECTED_PROMPT_INDEX="$TEST_STATE_ROOT/expected-prompt-index.sqlite"
+EXPECTED_MAILBOX_DIR="$TEST_STATE_ROOT/expected-mailbox"
 EXPECTED_MARINE_DIR="$TEST_STATE_ROOT/expected-marine-chrome"
 EXPECTED_CAPSULE_DIR="$TEST_STATE_ROOT/expected-capsule"
 EXPECTED_CAPSULE_SYNC_DIR="$TEST_STATE_ROOT/expected-capsule-sync"
@@ -33,10 +34,12 @@ MARINE_STATE_FILES=(
 )
 mkdir -p "$PROFILE_DIR/ai" "$PROFILE_DIR/plugins" "$PROFILE_DIR/preset-plugins" "$PROFILE_DIR/stats" \
          "$PROFILE_DIR/learning" "$PROFILE_DIR/my-prompt/library" \
+         "$PROFILE_DIR/mailbox" \
          "$PROFILE_DIR/build" \
          "$PROFILE_DIR/plugin-config/builtin.remarkable" "$IMPORT_DIR/ai" \
          "$IMPORT_DIR/plugins" "$IMPORT_DIR/preset-plugins" "$IMPORT_DIR/stats" "$IMPORT_DIR/learning" \
-         "$IMPORT_DIR/my-prompt" "$IMPORT_DIR/plugin-config/builtin.remarkable" \
+         "$IMPORT_DIR/my-prompt" "$IMPORT_DIR/mailbox" \
+         "$IMPORT_DIR/plugin-config/builtin.remarkable" \
          "$PROFILE_DIR/capsule/entries" "$PROFILE_DIR/capsule/passwords" \
          "$PROFILE_DIR/capsule/assets" "$PROFILE_DIR/capsule-sync" \
          "$EXPECTED_MARINE_DIR"
@@ -63,6 +66,11 @@ printf '%s\n' '# Research prompt' '' 'Summarize this paper.' > "$EXPECTED_PROMPT
 printf '%s\n' 'SQLite format 3 prompt-index-fixture' > "$EXPECTED_PROMPT_INDEX"
 cp "$EXPECTED_PROMPT" "$PROFILE_DIR/my-prompt/library/research.md"
 cp "$EXPECTED_PROMPT_INDEX" "$PROFILE_DIR/my-prompt/prompts.sqlite"
+printf '%s\n' '{"schemaVersion":1,"nextSequence":2,"threads":[]}' \
+    > "$PROFILE_DIR/mailbox/mailbox.json"
+chmod 0700 "$PROFILE_DIR/mailbox"
+chmod 0600 "$PROFILE_DIR/mailbox/mailbox.json"
+cp -R "$PROFILE_DIR/mailbox" "$EXPECTED_MAILBOX_DIR"
 printf '%s\n' 'installed-plugin' > "$PROFILE_DIR/plugins/marker"
 printf '%s\n' 'installed-preset-plugin' > "$PROFILE_DIR/preset-plugins/marker"
 printf '%s\n' 'stats-state' > "$PROFILE_DIR/stats/marker"
@@ -151,6 +159,10 @@ printf '%s\n' 'must-not-replace-prompt' \
     > "$IMPORT_DIR/my-prompt/library/research.md"
 printf '%s\n' 'must-not-replace-prompt-index' \
     > "$IMPORT_DIR/my-prompt/prompts.sqlite"
+printf '%s\n' 'must-not-replace-mailbox' \
+    > "$IMPORT_DIR/mailbox/mailbox.json"
+printf '%s\n' 'must-not-add-mailbox-file' \
+    > "$IMPORT_DIR/mailbox/import-only.json"
 printf '%s\n' 'must-not-replace-gateway' > "$IMPORT_DIR/gateway-token"
 printf '%s\n' 'must-not-replace-identity' > "$IMPORT_DIR/remote_identity.key"
 for state_file in "${MARINE_STATE_FILES[@]}"; do
@@ -207,6 +219,13 @@ assert_capsule_state_preserved() {
     test ! -e "$PROFILE_DIR/capsule-sync/import-only.json"
 }
 
+assert_mailbox_state_preserved() {
+    diff -r "$EXPECTED_MAILBOX_DIR" "$PROFILE_DIR/mailbox"
+    test "$(mode_of "$PROFILE_DIR/mailbox")" = '700'
+    test "$(mode_of "$PROFILE_DIR/mailbox/mailbox.json")" = '600'
+    test ! -e "$PROFILE_DIR/mailbox/import-only.json"
+}
+
 CONFIG_MODE_BEFORE="$(mode_of "$PROFILE_DIR/ai/openai-compatible.json")"
 AI_DIR_MODE_BEFORE="$(mode_of "$PROFILE_DIR/ai")"
 PLUGIN_CONFIG_MODE_BEFORE="$(
@@ -237,6 +256,7 @@ cmp -s "$EXPECTED_PROMPT_INDEX" "$PROFILE_DIR/my-prompt/prompts.sqlite"
 test "$(cat "$PROFILE_DIR/gateway-token")" = 'gateway-state'
 test "$(cat "$PROFILE_DIR/remote_identity.key")" = 'identity-state'
 assert_marine_chrome_state_preserved
+assert_mailbox_state_preserved
 assert_capsule_state_preserved
 test "$(cat "$PROFILE_DIR/default.yaml")" = 'new-schema'
 test ! -e "$PROFILE_DIR/build"
@@ -264,6 +284,7 @@ test "$(mode_of "$PROFILE_DIR/plugin-config/builtin.remarkable")" = \
 test "$(cat "$PROFILE_DIR/plugins/marker")" = 'installed-plugin'
 test "$(cat "$PROFILE_DIR/preset-plugins/marker")" = 'installed-preset-plugin'
 assert_marine_chrome_state_preserved
+assert_mailbox_state_preserved
 assert_capsule_state_preserved
 test ! -e "$PROFILE_DIR/build"
 test ! -e "$PROFILE_DIR/default.yaml"
@@ -281,4 +302,4 @@ grep -Fq 'source scripts/lib/rime-user-state.sh' build_install.sh
 grep -Fq 'import_rime_user_dir_preserving_product_state "$HOME/Library/Rime" "$RB_USER"' build_install.sh
 grep -Fq 'reset_rime_user_dir_preserving_product_state "$RB_USER"' build_install.sh
 
-echo 'rime-user-state: durable config and Capsule state preserved across import and reset'
+echo 'rime-user-state: durable config, Mailbox, and Capsule state preserved across import and reset'

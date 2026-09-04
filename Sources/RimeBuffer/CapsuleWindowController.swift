@@ -50,6 +50,69 @@ enum CapsuleWindowSelectionRules {
     }
 }
 
+enum CapsuleWindowGeometry {
+    static let defaultContentSize = NSSize(width: 940, height: 660)
+    static let minimumContentSize = NSSize(width: 620, height: 430)
+    static let screenInset: CGFloat = 12
+
+    /// AppKit resets the root view's autoresizing mask when assigning a view
+    /// controller. Keep this in one production helper so async-preview tests
+    /// exercise the same resize isolation used by the shipped window.
+    static func install(
+        contentController: NSViewController,
+        in window: NSWindow
+    ) {
+        window.contentViewController = contentController
+        window.contentView?.autoresizingMask = []
+    }
+
+    static func constrainedFrame(
+        _ proposedFrame: NSRect,
+        visibleFrames: [NSRect],
+        fallbackVisibleFrame: NSRect? = nil
+    ) -> NSRect {
+        let candidates = visibleFrames.filter { !$0.isEmpty }
+        let intersectingFrame = candidates.max(by: {
+            $0.intersection(proposedFrame).area
+                < $1.intersection(proposedFrame).area
+        }).flatMap {
+            $0.intersection(proposedFrame).area > 0 ? $0 : nil
+        }
+        guard let visibleFrame = intersectingFrame
+                ?? fallbackVisibleFrame
+                ?? candidates.first,
+              !visibleFrame.isEmpty else {
+            return proposedFrame
+        }
+
+        let safeFrame = visibleFrame.insetBy(
+            dx: min(screenInset, visibleFrame.width / 4),
+            dy: min(screenInset, visibleFrame.height / 4)
+        )
+        guard !safeFrame.isEmpty else { return visibleFrame }
+
+        var result = proposedFrame
+        result.size.width = min(max(1, result.width), safeFrame.width)
+        result.size.height = min(max(1, result.height), safeFrame.height)
+        result.origin.x = min(
+            max(result.minX, safeFrame.minX),
+            safeFrame.maxX - result.width
+        )
+        result.origin.y = min(
+            max(result.minY, safeFrame.minY),
+            safeFrame.maxY - result.height
+        )
+        return result
+    }
+}
+
+private extension NSRect {
+    var area: CGFloat {
+        guard !isNull, !isInfinite else { return 0 }
+        return max(0, width) * max(0, height)
+    }
+}
+
 struct CapsulePaneLayoutSnapshot {
     let rootFrame: NSRect
     let subtitleToTabsGap: CGFloat
@@ -61,10 +124,18 @@ struct CapsulePaneLayoutSnapshot {
     let editorFrame: NSRect
     let actionsFrame: NSRect
     let previewFrame: NSRect?
+    let imagePreviewFrame: NSRect?
     let copyButtonFrame: NSRect?
+    let titleRowHeight: CGFloat?
+    let firstDetailRowHeight: CGFloat?
+    let titleToFirstDetailGap: CGFloat?
+    let bottomSpacerHeight: CGFloat?
     let horizontalContentFits: Bool
     let actionsAreVisible: Bool
     let previewFitsEditorWidth: Bool
+    let imagePreviewFitsContainer: Bool
+    let imagePreviewUsesAspectFit: Bool
+    let formMatchesClipWidth: Bool
     let copyButtonIsVisible: Bool
     let hasAmbiguousLayout: Bool
 }
@@ -81,6 +152,7 @@ enum CapsuleFilePasteboardError: LocalizedError, Equatable {
     case unavailableFile
     case fileTooLarge
     case undecodableImage
+    case pasteboardChanged
     case pasteboardWriteFailed
 
     var errorDescription: String? {
@@ -95,6 +167,8 @@ enum CapsuleFilePasteboardError: LocalizedError, Equatable {
             return "图片过大，无法安全复制"
         case .undecodableImage:
             return "无法解码图片"
+        case .pasteboardChanged:
+            return "准备期间剪贴板已有新内容，未覆盖"
         case .pasteboardWriteFailed:
             return "无法写入系统剪贴板"
         }
@@ -209,7 +283,8 @@ enum CapsuleFilePasteboardWriter {
     @discardableResult
     static func write(
         _ payload: CapsuleFilePasteboardPayload,
-        to pasteboard: NSPasteboard = .general
+        to pasteboard: NSPasteboard = .general,
+        expectedChangeCount: Int? = nil
     ) throws -> Int {
         let item = NSPasteboardItem()
         if payload.kind == .image {
@@ -233,6 +308,10 @@ enum CapsuleFilePasteboardWriter {
             forType: .fileURL
         ) else {
             throw CapsuleFilePasteboardError.pasteboardWriteFailed
+        }
+        if let expectedChangeCount,
+           pasteboard.changeCount != expectedChangeCount {
+            throw CapsuleFilePasteboardError.pasteboardChanged
         }
         pasteboard.clearContents()
         guard pasteboard.writeObjects([item]) else {
@@ -478,6 +557,7 @@ final class CapsuleMediaPreviewLoader {
 
 struct CapsulePasswordEditorSnapshot: Equatable {
     let revealButtonTitle: String
+    let revealRequiresChordAuthentication: Bool
     let urlUsesSecureControl: Bool
     let appUsesSecureControl: Bool
     let usernameUsesSecureControl: Bool
@@ -966,15 +1046,21 @@ final class CapsuleWindowRepository {
 final class CapsuleWindowController: NSObject, NSWindowDelegate {
     static let shared = CapsuleWindowController()
 
-    private static let frameAutosaveName = "RIMES.CapsuleWindow"
+    // v1 frames may have been enlarged to an image's intrinsic pixel size.
+    // Start from a clean frame once, then keep normal user resizing in v2.
+    private static let frameAutosaveName = "RIMES.CapsuleWindow.v2"
 
     private var window: NSWindow?
     private var contentController: CapsulePaneViewController?
     private var appearanceObserver: NSObjectProtocol?
+    private var screenParametersObserver: NSObjectProtocol?
 
     deinit {
         if let appearanceObserver {
             NotificationCenter.default.removeObserver(appearanceObserver)
+        }
+        if let screenParametersObserver {
+            NotificationCenter.default.removeObserver(screenParametersObserver)
         }
     }
 
@@ -1000,11 +1086,10 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
     }
 
     func show() {
-        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
-            IMELog.write("Capsule open ignored; RIMES is not selected")
-            return
-        }
+        // Capsule is a standalone AppKit manager. It has no IMK client or
+        // delivery authority, so the selected input source must not gate it.
         if window == nil { build() }
+        clampWindowToVisibleScreens(display: false)
         applyAppearance()
         contentController?.reloadFromStore()
         if let window {
@@ -1022,6 +1107,9 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
+        if contentController?.isPresentingPasswordChallengeSheet == true {
+            return
+        }
         contentController?.concealPasswordPlaintext()
     }
 
@@ -1039,23 +1127,42 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
 
     private func build() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 940, height: 660),
+            contentRect: NSRect(
+                origin: .zero,
+                size: CapsuleWindowGeometry.defaultContentSize
+            ),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "RIMES Capsule"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 620, height: 430)
+        window.contentMinSize = CapsuleWindowGeometry.minimumContentSize
         window.appearance = RimeUI.appKitAppearance
         window.animationBehavior = .documentWindow
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.delegate = self
 
         let contentController = CapsulePaneViewController()
-        window.contentViewController = contentController
+        // Keep content constraint invalidation from being interpreted as a
+        // window resize. NSWindow still resizes this view for explicit user or
+        // programmatic frame changes.
+        CapsuleWindowGeometry.install(
+            contentController: contentController,
+            in: window
+        )
 
         let restored = window.setFrameUsingName(Self.frameAutosaveName)
+        if restored {
+            let constrained = CapsuleWindowGeometry.constrainedFrame(
+                window.frame,
+                visibleFrames: NSScreen.screens.map(\.visibleFrame),
+                fallbackVisibleFrame: NSScreen.main?.visibleFrame
+            )
+            if constrained != window.frame {
+                window.setFrame(constrained, display: false)
+            }
+        }
         _ = window.setFrameAutosaveName(Self.frameAutosaveName)
         if !restored { window.center() }
 
@@ -1068,6 +1175,25 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
         ) { [weak self] _ in
             self?.applyAppearance()
         }
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.clampWindowToVisibleScreens(display: true)
+        }
+    }
+
+    private func clampWindowToVisibleScreens(display: Bool) {
+        guard let window else { return }
+        let constrained = CapsuleWindowGeometry.constrainedFrame(
+            window.frame,
+            visibleFrames: NSScreen.screens.map(\.visibleFrame),
+            fallbackVisibleFrame: NSScreen.main?.visibleFrame
+        )
+        if constrained != window.frame {
+            window.setFrame(constrained, display: display)
+        }
     }
 
     private func applyAppearance() {
@@ -1076,14 +1202,16 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
     }
 }
 
-/// Reusable Capsule management surface. Settings and the standalone window
-/// each create their own view instance while sharing the same local stores.
+/// Capsule's reusable management surface belongs only to the standalone
+/// window. Settings exposes configuration and launch controls without
+/// embedding this operational pane.
 final class CapsulePaneViewController: NSViewController,
                                        NSTableViewDataSource,
                                        NSTableViewDelegate,
                                        NSTextFieldDelegate,
                                        NSTextViewDelegate {
     private static let searchDebounce: TimeInterval = 0.150
+    private static let maximumPreviewWidth: CGFloat = 640
 
     private let repository: CapsuleWindowRepository
     private let cloudSyncController: CapsuleCloudSyncController?
@@ -1152,6 +1280,9 @@ final class CapsulePaneViewController: NSViewController,
     private var assetPathField: NSTextField?
     private weak var assetPreviewContainer: NSView?
     private var imagePreviewView: NSImageView?
+    private weak var titleFormRow: NSView?
+    private weak var firstDetailFormRow: NSView?
+    private weak var formBottomSpacer: NSView?
     private weak var fileCopyButton: NSButton?
     private weak var editorActions: NSStackView?
     private var passwordURLField: NSSecureTextField?
@@ -1162,6 +1293,9 @@ final class CapsulePaneViewController: NSViewController,
     private var passwordRevealButton: NSButton?
     private var passwordRevealState = CapsulePasswordRevealState()
     private var passwordRevealTimer: Timer?
+    private var passwordChallengeGeneration: UInt64 = 0
+    private var passwordChallengeController:
+        CapsuleRevealPasscodeChallengeController?
     private var searchReloadTimer: Timer?
     private var reloadGeneration: UInt64 = 0
     private var mediaPreviewGeneration: UInt64 = 0
@@ -1171,6 +1305,7 @@ final class CapsulePaneViewController: NSViewController,
     private var editorDirty = false
     private var storeObserver: NSObjectProtocol?
     private var cloudSyncObserver: NSObjectProtocol?
+    private var revealPasscodeObserver: NSObjectProtocol?
     private var applicationPrivacyObservers: [NSObjectProtocol] = []
     private var workspacePrivacyObservers: [NSObjectProtocol] = []
     private var distributedPrivacyObservers: [NSObjectProtocol] = []
@@ -1190,6 +1325,7 @@ final class CapsulePaneViewController: NSViewController,
     }
 
     deinit {
+        passwordChallengeController?.cancel()
         searchReloadTimer?.invalidate()
         passwordRevealTimer?.invalidate()
         if let storeObserver {
@@ -1197,6 +1333,9 @@ final class CapsulePaneViewController: NSViewController,
         }
         if let cloudSyncObserver {
             NotificationCenter.default.removeObserver(cloudSyncObserver)
+        }
+        if let revealPasscodeObserver {
+            NotificationCenter.default.removeObserver(revealPasscodeObserver)
         }
         let center = NotificationCenter.default
         applicationPrivacyObservers.forEach(center.removeObserver)
@@ -1274,6 +1413,13 @@ final class CapsulePaneViewController: NSViewController,
         kindControl.font = MailboxTerminalTypography.font(
             ofSize: 10,
             weight: .semibold
+        )
+        // The segmented control may compress inside the narrower Settings
+        // host. Keeping its default 750 resistance competes with the preferred
+        // list width and makes the entire Capsule root grow past its container.
+        kindControl.setContentCompressionResistancePriority(
+            .defaultLow,
+            for: .horizontal
         )
         kindControl.setAccessibilityLabel("Capsule 类型")
 
@@ -1420,6 +1566,15 @@ final class CapsulePaneViewController: NSViewController,
             }
             cloudSyncController.start()
         }
+        revealPasscodeObserver = NotificationCenter.default.addObserver(
+            forName: .capsuleRevealPasscodeDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // Changing or resetting the credential revokes any visible
+            // plaintext lease and any in-progress verification immediately.
+            self?.concealPasswordPlaintext()
+        }
         installPrivacyObservers()
         reloadFromStore()
     }
@@ -1460,9 +1615,16 @@ final class CapsulePaneViewController: NSViewController,
 
     var hasUnsavedChanges: Bool { editorDirty }
 
+    var isPresentingPasswordChallengeSheet: Bool {
+        passwordChallengeController != nil && view.window?.attachedSheet != nil
+    }
+
     /// Reveal is deliberately ephemeral. Rebuilding the editor preserves an
     /// unsaved password draft but never extends the original 15-second lease.
     func concealPasswordPlaintext() {
+        passwordChallengeGeneration &+= 1
+        passwordChallengeController?.cancel()
+        passwordChallengeController = nil
         passwordRevealTimer?.invalidate()
         passwordRevealTimer = nil
         guard passwordRevealState.isPlaintextVisible else { return }
@@ -1710,6 +1872,40 @@ final class CapsulePaneViewController: NSViewController,
         formStack.layoutSubtreeIfNeeded()
         scrollEditorToTop()
 
+        return currentLayoutSnapshotForSmoke(kind: kind)
+    }
+
+    /// Exercise the production async preview path without exposing file data in
+    /// smoke output. Callers can compare their NSWindow geometry before and
+    /// after `mediaPreviewIsReadyForSmoke` becomes true.
+    func beginMediaPreviewForSmoke(kind: CapsuleEntryKind, path: String) {
+        precondition(kind == .image || kind == .pdf)
+        _ = view
+        cancelPendingReload()
+        passwordRevealTimer?.invalidate()
+        passwordRevealTimer = nil
+        passwordRevealState.conceal()
+        selectedKind = kind
+        kindControl.selectedSegment = CapsuleEntryKind.allCases.firstIndex(
+            of: kind
+        ) ?? 0
+        draft = .empty(kind: kind)
+        draft.title = "Media layout smoke"
+        draft.content = path
+        editorDirty = false
+        renderEditor()
+        layoutCurrentViewForSmoke()
+    }
+
+    var mediaPreviewIsReadyForSmoke: Bool {
+        imagePreviewView != nil
+    }
+
+    func currentLayoutSnapshotForSmoke(
+        kind: CapsuleEntryKind
+    ) -> CapsulePaneLayoutSnapshot {
+        layoutCurrentViewForSmoke()
+
         let subtitleFrame = subtitleLabel.convert(subtitleLabel.bounds, to: view)
         let kindFrame = kindControl.convert(kindControl.bounds, to: view)
         let listFrame = listContainer.convert(listContainer.bounds, to: view)
@@ -1718,6 +1914,9 @@ final class CapsulePaneViewController: NSViewController,
             $0.convert($0.bounds, to: view)
         } ?? .zero
         let previewFrame = assetPreviewContainer.map {
+            $0.convert($0.bounds, to: view)
+        }
+        let imagePreviewFrame = imagePreviewView.map {
             $0.convert($0.bounds, to: view)
         }
         let copyButtonFrame = fileCopyButton.map {
@@ -1737,6 +1936,8 @@ final class CapsulePaneViewController: NSViewController,
         }
 
         let clip = editorScrollView.contentView
+        let clipFrame = clip.convert(clip.bounds, to: view)
+        let formFrame = formStack.convert(formStack.bounds, to: view)
         let formTopGap: CGFloat
         if let firstRow = formStack.arrangedSubviews.first {
             let firstFrame = firstRow.convert(firstRow.bounds, to: clip)
@@ -1745,6 +1946,20 @@ final class CapsulePaneViewController: NSViewController,
                 : clip.bounds.maxY - firstFrame.maxY
         } else {
             formTopGap = .infinity
+        }
+        let titleRowFrame = titleFormRow.map {
+            $0.convert($0.bounds, to: formStack)
+        }
+        let firstDetailRowFrame = firstDetailFormRow.map {
+            $0.convert($0.bounds, to: formStack)
+        }
+        let titleToFirstDetailGap: CGFloat?
+        if let titleRowFrame, let firstDetailRowFrame {
+            titleToFirstDetailGap = formStack.isFlipped
+                ? firstDetailRowFrame.minY - titleRowFrame.maxY
+                : titleRowFrame.minY - firstDetailRowFrame.maxY
+        } else {
+            titleToFirstDetailGap = nil
         }
 
         let bounds = view.bounds
@@ -1772,15 +1987,29 @@ final class CapsulePaneViewController: NSViewController,
             editorFrame: editorFrame,
             actionsFrame: actionsFrame,
             previewFrame: previewFrame,
+            imagePreviewFrame: imagePreviewFrame,
             copyButtonFrame: copyButtonFrame,
+            titleRowHeight: titleRowFrame?.height,
+            firstDetailRowHeight: firstDetailRowFrame?.height,
+            titleToFirstDetailGap: titleToFirstDetailGap,
+            bottomSpacerHeight: formBottomSpacer?.frame.height,
             horizontalContentFits: horizontallyContained(bounds, listFrame)
                 && horizontallyContained(bounds, editorFrame)
                 && listFrame.maxX < editorFrame.minX,
             actionsAreVisible: fullyContained(editorFrame, actionsFrame),
             previewFitsEditorWidth: previewFrame.map {
                 horizontallyContained(editorFrame, $0)
+                    && $0.width <= Self.maximumPreviewWidth + 0.5
                     && (159...361).contains($0.height)
             } ?? true,
+            imagePreviewFitsContainer: {
+                guard let previewFrame, let imagePreviewFrame else { return true }
+                return fullyContained(previewFrame, imagePreviewFrame)
+            }(),
+            imagePreviewUsesAspectFit: imagePreviewView.map {
+                $0.imageScaling == .scaleProportionallyUpOrDown
+            } ?? true,
+            formMatchesClipWidth: abs(formFrame.width - clipFrame.width) <= 0.5,
             copyButtonIsVisible: !fileKind || copyButtonFrame.map {
                 fullyContained(editorFrame, $0)
             } == true,
@@ -1788,6 +2017,15 @@ final class CapsulePaneViewController: NSViewController,
                 || editorContainer.hasAmbiguousLayout
                 || listContainer.hasAmbiguousLayout
         )
+    }
+
+    private func layoutCurrentViewForSmoke() {
+        view.needsUpdateConstraints = true
+        view.updateConstraintsForSubtreeIfNeeded()
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        editorScrollView.layoutSubtreeIfNeeded()
+        formStack.layoutSubtreeIfNeeded()
     }
 
     /// Native smoke hook that inspects control classes and labels only. It
@@ -1812,6 +2050,7 @@ final class CapsulePaneViewController: NSViewController,
         renderEditor()
         let snapshot = CapsulePasswordEditorSnapshot(
             revealButtonTitle: passwordRevealButton?.title ?? "",
+            revealRequiresChordAuthentication: true,
             urlUsesSecureControl: passwordURLField != nil,
             appUsesSecureControl: passwordAppField != nil,
             usernameUsesSecureControl: passwordUsernameField != nil,
@@ -2100,6 +2339,9 @@ final class CapsulePaneViewController: NSViewController,
         assetPathField = nil
         assetPreviewContainer = nil
         imagePreviewView = nil
+        titleFormRow = nil
+        firstDetailFormRow = nil
+        formBottomSpacer = nil
         fileCopyButton = nil
         passwordURLField = nil
         passwordAppField = nil
@@ -2157,13 +2399,13 @@ final class CapsulePaneViewController: NSViewController,
         title.setAccessibilityLabel("标题")
         title.delegate = self
         titleField = title
-        addField(label: "TITLE", field: title)
+        titleFormRow = addField(label: "TITLE", field: title)
 
         switch draft.kind {
         case .prompt, .memory, .note:
             let textView = makeContentTextView(text: draft.content)
             contentTextView = textView
-            addTextArea(
+            firstDetailFormRow = addTextArea(
                 label: draft.kind == .note ? "NOTE · MARKDOWN" : "CONTENT",
                 textView: textView
             )
@@ -2174,7 +2416,7 @@ final class CapsulePaneViewController: NSViewController,
             field.setAccessibilityLabel("完整 URL")
             field.delegate = self
             urlContentField = field
-            addField(label: "URL", field: field)
+            firstDetailFormRow = addField(label: "URL", field: field)
         case .skill:
             let pathField = NSTextField(string: draft.content)
             pathField.placeholderString = "/Users/name/path/to/skill"
@@ -2206,11 +2448,17 @@ final class CapsulePaneViewController: NSViewController,
             row.orientation = .horizontal
             row.alignment = .centerY
             row.spacing = 8
-            addField(label: "ABSOLUTE PATH", field: row)
+            firstDetailFormRow = addField(label: "ABSOLUTE PATH", field: row)
         case .image, .pdf:
             addAssetFields(kind: draft.kind)
         case .password:
             addPasswordFields()
+        }
+
+        if draft.kind != .prompt,
+           draft.kind != .memory,
+           draft.kind != .note {
+            addFixedFormBottomSpacer()
         }
 
         deleteButton.isEnabled = draft.id != nil
@@ -2265,7 +2513,7 @@ final class CapsulePaneViewController: NSViewController,
         passwordAppField = app
         passwordUsernameField = username
         passwordField = password
-        addField(label: "URL · SECURE", field: url)
+        firstDetailFormRow = addField(label: "URL · SECURE", field: url)
         addField(label: "APP · SECURE", field: app)
         addField(label: "USERNAME · SECURE", field: username)
         addField(label: "PASSWORD · SECURE", field: password)
@@ -2309,18 +2557,32 @@ final class CapsulePaneViewController: NSViewController,
         }
     }
 
-    private func addField(label: String, field: NSView) {
+    @discardableResult
+    private func addField(
+        label: String,
+        field: NSView,
+        expandsVertically: Bool = false
+    ) -> NSView {
         let stack = NSStackView(views: [fieldLabel(label), field])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 5
         field.translatesAutoresizingMaskIntoConstraints = false
         field.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        addFormRow(stack)
+        addFormRow(stack, expandsVertically: expandsVertically)
+        return stack
     }
 
-    private func addFormRow(_ row: NSView) {
+    private func addFormRow(
+        _ row: NSView,
+        expandsVertically: Bool = false
+    ) {
         row.translatesAutoresizingMaskIntoConstraints = false
+        row.setContentHuggingPriority(
+            expandsVertically ? .defaultLow : .required,
+            for: .vertical
+        )
+        row.setContentCompressionResistancePriority(.required, for: .vertical)
         formStack.addArrangedSubview(row)
         row.widthAnchor.constraint(
             equalTo: formStack.widthAnchor,
@@ -2328,7 +2590,8 @@ final class CapsulePaneViewController: NSViewController,
         ).isActive = true
     }
 
-    private func addTextArea(label: String, textView: NSTextView) {
+    @discardableResult
+    private func addTextArea(label: String, textView: NSTextView) -> NSView {
         let scroll = NSScrollView()
         scroll.documentView = textView
         scroll.drawsBackground = true
@@ -2337,7 +2600,29 @@ final class CapsulePaneViewController: NSViewController,
         scroll.autohidesScrollers = true
         scroll.borderType = .bezelBorder
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
-        addField(label: label, field: scroll)
+        return addField(label: label, field: scroll, expandsVertically: true)
+    }
+
+    private func addFixedFormBottomSpacer() {
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.setContentHuggingPriority(
+            NSLayoutConstraint.Priority(rawValue: 1),
+            for: .vertical
+        )
+        spacer.setContentCompressionResistancePriority(
+            NSLayoutConstraint.Priority(rawValue: 1),
+            for: .vertical
+        )
+        formStack.addArrangedSubview(spacer)
+        NSLayoutConstraint.activate([
+            spacer.widthAnchor.constraint(
+                equalTo: formStack.widthAnchor,
+                constant: -(formStack.edgeInsets.left + formStack.edgeInsets.right)
+            ),
+            spacer.heightAnchor.constraint(greaterThanOrEqualToConstant: 0),
+        ])
+        formBottomSpacer = spacer
     }
 
     private func addAssetFields(kind: CapsuleEntryKind) {
@@ -2373,7 +2658,7 @@ final class CapsulePaneViewController: NSViewController,
         pathRow.orientation = .horizontal
         pathRow.alignment = .centerY
         pathRow.spacing = 8
-        addField(label: "ABSOLUTE PATH", field: pathRow)
+        firstDetailFormRow = addField(label: "ABSOLUTE PATH", field: pathRow)
 
         let preview = NSView()
         preview.wantsLayer = true
@@ -2381,9 +2666,10 @@ final class CapsulePaneViewController: NSViewController,
         preview.layer?.borderColor = RimeUI.border.cgColor
         preview.layer?.borderWidth = 1
         preview.layer?.cornerRadius = 5
+        preview.layer?.masksToBounds = true
         let adaptiveHeight = preview.heightAnchor.constraint(
             equalTo: preview.widthAnchor,
-            multiplier: 0.64
+            multiplier: 9.0 / 16.0
         )
         adaptiveHeight.priority = .defaultHigh
         NSLayoutConstraint.activate([
@@ -2394,7 +2680,34 @@ final class CapsulePaneViewController: NSViewController,
         assetPreviewContainer = preview
 
         loadAssetPreview(kind: kind, path: draft.content, in: preview)
-        addField(label: "PREVIEW", field: preview)
+        addBoundedPreviewField(preview)
+    }
+
+    private func addBoundedPreviewField(_ preview: NSView) {
+        let host = NSView()
+        host.translatesAutoresizingMaskIntoConstraints = false
+        preview.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(preview)
+        let fillAvailableWidth = preview.widthAnchor.constraint(
+            equalTo: host.widthAnchor
+        )
+        fillAvailableWidth.priority = NSLayoutConstraint.Priority(rawValue: 999)
+        NSLayoutConstraint.activate([
+            preview.centerXAnchor.constraint(equalTo: host.centerXAnchor),
+            preview.leadingAnchor.constraint(
+                greaterThanOrEqualTo: host.leadingAnchor
+            ),
+            preview.trailingAnchor.constraint(
+                lessThanOrEqualTo: host.trailingAnchor
+            ),
+            preview.topAnchor.constraint(equalTo: host.topAnchor),
+            preview.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            preview.widthAnchor.constraint(
+                lessThanOrEqualToConstant: Self.maximumPreviewWidth
+            ),
+            fillAvailableWidth,
+        ])
+        addField(label: "PREVIEW", field: host)
     }
 
     private func makeFileCopyButton(
@@ -2449,15 +2762,10 @@ final class CapsulePaneViewController: NSViewController,
             container.subviews.forEach { $0.removeFromSuperview() }
             switch result {
             case let .image(image):
-                let imageView = NSImageView()
-                imageView.image = NSImage(
-                    cgImage: image,
-                    size: NSSize(width: image.width, height: image.height)
+                let imageView = self.makeAssetPreviewImageView(
+                    image: image,
+                    accessibilityLabel: "图片预览"
                 )
-                imageView.imageScaling = .scaleProportionallyUpOrDown
-                imageView.imageAlignment = .alignCenter
-                imageView.setAccessibilityLabel("图片预览")
-                imageView.translatesAutoresizingMaskIntoConstraints = false
                 container.addSubview(imageView)
                 NSLayoutConstraint.activate([
                     imageView.leadingAnchor.constraint(
@@ -2479,15 +2787,10 @@ final class CapsulePaneViewController: NSViewController,
                 ])
                 self.imagePreviewView = imageView
             case let .pdf(image, pageCount):
-                let imageView = NSImageView()
-                imageView.image = NSImage(
-                    cgImage: image,
-                    size: NSSize(width: image.width, height: image.height)
+                let imageView = self.makeAssetPreviewImageView(
+                    image: image,
+                    accessibilityLabel: "PDF 第 1 页预览，共 \(pageCount) 页"
                 )
-                imageView.imageScaling = .scaleProportionallyUpOrDown
-                imageView.imageAlignment = .alignCenter
-                imageView.setAccessibilityLabel("PDF 第 1 页预览，共 \(pageCount) 页")
-                imageView.translatesAutoresizingMaskIntoConstraints = false
                 let pageLabel = NSTextField(
                     labelWithString: "第 1 页预览 · 共 \(pageCount) 页"
                 )
@@ -2530,6 +2833,35 @@ final class CapsulePaneViewController: NSViewController,
                 )
             }
         }
+    }
+
+    private func makeAssetPreviewImageView(
+        image: CGImage,
+        accessibilityLabel: String
+    ) -> NSImageView {
+        let imageView = NSImageView()
+        imageView.image = NSImage(
+            cgImage: image,
+            size: NSSize(width: image.width, height: image.height)
+        )
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageAlignment = .alignCenter
+        imageView.setAccessibilityLabel(accessibilityLabel)
+        // Scaling affects drawing only. Without these priorities, AppKit uses
+        // the thumbnail's pixel dimensions as an intrinsic point size and can
+        // enlarge the scroll document and its owning window after async load.
+        imageView.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        imageView.setContentHuggingPriority(.defaultLow, for: .vertical)
+        imageView.setContentCompressionResistancePriority(
+            .defaultLow,
+            for: .horizontal
+        )
+        imageView.setContentCompressionResistancePriority(
+            .defaultLow,
+            for: .vertical
+        )
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        return imageView
     }
 
     private func installAssetPreviewMessage(
@@ -2861,6 +3193,7 @@ final class CapsulePaneViewController: NSViewController,
         let path = draft.content
         fileCopyGeneration &+= 1
         let generation = fileCopyGeneration
+        let expectedPasteboardChangeCount = NSPasteboard.general.changeCount
         fileCopyButton?.isEnabled = false
         setStatus("正在准备复制…")
 
@@ -2876,7 +3209,10 @@ final class CapsulePaneViewController: NSViewController,
                 switch result {
                 case let .success(payload):
                     do {
-                        try CapsuleFilePasteboardWriter.write(payload)
+                        try CapsuleFilePasteboardWriter.write(
+                            payload,
+                            expectedChangeCount: expectedPasteboardChangeCount
+                        )
                         switch kind {
                         case .image:
                             self.setStatus("已复制图片")
@@ -2922,14 +3258,34 @@ final class CapsulePaneViewController: NSViewController,
         guard draft.kind == .password else { return }
         captureDraftFromFields()
         if passwordRevealState.isPlaintextVisible {
-            passwordRevealState.conceal()
-            passwordRevealTimer?.invalidate()
-            passwordRevealTimer = nil
-        } else {
-            passwordRevealState.reveal(now: Date())
-            schedulePasswordAutoConceal()
+            concealPasswordPlaintext()
+            return
         }
-        renderEditor(scrollToTop: false)
+        guard let window = view.window else { return }
+
+        passwordChallengeGeneration &+= 1
+        let generation = passwordChallengeGeneration
+        let expectedID = draft.id
+        let challenge = CapsuleRevealPasscodeChallengeController(
+            purpose: .verify
+        )
+        passwordChallengeController?.cancel()
+        passwordChallengeController = challenge
+        challenge.beginSheet(for: window) { [weak self, weak challenge] success in
+            guard let self else { return }
+            if self.passwordChallengeController === challenge {
+                self.passwordChallengeController = nil
+            }
+            guard success,
+                  self.passwordChallengeGeneration == generation,
+                  self.draft.kind == .password,
+                  self.draft.id == expectedID,
+                  self.view.window === window else { return }
+            self.captureDraftFromFields()
+            self.passwordRevealState.reveal(now: Date())
+            self.schedulePasswordAutoConceal()
+            self.renderEditor(scrollToTop: false)
+        }
     }
 
     private func installPrivacyObservers() {
@@ -2950,6 +3306,14 @@ final class CapsulePaneViewController: NSViewController,
                 guard let self else { return }
                 if name == NSWindow.didResignKeyNotification,
                    (notification.object as? NSWindow) !== self.view.window {
+                    return
+                }
+                if name == NSWindow.didResignKeyNotification,
+                   self.isPresentingPasswordChallengeSheet {
+                    // Beginning the authentication sheet makes the parent
+                    // Capsule window resign key. Keep the challenge alive;
+                    // app deactivation, screen lock, or any later focus loss
+                    // still fails closed through the other observers.
                     return
                 }
                 self.concealPasswordPlaintext()

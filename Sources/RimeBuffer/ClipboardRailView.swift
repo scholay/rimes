@@ -99,11 +99,27 @@ struct ClipboardHistoryPaneSnapshot: Equatable {
     let cardHeight: CGFloat
 }
 
-/// Paste-inspired visual timeline. Its owner never becomes key, so search is a
-/// logical query fed by the active IMK controller. This view never touches the
-/// pasteboard or an IMK client.
+enum ClipboardHistoryStandaloneEditingRules {
+    static func permitsSurfaceCommand(hasMarkedText: Bool) -> Bool {
+        !hasMarkedText
+    }
+
+    static func shouldDeleteSelectedCards(
+        queryIsEmpty: Bool,
+        selectedCount: Int,
+        hasMarkedText: Bool
+    ) -> Bool {
+        guard !hasMarkedText else { return false }
+        return queryIsEmpty || selectedCount > 1
+    }
+}
+
+/// Paste-inspired visual timeline. RIMES mode feeds the logical search label
+/// through the active IMK controller; standalone mode exposes a native AppKit
+/// field so whichever input method is selected can edit the query normally.
+/// This view never touches the pasteboard or an IMK client.
 @MainActor
-final class ClipboardHistoryPaneView: NSView {
+final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     var onActivate: (([ClipboardHistoryItem]) -> Bool)?
     var onCopy: (([ClipboardHistoryItem]) -> Bool)?
     var onClose: (() -> Void)?
@@ -114,6 +130,7 @@ final class ClipboardHistoryPaneView: NSView {
     private let searchShell = NSView()
     private let searchIcon = NSImageView()
     private let searchLabel = NSTextField(labelWithString: "")
+    private let standaloneSearchField = NSTextField()
     private let clearButton = ClipboardFirstMouseButton(title: "清空", target: nil, action: nil)
     private let closeButton = ClipboardFirstMouseButton(title: "", target: nil, action: nil)
     private let scrollView = ClipboardHistoryHorizontalScrollView()
@@ -147,6 +164,7 @@ final class ClipboardHistoryPaneView: NSView {
     private var assetGeneration: UInt64 = 0
     private(set) var query = ""
     private(set) var composingText = ""
+    private(set) var standaloneSearchEnabled = false
 
     init(model: ClipboardHistoryModel) {
         self.model = model
@@ -186,10 +204,43 @@ final class ClipboardHistoryPaneView: NSView {
 
     func resetSearch() {
         selectionAnchorID = model.selectedID
-        guard !query.isEmpty || !composingText.isEmpty else { return }
-        query = ""
-        composingText = ""
-        reloadFromModel()
+        if !query.isEmpty || !composingText.isEmpty {
+            query = ""
+            composingText = ""
+            reloadFromModel()
+        }
+        if !standaloneSearchField.stringValue.isEmpty {
+            standaloneSearchField.stringValue = ""
+        }
+    }
+
+    func setStandaloneSearchEnabled(_ enabled: Bool) {
+        guard standaloneSearchEnabled != enabled else {
+            if enabled { standaloneSearchField.stringValue = query }
+            return
+        }
+        standaloneSearchEnabled = enabled
+        standaloneSearchField.stringValue = query
+        standaloneSearchField.isHidden = !enabled
+        searchLabel.isHidden = enabled
+        hintLabel.stringValue = enabled
+            ? "TYPE TO SEARCH   ← → SELECT   ↩ PREPARE CLIPBOARD   ⌘C COPY   DELETE REMOVE   ESC CLOSE"
+            : "TYPE TO SEARCH   ← → SELECT   ⇧←→ / ⌘CLICK MULTI   ↩ INSERT   ⌘C COPY   DELETE REMOVE   ESC CLOSE"
+        updateSearchPresentation()
+    }
+
+    func focusStandaloneSearch() {
+        guard standaloneSearchEnabled else { return }
+        window?.makeFirstResponder(standaloneSearchField)
+    }
+
+    func setStandaloneSearchTextForSmoke(_ text: String) {
+        precondition(standaloneSearchEnabled)
+        standaloneSearchField.stringValue = text
+        controlTextDidChange(Notification(
+            name: NSControl.textDidChangeNotification,
+            object: standaloneSearchField
+        ))
     }
 
     func scrubForProtection() {
@@ -221,6 +272,82 @@ final class ClipboardHistoryPaneView: NSView {
         guard text != composingText else { return }
         composingText = text
         reloadFromModel()
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard standaloneSearchEnabled else { return }
+        query = standaloneSearchField.stringValue
+        composingText = ""
+        reloadFromModel()
+    }
+
+    func control(
+        _ control: NSControl,
+        textView: NSTextView,
+        doCommandBy commandSelector: Selector
+    ) -> Bool {
+        guard control === standaloneSearchField,
+              standaloneSearchEnabled else { return false }
+        // Leave every command with the active third-party input method until
+        // its marked text is settled. Owning Return/Escape/arrows here could
+        // activate a card, close Clip, or move selection underneath composition.
+        guard ClipboardHistoryStandaloneEditingRules.permitsSurfaceCommand(
+            hasMarkedText: textView.hasMarkedText()
+        ) else { return false }
+        switch NSStringFromSelector(commandSelector) {
+        case "insertNewline:", "insertLineBreak:",
+             "insertNewlineIgnoringFieldEditor:", "insertParagraphSeparator:":
+            _ = activateSelectedItems()
+            return true
+        case "cancelOperation:":
+            if query.isEmpty { onClose?() } else { resetSearch() }
+            return true
+        case "moveLeft:", "moveUp:":
+            moveFilteredSelection(delta: -1, extending: false)
+            return true
+        case "moveRight:", "moveDown:":
+            moveFilteredSelection(delta: 1, extending: false)
+            return true
+        case "deleteBackward:", "deleteForward:",
+             "deleteBackwardByDecomposingPreviousCharacter:":
+            guard ClipboardHistoryStandaloneEditingRules
+                .shouldDeleteSelectedCards(
+                    queryIsEmpty: query.isEmpty,
+                    selectedCount: selectedFilteredItems.count,
+                    hasMarkedText: textView.hasMarkedText()
+                ) else {
+                // Keep ordinary editing and third-party IME composition inside
+                // AppKit whenever this is a single-selection, nonempty query.
+                return false
+            }
+            _ = deleteSelectedItems()
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// AppKit sends Command-key equivalents through the panel instead of the
+    /// text-field delegate. Keep those shortcuts with the active input method
+    /// while its field editor owns marked text.
+    func handleStandaloneKeyEquivalent(_ event: NSEvent) -> Bool {
+        let hasMarkedText = (standaloneSearchField.currentEditor() as? NSTextView)?
+            .hasMarkedText() == true
+        return handleStandaloneKeyEquivalent(
+            event,
+            hasMarkedText: hasMarkedText
+        )
+    }
+
+    func handleStandaloneKeyEquivalent(
+        _ event: NSEvent,
+        hasMarkedText: Bool
+    ) -> Bool {
+        guard standaloneSearchEnabled,
+              ClipboardHistoryStandaloneEditingRules.permitsSurfaceCommand(
+                hasMarkedText: hasMarkedText
+              ) else { return false }
+        return handleKeyDown(event)
     }
 
     /// CandidateWindow needs a screen-space caret even though the search box
@@ -451,8 +578,19 @@ final class ClipboardHistoryPaneView: NSView {
         searchLabel.font = .systemFont(ofSize: 12)
         searchLabel.lineBreakMode = .byTruncatingTail
         searchLabel.translatesAutoresizingMaskIntoConstraints = false
+        standaloneSearchField.font = .systemFont(ofSize: 12)
+        standaloneSearchField.placeholderString = "输入以搜索"
+        standaloneSearchField.isBordered = false
+        standaloneSearchField.isBezeled = false
+        standaloneSearchField.drawsBackground = false
+        standaloneSearchField.focusRingType = .none
+        standaloneSearchField.usesSingleLineMode = true
+        standaloneSearchField.delegate = self
+        standaloneSearchField.isHidden = true
+        standaloneSearchField.translatesAutoresizingMaskIntoConstraints = false
         searchShell.addSubview(searchIcon)
         searchShell.addSubview(searchLabel)
+        searchShell.addSubview(standaloneSearchField)
         NSLayoutConstraint.activate([
             searchShell.widthAnchor.constraint(greaterThanOrEqualToConstant: 250),
             searchShell.heightAnchor.constraint(equalToConstant: 28),
@@ -463,6 +601,10 @@ final class ClipboardHistoryPaneView: NSView {
             searchLabel.leadingAnchor.constraint(equalTo: searchIcon.trailingAnchor, constant: 7),
             searchLabel.trailingAnchor.constraint(equalTo: searchShell.trailingAnchor, constant: -9),
             searchLabel.centerYAnchor.constraint(equalTo: searchShell.centerYAnchor),
+            standaloneSearchField.leadingAnchor.constraint(equalTo: searchIcon.trailingAnchor, constant: 3),
+            standaloneSearchField.trailingAnchor.constraint(equalTo: searchShell.trailingAnchor, constant: -5),
+            standaloneSearchField.centerYAnchor.constraint(equalTo: searchShell.centerYAnchor),
+            standaloneSearchField.heightAnchor.constraint(equalToConstant: 22),
         ])
 
         clearButton.target = self
@@ -554,6 +696,11 @@ final class ClipboardHistoryPaneView: NSView {
     }
 
     private func updateSearchPresentation() {
+        standaloneSearchField.textColor = RimeUI.textPrimary
+        if standaloneSearchEnabled {
+            searchShell.setAccessibilityLabel("剪贴板历史搜索")
+            return
+        }
         if query.isEmpty && composingText.isEmpty {
             searchLabel.stringValue = "直接输入以搜索"
             searchLabel.textColor = RimeUI.textMuted

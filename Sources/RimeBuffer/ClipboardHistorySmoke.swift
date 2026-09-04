@@ -124,6 +124,70 @@ enum ClipboardHistorySmoke {
             ),
             "other-space window reported visible"
         )
+        expect(
+            clipboardHistoryStandalonePanelKeyboardProbe(),
+            "standalone Clipboard panel cannot own native search input"
+        )
+        expect(
+            ClipboardHistoryPresentationMode.resolve(
+                currentSourceIsOwn: true
+            ) == .borrowedRime,
+            "RIMES clipboard presentation mode"
+        )
+        expect(
+            ClipboardHistoryPresentationMode.resolve(
+                currentSourceIsOwn: false
+            ) == .standalonePasteboard,
+            "external clipboard presentation mode"
+        )
+        expect(
+            ClipboardHistoryActivationRules.shouldAttemptDirectTextDelivery(
+                mode: .borrowedRime,
+                currentSourceIsOwn: true,
+                allItemsAreCompletePlainText: true
+            ),
+            "borrowed RIMES text delivery policy"
+        )
+        expect(
+            !ClipboardHistoryActivationRules.shouldAttemptDirectTextDelivery(
+                mode: .standalonePasteboard,
+                currentSourceIsOwn: false,
+                allItemsAreCompletePlainText: true
+            ),
+            "external input method attempted direct text delivery"
+        )
+        expect(
+            ClipboardHistoryStandaloneEditingRules.shouldDeleteSelectedCards(
+                queryIsEmpty: true,
+                selectedCount: 1,
+                hasMarkedText: false
+            ),
+            "standalone empty-query Delete did not target the selected card"
+        )
+        expect(
+            ClipboardHistoryStandaloneEditingRules.shouldDeleteSelectedCards(
+                queryIsEmpty: false,
+                selectedCount: 2,
+                hasMarkedText: false
+            ),
+            "standalone multi-selection Delete did not target cards"
+        )
+        expect(
+            !ClipboardHistoryStandaloneEditingRules.shouldDeleteSelectedCards(
+                queryIsEmpty: false,
+                selectedCount: 1,
+                hasMarkedText: false
+            ),
+            "standalone query Delete bypassed native text editing"
+        )
+        expect(
+            !ClipboardHistoryStandaloneEditingRules.shouldDeleteSelectedCards(
+                queryIsEmpty: true,
+                selectedCount: 1,
+                hasMarkedText: true
+            ),
+            "standalone Delete interrupted an active external-IME composition"
+        )
 
         let eligible = ClipboardHistoryWindowLifecycleRules.captureState(
             windowVisibleOnActiveSpace: true,
@@ -223,10 +287,45 @@ enum ClipboardHistorySmoke {
                 ] == synthesizedUTF16,
                 "rich fixture did not mirror readable synthesized UTF-16"
             )
+            let expectedChangeCount = isolatedPasteboard.changeCount
+            isolatedPasteboard.clearContents()
+            isolatedPasteboard.setString(
+                "newer-user-clipboard",
+                forType: .string
+            )
+            do {
+                _ = try archive.write(
+                    to: isolatedPasteboard,
+                    expectedChangeCount: expectedChangeCount
+                )
+                expect(false, "stale archive overwrote newer pasteboard")
+            } catch ClipboardPasteboardArchive.ArchiveError.pasteboardChanged {
+                // Expected: asynchronous restoration is compare-before-write.
+            }
+            expect(
+                isolatedPasteboard.string(forType: .string)
+                    == "newer-user-clipboard",
+                "stale archive cleared newer pasteboard"
+            )
         } catch {
             expect(false, "rich fixture archive: \(error.localizedDescription)")
         }
         runCapturePolicyChecks(expect: expect)
+        for command in [
+            "insertNewline:", "cancelOperation:", "moveLeft:", "moveRight:",
+            "moveUp:", "moveDown:", "deleteBackward:", "deleteForward:",
+        ] {
+            expect(
+                !ClipboardHistoryStandaloneEditingRules
+                    .permitsSurfaceCommand(hasMarkedText: true),
+                "standalone marked composition leaked command \(command)"
+            )
+        }
+        expect(
+            ClipboardHistoryStandaloneEditingRules
+                .permitsSurfaceCommand(hasMarkedText: false),
+            "standalone settled search rejected surface commands"
+        )
         expect(
             ClipboardHistoryScrollRules.horizontalDelta(
                 deltaX: 0,
@@ -939,11 +1038,11 @@ enum ClipboardHistorySmoke {
                 "plain-text activation classification"
             )
             expect(
-                ClipboardHistoryActivationRules.canInsertEveryItemAsPlainText(
+                !ClipboardHistoryActivationRules.canInsertEveryItemAsPlainText(
                     items: [directTextItem],
                     archives: [decoded]
                 ),
-                "text activation should use canonical text despite rich archive"
+                "rich text activation flattened its archived representations"
             )
             expect(
                 !ClipboardHistoryActivationRules.canInsertEveryItemAsPlainText(
@@ -1220,6 +1319,23 @@ enum ClipboardHistorySmoke {
         expect(snapshot.cardHeight == 126, "timeline card height")
         expect(snapshot.selectedCardCount == 1, "timeline single selection")
         expect(snapshot.selectedCardBorderWidth == 2, "selected timeline border")
+        pane.setStandaloneSearchEnabled(true)
+        expect(
+            pane.standaloneSearchEnabled,
+            "standalone native search did not enable"
+        )
+        pane.setStandaloneSearchTextForSmoke("beta")
+        expect(
+            pane.query == "beta"
+                && pane.snapshotForSmoke().queryCharacterCount == 4,
+            "standalone native search did not update the model query"
+        )
+        pane.resetSearch()
+        pane.setStandaloneSearchEnabled(false)
+        expect(
+            !pane.standaloneSearchEnabled,
+            "borrowed RIMES search did not restore"
+        )
 
         guard let searchA = keyEvent(keyCode: 0, characters: "a") else {
             expect(false, "search event creation")
@@ -1326,8 +1442,37 @@ enum ClipboardHistorySmoke {
             expect(false, "command event creation")
             return
         }
-        expect(pane.handleKeyDown(commandCopy), "Command-C was not consumed")
+        pane.setStandaloneSearchEnabled(true)
+        copiedID = nil
+        let activationCountBeforeMarkedCommands = rejectedActivationCount
+        expect(
+            !pane.handleStandaloneKeyEquivalent(
+                commandCopy,
+                hasMarkedText: true
+            ),
+            "marked standalone Command-C was consumed"
+        )
+        expect(copiedID == nil, "marked standalone Command-C copied a card")
+        expect(
+            !pane.handleStandaloneKeyEquivalent(
+                commandOne,
+                hasMarkedText: true
+            ),
+            "marked standalone Command-1 was consumed"
+        )
+        expect(
+            rejectedActivationCount == activationCountBeforeMarkedCommands,
+            "marked standalone Command-1 activated a card"
+        )
+        expect(
+            pane.handleStandaloneKeyEquivalent(
+                commandCopy,
+                hasMarkedText: false
+            ),
+            "settled standalone Command-C was not consumed"
+        )
         expect(copiedID == model.selectedID, "Command-C copied wrong item")
+        pane.setStandaloneSearchEnabled(false)
         expect(pane.handleKeyDown(capsLockCommandCopy), "Caps-Lock Command-C was not consumed")
         expect(
             ClipboardHistoryWindowController.hardwareKeyCodes(

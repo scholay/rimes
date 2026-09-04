@@ -113,6 +113,7 @@ jobs:
           bash -n scripts/fetch-rime.sh
           bash -n scripts/pkg/scripts/rimes-install-common.sh
           bash -n scripts/pkg/scripts/rimes-user-activation-agent.sh
+          bash -n scripts/pkg/scripts/rimes-companion-launch-agent.sh
           bash -n scripts/pkg/scripts/preinstall
           bash -n scripts/pkg/scripts/postinstall
           if /usr/bin/grep -REn '(/usr/bin/)?(killall|pkill)[[:space:]]+.*(TextInputMenuAgent|imklaunchagent|SystemUIServer)' \
@@ -717,6 +718,7 @@ jobs:
           printf '%s\n' \
             postinstall preinstall rimes-install-common.sh \
             rimes-timeout rimes-update-handoff rimes-user-activation-agent.sh \
+            rimes-companion-launch-agent.sh \
             | LC_ALL=C sort >"$verify_root/expected-script-members"
           find "$component/Scripts" -mindepth 1 -maxdepth 1 -type f \
             -exec basename {} \; | LC_ALL=C sort >"$verify_root/actual-script-members"
@@ -1506,6 +1508,7 @@ jobs:
           [[ -x "$component_dir/Scripts/postinstall" ]]
           [[ -f "$component_dir/Scripts/rimes-install-common.sh" ]]
           [[ -f "$component_dir/Scripts/rimes-user-activation-agent.sh" ]]
+          [[ -x "$component_dir/Scripts/rimes-companion-launch-agent.sh" ]]
           [[ -x "$component_dir/Scripts/rimes-timeout" ]]
           [[ -x "$component_dir/Scripts/rimes-update-handoff" ]]
           [[ "$(xmllint --xpath "count(/installer-gui-script/pkg-ref[@id='com.isaac.inputmethod.RimeBuffer' and @version='$VERSION' and text()='#component.pkg'])" "$product_distribution")" == '1' ]]

@@ -539,8 +539,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private lazy var navigation = SettingsNavigationState(catalog: routeCatalog)
     private var navButtons: [SettingsRouteID: NSButton] = [:]
     private var activePluginSettingsController: NSViewController?
-    private var activeMailboxController: MailboxPaneViewController?
-    private var activeCapsuleController: CapsulePaneViewController?
     private var statsObserver: NSObjectProtocol?
     private var pluginObserver: NSObjectProtocol?
     private var registryObserver: NSObjectProtocol?
@@ -549,6 +547,16 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private var aiConnectorObserver: NSObjectProtocol?
     private var aiConnectorAvailabilityObserver: NSObjectProtocol?
     private var appearanceObserver: NSObjectProtocol?
+    private var capsuleSyncSettingsObserver: NSObjectProtocol?
+    private var mailboxSettingsObservation: MailboxStoreObservation?
+    private weak var mailboxSettingsStatusBadge: NSTextField?
+    private weak var mailboxSettingsSummaryLabel: NSTextField?
+    private weak var mailboxSettingsStorageButton: NSButton?
+    private weak var capsuleSyncSettingsStatusBadge: NSTextField?
+    private weak var capsuleSyncSettingsDetailLabel: NSTextField?
+    private weak var capsuleSyncSettingsSyncButton: NSButton?
+    private weak var capsuleSyncSettingsChooseButton: NSButton?
+    private weak var capsuleSyncSettingsDisableButton: NSButton?
 
     private var encodingRadios: [InputEncoding: RimeFixedAccentChoiceButton] = [:]
     private var chordSchemaStatusRow: NSView?
@@ -1135,6 +1143,60 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             print("settings render sidebar content width drifted")
             return false
         }
+        if selectedCoreRoute == .mailbox || selectedCoreRoute == .capsule {
+            let routeName = selectedCoreRoute == .mailbox ? "mailbox" : "capsule"
+            let configurationID = NSUserInterfaceItemIdentifier(
+                "settings.\(routeName)-configuration"
+            )
+            let legacyPaneID = NSUserInterfaceItemIdentifier(
+                "settings.\(routeName)-pane"
+            )
+            guard let configuration = descendant(
+                identifiedBy: configurationID,
+                in: content
+            ), descendant(identifiedBy: legacyPaneID, in: content) == nil else {
+                print("settings render \(routeName) embedded a management pane")
+                return false
+            }
+            guard let scroll = descendant(
+                identifiedBy: NSUserInterfaceItemIdentifier("settings.page-scroll"),
+                in: content
+            ) as? NSScrollView else {
+                print("settings render \(routeName) configuration is not scrollable")
+                return false
+            }
+            let configurationRect = configuration.convert(
+                configuration.bounds,
+                to: content
+            )
+            let viewportRect = scroll.contentView.convert(
+                scroll.contentView.bounds,
+                to: content
+            )
+            guard configurationRect.minX >= viewportRect.minX - 0.5,
+                  configurationRect.maxX <= viewportRect.maxX + 0.5,
+                  scroll.hasHorizontalScroller == false else {
+                print("settings render \(routeName) overflows 980pt preview width")
+                return false
+            }
+            let routeSpecificIDs: [String] = selectedCoreRoute == .mailbox
+                ? [
+                    "settings.mailbox-actions",
+                    "settings.utility-shortcut.openMailbox",
+                ]
+                : [
+                    "settings.capsule-passcode-configuration",
+                    "settings.capsule-cloud-actions",
+                    "settings.utility-shortcut.openCapsule",
+                ]
+            for identifier in routeSpecificIDs where descendant(
+                identifiedBy: NSUserInterfaceItemIdentifier(identifier),
+                in: configuration
+            ) == nil {
+                print("settings render \(routeName) missing configuration: \(identifier)")
+                return false
+            }
+        }
         return true
     }
 
@@ -1456,6 +1518,26 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             }
         }
 
+        capsuleSyncSettingsObserver = NotificationCenter.default.addObserver(
+            forName: .capsuleCloudSyncStatusDidChange,
+            object: CapsuleCloudSyncController.shared,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self,
+                  self.window?.isVisible == true,
+                  self.selectedCoreRoute == .capsule else { return }
+            self.refreshCapsuleSyncSettingsControls()
+        }
+
+        mailboxSettingsObservation = MailboxStore.shared.observe(
+            deliverInitial: false
+        ) { [weak self] _ in
+            guard let self,
+                  self.window?.isVisible == true,
+                  self.selectedCoreRoute == .mailbox else { return }
+            self.refreshMailboxSettingsStatus()
+        }
+
         window = win
     }
 
@@ -1474,16 +1556,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         window.contentView?.needsDisplay = true
         refreshSidebarSelection()
         guard rebuildVisibleRoute, window.isVisible else { return }
-        if activeCapsuleController?.hasUnsavedChanges == true {
-            activeCapsuleController?.applyAppearance()
-            return
-        }
         reload()
         showCurrentRoute()
-    }
-
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        activeCapsuleController?.confirmDiscardChangesIfNeeded() ?? true
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -1513,9 +1587,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         // hidden AppKit work on the IME main thread.
         contentHost.subviews.forEach { $0.removeFromSuperview() }
         activePluginSettingsController = nil
-        activeMailboxController = nil
-        activeCapsuleController?.discardEditorForClose()
-        activeCapsuleController = nil
         candidatePreview = nil
         StandaloneWindowFocusCoordinator.shared.windowWillClose(closingWindow)
     }
@@ -1851,17 +1922,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
     private func showCurrentRoute() {
         guard let route = selectedRoute else { return }
-        if activeCapsuleController?.hasUnsavedChanges == true,
-           route.id == SettingsCoreRoute.capsule.id {
-            activeCapsuleController?.applyAppearance()
-            refreshSidebarSelection()
-            return
-        }
         refreshSidebarSelection()
         activePluginSettingsController = nil
-        activeMailboxController = nil
-        activeCapsuleController?.discardEditorForClose()
-        activeCapsuleController = nil
         contentHost.subviews.forEach { $0.removeFromSuperview() }
 
         let subpageID = navigation.selectedSubpage()?.rawValue
@@ -1991,10 +2053,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         ])
 
         let bodyHost: NSView
-        if body is NSScrollView
-            || body.identifier?.rawValue == "settings.mailbox-pane"
-            || body.identifier?.rawValue == "settings.capsule-pane" {
-            // Page-owned controllers may preserve their own scroll positions;
+        if body is NSScrollView {
+            // Page-owned plugin controllers may preserve their own scroll positions;
             // do not nest them in another scroll view with zero intrinsic height.
             bodyHost = body
         } else {
@@ -2080,9 +2140,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             case .clipboard:
                 return "管理独立、仅在本机持久保存的 Clipboard History。"
             case .mailbox:
-                return "独立管理本地保存的 AI 会话与待审核外部推送。"
+                return "配置独立 Mailbox 窗口、全局快捷键、本地存储与 AI 入口。"
             case .capsule:
-                return "独立管理本机 Prompt、Memory、Password、Skill、Note、URL、Image 与 PDF。"
+                return "配置独立 Capsule 窗口、查看口令、iCloud 同步与全局快捷键。"
             case .connectors:
                 return "管理 AI 模型与本地网关。"
             case .plugins:
@@ -2305,6 +2365,175 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         return row
     }
 
+    private func utilityStatusBadge(_ text: String,
+                                    active: Bool) -> NSTextField {
+        let badge = NSTextField(labelWithString: text)
+        badge.font = .systemFont(ofSize: 10, weight: .semibold)
+        badge.alignment = .center
+        badge.wantsLayer = true
+        badge.layer?.borderWidth = SettingsVisualStyle.hairline(
+            backingScale: window?.backingScaleFactor
+        )
+        badge.layer?.cornerRadius = 7
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        badge.widthAnchor.constraint(greaterThanOrEqualToConstant: 62).isActive = true
+        badge.heightAnchor.constraint(equalToConstant: 24).isActive = true
+        applyUtilityStatusBadge(badge, text: text, active: active)
+        return badge
+    }
+
+    private func applyUtilityStatusBadge(_ badge: NSTextField,
+                                         text: String,
+                                         active: Bool) {
+        badge.stringValue = text
+        badge.textColor = active ? themeStatusColor : RimeUI.textMuted
+        badge.layer?.backgroundColor = (active
+            ? RimeUI.accentGreen.withAlphaComponent(0.12)
+            : RimeUI.surface3).cgColor
+        badge.layer?.borderColor = (active
+            ? RimeUI.accentGreen.withAlphaComponent(0.34)
+            : RimeUI.border).cgColor
+    }
+
+    private func utilityShortcutRecorder(
+        for action: RimeShortcutAction
+    ) -> RimeShortcutRecorderButton {
+        let recorder = RimeShortcutRecorderButton(action: action)
+        recorder.identifier = NSUserInterfaceItemIdentifier(
+            "settings.utility-shortcut.\(action.rawValue)"
+        )
+        recorder.onFeedback = { [weak self] message in
+            guard let self else { return }
+            self.settingsStatusLabel.stringValue = message
+                ?? "设置会立即应用并保存在本机"
+            self.settingsStatusLabel.textColor = message?.contains("冲突") == true
+                ? .systemRed
+                : RimeUI.textMuted
+        }
+        return recorder
+    }
+
+    private func utilityActionRow(_ buttons: [NSButton]) -> NSView {
+        let row = NSStackView(views: buttons)
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.widthAnchor.constraint(lessThanOrEqualToConstant: 650).isActive = true
+        return row
+    }
+
+    private func refreshMailboxSettingsStatus(
+        snapshot: MailboxStoreSnapshot = MailboxStore.shared.snapshot
+    ) {
+        switch snapshot.persistence {
+        case .available:
+            if let badge = mailboxSettingsStatusBadge {
+                applyUtilityStatusBadge(badge, text: "可用", active: true)
+            }
+            mailboxSettingsSummaryLabel?.stringValue =
+                "当前有 \(snapshot.threads.count) 个会话，\(snapshot.unreadCount) 条未读。"
+            mailboxSettingsStorageButton?.isEnabled = true
+        case let .unavailable(reason):
+            if let badge = mailboxSettingsStatusBadge {
+                applyUtilityStatusBadge(badge, text: "不可用", active: false)
+            }
+            mailboxSettingsSummaryLabel?.stringValue = reason
+            mailboxSettingsStorageButton?.isEnabled = false
+        }
+    }
+
+    private func capsuleCloudStatusTitle(
+        _ status: CapsuleCloudSyncStatus
+    ) -> String {
+        switch status.phase {
+        case .unconfigured: return "未设置"
+        case .unavailable: return "不可用"
+        case .idle: return "等待同步"
+        case .syncing: return "同步中"
+        case .synced: return "已同步"
+        case .failed: return "同步失败"
+        }
+    }
+
+    private func capsuleCloudStatusDetail(
+        _ status: CapsuleCloudSyncStatus
+    ) -> String {
+        var pieces: [String] = []
+        if let folderName = status.folderName, !folderName.isEmpty {
+            pieces.append("文件夹：\(folderName)")
+        }
+        pieces.append(status.message)
+        if status.conflictCount > 0 {
+            pieces.append("\(status.conflictCount) 个冲突")
+        }
+        if status.deferredCount > 0 {
+            pieces.append("\(status.deferredCount) 个媒体待下载")
+        }
+        return pieces.joined(separator: " · ")
+    }
+
+    private func capsuleCloudActionRow(
+        status: CapsuleCloudSyncStatus
+    ) -> NSView {
+        let choose = SettingsPointingButton(
+            title: status.isConfigured ? "更换文件夹…" : "选择 iCloud 文件夹…",
+            target: self,
+            action: #selector(chooseCapsuleCloudFolder)
+        )
+        choose.bezelStyle = .rounded
+
+        let sync = SettingsPointingButton(
+            title: status.isBusy ? "正在同步…" : "立即同步",
+            target: self,
+            action: #selector(syncCapsuleCloudNow)
+        )
+        sync.bezelStyle = .rounded
+        sync.bezelColor = RimeUI.accentGreen
+
+        let disable = SettingsPointingButton(
+            title: "停用自动同步",
+            target: self,
+            action: #selector(disableCapsuleCloudSync)
+        )
+        disable.bezelStyle = .rounded
+
+        capsuleSyncSettingsSyncButton = sync
+        capsuleSyncSettingsChooseButton = choose
+        capsuleSyncSettingsDisableButton = disable
+        let row = utilityActionRow([sync, choose, disable])
+        row.identifier = NSUserInterfaceItemIdentifier(
+            "settings.capsule-cloud-actions"
+        )
+        refreshCapsuleSyncSettingsControls(status: status)
+        return row
+    }
+
+    private func refreshCapsuleSyncSettingsControls(
+        status: CapsuleCloudSyncStatus = CapsuleCloudSyncController.shared.status
+    ) {
+        if let badge = capsuleSyncSettingsStatusBadge {
+            applyUtilityStatusBadge(
+                badge,
+                text: capsuleCloudStatusTitle(status),
+                active: status.phase == .idle || status.phase == .synced
+                    || status.phase == .syncing
+            )
+        }
+        capsuleSyncSettingsDetailLabel?.stringValue = capsuleCloudStatusDetail(status)
+        capsuleSyncSettingsChooseButton?.title = status.isConfigured
+            ? "更换文件夹…"
+            : "选择 iCloud 文件夹…"
+        capsuleSyncSettingsSyncButton?.isHidden = !status.isConfigured
+        capsuleSyncSettingsDisableButton?.isHidden = !status.isConfigured
+        capsuleSyncSettingsSyncButton?.title = status.isBusy
+            ? "正在同步…"
+            : "立即同步"
+        capsuleSyncSettingsSyncButton?.isEnabled = status.isConfigured && !status.isBusy
+        capsuleSyncSettingsChooseButton?.isEnabled = !status.isBusy
+        capsuleSyncSettingsDisableButton?.isEnabled = status.isConfigured && !status.isBusy
+    }
+
     private func themePreviewCard(_ mode: RimeAppearanceMode) -> NSView {
         SettingsThemeCardButton(
             mode: mode,
@@ -2519,25 +2748,191 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     private func mailboxPage() -> NSView {
-        let controller = MailboxPaneViewController(
-            reviewRouter: MailboxBufferReviewAdapter.shared
+        let snapshot = MailboxStore.shared.snapshot
+        let persistenceDetail: String
+        let persistenceBadge: NSTextField
+        switch snapshot.persistence {
+        case .available:
+            persistenceDetail = "0600 JSON 原子落盘；内容只保存在本机。"
+            persistenceBadge = utilityStatusBadge("可用", active: true)
+        case let .unavailable(reason):
+            persistenceDetail = reason
+            persistenceBadge = utilityStatusBadge("不可用", active: false)
+        }
+
+        let openButton = SettingsPointingButton(
+            title: "打开 Mailbox",
+            target: self,
+            action: #selector(openMailboxWindowFromSettings)
         )
-        activeMailboxController = controller
-        let pane = controller.view
-        pane.identifier = NSUserInterfaceItemIdentifier(
-            "settings.mailbox-pane"
+        openButton.bezelStyle = .rounded
+        openButton.bezelColor = RimeUI.accentGreen
+
+        let storageButton = SettingsPointingButton(
+            title: "打开存储目录",
+            target: self,
+            action: #selector(openMailboxStorageDirectory)
         )
-        return pane
+        storageButton.bezelStyle = .rounded
+        storageButton.isEnabled = snapshot.persistence == .available
+        mailboxSettingsStorageButton = storageButton
+        mailboxSettingsStatusBadge = persistenceBadge
+
+        let connectorButton = SettingsPointingButton(
+            title: "AI 模型设置",
+            target: self,
+            action: #selector(openAIModelSettingsFromMailbox)
+        )
+        connectorButton.bezelStyle = .rounded
+
+        let shortcutRecorder = utilityShortcutRecorder(for: .openMailbox)
+        let actions = utilityActionRow([openButton, storageButton, connectorButton])
+        actions.identifier = NSUserInterfaceItemIdentifier(
+            "settings.mailbox-actions"
+        )
+        let path = MailboxStore.shared.storageDirectoryURL.path
+        let pathLabel = secondaryLabel("本地路径：\(path)")
+        pathLabel.toolTip = path
+        pathLabel.translatesAutoresizingMaskIntoConstraints = false
+        pathLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 650).isActive = true
+        let summaryLabel = secondaryLabel("")
+        summaryLabel.translatesAutoresizingMaskIntoConstraints = false
+        summaryLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 650).isActive = true
+        mailboxSettingsSummaryLabel = summaryLabel
+        refreshMailboxSettingsStatus(snapshot: snapshot)
+
+        let page = contentColumn([
+            title("Mailbox 配置"),
+            caption("Mailbox 的会话阅读、回复和审核都在独立窗口完成；这里仅管理入口、快捷键和本地状态。"),
+            spacer(4),
+            sectionLabel("运行与存储"),
+            settingsRow(
+                title: "本地会话存储",
+                detail: persistenceDetail,
+                symbolName: "externaldrive",
+                control: persistenceBadge
+            ),
+            summaryLabel,
+            actions,
+            pathLabel,
+            spacer(12),
+            sectionLabel("全局快捷键"),
+            settingsRow(
+                title: "显示或隐藏 Mailbox",
+                detail: "当前为 \(RimeShortcutPreferences.shortcut(for: .openMailbox).displayTitle)；在其他输入法下同样可用。",
+                symbolName: "keyboard",
+                control: shortcutRecorder
+            ),
+            secondaryLabel("点击快捷键后录入新组合；Delete 恢复默认，Esc 取消。快捷键只打开独立窗口，不接管其他输入法的组字。"),
+        ])
+        page.identifier = NSUserInterfaceItemIdentifier(
+            "settings.mailbox-configuration"
+        )
+        return page
     }
 
     private func capsulePage() -> NSView {
-        let controller = CapsulePaneViewController()
-        activeCapsuleController = controller
-        let pane = controller.view
-        pane.identifier = NSUserInterfaceItemIdentifier(
-            "settings.capsule-pane"
+        let localDetail: String
+        let localIsAvailable: Bool
+        do {
+            let contentCount = try CapsuleContentStore.shared.listRecords().count
+            let passwordCount = try CapsulePasswordStore().listSummaries().count
+            localDetail = "\(contentCount) 个普通条目，\(passwordCount) 个加密密码条目。"
+            localIsAvailable = true
+        } catch {
+            localDetail = "无法读取本地资料库：\(error.localizedDescription)"
+            localIsAvailable = false
+        }
+        let localRoot = CapsuleContentStore.shared.rootURL
+        let localBadge = utilityStatusBadge(
+            localIsAvailable ? "可用" : "检查失败",
+            active: localIsAvailable
         )
-        return pane
+
+        let openButton = SettingsPointingButton(
+            title: "打开 Capsule",
+            target: self,
+            action: #selector(openCapsuleWindowFromSettings)
+        )
+        openButton.bezelStyle = .rounded
+        openButton.bezelColor = RimeUI.accentGreen
+
+        let storageButton = SettingsPointingButton(
+            title: "打开资料目录",
+            target: self,
+            action: #selector(openCapsuleStorageDirectory)
+        )
+        storageButton.bezelStyle = .rounded
+
+        let shortcutRecorder = utilityShortcutRecorder(for: .openCapsule)
+        let localActions = utilityActionRow([openButton, storageButton])
+        let pathLabel = secondaryLabel("本地路径：\(localRoot.path)")
+        pathLabel.toolTip = localRoot.path
+        pathLabel.translatesAutoresizingMaskIntoConstraints = false
+        pathLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 650).isActive = true
+
+        let syncStatus = CapsuleCloudSyncController.shared.status
+        let syncBadge = utilityStatusBadge(
+            capsuleCloudStatusTitle(syncStatus),
+            active: syncStatus.phase == .idle || syncStatus.phase == .synced
+                || syncStatus.phase == .syncing
+        )
+        capsuleSyncSettingsStatusBadge = syncBadge
+        let syncDetailLabel = secondaryLabel(capsuleCloudStatusDetail(syncStatus))
+        syncDetailLabel.translatesAutoresizingMaskIntoConstraints = false
+        syncDetailLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 650).isActive = true
+        capsuleSyncSettingsDetailLabel = syncDetailLabel
+        let syncActions = capsuleCloudActionRow(status: syncStatus)
+
+        let revealPasscodeSettings = CapsuleRevealPasscodeSettingsView()
+        revealPasscodeSettings.identifier = NSUserInterfaceItemIdentifier(
+            "settings.capsule-passcode-configuration"
+        )
+        revealPasscodeSettings.translatesAutoresizingMaskIntoConstraints = false
+        revealPasscodeSettings.widthAnchor.constraint(equalToConstant: 650).isActive = true
+
+        let page = contentColumn([
+            title("Capsule 配置"),
+            caption("Prompt、Memory、Note、URL、Image 与 PDF 使用可读文件；密码密文和主密钥独立保存在本机。内容编辑在独立 Capsule 窗口完成。"),
+            spacer(4),
+            sectionLabel("本地资料库"),
+            settingsRow(
+                title: "本地 Capsule",
+                detail: localDetail,
+                symbolName: "archivebox",
+                control: localBadge
+            ),
+            localActions,
+            pathLabel,
+            spacer(12),
+            sectionLabel("全局快捷键"),
+            settingsRow(
+                title: "显示或隐藏 Capsule",
+                detail: "当前为 \(RimeShortcutPreferences.shortcut(for: .openCapsule).displayTitle)；在其他输入法下同样可用。",
+                symbolName: "keyboard",
+                control: shortcutRecorder
+            ),
+            secondaryLabel("点击快捷键后录入新组合；Delete 恢复默认，Esc 取消。"),
+            spacer(12),
+            sectionLabel("密码查看口令"),
+            secondaryLabel("用四组并击验证后才能短时查看密码明文；口令配置只保存在本机。"),
+            revealPasscodeSettings,
+            spacer(12),
+            sectionLabel("iCloud 自动同步"),
+            settingsRow(
+                title: "同步状态",
+                detail: "配置 iCloud Drive 文件夹，并自动同步普通条目与媒体。",
+                symbolName: "icloud",
+                control: syncBadge
+            ),
+            syncDetailLabel,
+            syncActions,
+            secondaryLabel("只同步 Prompt、Memory、Note、URL、Image 与 PDF。Password、Skill 路径、查看口令与主密钥不会上传。"),
+        ])
+        page.identifier = NSUserInterfaceItemIdentifier(
+            "settings.capsule-configuration"
+        )
+        return page
     }
 
     private func bufferSettingsPage() -> NSView {
@@ -3847,12 +4242,162 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
     // MARK: Actions
 
+    @objc private func openMailboxWindowFromSettings() {
+        let threadID = MailboxStore.shared.selectLatestUnreadOrMostRecent()
+        MailboxWindowController.shared.show(selecting: threadID)
+        settingsStatusLabel.stringValue = "已打开独立 Mailbox 窗口"
+        settingsStatusLabel.textColor = RimeUI.textMuted
+    }
+
+    @objc private func openMailboxStorageDirectory() {
+        openUtilityDirectory(
+            MailboxStore.shared.storageDirectoryURL,
+            title: "Mailbox 存储目录"
+        )
+    }
+
+    @objc private func openAIModelSettingsFromMailbox() {
+        guard navigation.selectRoute(
+            SettingsCoreRoute.connectors.id,
+            catalog: routeCatalog
+        ), navigation.selectSubpage(
+            SettingsSubpageID(rawValue: "ai-model"),
+            catalog: routeCatalog
+        ) else { return }
+        settingsStatusLabel.stringValue = "已打开 AI 模型设置"
+        settingsStatusLabel.textColor = RimeUI.textMuted
+        reload()
+        showCurrentRoute()
+    }
+
+    @objc private func openCapsuleWindowFromSettings() {
+        CapsuleWindowController.shared.show()
+        settingsStatusLabel.stringValue = "已打开独立 Capsule 窗口"
+        settingsStatusLabel.textColor = RimeUI.textMuted
+    }
+
+    @objc private func openCapsuleStorageDirectory() {
+        openUtilityDirectory(
+            CapsuleContentStore.shared.rootURL,
+            title: "Capsule 资料目录"
+        )
+    }
+
+    private func openUtilityDirectory(_ url: URL, title: String) {
+        do {
+            try FileManager.default.createDirectory(
+                at: url,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            guard NSWorkspace.shared.open(url) else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            settingsStatusLabel.stringValue = "已打开\(title)"
+            settingsStatusLabel.textColor = RimeUI.textMuted
+        } catch {
+            settingsStatusLabel.stringValue = "无法打开\(title)：\(error.localizedDescription)"
+            settingsStatusLabel.textColor = .systemRed
+        }
+    }
+
+    @objc private func chooseCapsuleCloudFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "选择 Capsule iCloud Drive 文件夹"
+        panel.message = "请在 iCloud Drive 中新建或选择一个空文件夹。普通条目和图片、PDF 会同步；密码、Skill 路径、查看口令与主密钥不会上传。"
+        panel.prompt = "使用此文件夹"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.resolvesAliases = false
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidates = [
+            home.appendingPathComponent(
+                "Library/Mobile Documents/com~apple~CloudDocs",
+                isDirectory: true
+            ),
+            home.appendingPathComponent(
+                "Library/CloudStorage",
+                isDirectory: true
+            ),
+        ]
+        panel.directoryURL = candidates.first {
+            FileManager.default.fileExists(atPath: $0.path)
+        }
+        let handle: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.settingsStatusLabel.stringValue = "正在配置 Capsule iCloud 同步…"
+            self?.settingsStatusLabel.textColor = RimeUI.textMuted
+            CapsuleCloudSyncController.shared.configure(folderURL: url) {
+                [weak self] result in
+                switch result {
+                case .success:
+                    self?.settingsStatusLabel.stringValue = "已启用 Capsule iCloud 自动同步"
+                    self?.settingsStatusLabel.textColor = RimeUI.textMuted
+                case let .failure(error):
+                    self?.presentCapsuleCloudSyncError(error)
+                }
+            }
+        }
+        if let window {
+            panel.beginSheetModal(for: window, completionHandler: handle)
+        } else {
+            handle(panel.runModal())
+        }
+    }
+
+    @objc private func syncCapsuleCloudNow() {
+        guard CapsuleCloudSyncController.shared.status.isConfigured else { return }
+        settingsStatusLabel.stringValue = "正在同步 Capsule…"
+        settingsStatusLabel.textColor = RimeUI.textMuted
+        CapsuleCloudSyncController.shared.requestSync(after: 0)
+    }
+
+    @objc private func disableCapsuleCloudSync() {
+        guard CapsuleCloudSyncController.shared.status.isConfigured else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "停用 Capsule iCloud 自动同步？"
+        alert.informativeText = "这只会移除本机同步配置，不会删除本机或 iCloud Drive 中的内容。"
+        alert.addButton(withTitle: "停用同步")
+        alert.addButton(withTitle: "取消")
+        let handle: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            CapsuleCloudSyncController.shared.disable { [weak self] result in
+                switch result {
+                case .success:
+                    self?.settingsStatusLabel.stringValue = "已停用 Capsule iCloud 自动同步"
+                    self?.settingsStatusLabel.textColor = RimeUI.textMuted
+                case let .failure(error):
+                    self?.presentCapsuleCloudSyncError(error)
+                }
+            }
+        }
+        if let window {
+            alert.beginSheetModal(for: window, completionHandler: handle)
+        } else {
+            handle(alert.runModal())
+        }
+    }
+
+    private func presentCapsuleCloudSyncError(_ error: Error) {
+        settingsStatusLabel.stringValue = error.localizedDescription
+        settingsStatusLabel.textColor = .systemRed
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Capsule iCloud 同步配置失败"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "好")
+        if let window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
     @objc private func routeChosen(_ sender: SettingsRouteButton) {
         if sender.routeID == navigation.currentRouteID {
-            refreshSidebarSelection()
-            return
-        }
-        guard activeCapsuleController?.confirmDiscardChangesIfNeeded() != false else {
             refreshSidebarSelection()
             return
         }
@@ -3870,13 +4415,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
               route.subpages.indices.contains(sender.selectedSegment) else { return }
         let subpage = route.subpages[sender.selectedSegment].id
         if subpage == navigation.selectedSubpage() { return }
-        guard activeCapsuleController?.confirmDiscardChangesIfNeeded() != false else {
-            if let selected = navigation.selectedSubpage(),
-               let index = route.subpages.firstIndex(where: { $0.id == selected }) {
-                sender.selectedSegment = index
-            }
-            return
-        }
         guard navigation.selectSubpage(subpage, catalog: routeCatalog) else { return }
         settingsStatusLabel.stringValue = "已打开\(route.subpages[sender.selectedSegment].title)"
         settingsStatusLabel.textColor = RimeUI.textMuted

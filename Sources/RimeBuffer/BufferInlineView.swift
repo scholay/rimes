@@ -1917,6 +1917,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         let color: NSColor
         switch origin {
         case .rime: return nil
+        case .clipboard: color = RimeUI.color(0x10B981)          // local pasteboard — green
         case .remotePeer: color = RimeUI.color(0x9B8CFF)        // paired Mac — violet
         case .marine, .plugin, .processor, .mcp:
             color = RimeUI.color(0xF59E0B) // local action/transform/agent — amber

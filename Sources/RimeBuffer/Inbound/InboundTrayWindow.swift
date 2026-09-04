@@ -57,10 +57,8 @@ final class MailboxWindowController: NSObject, NSWindowDelegate {
     }
 
     func show(selecting threadID: UUID? = nil) {
-        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
-            IMELog.write("Mailbox open ignored; RIMES is not selected")
-            return
-        }
+        // Mailbox is a standalone key window; showing it does not require the
+        // current input source to belong to RIMES.
         if window == nil { build() }
         if let threadID, MailboxStore.shared.snapshot.thread(id: threadID) != nil {
             _ = MailboxStore.shared.selectThread(id: threadID)

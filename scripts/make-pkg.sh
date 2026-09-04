@@ -155,7 +155,8 @@ done
 # 组件包：把内部兼容路径 ETInput.app 装到 /Library/Input Methods，带 pre/postinstall 注册脚本。
 mkdir -p "$TMP/root"
 /usr/bin/ditto "$APP" "$TMP/root/ETInput.app"
-/bin/chmod 755 "$SCRIPT_STAGE/preinstall" "$SCRIPT_STAGE/postinstall"
+/bin/chmod 755 "$SCRIPT_STAGE/preinstall" "$SCRIPT_STAGE/postinstall" \
+    "$SCRIPT_STAGE/rimes-companion-launch-agent.sh"
 
 if [[ "$signed_package" == true ]]; then
     /usr/bin/codesign --verify --deep --strict --verbose=2 "$TMP/root/ETInput.app"
@@ -233,10 +234,15 @@ verify_component="$verify_product/component.pkg"
     || die "component payload bundle id/path/version does not match the updater contract"
 for required_script in \
     preinstall postinstall rimes-install-common.sh \
-    rimes-user-activation-agent.sh rimes-timeout rimes-update-handoff; do
+    rimes-user-activation-agent.sh rimes-companion-launch-agent.sh \
+    rimes-timeout rimes-update-handoff; do
     [[ -e "$verify_component/Scripts/$required_script" ]] \
         || die "component is missing installer script/helper: $required_script"
 done
+[[ -x "$verify_component/Scripts/rimes-companion-launch-agent.sh" ]] \
+    || die "component companion LaunchAgent helper is not executable"
+/bin/bash -n "$verify_component/Scripts/rimes-companion-launch-agent.sh" \
+    || die "component companion LaunchAgent helper has invalid syntax"
 
 if [[ "$signed_package" == true ]]; then
     signature_output="$(/usr/sbin/pkgutil --check-signature "$OUT" 2>&1)" \

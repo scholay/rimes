@@ -87,8 +87,54 @@ jobs:
           bash -n scripts/release.sh
           bash -n scripts/pkg/scripts/rimes-install-common.sh
           bash -n scripts/pkg/scripts/rimes-user-activation-agent.sh
+          bash -n scripts/pkg/scripts/rimes-companion-launch-agent.sh
           bash -n scripts/pkg/scripts/preinstall
           bash -n scripts/pkg/scripts/postinstall
+          python3 - <<'PY'
+          from pathlib import Path
+          build_install = Path("build_install.sh").read_text()
+          companion_install = build_install.index(
+              'echo "==> installing one-shot login bootstrap for companion shortcuts"'
+          )
+          companion_resident = build_install.index(
+              'if ! wait_for_installed_app_process'
+          )
+          tis_activation = build_install.index(
+              'echo "==> self-install: register + enable + select inside the login session"'
+          )
+          assert companion_install < companion_resident < tis_activation
+          assert build_install.count('--prepare-update') >= 2
+
+          preinstall = Path("scripts/pkg/scripts/preinstall").read_text()
+          account_audit = preinstall.index('audit-system-conflicts "$ALLOWED_CONSOLE_UID"')
+          process_audit = preinstall.index('audit-system-processes "$ALLOWED_CONSOLE_UID"')
+          active_handoff = preinstall.index('rimes_run_console_user_bounded 5 "$HANDOFF_HELPER"')
+          preinstall_kill = preinstall.index('/usr/bin/killall ETInput')
+          preinstall_stopped = preinstall.index('wait-user-processes-stopped')
+          assert account_audit < process_audit < active_handoff
+          assert active_handoff < preinstall_kill < preinstall_stopped
+
+          postinstall = Path("scripts/pkg/scripts/postinstall").read_text()
+          retire = postinstall.index('"$COMPANION_USER_HELPER" remove-user')
+          conflict_gate = postinstall.index('if [ "$DUPLICATE_CONFLICTS" -ne 0 ]')
+          account_reaudit = postinstall.index('audit-system-conflicts none')
+          publish = postinstall.index('"$COMPANION_AGENT_HELPER" install-system')
+          kill_old = postinstall.index('/usr/bin/killall ETInput')
+          old_process_gate = postinstall.index('wait-user-processes-stopped')
+          all_process_gate = postinstall.index('audit-system-processes none')
+          activate = postinstall.index('rimes_run_console_user_activation_bounded')
+          open_current = postinstall.index('/usr/bin/open -g "$APP"')
+          process_check = postinstall.index('if ! wait_for_canonical_app_process')
+          assert retire < conflict_gate < account_reaudit < publish
+          assert publish < kill_old < old_process_gate < all_process_gate
+          assert all_process_gate < activate < open_current < process_check
+          assert 'SYSTEM_AGENT_TRANSACTION_ACTIVE=1' in postinstall
+          assert 'rollback-system-update' in postinstall
+          assert postinstall.count('commit-system-update') == 2
+          assert "root:wheel" in Path(
+              "scripts/pkg/scripts/rimes-companion-launch-agent.sh"
+          ).read_text()
+          PY
           if /usr/bin/grep -REn 'killall[[:space:]]+(imklaunchagent|TextInputMenuAgent)' \
               build_install.sh scripts/pkg/scripts Sources/RimeBuffer/UpdateManager.swift; then
             echo 'Do not restart Apple-owned input-method agents during install/update' >&2
@@ -227,6 +273,207 @@ jobs:
           test -f "$repair_lock"
           find "$agent_probe" -depth -delete
           find "$helper_probe" -depth -delete
+
+          # The companion bootstrap is a one-shot `open -g`, not a second
+          # resident service. Exercise both user/dev and system/pkg layouts in
+          # isolated roots, including their reversible removal paths.
+          companion_probe="$(mktemp -d /tmp/rimes-companion-ci.XXXXXX)"
+          companion_app="$companion_probe/Library/Input Methods/ETInput.app"
+          mkdir -p "$companion_app/Contents/MacOS"
+          cat >"$companion_app/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+          <key>CFBundleExecutable</key><string>ETInput</string>
+          <key>CFBundleIdentifier</key><string>com.scholay.rimes.companion-ci</string>
+          <key>CFBundleName</key><string>RIMES Companion CI</string>
+          <key>CFBundlePackageType</key><string>APPL</string>
+          <key>CFBundleVersion</key><string>1</string>
+          <key>LSUIElement</key><true/>
+          </dict></plist>
+          EOF
+          cat >"$companion_app/Contents/MacOS/ETInput" <<EOF
+          #!/bin/sh
+          /usr/bin/touch "$companion_probe/opened"
+          EOF
+          chmod 755 "$companion_app/Contents/MacOS/ETInput"
+          codesign --force --deep --sign - "$companion_app"
+          HOME="$companion_probe" /bin/bash \
+            scripts/pkg/scripts/rimes-companion-launch-agent.sh install-user
+          user_companion="$companion_probe/Library/LaunchAgents/com.scholay.rimes.dev-companion-start.plist"
+          plutil -lint "$user_companion"
+          test "$([ -f "$user_companion" ] && stat -f '%Lp' "$user_companion")" = '644'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$user_companion")" = '/usr/bin/open'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:1' "$user_companion")" = '-g'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:2' "$user_companion")" = "$companion_probe/Library/Input Methods/ETInput.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$user_companion")" = 'true'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LimitLoadToSessionType' "$user_companion")" = 'Aqua'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :AssociatedBundleIdentifiers:0' "$user_companion")" = 'com.isaac.inputmethod.RimeBuffer'
+          if /usr/libexec/PlistBuddy -c 'Print :KeepAlive' "$user_companion" >/dev/null 2>&1; then
+            echo 'Companion bootstrap must not become a KeepAlive service.' >&2
+            exit 1
+          fi
+
+          # A failed replacement must preserve the previously published
+          # definition byte for byte.
+          companion_before="$(shasum -a 256 "$user_companion" | awk '{print $1}')"
+          chmod 644 "$companion_app/Contents/MacOS/ETInput"
+          if HOME="$companion_probe" /bin/bash \
+              scripts/pkg/scripts/rimes-companion-launch-agent.sh install-user; then
+            echo 'Companion helper accepted a non-executable app.' >&2
+            exit 1
+          fi
+          companion_after="$(shasum -a 256 "$user_companion" | awk '{print $1}')"
+          test "$companion_before" = "$companion_after"
+          chmod 755 "$companion_app/Contents/MacOS/ETInput"
+          codesign --force --deep --sign - "$companion_app"
+
+          # Hosted macOS runners expose an Aqua launchd domain. Bootstrap the
+          # real plist and require its one-shot open to launch a signed marker
+          # app, then remove the job so no test state survives this step.
+          companion_uid="$(id -u)"
+          launchctl bootout \
+            "gui/$companion_uid/com.scholay.rimes.dev-companion-start" \
+            >/dev/null 2>&1 || true
+          launchctl bootstrap "gui/$companion_uid" "$user_companion"
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            test ! -e "$companion_probe/opened" || break
+            sleep 0.25
+          done
+          test -e "$companion_probe/opened"
+          launchctl print \
+            "gui/$companion_uid/com.scholay.rimes.dev-companion-start" \
+            | grep -F 'state = not running'
+          launchctl bootout \
+            "gui/$companion_uid/com.scholay.rimes.dev-companion-start"
+          HOME="$companion_probe" /bin/bash \
+            scripts/pkg/scripts/rimes-companion-launch-agent.sh remove-user
+          test ! -e "$user_companion"
+
+          # A package may converge the active console user's verified dev copy,
+          # but must fail before payload replacement when any other local account
+          # still owns the same per-user bundle/agent identity.
+          audit_current="$companion_probe/audit-current"
+          audit_other="$companion_probe/audit-other"
+          audit_current_uid="$(id -u)"
+          audit_other_uid="$((audit_current_uid + 1))"
+          mkdir -p "$audit_current/Library/Input Methods" \
+            "$audit_other/Library/Input Methods"
+          ditto "$companion_app" \
+            "$audit_current/Library/Input Methods/ETInput.app"
+          /usr/libexec/PlistBuddy -c \
+            'Set :CFBundleIdentifier com.isaac.inputmethod.RimeBuffer' \
+            "$audit_current/Library/Input Methods/ETInput.app/Contents/Info.plist"
+          HOME="$audit_current" /bin/bash \
+            scripts/pkg/scripts/rimes-companion-launch-agent.sh install-user
+          printf '%s\t%s\n%s\t%s\n' \
+            "$audit_current_uid" "$audit_current" \
+            "$audit_other_uid" "$audit_other" \
+            >"$companion_probe/local-users.tsv"
+          RIMES_COMPANION_TESTING=1 \
+            RIMES_COMPANION_TEST_ROOT="$companion_probe" /bin/bash \
+            scripts/pkg/scripts/rimes-companion-launch-agent.sh \
+              audit-system-conflicts "$audit_current_uid"
+          if RIMES_COMPANION_TESTING=1 \
+              RIMES_COMPANION_TEST_ROOT="$companion_probe" /bin/bash \
+              scripts/pkg/scripts/rimes-companion-launch-agent.sh \
+                audit-system-conflicts none; then
+            echo 'Post-retirement account audit accepted a current dev copy.' >&2
+            exit 1
+          fi
+          ditto "$audit_current/Library/Input Methods/ETInput.app" \
+            "$audit_other/Library/Input Methods/ETInput.app"
+          if RIMES_COMPANION_TESTING=1 \
+              RIMES_COMPANION_TEST_ROOT="$companion_probe" /bin/bash \
+              scripts/pkg/scripts/rimes-companion-launch-agent.sh \
+                audit-system-conflicts "$audit_current_uid"; then
+            echo 'System package audit accepted another user dev copy.' >&2
+            exit 1
+          fi
+          find "$audit_other/Library/Input Methods/ETInput.app" -depth -delete
+          HOME="$audit_current" /bin/bash \
+            scripts/pkg/scripts/rimes-companion-launch-agent.sh remove-user
+          find "$audit_current/Library/Input Methods/ETInput.app" -depth -delete
+          RIMES_COMPANION_TESTING=1 \
+            RIMES_COMPANION_TEST_ROOT="$companion_probe" /bin/bash \
+            scripts/pkg/scripts/rimes-companion-launch-agent.sh \
+              audit-system-conflicts none
+
+          # The postinstall process fence must reject a same-name old binary,
+          # then succeed only after that exact process has exited.
+          cat >"$companion_probe/process-probe.c" <<'EOF'
+          #include <unistd.h>
+          int main(void) { sleep(30); return 0; }
+          EOF
+          clang "$companion_probe/process-probe.c" -o "$companion_probe/ETInput"
+          "$companion_probe/ETInput" &
+          old_process_pid=$!
+          /bin/bash scripts/pkg/scripts/rimes-companion-launch-agent.sh \
+            audit-system-processes "$(id -u)"
+          if /bin/bash scripts/pkg/scripts/rimes-companion-launch-agent.sh \
+              audit-system-processes none; then
+            echo 'Cross-session process audit accepted a running ETInput.' >&2
+            kill "$old_process_pid" 2>/dev/null || true
+            exit 1
+          fi
+          if /bin/bash scripts/pkg/scripts/rimes-companion-launch-agent.sh \
+              wait-user-processes-stopped "$(id -u)"; then
+            echo 'Old RIMES process fence accepted a running ETInput.' >&2
+            kill "$old_process_pid" 2>/dev/null || true
+            exit 1
+          fi
+          kill "$old_process_pid"
+          wait "$old_process_pid" 2>/dev/null || true
+          /bin/bash scripts/pkg/scripts/rimes-companion-launch-agent.sh \
+            wait-user-processes-stopped "$(id -u)"
+
+          RIMES_COMPANION_TESTING=1 \
+            RIMES_COMPANION_TEST_ROOT="$companion_probe" /bin/bash \
+            scripts/pkg/scripts/rimes-companion-launch-agent.sh begin-system-update
+          RIMES_COMPANION_TESTING=1 \
+            RIMES_COMPANION_TEST_ROOT="$companion_probe" /bin/bash \
+            scripts/pkg/scripts/rimes-companion-launch-agent.sh install-system
+          system_companion="$companion_probe/Library/LaunchAgents/com.scholay.rimes.companion-start.plist"
+          plutil -lint "$system_companion"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$system_companion")" = '/bin/sh'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:1' "$system_companion")" = '-c'
+          system_guard="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:2' "$system_companion")"
+          printf '%s\n' "$system_guard" | grep -Fq '$HOME/Library/Input Methods/ETInput.app'
+          printf '%s\n' "$system_guard" | grep -Fq '$HOME/Library/LaunchAgents/com.scholay.rimes.dev-companion-start.plist'
+          printf '%s\n' "$system_guard" | grep -Fq 'exec /usr/bin/open -g "/Library/Input Methods/ETInput.app"'
+          HOME="$companion_probe" /bin/sh -c "$system_guard"
+          guard_home="$companion_probe/guard-home"
+          mkdir -p "$guard_home/Library/LaunchAgents"
+          touch "$guard_home/Library/LaunchAgents/com.scholay.rimes.dev-companion-start.plist"
+          HOME="$guard_home" /bin/sh -c "$system_guard"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :ProcessType' "$system_companion")" = 'Background'
+          RIMES_COMPANION_TESTING=1 \
+            RIMES_COMPANION_TEST_ROOT="$companion_probe" /bin/bash \
+            scripts/pkg/scripts/rimes-companion-launch-agent.sh commit-system-update
+
+          # Replace an actual prior definition, force a later-stage failure,
+          # then require the transaction rollback to restore exact bytes.
+          /usr/libexec/PlistBuddy -c 'Add :RollbackProbe string previous' \
+            "$system_companion"
+          system_before="$(shasum -a 256 "$system_companion" | awk '{print $1}')"
+          RIMES_COMPANION_TESTING=1 \
+            RIMES_COMPANION_TEST_ROOT="$companion_probe" /bin/bash \
+            scripts/pkg/scripts/rimes-companion-launch-agent.sh begin-system-update
+          RIMES_COMPANION_TESTING=1 \
+            RIMES_COMPANION_TEST_ROOT="$companion_probe" /bin/bash \
+            scripts/pkg/scripts/rimes-companion-launch-agent.sh install-system
+          system_replaced="$(shasum -a 256 "$system_companion" | awk '{print $1}')"
+          test "$system_replaced" != "$system_before"
+          RIMES_COMPANION_TESTING=1 \
+            RIMES_COMPANION_TEST_ROOT="$companion_probe" /bin/bash \
+            scripts/pkg/scripts/rimes-companion-launch-agent.sh rollback-system-update
+          system_after="$(shasum -a 256 "$system_companion" | awk '{print $1}')"
+          test "$system_after" = "$system_before"
+          RIMES_COMPANION_TESTING=1 \
+            RIMES_COMPANION_TEST_ROOT="$companion_probe" /bin/bash \
+            scripts/pkg/scripts/rimes-companion-launch-agent.sh remove-system
+          test ! -e "$system_companion"
+          find "$companion_probe" -depth -delete
 
       - name: Preserve durable user state across reseed
         run: scripts/test-rime-user-state.sh

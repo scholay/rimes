@@ -867,7 +867,8 @@ let bufferPluginSelectionObserver = NotificationCenter.default.addObserver(
 ) { notification in
     BufferWindowController.shared.notePluginSelectionChanged()
     BufferModel.shared.clearAllContentSelection()
-    if notification.userInfo?["current"] as? PluginKey
+    if RimeInputSourceAuthority.currentSourceIsOwn(),
+       notification.userInfo?["current"] as? PluginKey
         == StreamInputWorkspace.pluginKey {
         if let target = InputFocusCoordinator.shared.liveTarget(
             forceOverlayVisibilityRefresh: true
@@ -1086,9 +1087,9 @@ let inputSourceChangedObserver = DistributedNotificationCenter.default().addObse
         IMELog.write("TIS source changed: previous=\(previousID) current=unavailable deltaMs=\(elapsed) controlDown=\(controlDown) modifiers=\(modifierFlags.rawValue)")
         lastObservedInputSourceID = nil
         lastObservedInputSourceUptime = now
-        // TIS can briefly return no current source during a handoff. Fail
-        // closed immediately: keeping the old exclusive Carbon registrations
-        // would let ETInput observe shortcuts after another IME took over.
+        // TIS can briefly return no current source during a handoff. Retire IMK
+        // authority immediately; registration reconciliation keeps the four
+        // standalone utility shortcuts and removes only RIMES-owned actions.
         retireRimeInputSourceAuthority(observedSourceID: nil)
         return
     }
@@ -5865,6 +5866,16 @@ func runBufferSmokeTest() -> Bool {
         return false
     }
     model.discardForPrivacy()
+    let detachedClipboardModel = BufferModel()
+    guard detachedClipboardModel.insertPastedText(
+            "detached clipboard",
+            origin: .clipboard
+          ),
+          detachedClipboardModel.blocks.allSatisfy({ $0.origin == .clipboard }),
+          detachedClipboardModel.inputRoute == .directToHost else {
+        print("FAILED: detached clipboard provenance or input route")
+        return false
+    }
 
     // Accepted delivery attempts disappear from the live workbench without
     // retaining a plaintext delivery history.
@@ -6021,9 +6032,10 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
 
     let flexibleSpace = NSView()
     let statusIndicators = NSStackView()
+    let clipboardImport = NSView()
     let exchangeEdit = NSView()
     let close = NSView()
-    for control in [exchangeEdit, close] {
+    for control in [clipboardImport, exchangeEdit, close] {
         control.translatesAutoresizingMaskIntoConstraints = false
         control.widthAnchor.constraint(equalToConstant: 22).isActive = true
         control.heightAnchor.constraint(equalToConstant: 22).isActive = true
@@ -6031,6 +6043,7 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
     BufferWorkbenchShelfLayout.configure(
         shelf,
         status: status,
+        clipboardImport: clipboardImport,
         pluginActions: pluginActions,
         flexibleSpace: flexibleSpace,
         statusIndicators: statusIndicators,
@@ -6096,6 +6109,8 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
 
     let epsilon: CGFloat = 0.5
     let expectedEmptySelectorX = BufferWorkbenchMetrics.shelfHorizontalInset
+        + 22
+        + BufferWorkbenchMetrics.shelfSpacing
         + pluginActions.edgeInsets.left
     let expectedEmptyPluginWidth = selectorWidth.constant
         + pluginActions.edgeInsets.left
@@ -6131,6 +6146,35 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
 
 func runBufferWindowSmokeTest() -> Bool {
     print("== \(ProductIdentity.displayName) buffer window smoke test ==")
+
+    guard BufferDetachedClipboardRules.acceptedText("clipboard text")
+            == "clipboard text",
+          BufferDetachedClipboardRules.acceptedText(nil) == nil,
+          BufferDetachedClipboardRules.acceptedText("") == nil,
+          BufferDetachedClipboardRules.acceptedText("unsafe\0text") == nil,
+          BufferDetachedClipboardRules.acceptedText(
+            String(
+                repeating: "a",
+                count: BufferDetachedClipboardRules.maximumUTF8Bytes + 1
+            )
+          ) == nil else {
+        print("FAILED: detached Buffer clipboard validation")
+        return false
+    }
+
+    let pasteboard = NSPasteboard(
+        name: .init("com.rimes.buffer-window-smoke.\(UUID().uuidString)")
+    )
+    defer { pasteboard.releaseGlobally() }
+    pasteboard.clearContents()
+    guard pasteboard.setString("preserve me", forType: .string),
+          !BufferTextPasteboardWriter.write("", to: pasteboard),
+          pasteboard.string(forType: .string) == "preserve me",
+          BufferTextPasteboardWriter.write("detached result", to: pasteboard),
+          pasteboard.string(forType: .string) == "detached result" else {
+        print("FAILED: detached Buffer pasteboard write contract")
+        return false
+    }
 
     let preferenceSuiteName = "RimeBuffer.BufferWindowSmoke.\(UUID().uuidString)"
     guard let preferenceDefaults = UserDefaults(suiteName: preferenceSuiteName) else {
@@ -6455,6 +6499,24 @@ func runBufferWindowSmokeTest() -> Bool {
           migratedCapsuleDefinition.keyCode == UInt32(kVK_ANSI_C),
           migratedCapsuleDefinition.modifiers == UInt32(cmdKey | shiftKey) else {
         print("FAILED: individual hot key definition skipped Capsule migration")
+        return false
+    }
+
+    let externalUtilityActions = GlobalHotKeyRouting.registeredActions(
+        currentSourceIsOwn: false
+    )
+    let rimeUtilityActions = GlobalHotKeyRouting.registeredActions(
+        currentSourceIsOwn: true
+    )
+    guard externalUtilityActions == [
+            .toggleWorkbench,
+            .toggleClipboardHistory,
+            .openMailbox,
+            .openCapsule,
+          ],
+          !externalUtilityActions.contains(.openSettings),
+          rimeUtilityActions == Set(GlobalHotKeyAction.allCases) else {
+        print("FAILED: global utility registration scope")
         return false
     }
 
@@ -6812,9 +6874,10 @@ func runBufferWindowSmokeTest() -> Bool {
     guard BufferWorkbenchLayout.mainBar
             == [.bufferRail, .send],
           BufferWorkbenchLayout.toolbar
-            == [.status, .pluginActions, .exchangeEdit, .close],
+            == [.status, .clipboardImport, .pluginActions, .exchangeEdit, .close],
           BufferWorkbenchLayout.hoverControls
-            == [.copyResult, .send, .pluginActions, .exchangeEdit, .close],
+            == [.copyResult, .send, .clipboardImport, .pluginActions,
+                .exchangeEdit, .close],
           BufferWorkbenchLayout.passiveControls == [.bufferRail, .status],
           BufferWorkbenchLayout.toolbarInitiallyExpanded,
           BufferWorkbenchLayout.toolbarEmptySpaceDraggable,

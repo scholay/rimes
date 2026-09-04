@@ -259,6 +259,9 @@ final class BufferDeliveryCoordinator {
         static var live: Dependencies {
             Dependencies(
                 resolveTarget: { expectedToken in
+                    guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+                        return nil
+                    }
                     let lease = expectedToken.flatMap {
                         InputFocusCoordinator.shared.liveTarget(expected: $0)
                     } ?? (expectedToken == nil
@@ -270,10 +273,13 @@ final class BufferDeliveryCoordinator {
                         token: lease.token,
                         compositionActive: lease.compositionActive,
                         resolveComposition: {
+                            guard RimeInputSourceAuthority.currentSourceIsOwn()
+                            else { return }
                             controller.resolveCompositionForBufferDelivery(target: lease)
                         },
                         deliver: { block in
-                            guard let current = InputFocusCoordinator.shared.liveTarget(
+                            guard RimeInputSourceAuthority.currentSourceIsOwn(),
+                                  let current = InputFocusCoordinator.shared.liveTarget(
                                 expected: lease.token
                             ), current === lease else { return false }
                             return controller.deliverBufferedBlock(block.text,

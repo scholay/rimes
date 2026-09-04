@@ -27,6 +27,18 @@ STAGE=".build/stage"                # assemble here, not in the repo root
 APP_PATH="$STAGE/$APP"
 DEST="$HOME/Library/Input Methods/$APP"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+COMPANION_AGENT_HELPER="scripts/pkg/scripts/rimes-companion-launch-agent.sh"
+SYSTEM_COMPANION_AGENT="/Library/LaunchAgents/com.scholay.rimes.companion-start.plist"
+USER_COMPANION_AGENT="$HOME/Library/LaunchAgents/com.scholay.rimes.dev-companion-start.plist"
+COMPANION_AGENT_BACKUP=""
+COMPANION_AGENT_HAD_PREVIOUS=0
+COMPANION_AGENT_CHANGED=0
+
+if [ ! -r "$COMPANION_AGENT_HELPER" ] \
+    || ! /bin/bash -n "$COMPANION_AGENT_HELPER"; then
+    echo "!! companion LaunchAgent helper is missing or invalid"
+    exit 1
+fi
 
 # A system-wide release copy and this per-user dev copy would advertise the
 # same bundle/input-source IDs. Stop before creating that poisoned duplicate;
@@ -45,6 +57,12 @@ for system_copy in "/Library/Input Methods/ETInput.app" \
             ;;
     esac
 done
+if [ -e "$SYSTEM_COMPANION_AGENT" ] || [ -L "$SYSTEM_COMPANION_AGENT" ]; then
+    echo "!! found the release-package companion LaunchAgent: $SYSTEM_COMPANION_AGENT"
+    echo "   remove the system package and its agent before returning to a per-user dev install"
+    echo "   sudo /bin/bash '$COMPANION_AGENT_HELPER' remove-system"
+    exit 1
+fi
 
 # Fetch the bundled librime runtime (cached in Vendor/, not committed to git).
 ./scripts/fetch-rime.sh
@@ -206,6 +224,11 @@ echo "==> purging stray/duplicate registrations (same id at other paths poisons 
 pkill -x "$EXE" 2>/dev/null || true
 pkill -x RimeBuffer 2>/dev/null || true
 sleep 0.5
+if /usr/bin/pgrep -U "$(id -u)" -x "$EXE" >/dev/null 2>&1 \
+    || /usr/bin/pgrep -U "$(id -u)" -x RimeBuffer >/dev/null 2>&1; then
+    echo "!! existing RIMES process did not stop; refusing a live bundle replacement"
+    exit 1
+fi
 # Any leftover copies in the repo tree or a previous CJK-named install.
 for stray in "Enter输入法.app" "恩特输入法.app" "ETInput.app" "RimeBuffer.app" \
              "$HOME/Library/Input Methods/Enter输入法.app" \
@@ -232,6 +255,31 @@ rm -rf "$STAGE/$APP"                 # don't leave a staging copy lying around
 
 restore_previous_install() {
     echo "!! restoring the previous RIMES installation"
+    # The new bundle may already have registered or selected its TIS mode if a
+    # later shell/runtime failure interrupted the install. While its executable
+    # still exists, hand the session to a safe fallback before removing it.
+    if [ -x "$DEST/Contents/MacOS/$EXE" ]; then
+        if ! /bin/launchctl asuser "$(id -u)" \
+                "$DEST/Contents/MacOS/$EXE" --prepare-update \
+                >>"$HOME/rimebuffer-install.log" 2>&1; then
+            echo "!! could not move TIS to a safe fallback; keeping the valid new bundle in place"
+            return 1
+        fi
+    fi
+    if [ "$COMPANION_AGENT_CHANGED" -eq 1 ]; then
+        if [ "$COMPANION_AGENT_HAD_PREVIOUS" -eq 1 ] \
+            && [ -n "$COMPANION_AGENT_BACKUP" ]; then
+            if ! /bin/mv -f "$COMPANION_AGENT_BACKUP" \
+                    "$USER_COMPANION_AGENT" 2>/dev/null; then
+                echo "!! failed to restore the previous companion LaunchAgent"
+            fi
+            COMPANION_AGENT_BACKUP=""
+        else
+            /bin/bash "$COMPANION_AGENT_HELPER" remove-user \
+                2>/dev/null || true
+        fi
+        COMPANION_AGENT_CHANGED=0
+    fi
     pkill -x "$EXE" 2>/dev/null || true
     "$LSREGISTER" -u "$DEST" 2>/dev/null || true
     rm -rf "$DEST"
@@ -239,9 +287,69 @@ restore_previous_install() {
         mv "$DEST_BACKUP" "$DEST"
         "$LSREGISTER" -f "$DEST" 2>/dev/null || true
         /bin/launchctl asuser "$(id -u)" "$DEST/Contents/MacOS/$EXE" --install >> "$HOME/rimebuffer-install.log" 2>&1 || true
-        open "$DEST" 2>/dev/null || true
+        open -g "$DEST" 2>/dev/null || true
     fi
     rm -rf "$DEST_NEW"
+}
+
+snapshot_companion_agent() {
+    local agent_dir snapshot
+
+    agent_dir="$(dirname "$USER_COMPANION_AGENT")"
+    if [ -L "$USER_COMPANION_AGENT" ]; then
+        echo "!! refusing a symlinked development companion LaunchAgent"
+        return 1
+    fi
+    if [ -e "$USER_COMPANION_AGENT" ]; then
+        [ -f "$USER_COMPANION_AGENT" ] || return 1
+        snapshot="$(
+            /usr/bin/mktemp "$agent_dir/.rimes-companion-build-backup.XXXXXX"
+        )" || return 1
+        if ! /bin/cp -p "$USER_COMPANION_AGENT" "$snapshot"; then
+            /bin/rm -f "$snapshot"
+            return 1
+        fi
+        if ! /usr/bin/cmp -s "$USER_COMPANION_AGENT" "$snapshot"; then
+            /bin/rm -f "$snapshot"
+            return 1
+        fi
+        COMPANION_AGENT_BACKUP="$snapshot"
+        COMPANION_AGENT_HAD_PREVIOUS=1
+    fi
+}
+
+wait_for_installed_app_process() {
+    local expected="$DEST/Contents/MacOS/$EXE"
+    local attempts=0
+    local stable_matches=0
+    local pids pid running_command found
+
+    while [ "$attempts" -lt 20 ]; do
+        pids="$(
+            /usr/bin/pgrep -U "$(id -u)" -x "$EXE" 2>/dev/null || true
+        )"
+        found=0
+        for pid in $pids; do
+            case "$pid" in
+                ""|*[!0-9]*) continue ;;
+            esac
+            running_command="$(
+                /bin/ps -p "$pid" -o command= 2>/dev/null || true
+            )"
+            case "$running_command" in
+                "$expected"|"$expected -psn_"*) found=1; break ;;
+            esac
+        done
+        if [ "$found" -eq 1 ]; then
+            stable_matches=$((stable_matches + 1))
+            [ "$stable_matches" -ge 2 ] && return 0
+        else
+            stable_matches=0
+        fi
+        attempts=$((attempts + 1))
+        /bin/sleep 0.25
+    done
+    return 1
 }
 
 echo "==> atomically swapping the installed bundle"
@@ -260,17 +368,42 @@ fi
 echo "==> registering the single installed copy with Launch Services"
 "$LSREGISTER" -f "$DEST" || true
 
+echo "==> installing one-shot login bootstrap for companion shortcuts"
+if ! snapshot_companion_agent; then
+    echo "!! could not snapshot the existing companion LaunchAgent"
+    restore_previous_install
+    exit 1
+fi
+COMPANION_AGENT_CHANGED=1
+if ! /bin/bash "$COMPANION_AGENT_HELPER" install-user; then
+    echo "!! could not install the RIMES companion LaunchAgent"
+    restore_previous_install
+    exit 1
+fi
+open -g "$DEST" 2>/dev/null || true  # LaunchServices can report late success.
+if ! wait_for_installed_app_process; then
+    echo "!! installed RIMES did not remain running from the canonical bundle"
+    restore_previous_install
+    exit 1
+fi
+
+# Do not select the new TIS source until every later fail-closed lifecycle check
+# has passed. A failed fresh install can then restore/remove the bundle without
+# ever leaving the user's current input source pointing at deleted bytes.
 echo "==> self-install: register + enable + select inside the login session"
 INSTALL_LOG="$HOME/rimebuffer-install.log"
 ACTIVATION_READY=1
-if ! /bin/launchctl asuser "$(id -u)" "$DEST/Contents/MacOS/$EXE" --install 2>&1 | tee "$INSTALL_LOG"; then
-    # The bundle is already valid and atomically installed. Recent macOS
-    # releases can require a login-session refresh before TIS exposes a newly
-    # registered source; do not roll back good payload bytes for that condition.
+if ! /bin/launchctl asuser "$(id -u)" \
+        "$DEST/Contents/MacOS/$EXE" --install 2>&1 | tee "$INSTALL_LOG"; then
+    # The bundle is already valid, resident, and has its login bootstrap.
+    # Recent macOS releases can require a session refresh before TIS exposes a
+    # newly registered source, so activation remains an explicit nonfatal tail.
     ACTIVATION_READY=0
     echo "!! input-source activation is pending a logout/login session refresh"
 fi
-open "$DEST" || true                 # start the IMK server (candidate/settings UI ready)
+[ -z "$COMPANION_AGENT_BACKUP" ] || /bin/rm -f "$COMPANION_AGENT_BACKUP"
+COMPANION_AGENT_BACKUP=""
+COMPANION_AGENT_CHANGED=0
 rm -rf "$DEST_BACKUP"
 
 if [ "$ACTIVATION_READY" -eq 1 ]; then
