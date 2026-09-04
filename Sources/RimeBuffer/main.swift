@@ -755,8 +755,9 @@ if let i = CommandLine.arguments.firstIndex(of: "settings-render"),
         : "failed to render one or more settings routes")
     exit(rendered ? 0 : 1)
 }
-// Dev-only: `ETInput panel-render <path> [translation|marine|candidate|toolbar]
-// [hover=<control>]` renders the actual compact workbench.
+// Dev-only: `ETInput panel-render <path>
+// [translation|marine|candidate|linked|toolbar] [hover=<control>]
+// [width=<points>]` renders the actual compact workbench.
 if let i = CommandLine.arguments.firstIndex(of: "panel-render"),
    i + 1 < CommandLine.arguments.count {
     let app = NSApplication.shared
@@ -772,10 +773,14 @@ if let i = CommandLine.arguments.firstIndex(of: "panel-render"),
     let translation = options.contains("translation")
     let marine = options.contains("marine")
     let candidatePreview = options.contains("candidate")
+    let linkedPreview = options.contains("linked")
     let toolbarExpanded = options.contains("toolbar")
     if marine { model.discardForPrivacy() }
     let scaleValue = options.first { Double($0) != nil }.flatMap { Double($0) }
     let scale = CGFloat(scaleValue ?? 2)
+    let panelWidth = options.first { $0.hasPrefix("width=") }
+        .flatMap { Double($0.dropFirst("width=".count)) }
+        .map { CGFloat($0) } ?? 760
     let hoveredControl = options.compactMap { option -> BufferWorkbenchControl? in
         guard option.hasPrefix("hover=") else { return nil }
         return BufferWorkbenchControl(rawValue: String(option.dropFirst("hover=".count)))
@@ -816,10 +821,12 @@ if let i = CommandLine.arguments.firstIndex(of: "panel-render"),
     let rendered = BufferWindowController.shared.renderForPreview(
         to: CommandLine.arguments[i + 1],
         scale: scale,
+        panelWidth: panelWidth,
         translationSnapshot: translationSnapshot,
         statusIndicators: previewStatuses,
         hoveredControl: hoveredControl,
         candidatePreview: candidatePreview,
+        targetAssociationPreviewAppName: linkedPreview ? "Safari" : nil,
         toolbarExpanded: toolbarExpanded
     )
     print(rendered
@@ -979,6 +986,7 @@ InputFocusCoordinator.shared.onChange = {
 InputFocusCoordinator.shared.onInvalidated = { owner in
     BufferModel.shared.clearAllContentSelection()
     candidateWindow.hide(owner: owner)
+    BufferWindowController.shared.focusInvalidated(owner)
     ActionPluginHost.shared.focusInvalidated(owner)
     StreamInputWorkspace.shared.focusInvalidated(owner)
     ClipboardHistoryWindowController.shared.focusInvalidated(owner)
@@ -1056,6 +1064,11 @@ private func retireRimeInputSourceAuthority(observedSourceID: String?) {
             reason: "input source changed"
         )
     }
+    // `invalidateAll` and `routeDirectPreservingContent` can both be no-ops
+    // when there is no current lease and Buffer was already direct. The
+    // visible utility still has to enter detached clipboard presentation as
+    // soon as another input source becomes authoritative.
+    BufferWindowController.shared.refresh()
 }
 
 var lastObservedInputSourceID: String? = {
@@ -6147,6 +6160,125 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
 func runBufferWindowSmokeTest() -> Bool {
     print("== \(ProductIdentity.displayName) buffer window smoke test ==")
 
+    guard BufferTargetAssociationRules.state(
+            rimeOwnsInput: true,
+            contentProtected: false,
+            captureActive: true,
+            capturedTargetIsLive: true,
+            hasLiveTarget: true
+          ) == .capturing,
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: true,
+            contentProtected: false,
+            captureActive: true,
+            capturedTargetIsLive: false,
+            hasLiveTarget: true
+          ) == .targetChanged,
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: true,
+            contentProtected: false,
+            captureActive: false,
+            capturedTargetIsLive: false,
+            hasLiveTarget: true
+          ) == .ready,
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: true,
+            contentProtected: false,
+            captureActive: false,
+            capturedTargetIsLive: false,
+            hasLiveTarget: false
+          ) == .unavailable,
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: false,
+            contentProtected: false,
+            captureActive: true,
+            capturedTargetIsLive: true,
+            hasLiveTarget: true
+          ) == .detached,
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: false,
+            contentProtected: true,
+            captureActive: true,
+            capturedTargetIsLive: true,
+            hasLiveTarget: true
+          ) == .protected,
+          !BufferTargetAssociationRules.showsExpandedTitle(panelWidth: 679),
+          BufferTargetAssociationRules.showsExpandedTitle(panelWidth: 680),
+          !BufferTargetAssociationRules.shouldClearCue(
+            state: .capturing,
+            hasPresentedCue: true,
+            cueMatchesLiveTarget: true
+          ),
+          BufferTargetAssociationRules.shouldClearCue(
+            state: .ready,
+            hasPresentedCue: true,
+            cueMatchesLiveTarget: false
+          ),
+          !BufferTargetAssociationRules.shouldClearCue(
+            state: .ready,
+            hasPresentedCue: false,
+            cueMatchesLiveTarget: false
+          ),
+          BufferTargetAssociationRules.shouldClearCue(
+            state: .targetChanged,
+            hasPresentedCue: false,
+            cueMatchesLiveTarget: false
+          ) else {
+        print("FAILED: Buffer target-association state contract")
+        return false
+    }
+
+    let associationPanel = NSRect(x: 100, y: 100, width: 200, height: 80)
+    let topMarker = BufferTargetAssociationGeometry.marker(
+        panelFrame: associationPanel,
+        targetRect: NSRect(x: 199, y: 220, width: 2, height: 20)
+    )
+    let bottomMarker = BufferTargetAssociationGeometry.marker(
+        panelFrame: associationPanel,
+        targetRect: NSRect(x: 199, y: 40, width: 2, height: 20)
+    )
+    let leftMarker = BufferTargetAssociationGeometry.marker(
+        panelFrame: associationPanel,
+        targetRect: NSRect(x: 20, y: 139, width: 2, height: 2)
+    )
+    let rightMarker = BufferTargetAssociationGeometry.marker(
+        panelFrame: associationPanel,
+        targetRect: NSRect(x: 379, y: 139, width: 2, height: 2)
+    )
+    let clampedTopMarker = BufferTargetAssociationGeometry.marker(
+        panelFrame: associationPanel,
+        targetRect: NSRect(x: 100, y: 220, width: 2, height: 20)
+    )
+    guard topMarker == BufferTargetAssociationMarker(edge: .top, position: 0.5),
+          bottomMarker == BufferTargetAssociationMarker(edge: .bottom, position: 0.5),
+          leftMarker == BufferTargetAssociationMarker(edge: .left, position: 0.5),
+          rightMarker == BufferTargetAssociationMarker(edge: .right, position: 0.5),
+          clampedTopMarker?.edge == .top,
+          abs((clampedTopMarker?.position ?? 0) - 0.07) < 0.0001,
+          BufferTargetAssociationGeometry.marker(
+            panelFrame: associationPanel,
+            targetRect: NSRect(x: 180, y: 120, width: 10, height: 10)
+          ) == nil,
+          BufferTargetAssociationGeometry.marker(
+            panelFrame: NSRect(x: CGFloat.nan, y: 0, width: 200, height: 80),
+            targetRect: NSRect(x: 0, y: 0, width: 2, height: 20)
+          ) == nil else {
+        print("FAILED: Buffer target-association geometry contract")
+        return false
+    }
+
+    let targetCue = TargetAssociationCueController()
+    guard targetCue.hasSafeWindowContractForSmokeTest(),
+          !targetCue.show(
+            caretScreenRect: NSRect(x: CGFloat.nan, y: 0, width: 1, height: 20),
+            accentColor: .systemBlue,
+            level: .popUpMenu,
+            reduceMotion: false
+          ) else {
+        print("FAILED: target-association cue window contract")
+        return false
+    }
+
     guard BufferDetachedClipboardRules.acceptedText("clipboard text")
             == "clipboard text",
           BufferDetachedClipboardRules.acceptedText(nil) == nil,
@@ -6872,12 +7004,12 @@ func runBufferWindowSmokeTest() -> Bool {
         phase: .ready
     )
     guard BufferWorkbenchLayout.mainBar
-            == [.bufferRail, .send],
+            == [.bufferRail, .targetAssociation, .send],
           BufferWorkbenchLayout.toolbar
             == [.status, .clipboardImport, .pluginActions, .exchangeEdit, .close],
           BufferWorkbenchLayout.hoverControls
-            == [.copyResult, .send, .clipboardImport, .pluginActions,
-                .exchangeEdit, .close],
+            == [.copyResult, .targetAssociation, .send, .clipboardImport,
+                .pluginActions, .exchangeEdit, .close],
           BufferWorkbenchLayout.passiveControls == [.bufferRail, .status],
           BufferWorkbenchLayout.toolbarInitiallyExpanded,
           BufferWorkbenchLayout.toolbarEmptySpaceDraggable,

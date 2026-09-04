@@ -4,6 +4,8 @@
 
 > **2026-08-31 Buffer 点击、指针与拖动补充**：前置输入/插件图标在祖先 rail 手势识别前被排除，点击不再切换工具栏，也不同时触发正文捕获；所有可交互按钮、弹出控件和可选 chip 在 nonactivating panel 内主动设置 pointing-hand，禁用或离开时恢复 arrow。只有常显工具栏的空白 chrome、状态、间距和弹性留白使用 open/closed-hand 并可拖窗；正文轨、窗口背景、插件/配置控件、复制、发送与关闭命中区都不参与拖动，不保留右侧 24pt 专用拖动区。
 
+> **2026-09-04 Buffer 目标关联提示覆盖（当前）**：Buffer 主行在发送按钮前常驻一个目标状态锚；宽度至少 680pt 且目标有效时展开为「应用名 · 输入到 Buffer / 发送目标」，窄窗口只保留形状不同的状态图标。只有 `BufferModel.captureFocusToken` 与实时 `InputFocusCoordinator.liveTarget` 精确一致时才显示正在关联；目标变化、无目标、secure/session protection 与非 RIMES detached 模式分别显示警告、等待、锁定和剪贴板状态，不得用保存的 bundle 名或旧 caret 冒充关联。显式捕获成功后，在经过输入源、会话 epoch、route generation、同一 token、controller/client 与 caret 的前后两次复验后，于宿主 caret 显示约 700ms 的双括号信标，同时在 Buffer 朝向该 caret 的最近边缘显示同色缺口。点击有效状态锚只重新验证并重播提示，不切换焦点、输入源或输入路由。提示 panel 必须 borderless、nonactivating、click-through，并沿用宿主感知的候选窗口层级；Reduce Motion 下不缩放。焦点失效、出现 preedit、外部指针归还宿主、窗口移动/移屏/Space 或屏幕变化、隐藏、secure input、锁屏/睡眠/会话切出、输入源离开 RIMES 时同步清除；不得通过 Accessibility、CGEvent、轮询其他输入法或合成按键实现。
+
 >
 > **2026-09-04 周边功能跨输入法覆盖（当前）**：开发安装与发布包各自安装一个不带 `KeepAlive` 的 one-shot Aqua LaunchAgent，在冷登录时只执行一次后台 `open -g`，使同一个 RIMES 进程在当前输入源属于其他输入法时也能提供 Buffer、Clipboard History、Mailbox 与 Capsule 的四个全局快捷键。开发版任务以同目录临时文件校验后原子替换并打开用户 App；系统包在替换 payload 前审计所有本机普通账户，只允许当前 GUI 用户存在可安全退休的开发版，其他账户有同 ID dev App/任务或 home 无法安全核验就 fail-closed。postinstall 退休当前用户开发版并复核全机无冲突后，才以原始 agent 字节/缺席状态快照事务发布系统任务；系统登录 guard 对后来出现的开发版痕迹只作防御性短路。Mailbox 与 Capsule 是正常取得键盘焦点的管理窗口；Clipboard 在非 RIMES 输入源下激活任意条目时只恢复原始 pasteboard、提升到历史首位并静默关闭，由用户自行按 `Command+V`；Buffer 在非 RIMES 输入源下只允许显式剪贴板导入与结果复制，不取得 IMK 捕获或投递 authority。设置窗口仍只允许从 RIMES 输入源打开，其中 Mailbox/Capsule 路由只承载配置与状态，不嵌入实际操作 pane。所有周边路径都不得访问外部 IMK client、切换输入源、合成粘贴或其他按键、调用 Accessibility/Post Event，或读取、提交、取消其他输入法的组字。
 
@@ -331,7 +333,8 @@ rime-buffer/
     ├── (FocusObserver)           ✅ 以 main.swift 的 NSWorkspace 观察器实现(forceCommit+藏窗)
     ├── BufferModel.swift          ✅ P2 缓冲模型(live块/成功消费/无历史/transient)
     ├── BufferDeliveryCoordinator.swift ✅ 精确焦点逐块投递/失败后缀保留
-    ├── BufferWindowController.swift ✅ 前置图标切换33+1pt工具栏、折叠44/78pt与展开78/112pt、工具栏空白拖动、1–5 alternative分页/插件刷新/多屏/隐私
+    ├── BufferWindowController.swift ✅ Buffer 主窗口、精确目标状态锚/边缘提示、工具栏、1–5 alternative分页/插件刷新/多屏/隐私
+    ├── TargetAssociationCueController.swift ✅ caret 双括号短提示（nonactivating/click-through/Reduce Motion）
     ├── BufferInlineView.swift     ✅ 工作台块轨、来源徽标、source全选与多行target
     ├── GlobalHotKeyController.swift ✅ Command+Shift+B Buffer；Command+Shift+P Clipboard History；Command+Shift+M Mailbox；Command+Shift+C Capsule
     ├── ClipboardHistoryWindowController.swift ✅ 独立底部双模式窗口（RIMES nonactivating / 外部输入法 key-capable）、文本 exact-token 投递、富内容 pasteboard 恢复与会话保护

@@ -1,5 +1,12 @@
 # Buffer UI Notes
 
+## Latest Override — 2026-09-04 Target Association
+
+- The main content row keeps one target-association anchor immediately before the primary action. At 680pt or wider, a valid target expands to `App · 输入到 Buffer` or `App · 发送目标`; narrower layouts retain the state icon. Capturing, ready, changed, unavailable, detached, and protected states use distinct shape and text, so color is never the sole signal.
+- A capturing state is truthful only while `BufferModel.captureFocusToken` exactly matches the current `InputFocusCoordinator.liveTarget`. Detached mode never resolves IMK focus or caret geometry. Saved app identity, `openingFocusToken`, and prior caret rectangles are presentation history, not association authority.
+- A successful explicit capture revalidates the input source, secure/session state, workbench epoch, input-route generation, exact token, live controller/client, and caret before showing a roughly 700ms click-through bracket at the host caret. The Buffer chrome simultaneously draws a short notch on the nearest edge. Clicking a valid target anchor only repeats the same validation and cue; it never focuses the host, changes routing, selects an input source, or synthesizes input.
+- The cue uses a borderless nonactivating panel, the host-aware candidate-panel level, and no Accessibility or event posting. Reduce Motion removes scale animation. Hide, focus invalidation, preedit, host pointer return, manual movement, screen/Space changes, secure input, session protection, and leaving RIMES clear both halves immediately.
+
 ## Latest Override — 2026-08-31
 
 This section is the current Buffer UI contract and overrides every conflicting toolbar, geometry, rail-role, copy, and appearance statement later in this document. Historical sections remain only for decision traceability.
@@ -109,6 +116,7 @@ The buffer is a native IME-layer staging area. It is not an AX/paste workaround 
 - Build with `swift build -c debug`.
 - Run `.build/debug/RimeBuffer buffer-smoke`. It covers successful live-block consumption without history retention, unsent-order preservation, insertion point movement, and close/pause block preservation plus transient-state cleanup.
 - Run `.build/debug/RimeBuffer buffer-window-smoke`. It must cover:
+  - target-association state truthfulness, nearest-edge geometry, nonfinite rejection, and the cue panel's nonactivating/click-through contract;
   - stale focus epochs/deactivate rejection;
   - every target gate: current/expected token, external/trusted target, live controller/client, lease and current-controller client identity, client bundle, and frontmost bundle/PID;
   - event timestamp ordering and background ownership rejection;
