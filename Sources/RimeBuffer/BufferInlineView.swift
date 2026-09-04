@@ -17,6 +17,7 @@ enum BufferInlineMetrics {
     static let pagerCountWidth: CGFloat = 28
     static let pagerButtonSize: CGFloat = 24
     static let maximumAlternativeCount = 5
+    static let trailingActionSafetyGap: CGFloat = 6
 
     /// Width used by repeated block chrome, excluding text and the rail edge.
     static func packedBlockChromeWidth(blockCount: Int,
@@ -524,13 +525,19 @@ private final class TranslationTargetRail {
     let row = NSStackView()
     let leadingPlaceholder = NSView()
     let trailingSpacer = NSView()
+    private let trailingClearanceConstraint: NSLayoutConstraint
 
     init(key: Int) {
         self.key = key
+        trailingClearanceConstraint = trailingSpacer.widthAnchor.constraint(
+            greaterThanOrEqualToConstant: 0
+        )
         leadingPlaceholder.translatesAutoresizingMaskIntoConstraints = false
+        trailingSpacer.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             leadingPlaceholder.widthAnchor.constraint(equalToConstant: 14),
             leadingPlaceholder.heightAnchor.constraint(equalToConstant: 14),
+            trailingClearanceConstraint,
         ])
         leadingPlaceholder.setContentHuggingPriority(.required, for: .horizontal)
         leadingPlaceholder.setContentCompressionResistancePriority(.required,
@@ -538,6 +545,10 @@ private final class TranslationTargetRail {
         trailingSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         trailingSpacer.setContentCompressionResistancePriority(.defaultLow,
                                                                for: .horizontal)
+    }
+
+    func setTrailingClearance(_ width: CGFloat) {
+        trailingClearanceConstraint.constant = max(0, width)
     }
 }
 
@@ -659,8 +670,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     var onDerivedTargetSelection: ((UUID) -> Void)?
     var onDerivedTargetStep: ((Int) -> Void)?
     var onCaptureRequested: ((Int) -> Void)?
-    var onToolbarToggleRequested: (() -> Void)?
-    var generatedResultCopyControl: NSView?
 
     static let standardPreferredHeight: CGFloat = 34
     static let translationPreferredHeight: CGFloat = 68
@@ -700,9 +709,12 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private let translationContainer = NSStackView()
     private let translationSourceScroll = NSScrollView()
     private let translationSourceRow = NSStackView()
-    private let inputOptionsButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let leadingSpacer = NSView()
     private let translationSourceSpacer = NSView()
+    private lazy var standardTrailingClearanceConstraint = leadingSpacer.widthAnchor
+        .constraint(greaterThanOrEqualToConstant: 0)
+    private lazy var sourceTrailingClearanceConstraint = translationSourceSpacer.widthAnchor
+        .constraint(greaterThanOrEqualToConstant: 0)
     private let caretView = NSView()
     private let preeditView = BufferInlinePreeditView(frame: .zero)
     private let emptyLabel = NSTextField(labelWithString: "等待暂存内容")
@@ -724,8 +736,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private var translationLoadingActive = false
     private var lastRenderSignature: RenderSignature?
     private var contentShielded = false
-    private var inputOptionsTitle = BufferPluginMenuCatalog.defaultTitle
-    private var toolbarExpanded = false
+    private var trailingActionExclusionWidth: CGFloat = 0
     private var enterHoldProgress: CGFloat?
     private(set) var renderPassCount = 0
     private(set) var renderedSelectedStandardBlockCount = 0
@@ -733,9 +744,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private(set) var renderedAlternativeCount = 0
     private(set) var renderedAlternativeIndex = 0
     private(set) var renderedInputPlaceholderVisible = false
-    var renderedInputControlCount: Int {
-        inputOptionsButton.superview == nil ? 0 : 1
-    }
+    var renderedLeadingInputControlCount: Int { 0 }
     var renderedBlockCount: Int { renderedBlockIDs.count }
     var renderedInputCaretVisible: Bool {
         caretView.superview === chipRow
@@ -926,7 +935,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         )
     }
 
-    static func runToolbarToggleInteractionProbe() -> Bool {
+    static func runNoLeadingControlProbe() -> Bool {
         let host = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 50))
         let view = BufferInlineView(
             frame: NSRect(x: 37, y: 8, width: 460, height: 34)
@@ -942,30 +951,14 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         _ = view.renderStandardForPreview()
         host.layoutSubtreeIfNeeded()
         view.layoutSubtreeIfNeeded()
-
-        let buttonRect = view.inputOptionsButton.convert(
-            view.inputOptionsButton.bounds,
-            to: view
-        )
-        guard !buttonRect.isEmpty else { return false }
-        let buttonPoint = NSPoint(x: buttonRect.midX, y: buttonRect.midY)
         let ordinaryRailPoint = NSPoint(
-            x: min(view.bounds.maxX - 2, buttonRect.maxX + 12),
+            x: view.bounds.minX + 12,
             y: view.bounds.midY
         )
-        var requestedToggleCount = 0
-        view.onToolbarToggleRequested = {
-            requestedToggleCount += 1
-        }
-        view.inputOptionsButton.performClick(nil)
-        view.inputOptionsButton.performClick(nil)
-        let containsButton = view.inputOptionsContains(pointInSelf: buttonPoint)
-        let excludesButton = !view.shouldAttemptLogicalRailClick(at: buttonPoint)
         let acceptsRail = view.shouldAttemptLogicalRailClick(at: ordinaryRailPoint)
-        let standardPassed = containsButton
-            && excludesButton
-            && acceptsRail
-            && requestedToggleCount == 0
+        let standardHasNoLeadingControl = !view.chipRow.arrangedSubviews.contains {
+            $0 is NSButton
+        }
 
         let outputID = UUID()
         _ = view.renderTranslationForPreview(
@@ -982,6 +975,11 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         )
         host.layoutSubtreeIfNeeded()
         view.layoutSubtreeIfNeeded()
+        let sourceHasNoLeadingControl = !view.translationSourceRow
+            .arrangedSubviews.contains { $0 is NSButton }
+        let targetHasNoLeadingControl = view.translationTargetRails.values.allSatisfy {
+            !$0.row.arrangedSubviews.contains { $0 is NSButton }
+        }
         let sourceChipAccepted: Bool
         if let sourceChip = view.translationSourceChipView {
             let rect = sourceChip.convert(sourceChip.bounds, to: view)
@@ -1008,23 +1006,28 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             )
         )
         interactiveChip.removeFromSuperview()
-        let passed = standardPassed && sourceChipAccepted && targetChipExcluded
+        let passed = view.renderedLeadingInputControlCount == 0
+            && standardHasNoLeadingControl
+            && sourceHasNoLeadingControl
+            && targetHasNoLeadingControl
+            && acceptsRail
+            && sourceChipAccepted
+            && targetChipExcluded
         if !passed {
             print(
-                "FAILED: buffer input-icon interaction probe",
-                "buttonRect=\(buttonRect)",
-                "contains=\(containsButton)",
-                "excluded=\(excludesButton)",
+                "FAILED: buffer rail must have no leading control",
+                "standard=\(standardHasNoLeadingControl)",
+                "source=\(sourceHasNoLeadingControl)",
+                "target=\(targetHasNoLeadingControl)",
                 "rail=\(acceptsRail)",
-                "toggles=\(requestedToggleCount)",
-                "source=\(sourceChipAccepted)",
-                "target=\(targetChipExcluded)"
+                "sourceClick=\(sourceChipAccepted)",
+                "targetClick=\(targetChipExcluded)"
             )
         }
         return passed
     }
 
-    static func runGeneratedResultCopyPlacementProbe() -> Bool {
+    static func runTrailingActionExclusionProbe() -> Bool {
         let host = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 80))
         let view = BufferInlineView(
             frame: NSRect(x: 8, y: 8, width: 504, height: 64)
@@ -1036,10 +1039,39 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             view.topAnchor.constraint(equalTo: host.topAnchor, constant: 8),
             view.bottomAnchor.constraint(equalTo: host.bottomAnchor, constant: -8),
         ])
-        let copy = FirstMouseButton(title: "", target: nil, action: nil)
-        copy.isHidden = false
-        view.generatedResultCopyControl = copy
         host.layoutSubtreeIfNeeded()
+        let longPreedit = String(repeating: "buffer-tail-", count: 32)
+        _ = view.renderStandardForPreview(
+            preedit: longPreedit,
+            preeditCursorPosUTF8: longPreedit.utf8.count
+        )
+        host.layoutSubtreeIfNeeded()
+        view.layoutSubtreeIfNeeded()
+        let railWidthBefore = view.bounds.width
+        let standardScrollWidthBefore = view.chipScroll.frame.width
+        let requestedWidth: CGFloat = 92
+        let expectedClearance = requestedWidth
+            + BufferInlineMetrics.trailingActionSafetyGap
+        view.setTrailingActionExclusion(width: requestedWidth)
+        host.layoutSubtreeIfNeeded()
+        view.layoutSubtreeIfNeeded()
+        let standardStable = abs(view.bounds.width - railWidthBefore) < 0.5
+            && abs(view.chipScroll.frame.width - standardScrollWidthBefore) < 0.5
+            && abs(view.standardTrailingClearanceConstraint.constant
+                - expectedClearance) < 0.5
+        let standardCaretClearsOverlay: Bool
+        if let caret = view.preeditView.caretRect(
+            convertedTo: view.chipScroll.contentView
+        ) {
+            let safeVisibleMaxX = view.chipScroll.contentView.bounds.maxX
+                - expectedClearance
+            standardCaretClearsOverlay = caret.minX
+                    >= view.chipScroll.contentView.bounds.minX - 1
+                && caret.maxX <= safeVisibleMaxX + 1
+        } else {
+            standardCaretClearsOverlay = false
+        }
+
         _ = view.renderTranslationForPreview(
             TranslationRailSnapshot(
                 sourceText: "原文",
@@ -1052,25 +1084,23 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         host.layoutSubtreeIfNeeded()
         view.layoutSubtreeIfNeeded()
         guard let rail = view.translationTargetRails.values.first else {
-            print("FAILED: generated-result copy placement missing target rail")
+            print("FAILED: trailing action exclusion missing target rail")
             return false
         }
-        let arranged = rail.row.arrangedSubviews
-        guard let copyIndex = arranged.firstIndex(where: { $0 === copy }) else {
-            print("FAILED: generated-result copy missing from target rail", arranged)
-            return false
-        }
-        let chipIndex = arranged.firstIndex { $0 is TranslationRailChipView }
-        let leading = copyIndex == 0
-            || (arranged.first === view.inputOptionsButton && copyIndex == 1)
-        let beforeText = chipIndex.map { copyIndex < $0 } ?? true
-        let passed = leading && beforeText && !copy.isHidden
+        let targetStable = abs(view.bounds.width - railWidthBefore) < 0.5
+            && view.sourceTrailingClearanceConstraint.constant == 0
+            && rail.trailingSpacer === rail.row.arrangedSubviews.last
+            && rail.trailingSpacer.frame.width + 0.5 >= expectedClearance
+            && !rail.row.arrangedSubviews.contains(where: { $0 is NSButton })
+        let passed = standardStable && standardCaretClearsOverlay && targetStable
         if !passed {
             print(
-                "FAILED: generated-result copy must lead the return rail",
-                "copyIndex=\(copyIndex)",
-                "chipIndex=\(String(describing: chipIndex))",
-                "arranged=\(arranged)"
+                "FAILED: trailing action exclusion must not shrink rail",
+                "standard=\(standardStable)",
+                "caretClear=\(standardCaretClearsOverlay)",
+                "target=\(targetStable)",
+                "clearance=\(rail.trailingSpacer.frame.width)",
+                "expected=\(expectedClearance)"
             )
         }
         return passed
@@ -1094,15 +1124,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         inputClick.delegate = self
         addGestureRecognizer(inputClick)
 
-        configureIconButton(
-            inputOptionsButton,
-            symbolName: "keyboard",
-            toolTip: BufferPluginMenuCatalog.defaultTitle
-        )
-        inputOptionsButton.target = nil
-        inputOptionsButton.action = nil
-        inputOptionsButton.setAccessibilityLabel(BufferPluginMenuCatalog.defaultTitle)
-
         emptyLabel.font = .systemFont(ofSize: 12)
         emptyLabel.lineBreakMode = .byTruncatingTail
         for label in [translationSourceEmptyLabel, translationTargetEmptyLabel] {
@@ -1124,9 +1145,14 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         chipRow.alignment = .centerY
         chipRow.distribution = .fill
         for spacer in [leadingSpacer, translationSourceSpacer] {
+            spacer.translatesAutoresizingMaskIntoConstraints = false
             spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
             spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
+        NSLayoutConstraint.activate([
+            standardTrailingClearanceConstraint,
+            sourceTrailingClearanceConstraint,
+        ])
 
         caretView.wantsLayer = true
         caretView.layer?.cornerRadius = 1
@@ -1186,30 +1212,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    func updateInputOptions(symbolName: String,
-                            title: String,
-                            enabled: Bool = true,
-                            toolbarExpanded: Bool = false) {
-        inputOptionsTitle = title
-        self.toolbarExpanded = toolbarExpanded
-        inputOptionsButton.image = RimeUI.symbol(
-            symbolName,
-            pointSize: 12,
-            weight: .semibold
-        )
-        inputOptionsButton.image?.isTemplate = true
-        inputOptionsButton.toolTip = inputOptionsTitle
-        inputOptionsButton.setAccessibilityLabel(inputOptionsTitle)
-        inputOptionsButton.isEnabled = enabled
-        inputOptionsButton.refreshInteractionAppearance()
-    }
-
-    func setToolbarExpanded(_ expanded: Bool) {
-        toolbarExpanded = expanded
-        inputOptionsButton.toolTip = inputOptionsTitle
-        inputOptionsButton.setAccessibilityLabel(inputOptionsTitle)
-    }
-
     @objc private func logicalInputClicked(_ recognizer: NSClickGestureRecognizer) {
         guard recognizer.state == .ended, !contentShielded else { return }
         let point = recognizer.location(in: self)
@@ -1257,20 +1259,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         !contentShielded && !interactiveDescendantContains(pointInSelf: point)
     }
 
-    private func inputOptionsContains(pointInSelf point: NSPoint) -> Bool {
-        guard inputOptionsButton.superview != nil,
-              !inputOptionsButton.isHidden,
-              inputOptionsButton.alphaValue > 0 else { return false }
-        return inputOptionsButton.convert(
-            inputOptionsButton.bounds,
-            to: self
-        ).contains(point)
-    }
-
     private func interactiveDescendantContains(pointInSelf point: NSPoint) -> Bool {
-        if inputOptionsContains(pointInSelf: point) {
-            return true
-        }
         guard let superview else { return false }
         let pointForHitTest = convert(point, to: superview)
         var candidate = hitTest(pointForHitTest)
@@ -1345,6 +1334,54 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         guard !translationContainer.isHidden else { return }
         layoutSubtreeIfNeeded()
         updateTranslationDocumentSizes()
+    }
+
+    /// Keeps the logical rail full width while reserving scrollable tail room
+    /// beneath the sibling action overlay. The overlay never participates in
+    /// the rail's outer Auto Layout width; only the document tail changes, so
+    /// the caret and final chip can scroll clear of the buttons.
+    func setTrailingActionExclusion(width: CGFloat) {
+        let bounded = max(0, width) + (width > 0
+            ? BufferInlineMetrics.trailingActionSafetyGap
+            : 0)
+        guard abs(trailingActionExclusionWidth - bounded) >= 0.5 else { return }
+        trailingActionExclusionWidth = bounded
+        applyTrailingActionExclusion()
+        if translationContainer.isHidden {
+            updateChipDocumentSize()
+            if contentShielded {
+                scrollToStart(in: chipScroll)
+            } else if lastRenderSignature != nil {
+                // The copy action can appear without changing rail content.
+                // Reconcile the logical insertion point against the new safe
+                // width so the tail never remains underneath the overlay.
+                scrollChipsToInsertionPoint()
+            }
+        } else {
+            updateTranslationDocumentSizes()
+            if let phase = lastRenderSignature?.translation?.phase {
+                scrollTranslationRails(for: phase)
+            }
+        }
+    }
+
+    private func applyTrailingActionExclusion() {
+        standardTrailingClearanceConstraint.constant = 0
+        sourceTrailingClearanceConstraint.constant = 0
+        translationTargetRails.values.forEach { $0.setTrailingClearance(0) }
+
+        guard trailingActionExclusionWidth > 0 else { return }
+        if translationContainer.isHidden {
+            standardTrailingClearanceConstraint.constant = trailingActionExclusionWidth
+        } else if renderedTranslationTargetRowKeys.isEmpty {
+            sourceTrailingClearanceConstraint.constant = trailingActionExclusionWidth
+        } else {
+            for key in renderedTranslationTargetRowKeys {
+                translationTargetRails[key]?.setTrailingClearance(
+                    trailingActionExclusionWidth
+                )
+            }
+        }
     }
 
     private func updateHairlineWidth() {
@@ -1431,8 +1468,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         let wasRenderingTranslation = !contentShielded
             && lastRenderSignature?.translation != nil
         contentShielded = false
-        inputOptionsButton.isEnabled = true
-
         let signature = RenderSignature(
             blocks: model.blocks.map {
                 RenderedBlock(id: $0.id,
@@ -1489,7 +1524,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         )
         normalRailContainer.isHidden = false
         translationContainer.isHidden = true
-        chipRow.addArrangedSubview(inputOptionsButton)
         renderedSelectedStandardBlockCount = signature.allContentSelected
             ? model.blocks.count
             : 0
@@ -1558,6 +1592,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             chipRow.addArrangedSubview(messageChip(text: message))
         }
         chipRow.addArrangedSubview(leadingSpacer)
+        applyTrailingActionExclusion()
 
         active ? startCaretBlinking() : stopCaretBlinking()
         applyAppearance()
@@ -1598,10 +1633,9 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         normalRailContainer.isHidden = false
         translationContainer.isHidden = true
         emptyLabel.stringValue = "内容已隐藏"
-        inputOptionsButton.isEnabled = false
-        chipRow.addArrangedSubview(inputOptionsButton)
         chipRow.addArrangedSubview(emptyLabel)
         chipRow.addArrangedSubview(leadingSpacer)
+        applyTrailingActionExclusion()
         stopCaretBlinking()
         isHidden = false
         applyAppearance()
@@ -1671,9 +1705,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         renderedAlternativeCount = showsTargetRail ? alternativeCount : 0
         renderedAlternativeIndex = showsTargetRail ? activeAlternativeIndex : 0
 
-        var sourceViews: [NSView] = renderedShowsSourceRail
-            ? [inputOptionsButton]
-            : []
+        var sourceViews: [NSView] = []
         if renderedShowsSourceRail,
            BufferInputPlaceholderRules.shouldShow(
             contentIsEmpty: snapshot.sourceText.isEmpty,
@@ -1802,14 +1834,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         for (rowIndex, rowSnapshot) in rowSnapshots.enumerated() {
             guard let rail = translationTargetRails[rowSnapshot.key] else { continue }
             var targetViews: [NSView] = []
-            if rowIndex == 0, !renderedShowsSourceRail {
-                targetViews.append(inputOptionsButton)
-            }
-            if rowIndex == 0,
-               let copyControl = generatedResultCopyControl,
-               !copyControl.isHidden {
-                targetViews.append(copyControl)
-            }
             if alternativeCount > 1 {
                 targetViews.append(translationPagerView)
             }
@@ -1854,6 +1878,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             clearArrangedSubviews(of: rail.row)
             rail.scroll.removeFromSuperview()
         }
+        applyTrailingActionExclusion()
         renderedShowsSourceRail && active
             ? startCaretBlinking()
             : stopCaretBlinking()
@@ -2193,16 +2218,34 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private func scroll(rect: NSRect, row: NSView, in scrollView: NSScrollView) {
         let maxX = max(0, row.frame.width - scrollView.contentSize.width)
         let visible = scrollView.contentView.bounds
+        let exclusion = trailingActionExclusion(for: scrollView)
+        let safeVisibleWidth = max(1, visible.width - exclusion)
+        let safeVisibleMaxX = visible.minX + safeVisibleWidth
         var targetX = visible.minX
         if rect.minX < visible.minX {
             targetX = max(0, rect.minX)
-        } else if rect.maxX > visible.maxX {
-            targetX = max(0, min(maxX, rect.maxX - scrollView.contentSize.width))
+        } else if rect.maxX > safeVisibleMaxX {
+            targetX = max(0, min(maxX, rect.maxX - safeVisibleWidth))
         } else {
             targetX = min(max(0, visible.minX), maxX)
         }
         scrollView.contentView.scroll(to: NSPoint(x: targetX, y: 0))
         scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    private func trailingActionExclusion(for scrollView: NSScrollView) -> CGFloat {
+        guard trailingActionExclusionWidth > 0 else { return 0 }
+        if translationContainer.isHidden {
+            return scrollView === chipScroll ? trailingActionExclusionWidth : 0
+        }
+        if renderedTranslationTargetRowKeys.isEmpty {
+            return scrollView === translationSourceScroll
+                ? trailingActionExclusionWidth
+                : 0
+        }
+        return renderedTranslationTargetRowKeys.contains { key in
+            translationTargetRails[key]?.scroll === scrollView
+        } ? trailingActionExclusionWidth : 0
     }
 
     private func scrollChipsToInsertionPoint() {
@@ -2245,10 +2288,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         translationSourceEmptyLabel.textColor = RimeUI.textSecondary
         translationTargetEmptyLabel.textColor = RimeUI.textSecondary
         translationPagerView.applyAppearance()
-        inputOptionsButton.contentTintColor = RimeUI.isRasta
-            ? RimeUI.brandYellow
-            : RimeUI.textSecondary
-        inputOptionsButton.refreshInteractionAppearance()
     }
 
     private func startCaretBlinking() {
@@ -2279,17 +2318,20 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
 
 }
 
-func runBufferInlineToolbarToggleInteractionProbe() -> Bool {
-    BufferInlineView.runToolbarToggleInteractionProbe()
+func runBufferInlineNoLeadingControlProbe() -> Bool {
+    BufferInlineView.runNoLeadingControlProbe()
 }
 
-func runBufferInlineGeneratedResultCopyPlacementProbe() -> Bool {
-    BufferInlineView.runGeneratedResultCopyPlacementProbe()
+func runBufferInlineTrailingActionExclusionProbe() -> Bool {
+    BufferInlineView.runTrailingActionExclusionProbe()
 }
 
 /// A button that works on the first click inside a never-key panel.
 class FirstMouseButton: NSButton {
     var usesPrimarySurface = false
+    var showsPersistentInteractionSurface = false {
+        didSet { refreshInteractionAppearance() }
+    }
     private var pointerTrackingArea: NSTrackingArea?
     private var pointerHovered = false
     private var pointerPressed = false
@@ -2392,6 +2434,26 @@ class FirstMouseButton: NSButton {
             layer?.borderColor = (state == .disabled
                 ? RimeUI.border
                 : RimeUI.accentBlue).cgColor
+            layer?.borderWidth = 1 / max(window?.backingScaleFactor ?? 2, 1)
+        } else if showsPersistentInteractionSurface {
+            let background: NSColor
+            let border: NSColor
+            switch state {
+            case .idle:
+                background = RimeUI.surface2.withAlphaComponent(0.78)
+                border = RimeUI.border.withAlphaComponent(0.82)
+            case .hovered:
+                background = BufferWorkbenchPointerRules.backgroundColor(for: state)
+                border = BufferWorkbenchPointerRules.borderColor(for: state)
+            case .pressed:
+                background = BufferWorkbenchPointerRules.backgroundColor(for: state)
+                border = BufferWorkbenchPointerRules.borderColor(for: state)
+            case .disabled:
+                background = RimeUI.surface2.withAlphaComponent(0.34)
+                border = RimeUI.border.withAlphaComponent(0.40)
+            }
+            layer?.backgroundColor = background.cgColor
+            layer?.borderColor = border.cgColor
             layer?.borderWidth = 1 / max(window?.backingScaleFactor ?? 2, 1)
         } else {
             layer?.backgroundColor = BufferWorkbenchPointerRules

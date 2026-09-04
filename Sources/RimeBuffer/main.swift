@@ -1117,6 +1117,10 @@ let inputSourceChangedObserver = DistributedNotificationCenter.default().addObse
     lastObservedInputSourceUptime = now
     if currentIsOwn {
         _ = globalHotKeyController.setRuntimeEnabledForInputSource(true)
+        // A detached Buffer can remain visible while no IMK client is active.
+        // Refresh directly from the authoritative TIS transition so its
+        // copy/send affordances do not keep the previous input source state.
+        BufferWindowController.shared.refresh()
     } else {
         retireRimeInputSourceAuthority(observedSourceID: currentID)
     }
@@ -6045,10 +6049,11 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
 
     let flexibleSpace = NSView()
     let statusIndicators = NSStackView()
-    let clipboardImport = NSView()
+    let functionMenu = NSView()
     let exchangeEdit = NSView()
+    let targetAssociation = NSView()
     let close = NSView()
-    for control in [clipboardImport, exchangeEdit, close] {
+    for control in [functionMenu, exchangeEdit, targetAssociation, close] {
         control.translatesAutoresizingMaskIntoConstraints = false
         control.widthAnchor.constraint(equalToConstant: 22).isActive = true
         control.heightAnchor.constraint(equalToConstant: 22).isActive = true
@@ -6056,11 +6061,12 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
     BufferWorkbenchShelfLayout.configure(
         shelf,
         status: status,
-        clipboardImport: clipboardImport,
+        functionMenu: functionMenu,
         pluginActions: pluginActions,
         flexibleSpace: flexibleSpace,
         statusIndicators: statusIndicators,
         exchangeEdit: exchangeEdit,
+        targetAssociation: targetAssociation,
         close: close
     )
     NSLayoutConstraint.activate([
@@ -6070,10 +6076,16 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
         shelf.bottomAnchor.constraint(equalTo: host.bottomAnchor),
     ])
 
-    func geometry() -> (selector: CGFloat, close: CGFloat, pluginWidth: CGFloat) {
+    func geometry() -> (
+        selector: CGFloat,
+        targetAssociation: CGFloat,
+        close: CGFloat,
+        pluginWidth: CGFloat
+    ) {
         host.layoutSubtreeIfNeeded()
         return (
             selector.convert(selector.bounds, to: host).minX,
+            targetAssociation.convert(targetAssociation.bounds, to: host).maxX,
             close.convert(close.bounds, to: host).minX,
             pluginActions.bounds.width
         )
@@ -6128,12 +6140,10 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
     let expectedEmptyPluginWidth = selectorWidth.constant
         + pluginActions.edgeInsets.left
         + pluginActions.edgeInsets.right
-    let expectedStatusShift = BufferWorkbenchMetrics.shelfStatusWidth
-        + BufferWorkbenchMetrics.shelfSpacing
     let stable = abs(baseline.selector - expectedEmptySelectorX) <= epsilon
         && abs(loadingOnly.selector - baseline.selector) <= epsilon
         && abs(actionsOnly.selector - baseline.selector) <= epsilon
-        && abs(dynamic.selector - baseline.selector - expectedStatusShift) <= epsilon
+        && abs(dynamic.selector - baseline.selector) <= epsilon
         && abs(restoredEmpty.selector - baseline.selector) <= epsilon
         && abs(baseline.pluginWidth - expectedEmptyPluginWidth) <= epsilon
         && abs(baselineTrailingGap - pluginActions.edgeInsets.right) <= epsilon
@@ -6148,6 +6158,16 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
         && abs(baseline.close - actionsOnly.close) <= epsilon
         && abs(baseline.close - dynamic.close) <= epsilon
         && abs(baseline.close - restoredEmpty.close) <= epsilon
+        && abs(baseline.close - baseline.targetAssociation
+            - BufferWorkbenchMetrics.shelfSpacing) <= epsilon
+        && abs(loadingOnly.targetAssociation
+            - baseline.targetAssociation) <= epsilon
+        && abs(actionsOnly.targetAssociation
+            - baseline.targetAssociation) <= epsilon
+        && abs(dynamic.targetAssociation
+            - baseline.targetAssociation) <= epsilon
+        && abs(restoredEmpty.targetAssociation
+            - baseline.targetAssociation) <= epsilon
     if !stable {
         print("FAILED: workbench shelf alignment moved",
               "baseline=\(baseline)",
@@ -6202,8 +6222,6 @@ func runBufferWindowSmokeTest() -> Bool {
             capturedTargetIsLive: true,
             hasLiveTarget: true
           ) == .protected,
-          !BufferTargetAssociationRules.showsExpandedTitle(panelWidth: 679),
-          BufferTargetAssociationRules.showsExpandedTitle(panelWidth: 680),
           !BufferTargetAssociationRules.shouldClearCue(
             state: .capturing,
             hasPresentedCue: true,
@@ -7003,14 +7021,17 @@ func runBufferWindowSmokeTest() -> Bool {
         outputBlocks: [TranslationOutputBlock(id: UUID(), text: "独立结果")],
         phase: .ready
     )
-    guard BufferWorkbenchLayout.mainBar
-            == [.bufferRail, .targetAssociation, .send],
+    guard BufferWorkbenchLayout.mainBar == [.bufferRail],
+          BufferWorkbenchLayout.railOverlay
+            == [.clipboardImport, .copyResult, .send],
           BufferWorkbenchLayout.toolbar
-            == [.status, .clipboardImport, .pluginActions, .exchangeEdit, .close],
+            == [.functionMenu, .pluginActions, .status, .exchangeEdit,
+                .targetAssociation, .close],
           BufferWorkbenchLayout.hoverControls
-            == [.copyResult, .targetAssociation, .send, .clipboardImport,
+            == [.copyResult, .send, .clipboardImport, .functionMenu,
                 .pluginActions, .exchangeEdit, .close],
-          BufferWorkbenchLayout.passiveControls == [.bufferRail, .status],
+          BufferWorkbenchLayout.passiveControls
+            == [.bufferRail, .status, .targetAssociation],
           BufferWorkbenchLayout.toolbarInitiallyExpanded,
           BufferWorkbenchLayout.toolbarEmptySpaceDraggable,
           BufferWorkbenchToolbarDragRules.disposition(
@@ -7020,8 +7041,8 @@ func runBufferWindowSmokeTest() -> Bool {
             hitIsInteractiveControl: true
           ) == .interactWithControl,
           runBufferWorkbenchToolbarHitTestProbe(),
-          runBufferInlineToolbarToggleInteractionProbe(),
-          runBufferInlineGeneratedResultCopyPlacementProbe(),
+          runBufferInlineNoLeadingControlProbe(),
+          runBufferInlineTrailingActionExclusionProbe(),
           BufferWorkbenchPointerRules.state(
             enabled: true, hovered: false, pressed: false
           ) == .idle,
@@ -9533,7 +9554,7 @@ func runBufferWindowSmokeTest() -> Bool {
     _ = rail.renderStandardForPreview()
     let renderedPassiveEmptyPlaceholder = rail.renderedInputPlaceholderVisible
         && !rail.renderedInputCaretVisible
-        && rail.renderedInputControlCount == 1
+        && rail.renderedLeadingInputControlCount == 0
         && rail.renderedTextFragments.contains("等待暂存内容")
     model.enabled = true
     _ = rail.renderStandardForPreview()
@@ -9570,7 +9591,7 @@ func runBufferWindowSmokeTest() -> Bool {
     _ = rail.renderStandardForPreview(shielded: true)
     let scrubbedByShield = !rail.isHidden
         && rail.renderedBlockCount == 0
-        && rail.renderedInputControlCount == 1
+        && rail.renderedLeadingInputControlCount == 0
         && rail.renderedTextFragments == ["内容已隐藏"]
         && !rail.isEnterHoldProgressVisible
     model.enabled = oldEnabled
@@ -9895,7 +9916,7 @@ func runBufferWindowSmokeTest() -> Bool {
     _ = translationRail.refresh(shielded: true)
     let translationShielded = translationRail.translationRailCount == 0
         && !translationRail.isHidden
-        && translationRail.renderedInputControlCount == 1
+        && translationRail.renderedLeadingInputControlCount == 0
         && translationRail.renderedTextFragments == ["内容已隐藏"]
         && !translationRail.renderedTextFragments.contains(sourcePreview)
         && !translationRail.renderedTextFragments.contains("方案")
@@ -10548,6 +10569,35 @@ func runBufferWindowSmokeTest() -> Bool {
             try? FileManager.default.removeItem(at: transitionRoot)
         }
     }
+    for width: CGFloat in [400, 520, 760] {
+        let overlay = BufferWindowController.shared
+            .exerciseRailActionOverlayForSmoke(panelWidth: width)
+        guard overlay.passed else {
+            print(
+                "FAILED: live Buffer rail action overlay",
+                "width=\(overlay.panelWidth)",
+                "rail2=\(overlay.railFrameWithTwoActions)",
+                "rail3=\(overlay.railFrameWithThreeActions)",
+                "overlay=\(overlay.overlayFrame)",
+                "actions=\(overlay.actionFrames)",
+                "sibling=\(overlay.overlayIsNonArrangedSibling)",
+                "contained=\(overlay.overlayContainedByRail)",
+                "ordered=\(overlay.actionsOrderedOnOneRow)",
+                "hits=\(overlay.actionHitTestingWorks)",
+                "passThrough=\(overlay.fadeAreaPassesThrough)",
+                "surface=\(overlay.interactiveSurfaceVisibleAtIdle)",
+                "a11y=\(overlay.interactiveAccessibilityLabelsAreReadable)",
+                "functionIcon=\(overlay.functionMenuOwnsOnlyPluginIcon)",
+                "appIcon=\(overlay.targetApplicationIconIsReal)",
+                "passive=\(overlay.targetApplicationIndicatorIsPassive)",
+                "beforeClose=\(overlay.targetApplicationIconPrecedesClose)",
+                "scrubbed=\(overlay.protectedStateScrubsApplicationIdentity)",
+                "ambiguous=\(overlay.hasAmbiguousLayout)"
+            )
+            return false
+        }
+    }
+
     let transition = BufferWindowController.shared
         .exerciseLayoutTransitionForSmoke(
             standardBeforePath: transitionRoot

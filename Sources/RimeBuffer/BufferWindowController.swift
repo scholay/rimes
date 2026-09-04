@@ -82,10 +82,8 @@ struct BufferWindowLayoutTransitionSmokeResult {
     let renderedAllFrames: Bool
 }
 
-/// AppKit-backed evidence for the compact -> toolbar -> compact interaction.
-/// The toolbar state is intentionally process-local and resets when Buffer is
-/// hidden, so this probe exercises the same non-persisted presentation path as
-/// the leading input icon.
+/// AppKit-backed evidence that attempts to collapse the permanent toolbar are
+/// ignored and leave the same stable presentation in place.
 struct BufferToolbarToggleSmokeResult {
     let collapsed: NSRect
     let expanded: NSRect
@@ -94,6 +92,50 @@ struct BufferToolbarToggleSmokeResult {
     let toolbarVisibleWhenExpanded: Bool
     let toolbarHiddenAfterCollapse: Bool
     let renderedAllFrames: Bool
+}
+
+/// AppKit-backed evidence that the action group overlays the rail instead of
+/// taking one of the stack's arranged columns. Width is sampled before and
+/// after the optional copy action appears so a future regression cannot bring
+/// back the blank trailing slot this layout replaces.
+struct BufferRailActionOverlaySmokeResult {
+    let panelWidth: CGFloat
+    let railFrameWithTwoActions: NSRect
+    let railFrameWithThreeActions: NSRect
+    let overlayFrame: NSRect
+    let actionFrames: [NSRect]
+    let overlayIsNonArrangedSibling: Bool
+    let overlayContainedByRail: Bool
+    let actionsOrderedOnOneRow: Bool
+    let actionHitTestingWorks: Bool
+    let fadeAreaPassesThrough: Bool
+    let interactiveSurfaceVisibleAtIdle: Bool
+    let interactiveAccessibilityLabelsAreReadable: Bool
+    let functionMenuOwnsOnlyPluginIcon: Bool
+    let targetApplicationIconIsReal: Bool
+    let targetApplicationIndicatorIsPassive: Bool
+    let targetApplicationIconPrecedesClose: Bool
+    let protectedStateScrubsApplicationIdentity: Bool
+    let hasAmbiguousLayout: Bool
+
+    var passed: Bool {
+        let epsilon: CGFloat = 0.5
+        return abs(railFrameWithTwoActions.width
+            - railFrameWithThreeActions.width) <= epsilon
+            && overlayIsNonArrangedSibling
+            && overlayContainedByRail
+            && actionsOrderedOnOneRow
+            && actionHitTestingWorks
+            && fadeAreaPassesThrough
+            && interactiveSurfaceVisibleAtIdle
+            && interactiveAccessibilityLabelsAreReadable
+            && functionMenuOwnsOnlyPluginIcon
+            && targetApplicationIconIsReal
+            && targetApplicationIndicatorIsPassive
+            && targetApplicationIconPrecedesClose
+            && protectedStateScrubsApplicationIdentity
+            && !hasAmbiguousLayout
+    }
 }
 
 /// React's Buffer master has two presentation grammars. Live workspaces keep
@@ -531,12 +573,10 @@ enum BufferTargetAssociationState: Equatable {
     case protected
 }
 
-/// Pure state resolution for the small target anchor in the Buffer main row.
-/// The visual never invents an association: capture is shown only when the
-/// model's exact token is also the coordinator's current live target.
+/// Pure state resolution for the passive target-application icon in the
+/// toolbar. The visual never invents an association: capture is shown only
+/// when the model's exact token is also the coordinator's current live target.
 enum BufferTargetAssociationRules {
-    static let expandedTitleMinimumWidth: CGFloat = 680
-
     static func state(rimeOwnsInput: Bool,
                       contentProtected: Bool,
                       captureActive: Bool,
@@ -548,10 +588,6 @@ enum BufferTargetAssociationRules {
             return capturedTargetIsLive ? .capturing : .targetChanged
         }
         return hasLiveTarget ? .ready : .unavailable
-    }
-
-    static func showsExpandedTitle(panelWidth: CGFloat) -> Bool {
-        panelWidth >= expandedTitleMinimumWidth
     }
 
     static func shouldClearCue(state: BufferTargetAssociationState,
@@ -652,6 +688,7 @@ enum BufferWorkbenchControl: String, Equatable {
     case send
     case status
     case clipboardImport
+    case functionMenu
     case pluginActions
     case exchangeEdit
     case close
@@ -743,7 +780,7 @@ enum BufferWorkbenchMetrics {
     static let primaryControlWidth: CGFloat = controlSize
     static let primaryControlHeight: CGFloat = controlSize
     static let mainSpacing: CGFloat = 3
-    static let expandedTargetAssociationWidth: CGFloat = 150
+    static let actionOverlayFadeWidth: CGFloat = 18
     static let shelfSpacing: CGFloat = 4
     static let mainHorizontalInset: CGFloat = 5
     static let shelfHorizontalInset: CGFloat = 6
@@ -787,11 +824,12 @@ enum BufferWorkbenchShelfLayout {
 
     static func configure(_ shelf: NSStackView,
                           status: NSView,
-                          clipboardImport: NSView,
+                          functionMenu: NSView,
                           pluginActions: NSView,
                           flexibleSpace: NSView,
                           statusIndicators: NSView,
                           exchangeEdit: NSView,
+                          targetAssociation: NSView,
                           close: NSView) {
         shelf.orientation = .horizontal
         shelf.alignment = .centerY
@@ -819,8 +857,8 @@ enum BufferWorkbenchShelfLayout {
         flexibleSpace.setContentCompressionResistancePriority(flexiblePriority,
                                                               for: .horizontal)
 
-        [status, clipboardImport, pluginActions, flexibleSpace, statusIndicators,
-         exchangeEdit, close].forEach {
+        [functionMenu, pluginActions, status, flexibleSpace, statusIndicators,
+         exchangeEdit, targetAssociation, close].forEach {
             shelf.addArrangedSubview($0)
         }
     }
@@ -828,17 +866,21 @@ enum BufferWorkbenchShelfLayout {
 
 /// Shared by the live stack construction and the pure layout smoke test.
 enum BufferWorkbenchLayout {
-    static let mainBar: [BufferWorkbenchControl] = [
-        .bufferRail, .targetAssociation, .send,
+    static let mainBar: [BufferWorkbenchControl] = [.bufferRail]
+    static let railOverlay: [BufferWorkbenchControl] = [
+        .clipboardImport, .copyResult, .send,
     ]
     static let toolbar: [BufferWorkbenchControl] = [
-        .status, .clipboardImport, .pluginActions, .exchangeEdit, .close,
+        .functionMenu, .pluginActions, .status, .exchangeEdit,
+        .targetAssociation, .close,
     ]
     static let hoverControls: Set<BufferWorkbenchControl> = [
-        .copyResult, .targetAssociation, .send, .clipboardImport,
+        .copyResult, .send, .clipboardImport, .functionMenu,
         .pluginActions, .exchangeEdit, .close,
     ]
-    static let passiveControls: Set<BufferWorkbenchControl> = [.bufferRail, .status]
+    static let passiveControls: Set<BufferWorkbenchControl> = [
+        .bufferRail, .status, .targetAssociation,
+    ]
     static let toolbarInitiallyExpanded = true
     static let toolbarEmptySpaceDraggable = true
     static let windowBackgroundDraggable = false
@@ -1187,66 +1229,220 @@ private final class BufferToolbarControlSlot: NSView {
     }
 }
 
-private final class BufferMainControlSlot: NSView {
-    private let control: NSView
-    private let row: BufferMainControlRow
+/// A non-arranged sibling of the full-width rail. Its buttons float over the
+/// rail's trailing edge, so showing or hiding an action never changes the
+/// outer rail frame. Empty gaps pass through to the logical input surface.
+private final class BufferRailActionClusterView: NSView {
+    private let controls: [NSControl]
+    private let row = NSStackView()
+    private let fadeLayer = CAGradientLayer()
     private var widthConstraint: NSLayoutConstraint!
-    private var controlWidthConstraint: NSLayoutConstraint!
-    private var heightConstraint: NSLayoutConstraint!
-    private var centerYConstraint: NSLayoutConstraint!
 
-    init(control: NSView, row: BufferMainControlRow) {
-        self.control = control
-        self.row = row
+    init(controls: [NSControl]) {
+        self.controls = controls
         super.init(frame: .zero)
-
         translatesAutoresizingMaskIntoConstraints = false
-        control.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(control)
-        let height = heightAnchor.constraint(
-            equalToConstant: BufferWorkbenchMetrics.railHeight(for: .standard)
-        )
-        let centerY = control.centerYAnchor.constraint(equalTo: centerYAnchor)
-        let width = widthAnchor.constraint(
-            equalToConstant: BufferWorkbenchMetrics.primaryControlWidth
-        )
-        let controlWidth = control.widthAnchor.constraint(
-            equalToConstant: BufferWorkbenchMetrics.primaryControlWidth
-        )
-        widthConstraint = width
-        controlWidthConstraint = controlWidth
-        heightConstraint = height
-        centerYConstraint = centerY
+        wantsLayer = true
+        layer?.addSublayer(fadeLayer)
+
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.distribution = .fill
+        row.spacing = BufferWorkbenchMetrics.shelfSpacing
+        row.detachesHiddenViews = true
+        row.translatesAutoresizingMaskIntoConstraints = false
+        controls.forEach { row.addArrangedSubview($0) }
+        addSubview(row)
+
+        widthConstraint = widthAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
-            width,
-            height,
-            control.centerXAnchor.constraint(equalTo: centerXAnchor),
-            centerY,
-            controlWidth,
-            control.heightAnchor.constraint(equalToConstant: BufferWorkbenchMetrics.primaryControlHeight),
+            widthConstraint,
+            heightAnchor.constraint(equalToConstant: 28),
+            row.leadingAnchor.constraint(
+                equalTo: leadingAnchor,
+                constant: BufferWorkbenchMetrics.actionOverlayFadeWidth
+            ),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+        refreshGeometry()
+        applyAppearance()
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func update(for mode: BufferWorkbenchLayoutMode) {
-        heightConstraint.constant = BufferWorkbenchMetrics.railHeight(for: mode)
-        centerYConstraint.constant = BufferWorkbenchMetrics.mainControlYOffset(row: row,
-                                                                                mode: mode)
+    var reservedWidth: CGFloat { widthConstraint.constant }
+    var visibleControls: [NSControl] { controls.filter { !$0.isHidden } }
+
+    func refreshGeometry() {
+        let visibleCount = visibleControls.count
+        let controlsWidth = CGFloat(visibleCount) * BufferWorkbenchMetrics.controlSize
+        let spacingWidth = CGFloat(max(0, visibleCount - 1))
+            * BufferWorkbenchMetrics.shelfSpacing
+        widthConstraint.constant = visibleCount == 0
+            ? 0
+            : BufferWorkbenchMetrics.actionOverlayFadeWidth
+                + controlsWidth + spacingWidth
+        isHidden = visibleCount == 0
+        invalidateIntrinsicContentSize()
+        needsLayout = true
     }
 
-    func setWidth(_ width: CGFloat) {
-        widthConstraint.constant = width
-        controlWidthConstraint.constant = width
+    func applyAppearance() {
+        let background = RimeUI.candidateBackgroundColor
+        fadeLayer.colors = [
+            background.withAlphaComponent(0).cgColor,
+            background.withAlphaComponent(0.96).cgColor,
+            background.cgColor,
+        ]
+        fadeLayer.locations = [0, 0.42, 1]
+        needsLayout = true
     }
 
-    func setControlVisible(_ visible: Bool) {
-        isHidden = !visible
-        control.isHidden = !visible
-        if let control = control as? NSControl, !visible {
-            control.isEnabled = false
+    override func layout() {
+        super.layout()
+        fadeLayer.frame = bounds
+        fadeLayer.startPoint = CGPoint(x: 0, y: 0.5)
+        fadeLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        fadeLayer.contentsScale = window?.backingScaleFactor ?? 2
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        var candidate: NSView? = hit
+        while let view = candidate, view !== self {
+            if view is NSControl { return hit }
+            candidate = view.superview
         }
+        return nil
     }
+}
+
+/// Passive target identity beside Close. A valid exact focus lease uses the
+/// application's real color icon; invalid/protected states immediately replace
+/// it with a generic template symbol so stale application identity cannot leak.
+private final class BufferTargetApplicationIndicatorView: NSView {
+    private let imageView = NSImageView()
+    private let statusDot = NSView()
+    private var fallbackTint: NSColor = RimeUI.textMuted
+    private var dotColor: NSColor = .systemGreen
+    private(set) var renderedAppName: String?
+    private(set) var renderedUsesRealApplicationIcon = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        imageView.imageScaling = .scaleProportionallyDown
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        statusDot.wantsLayer = true
+        statusDot.layer?.cornerRadius = 3
+        statusDot.layer?.borderWidth = 1
+        statusDot.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(imageView)
+        addSubview(statusDot)
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: BufferWorkbenchMetrics.controlSize),
+            heightAnchor.constraint(equalToConstant: BufferWorkbenchMetrics.controlSize),
+            imageView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            imageView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            imageView.widthAnchor.constraint(equalToConstant: 16),
+            imageView.heightAnchor.constraint(equalToConstant: 16),
+            statusDot.widthAnchor.constraint(equalToConstant: 6),
+            statusDot.heightAnchor.constraint(equalToConstant: 6),
+            statusDot.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -1),
+            statusDot.bottomAnchor.constraint(equalTo: bottomAnchor, constant: 1),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.image)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func update(state: BufferTargetAssociationState,
+                appName: String?,
+                appIcon: NSImage?,
+                title: String,
+                help: String) {
+        renderedAppName = nil
+        renderedUsesRealApplicationIcon = false
+        statusDot.isHidden = true
+
+        switch state {
+        case .capturing, .ready:
+            if let appIcon {
+                // `NSWorkspace` application icons contain lazily decoded
+                // representations. A plain `NSImage.copy()` loses those
+                // representations on current macOS and renders as an empty
+                // square, so materialize one CG-backed image before display.
+                let image = Self.materializedApplicationIcon(appIcon)
+                imageView.image = image
+                renderedUsesRealApplicationIcon = image != nil
+                renderedAppName = image == nil ? nil : appName
+            } else {
+                imageView.image = RimeUI.symbol("app.dashed", pointSize: 13,
+                                                weight: .semibold)
+                imageView.image?.isTemplate = true
+            }
+            fallbackTint = RimeUI.textSecondary
+            dotColor = .systemGreen
+            statusDot.isHidden = false
+        case .targetChanged:
+            imageView.image = RimeUI.symbol("exclamationmark.triangle.fill",
+                                            pointSize: 12, weight: .semibold)
+            imageView.image?.isTemplate = true
+            fallbackTint = .systemOrange
+        case .unavailable:
+            imageView.image = RimeUI.symbol("scope", pointSize: 12,
+                                            weight: .semibold)
+            imageView.image?.isTemplate = true
+            fallbackTint = RimeUI.textMuted
+        case .detached:
+            imageView.image = RimeUI.symbol("doc.on.clipboard", pointSize: 12,
+                                            weight: .semibold)
+            imageView.image?.isTemplate = true
+            fallbackTint = RimeUI.textMuted
+        case .protected:
+            imageView.image = RimeUI.symbol("lock.fill", pointSize: 11,
+                                            weight: .semibold)
+            imageView.image?.isTemplate = true
+            fallbackTint = .systemOrange
+        }
+
+        toolTip = help
+        setAccessibilityLabel(title)
+        setAccessibilityHelp(help)
+        applyAppearance()
+    }
+
+    private static func materializedApplicationIcon(_ source: NSImage) -> NSImage? {
+        var proposedRect = NSRect(
+            origin: .zero,
+            size: source.size.width > 0 && source.size.height > 0
+                ? source.size
+                : NSSize(width: 32, height: 32)
+        )
+        guard let cgImage = source.cgImage(
+            forProposedRect: &proposedRect,
+            context: nil,
+            hints: nil
+        ) else { return nil }
+        let image = NSImage(
+            cgImage: cgImage,
+            size: NSSize(width: 16, height: 16)
+        )
+        image.isTemplate = false
+        return image
+    }
+
+    func applyAppearance() {
+        imageView.contentTintColor = fallbackTint
+        statusDot.layer?.backgroundColor = dotColor.cgColor
+        statusDot.layer?.borderColor = RimeUI.candidateBackgroundColor.cgColor
+    }
+
+    /// The status remains part of the toolbar drag surface and never looks or
+    /// behaves like a button.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 private final class BufferWorkbenchStatusIndicatorView: NSStackView {
@@ -1529,6 +1725,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         let cursorPosUTF8: Int
     }
 
+    private struct TargetApplicationIdentity {
+        let name: String
+        let icon: NSImage?
+    }
+
     private enum Key {
         static let visible = "bufferWindow.visible.v1"
         static let frame = "bufferWindow.frame.v2"
@@ -1540,10 +1741,16 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private let outerContainer = NSView()
     private let visual = BufferChromeView()
     private let bufferRail = BufferInlineView()
+    private let mainBar = NSStackView()
     private lazy var translationBridgeView = AppleTranslationWorkspace.shared.makeBridgeView()
     private let utilityShelf = BufferWorkbenchToolbarView()
     private let shelfDivider = NSView()
     private let statusLabel = NSTextField(labelWithString: "")
+    private let functionMenuButton = FirstMouseButton(
+        title: "",
+        target: nil,
+        action: nil
+    )
     private let clipboardImportButton = FirstMouseButton(
         title: "",
         target: nil,
@@ -1572,21 +1779,16 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private let aiModePopup = FirstMousePopUpButton(frame: .zero, pullsDown: false)
     private let aiOutputPopup = FirstMousePopUpButton(frame: .zero, pullsDown: false)
     private let copyResultButton = FirstMouseButton(title: "", target: nil, action: nil)
-    private let targetAssociationButton = FirstMouseButton(
-        title: "",
-        target: nil,
-        action: nil
-    )
+    private let targetApplicationIndicator = BufferTargetApplicationIndicatorView()
     private let sendButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let sendButtonProgressIndicator = NSProgressIndicator()
     private let exchangeEditButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let closeButton = FirstMouseButton(title: "", target: nil, action: nil)
-    private lazy var exchangeEditSlot = BufferToolbarControlSlot(control: exchangeEditButton)
-    private lazy var targetAssociationSlot = BufferMainControlSlot(
-        control: targetAssociationButton,
-        row: .target
+    private lazy var railActionCluster = BufferRailActionClusterView(
+        controls: [clipboardImportButton, copyResultButton, sendButton]
     )
-    private lazy var sendSlot = BufferMainControlSlot(control: sendButton, row: .target)
+    private lazy var exchangeEditSlot = BufferToolbarControlSlot(control: exchangeEditButton)
+    private var railActionCenterYConstraint: NSLayoutConstraint?
     private var hiddenForSession = false
     private var sessionInactive = false
     private var screenLocked = false
@@ -1618,7 +1820,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     ] = []
     private var sendButtonUsesAccent = false
     private var renderedTargetAssociationState: BufferTargetAssociationState = .unavailable
-    private var renderedTargetAssociationFullTitle = "等待输入框"
     private var targetAssociationCueController: TargetAssociationCueController?
     private var targetAssociationCueToken: FocusToken?
     private var targetAssociationCueGeneration: UInt64 = 0
@@ -1805,7 +2006,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         bufferRail.onCaptureRequested = { [weak self] insertionIndex in
             self?.activateLogicalInput(at: insertionIndex)
         }
-        bufferRail.generatedResultCopyControl = copyResultButton
         buildWindow()
         restoreFrame()
         installObservers()
@@ -2024,9 +2224,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
               !hiddenForSession,
               !sessionProtectionActive,
               !IsSecureEventInputEnabled() else { return false }
-        if canCopyGeneratedResult,
-           copyGeneratedResultAndClose() {
-            return true
+        if canCopyGeneratedResult {
+            // Once the visible action resolved to the generated result, keep
+            // that meaning stable. A stale workspace snapshot or a failed
+            // pasteboard write must not silently copy the staged source.
+            return copyGeneratedResultAndClose()
         }
         let text = BufferModel.shared.stagedText
         guard !text.isEmpty else { return false }
@@ -2238,9 +2440,16 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         if let targetAssociationPreviewAppName {
             setWorkbenchStatusText("")
+            let previewApplicationURL = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: "com.apple.Safari"
+            )
+            let previewApplicationIcon = previewApplicationURL.map {
+                NSWorkspace.shared.icon(forFile: $0.path)
+            }
             applyTargetAssociationPresentation(
                 state: .capturing,
-                appName: targetAssociationPreviewAppName
+                appName: targetAssociationPreviewAppName,
+                appIcon: previewApplicationIcon
             )
             setSendButtonGenerating(false)
             setSendButtonSymbol("paperplane.fill")
@@ -2253,8 +2462,209 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         if let statusIndicators {
             reconcileContextualStatusIndicators(statusIndicators)
         }
+        refreshRailActionOverlayGeometry()
+        applyAppearance()
         applyPreviewPointerState(hoveredControl)
         return renderCurrentContent(to: path, scale: scale)
+    }
+
+    /// Exercises the approved in-rail action layout against the real view tree
+    /// at both ordinary and narrow widths. The probe changes presentation-only
+    /// state and does not read or write the pasteboard or deliver any text.
+    func exerciseRailActionOverlayForSmoke(
+        panelWidth: CGFloat
+    ) -> BufferRailActionOverlaySmokeResult {
+        setToolbarExpanded(true, resize: false)
+        syncLayoutMode(.standard)
+        let currentOrigin = panel.frame.origin
+        adjustingFrame = true
+        panel.setFrame(
+            NSRect(
+                origin: currentOrigin,
+                size: NSSize(
+                    width: panelWidth,
+                    height: BufferWindowGeometry.height(
+                        expanded: true,
+                        mode: .standard
+                    )
+                )
+            ),
+            display: false
+        )
+        adjustingFrame = false
+        _ = bufferRail.renderStandardForPreview()
+
+        clipboardImportButton.isHidden = false
+        clipboardImportButton.isEnabled = true
+        sendButton.isHidden = false
+        sendButton.isEnabled = true
+        copyResultButton.isHidden = true
+        refreshRailActionOverlayGeometry()
+        panel.contentView?.layoutSubtreeIfNeeded()
+        let railFrameWithTwoActions = bufferRail.convert(
+            bufferRail.bounds,
+            to: mainBar
+        )
+
+        copyResultButton.isHidden = false
+        copyResultButton.isEnabled = true
+        refreshRailActionOverlayGeometry()
+        panel.contentView?.layoutSubtreeIfNeeded()
+
+        let railFrameWithThreeActions = bufferRail.convert(
+            bufferRail.bounds,
+            to: mainBar
+        )
+        let overlayFrame = railActionCluster.convert(
+            railActionCluster.bounds,
+            to: mainBar
+        )
+        let actionControls = railActionCluster.visibleControls
+        let actionFrames = actionControls.map {
+            $0.convert($0.bounds, to: mainBar)
+        }
+        let epsilon: CGFloat = 0.5
+        let ordered = zip(actionFrames, actionFrames.dropFirst()).allSatisfy {
+            lhs, rhs in
+            lhs.maxX <= rhs.minX + epsilon
+                && abs(lhs.midY - rhs.midY) <= epsilon
+        }
+        let finiteFrames = ([railFrameWithTwoActions,
+                             railFrameWithThreeActions,
+                             overlayFrame] + actionFrames).allSatisfy { rect in
+            [rect.minX, rect.minY, rect.width, rect.height].allSatisfy(\.isFinite)
+                && rect.width > 0
+                && rect.height > 0
+        }
+
+        func hitBelongsToView(_ hit: NSView?, view expectedView: NSView) -> Bool {
+            var candidate = hit
+            while let view = candidate {
+                if view === expectedView { return true }
+                candidate = view.superview
+            }
+            return false
+        }
+        let actionHitTestingWorks = zip(actionControls, actionFrames).allSatisfy {
+            control, frame in
+            hitBelongsToView(
+                mainBar.hitTest(NSPoint(x: frame.midX, y: frame.midY)),
+                view: control
+            )
+        }
+        let fadePoint = NSPoint(
+            x: overlayFrame.minX + 2,
+            y: overlayFrame.midY
+        )
+        let fadeHit = mainBar.hitTest(fadePoint)
+        let fadeAreaPassesThrough = hitBelongsToView(fadeHit, view: bufferRail)
+
+        functionMenuButton.isEnabled = true
+        functionMenuButton.refreshInteractionAppearance()
+        let interactiveSurfaceVisibleAtIdle =
+            functionMenuButton.showsPersistentInteractionSurface
+            && (functionMenuButton.layer?.backgroundColor?.alpha ?? 0) > 0
+            && (functionMenuButton.layer?.borderWidth ?? 0) > 0
+        let interactiveAccessibilityLabelsAreReadable = [
+            functionMenuButton, clipboardImportButton, copyResultButton,
+            sendButton, exchangeEditButton, closeButton,
+        ].allSatisfy { button in
+            guard let label = button.accessibilityLabel()?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !label.isEmpty else { return false }
+            return !label.contains("arrow.")
+                && !label.contains("rectangle.")
+                && !label.contains("paperplane")
+                && label != "text.cursor"
+                && label != "xmark"
+        }
+        let functionMenuOwnsOnlyPluginIcon = functionMenuButton.image != nil
+            && pluginSelector.itemArray.allSatisfy { $0.image == nil }
+
+        let previewApplicationURL = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: "com.apple.Safari"
+        )
+        let previewApplicationIcon = previewApplicationURL.map {
+            NSWorkspace.shared.icon(forFile: $0.path)
+        }
+        applyTargetAssociationPresentation(
+            state: .capturing,
+            appName: "Safari",
+            appIcon: previewApplicationIcon
+        )
+        panel.contentView?.layoutSubtreeIfNeeded()
+        let targetFrame = targetApplicationIndicator.convert(
+            targetApplicationIndicator.bounds,
+            to: utilityShelf
+        )
+        let closeFrame = closeButton.convert(closeButton.bounds, to: utilityShelf)
+        let targetApplicationIconIsReal =
+            targetApplicationIndicator.renderedUsesRealApplicationIcon
+            && targetApplicationIndicator.renderedAppName == "Safari"
+        let targetApplicationIndicatorIsPassive =
+            targetApplicationIndicator.hitTest(.zero) == nil
+            && targetApplicationIndicator.layer?.backgroundColor == nil
+        let toolbarFramesFinite = [targetFrame, closeFrame].allSatisfy { rect in
+            [rect.minX, rect.minY, rect.width, rect.height].allSatisfy(\.isFinite)
+                && rect.width > 0
+                && rect.height > 0
+        }
+        let targetApplicationIconPrecedesClose = toolbarFramesFinite
+            && targetFrame.maxX <= closeFrame.minX + epsilon
+            && abs(closeFrame.minX - targetFrame.maxX
+                - BufferWorkbenchMetrics.shelfSpacing) <= epsilon
+
+        applyTargetAssociationPresentation(
+            state: .protected,
+            appName: nil,
+            appIcon: nil
+        )
+        let protectedStateScrubsApplicationIdentity =
+            !targetApplicationIndicator.renderedUsesRealApplicationIcon
+            && targetApplicationIndicator.renderedAppName == nil
+
+        let inspectedViews: [NSView] = [
+            utilityShelf, mainBar, bufferRail, railActionCluster,
+            clipboardImportButton, copyResultButton, sendButton,
+            functionMenuButton, targetApplicationIndicator, closeButton,
+        ]
+        let hasAmbiguousLayout = inspectedViews.contains {
+            $0.hasAmbiguousLayout
+        }
+        let overlayIsNonArrangedSibling = railActionCluster.superview === mainBar
+            && !mainBar.arrangedSubviews.contains { $0 === railActionCluster }
+            && mainBar.arrangedSubviews.count == 1
+            && mainBar.arrangedSubviews.first === bufferRail
+        let overlayContainedByRail = railFrameWithThreeActions
+            .insetBy(dx: -epsilon, dy: -epsilon)
+            .contains(overlayFrame)
+
+        return BufferRailActionOverlaySmokeResult(
+            panelWidth: panelWidth,
+            railFrameWithTwoActions: railFrameWithTwoActions,
+            railFrameWithThreeActions: railFrameWithThreeActions,
+            overlayFrame: overlayFrame,
+            actionFrames: actionFrames,
+            overlayIsNonArrangedSibling: overlayIsNonArrangedSibling,
+            overlayContainedByRail: overlayContainedByRail,
+            actionsOrderedOnOneRow: finiteFrames
+                && actionFrames.count == 3
+                && ordered,
+            actionHitTestingWorks: actionHitTestingWorks,
+            fadeAreaPassesThrough: fadeAreaPassesThrough,
+            interactiveSurfaceVisibleAtIdle: interactiveSurfaceVisibleAtIdle,
+            interactiveAccessibilityLabelsAreReadable:
+                interactiveAccessibilityLabelsAreReadable,
+            functionMenuOwnsOnlyPluginIcon: functionMenuOwnsOnlyPluginIcon,
+            targetApplicationIconIsReal: targetApplicationIconIsReal,
+            targetApplicationIndicatorIsPassive:
+                targetApplicationIndicatorIsPassive,
+            targetApplicationIconPrecedesClose:
+                targetApplicationIconPrecedesClose,
+            protectedStateScrubsApplicationIdentity:
+                protectedStateScrubsApplicationIdentity,
+            hasAmbiguousLayout: hasAmbiguousLayout
+        )
     }
 
     /// Exercises one real `NSPanel` and its existing constraints through the
@@ -2590,7 +3000,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             syncLayoutMode(nextLayoutMode)
             panel.contentView?.layoutSubtreeIfNeeded()
         }
-        refreshGeneratedResultCopy(contentProtected: contentProtected)
+        refreshGeneratedResultCopy(
+            contentProtected: contentProtected,
+            detachedClipboardMode: !rimeOwnsInput
+        )
         _ = bufferRail.refresh(
             preedit: inlineComposition?.text ?? "",
             preeditCursorPosUTF8: inlineComposition?.cursorPosUTF8 ?? 0,
@@ -2675,6 +3088,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         )
         refreshPluginActions()
         refreshInputOptionsControl(contentProtected: contentProtected)
+        refreshRailActionOverlayGeometry()
         applyAppearance()
         if inlineComposition != nil {
             candidateWindow.syncWorkbenchLayout()
@@ -2703,10 +3117,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         case .targetChanged, .unavailable, .detached, .protected:
             targetForIdentity = nil
         }
-        let appName = targetApplicationName(for: targetForIdentity)
+        let identity = targetApplicationIdentity(for: targetForIdentity)
         applyTargetAssociationPresentation(
             state: state,
-            appName: appName,
+            appName: identity?.name,
+            appIcon: identity?.icon,
             targetToken: targetForIdentity?.token
         )
     }
@@ -2714,58 +3129,40 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private func applyTargetAssociationPresentation(
         state: BufferTargetAssociationState,
         appName: String?,
+        appIcon: NSImage? = nil,
         targetToken: FocusToken? = nil
     ) {
         renderedTargetAssociationState = state
-        let symbolName: String
         let fullTitle: String
         let help: String
-        let interactive: Bool
         switch state {
         case .capturing:
-            symbolName = "link.circle.fill"
             fullTitle = "\(appName ?? "当前应用") · 输入到 Buffer"
-            help = "Buffer 正在接收按键；发送会返回到 \(appName ?? "当前应用") 的当前输入框。点按可重新显示目标位置。"
-            interactive = true
+            help = "Buffer 正在接收按键；发送会返回到 \(appName ?? "当前应用") 的当前输入框。"
         case .ready:
-            symbolName = "arrow.up.right.circle"
             fullTitle = "\(appName ?? "当前应用") · 发送目标"
-            help = "Buffer 可发送到 \(appName ?? "当前应用") 的当前输入框。点按可显示目标位置。"
-            interactive = true
+            help = "Buffer 可发送到 \(appName ?? "当前应用") 的当前输入框。"
         case .targetChanged:
-            symbolName = "exclamationmark.triangle"
             fullTitle = "焦点已变化"
             help = "原目标已失效；请点选输入框后重新关联。"
-            interactive = false
         case .unavailable:
-            symbolName = "scope"
             fullTitle = "等待输入框"
             help = "请先点选要接收内容的输入框。"
-            interactive = false
         case .detached:
-            symbolName = "doc.on.clipboard"
             fullTitle = "剪贴板模式"
             help = "当前不是 RIMES 输入法；Buffer 只允许剪贴板导入与复制。"
-            interactive = false
         case .protected:
-            symbolName = "lock.fill"
             fullTitle = "安全输入"
             help = "受保护状态下不显示或保留目标输入框信息。"
-            interactive = false
         }
 
-        renderedTargetAssociationFullTitle = fullTitle
-        targetAssociationButton.image = RimeUI.symbol(
-            symbolName,
-            pointSize: 11,
-            weight: .semibold
+        targetApplicationIndicator.update(
+            state: state,
+            appName: appName,
+            appIcon: appIcon,
+            title: fullTitle,
+            help: help
         )
-        targetAssociationButton.image?.isTemplate = true
-        targetAssociationButton.toolTip = help
-        targetAssociationButton.setAccessibilityLabel(fullTitle)
-        targetAssociationButton.setAccessibilityHelp(help)
-        targetAssociationButton.isEnabled = interactive
-        updateTargetAssociationTitleForCurrentWidth()
 
         if BufferTargetAssociationRules.shouldClearCue(
             state: state,
@@ -2776,30 +3173,35 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func updateTargetAssociationTitleForCurrentWidth() {
-        let expandsTitle = BufferTargetAssociationRules.showsExpandedTitle(
-            panelWidth: panel.frame.width
-        ) && (renderedTargetAssociationState == .capturing
-              || renderedTargetAssociationState == .ready)
-        targetAssociationButton.title = expandsTitle
-            ? renderedTargetAssociationFullTitle
-            : ""
-        targetAssociationSlot.setWidth(
-            expandsTitle
-                ? BufferWorkbenchMetrics.expandedTargetAssociationWidth
-                : BufferWorkbenchMetrics.controlSize
-        )
-    }
-
-    private func targetApplicationName(for target: FocusLease?) -> String? {
+    private func targetApplicationIdentity(
+        for target: FocusLease?
+    ) -> TargetApplicationIdentity? {
         guard let target else { return nil }
-        if let name = NSRunningApplication(
+        let application = NSRunningApplication(
             processIdentifier: target.processIdentifier
-        )?.localizedName?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !name.isEmpty {
-            return name
+        )
+        let name = application?.localizedName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedName: String
+        if let name, !name.isEmpty {
+            resolvedName = name
+        } else {
+            resolvedName = target.bundleID.split(separator: ".").last
+                .map(String.init) ?? "当前应用"
         }
-        return target.bundleID.split(separator: ".").last.map(String.init)
+        let icon: NSImage?
+        if let applicationIcon = application?.icon {
+            icon = applicationIcon
+        } else if let applicationURL = application?.bundleURL
+                    ?? NSWorkspace.shared.urlForApplication(
+                        withBundleIdentifier: target.bundleID
+                    ) {
+            let workspaceIcon = NSWorkspace.shared.icon(forFile: applicationURL.path)
+            icon = workspaceIcon
+        } else {
+            icon = nil
+        }
+        return TargetApplicationIdentity(name: resolvedName, icon: icon)
     }
 
     /// Replays the paired target cue only for a freshly revalidated live
@@ -2912,6 +3314,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     func focusInvalidated(_ token: FocusToken) {
         dispatchPrecondition(condition: .onQueue(.main))
         clearTargetAssociationCue(expected: token)
+        applyTargetAssociationPresentation(
+            state: .unavailable,
+            appName: nil,
+            appIcon: nil
+        )
     }
 
     private func refreshContextualStatusIndicators(
@@ -2944,14 +3351,26 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             : nil
     }
 
-    private func refreshGeneratedResultCopy(contentProtected: Bool) {
-        let available = !contentProtected
+    private func refreshGeneratedResultCopy(contentProtected: Bool,
+                                            detachedClipboardMode: Bool) {
+        // Preserve the secure-refresh rule: never ask a workspace for a
+        // plaintext snapshot merely to decide whether an action is visible.
+        let hasGeneratedResult = !contentProtected
             && BufferGeneratedResultCopyRules.freeze(protected: false) != nil
+        let available = !contentProtected && (hasGeneratedResult
+            || (detachedClipboardMode && !BufferModel.shared.stagedText.isEmpty))
         copyResultButton.isHidden = !available
         copyResultButton.isEnabled = available
         copyResultButton.toolTip = available
-            ? "复制当前生成结果并关闭 Buffer（⌘C）"
+            ? (detachedClipboardMode
+                ? "复制 Buffer 内容并关闭"
+                : "复制当前生成结果并关闭 Buffer（⌘C）")
             : nil
+        copyResultButton.setAccessibilityLabel(
+            detachedClipboardMode
+                ? "复制 Buffer 内容并关闭"
+                : "复制当前生成结果并关闭 Buffer"
+        )
     }
 
     private func refreshInputOptionsControl(contentProtected: Bool) {
@@ -2964,12 +3383,19 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             title: BufferPluginMenuCatalog.defaultTitle,
             symbolName: PluginVisualIdentity.defaultWorkbenchSymbolName
         )
-        bufferRail.updateInputOptions(
+        functionMenuButton.image = PluginVisualIdentity.image(
             symbolName: entry.symbolName,
-            title: entry.title,
-            enabled: !contentProtected,
-            toolbarExpanded: toolbarExpanded
+            accessibilityDescription: entry.title,
+            pointSize: 12,
+            weight: .semibold
         )
+        functionMenuButton.image?.isTemplate = true
+        functionMenuButton.isEnabled = !contentProtected
+        functionMenuButton.toolTip = contentProtected
+            ? "受保护状态下不能切换 Buffer 功能"
+            : "当前功能：\(entry.title)；点按选择 Buffer 功能"
+        functionMenuButton.setAccessibilityLabel("Buffer 功能：\(entry.title)")
+        functionMenuButton.refreshInteractionAppearance()
         contextualStatusControl.isHidden = contextualStatusControl.arrangedSubviews.isEmpty
     }
 
@@ -3099,20 +3525,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
         configurePrimaryButton(
             copyResultButton,
-            "doc.on.doc",
+            "rectangle.portrait.and.arrow.forward",
             "复制当前生成结果并关闭 Buffer（⌘C）",
             #selector(copyResultTapped)
         )
         copyResultButton.isHidden = true
-        NSLayoutConstraint.activate([
-            copyResultButton.widthAnchor.constraint(
-                equalToConstant: BufferWorkbenchMetrics.primaryControlWidth
-            ),
-            copyResultButton.heightAnchor.constraint(
-                equalToConstant: BufferWorkbenchMetrics.primaryControlHeight
-            ),
-        ])
-        configureTargetAssociationButton()
         configurePrimaryButton(
             sendButton,
             "paperplane.fill",
@@ -3133,9 +3550,15 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         ])
         configureIconButton(
             clipboardImportButton,
-            "doc.on.clipboard",
+            "arrow.down.doc",
             "从系统剪贴板导入文字",
             #selector(importClipboardTapped)
+        )
+        configureIconButton(
+            functionMenuButton,
+            PluginVisualIdentity.defaultWorkbenchSymbolName,
+            "选择 Buffer 功能",
+            #selector(functionMenuTapped)
         )
         configureIconButton(
             exchangeEditButton,
@@ -3150,6 +3573,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             "关闭并暂停缓冲（保留内容）",
             #selector(closeTapped)
         )
+        [functionMenuButton, clipboardImportButton, copyResultButton,
+         sendButton, exchangeEditButton, closeButton].forEach {
+            $0.showsPersistentInteractionSurface = true
+        }
 
         statusLabel.font = .systemFont(ofSize: 10)
         statusLabel.alignment = .left
@@ -3161,8 +3588,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
         pluginSelector.controlSize = .mini
         pluginSelector.font = .systemFont(ofSize: 10, weight: .semibold)
-        pluginSelector.imagePosition = .imageLeading
-        pluginSelector.imageHugsTitle = true
+        pluginSelector.imagePosition = .noImage
         pluginSelector.target = self
         pluginSelector.action = #selector(bufferPluginSelectionChanged)
         pluginSelector.toolTip = "切换缓冲插件（\(pluginSwitchShortcutTitle)）"
@@ -3337,11 +3763,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         BufferWorkbenchShelfLayout.configure(
             utilityShelf,
             status: statusLabel,
-            clipboardImport: clipboardImportButton,
+            functionMenu: functionMenuButton,
             pluginActions: pluginActionsControl,
             flexibleSpace: shelfFlexibleSpace,
             statusIndicators: contextualStatusControl,
             exchangeEdit: exchangeEditSlot,
+            targetAssociation: targetApplicationIndicator,
             close: closeButton
         )
         utilityShelf.isHidden = !toolbarExpanded
@@ -3351,9 +3778,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             .withAlphaComponent(0.55).cgColor
         shelfDivider.isHidden = !toolbarExpanded
 
-        let mainBar = NSStackView(
-            views: BufferWorkbenchLayout.mainBar.map { view(for: $0) }
-        )
+        BufferWorkbenchLayout.mainBar
+            .map { view(for: $0) }
+            .forEach { mainBar.addArrangedSubview($0) }
         mainBar.orientation = .horizontal
         mainBar.alignment = .centerY
         mainBar.distribution = .fill
@@ -3366,6 +3793,26 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             bottom: 3,
             right: BufferWorkbenchMetrics.mainHorizontalInset
         )
+        mainBar.addSubview(railActionCluster, positioned: .above, relativeTo: bufferRail)
+        let actionCenterY = railActionCluster.centerYAnchor.constraint(
+            equalTo: bufferRail.centerYAnchor,
+            constant: BufferWorkbenchMetrics.mainControlYOffset(
+                row: .target,
+                mode: layoutMode
+            )
+        )
+        railActionCenterYConstraint = actionCenterY
+        NSLayoutConstraint.activate([
+            railActionCluster.trailingAnchor.constraint(
+                equalTo: bufferRail.trailingAnchor,
+                constant: -BufferInlineMetrics.railHorizontalInset
+            ),
+            railActionCluster.leadingAnchor.constraint(
+                greaterThanOrEqualTo: bufferRail.leadingAnchor,
+                constant: BufferInlineMetrics.railHorizontalInset
+            ),
+            actionCenterY,
+        ])
 
         let root = NSStackView(views: [utilityShelf, shelfDivider, mainBar])
         root.orientation = .vertical
@@ -3394,6 +3841,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             railHeight,
         ])
         updateMainControlAlignment(for: layoutMode)
+        refreshRailActionOverlayGeometry()
         applyAppearance()
         rebuildPluginSelector()
         candidateWindow.syncWorkbenchLayout()
@@ -3438,6 +3886,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         button.isBordered = false
         button.focusRingType = .none
         button.toolTip = toolTip
+        button.setAccessibilityLabel(toolTip)
         button.target = self
         button.action = action
         button.translatesAutoresizingMaskIntoConstraints = false
@@ -3456,33 +3905,27 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         button.isBordered = false
         button.focusRingType = .none
         button.toolTip = toolTip
+        button.setAccessibilityLabel(toolTip)
         button.target = self
         button.action = action
         button.translatesAutoresizingMaskIntoConstraints = false
-    }
-
-    private func configureTargetAssociationButton() {
-        targetAssociationButton.imagePosition = .imageLeading
-        targetAssociationButton.imageHugsTitle = true
-        targetAssociationButton.font = .systemFont(ofSize: 10, weight: .semibold)
-        targetAssociationButton.isBordered = false
-        targetAssociationButton.focusRingType = .none
-        targetAssociationButton.target = self
-        targetAssociationButton.action = #selector(targetAssociationTapped)
-        targetAssociationButton.translatesAutoresizingMaskIntoConstraints = false
-        if let cell = targetAssociationButton.cell as? NSButtonCell {
-            cell.lineBreakMode = .byTruncatingMiddle
-        }
+        button.widthAnchor.constraint(
+            equalToConstant: BufferWorkbenchMetrics.primaryControlWidth
+        ).isActive = true
+        button.heightAnchor.constraint(
+            equalToConstant: BufferWorkbenchMetrics.primaryControlHeight
+        ).isActive = true
     }
 
     private func view(for control: BufferWorkbenchControl) -> NSView {
         switch control {
         case .bufferRail: return bufferRail
         case .copyResult: return copyResultButton
-        case .targetAssociation: return targetAssociationSlot
-        case .send: return sendSlot
+        case .targetAssociation: return targetApplicationIndicator
+        case .send: return sendButton
         case .status: return statusLabel
         case .clipboardImport: return clipboardImportButton
+        case .functionMenu: return functionMenuButton
         case .pluginActions: return pluginActionsControl
         case .exchangeEdit: return exchangeEditSlot
         case .close: return closeButton
@@ -3499,9 +3942,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         pluginActionsControl.layer?.backgroundColor = RimeUI.surface2.cgColor
         pluginActionsControl.layer?.borderColor = RimeUI.border.cgColor
         pluginActionsControl.layer?.borderWidth = 1 / max(panel.backingScaleFactor, 1)
-        [clipboardImportButton, exchangeEditButton, closeButton,
-         copyResultButton, targetAssociationButton, sendButton].forEach {
-            $0.contentTintColor = RimeUI.textSecondary
+        [functionMenuButton, clipboardImportButton, exchangeEditButton,
+         closeButton, copyResultButton, sendButton].forEach {
+            $0.contentTintColor = $0.isEnabled
+                ? RimeUI.textSecondary
+                : RimeUI.textMuted
             $0.refreshInteractionAppearance()
         }
         copyResultButton.contentTintColor = RimeUI.isRasta
@@ -3510,17 +3955,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         sendButton.contentTintColor = sendButtonUsesAccent && sendButton.isEnabled
             ? (RimeUI.isRasta ? RimeUI.brandGreen : RimeUI.accentBlue)
             : RimeUI.textSecondary
-        switch renderedTargetAssociationState {
-        case .capturing:
-            targetAssociationButton.contentTintColor = RimeUI.isRasta
-                ? RimeUI.brandGreen
-                : RimeUI.accentBlue
-        case .targetChanged, .protected:
-            targetAssociationButton.contentTintColor = .systemOrange
-        case .ready, .unavailable, .detached:
-            targetAssociationButton.contentTintColor = RimeUI.textSecondary
-        }
-        targetAssociationButton.refreshInteractionAppearance()
+        targetApplicationIndicator.applyAppearance()
+        railActionCluster.applyAppearance()
         translationSwapButton.contentTintColor = RimeUI.textSecondary
         translationSwapButton.refreshInteractionAppearance()
         pluginActionButtons.values.forEach {
@@ -3544,7 +3980,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func applyPreviewPointerState(_ hoveredControl: BufferWorkbenchControl?) {
-        [copyResultButton, targetAssociationButton, sendButton, clipboardImportButton,
+        [functionMenuButton, copyResultButton, sendButton, clipboardImportButton,
          exchangeEditButton, closeButton].forEach {
             $0.setPreviewPointerState(nil)
         }
@@ -3565,17 +4001,17 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             copyResultButton.setPreviewPointerState(.hovered)
         case .send:
             sendButton.setPreviewPointerState(.hovered)
-        case .targetAssociation:
-            targetAssociationButton.setPreviewPointerState(.hovered)
         case .clipboardImport:
             clipboardImportButton.setPreviewPointerState(.hovered)
+        case .functionMenu:
+            functionMenuButton.setPreviewPointerState(.hovered)
         case .pluginActions:
             pluginSelector.setPreviewPointerState(.hovered)
         case .exchangeEdit:
             exchangeEditButton.setPreviewPointerState(.hovered)
         case .close:
             closeButton.setPreviewPointerState(.hovered)
-        case .bufferRail, .status, .none:
+        case .bufferRail, .status, .targetAssociation, .none:
             break
         }
     }
@@ -3592,13 +4028,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         guard let controls else {
             setSendButtonGenerating(false)
             if detachedClipboardMode {
-                setSendButtonSymbol("doc.on.doc")
-                sendButton.isEnabled = !contentProtected
-                    && !BufferModel.shared.stagedText.isEmpty
-                sendButton.toolTip = sendButton.isEnabled
-                    ? "复制 Buffer 内容并关闭"
-                    : "先从剪贴板导入文字"
-                sendButton.setAccessibilityLabel("复制 Buffer 内容")
+                setSendButtonSymbol("paperplane.fill")
+                sendButton.isEnabled = false
+                sendButton.toolTip = "当前输入法下请使用旁边的“复制并退出”"
+                sendButton.setAccessibilityLabel("发送不可用")
             } else {
                 setSendButtonSymbol("paperplane.fill")
                 sendButton.isEnabled = availability.canSend && !contentProtected
@@ -3640,21 +4073,17 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             setSendButtonGenerating(true)
         case .deliver:
             setSendButtonGenerating(false)
-            setSendButtonSymbol(
-                detachedClipboardMode ? "doc.on.doc" : "paperplane.fill"
-            )
-            sendButton.isEnabled = !contentProtected
-                && (detachedClipboardMode
-                    ? (BufferGeneratedResultCopyRules.freeze(protected: false) != nil
-                        || !BufferModel.shared.stagedText.isEmpty)
-                    : availability.canSend)
+            setSendButtonSymbol("paperplane.fill")
+            sendButton.isEnabled = !detachedClipboardMode
+                && !contentProtected
+                && availability.canSend
             sendButton.toolTip = detachedClipboardMode
-                ? "复制生成结果并关闭"
+                ? "当前输入法下请使用旁边的“复制并退出”"
                 : (availability.canSend
                     ? "发送下一块（\(deliveryShortcutTitle)）"
                     : availability.label)
             sendButton.setAccessibilityLabel(
-                detachedClipboardMode ? "复制 AI 生成结果" : "发送下一块 AI 内容"
+                detachedClipboardMode ? "发送不可用" : "发送下一块 AI 内容"
             )
             sendButtonUsesAccent = true
         }
@@ -4077,7 +4506,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         toolbarExpanded = true
         utilityShelf.isHidden = false
         shelfDivider.isHidden = false
-        bufferRail.setToolbarExpanded(true)
         panel.contentView?.layoutSubtreeIfNeeded()
 
         if resize {
@@ -4169,8 +4597,15 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func updateMainControlAlignment(for mode: BufferWorkbenchLayoutMode) {
-        targetAssociationSlot.update(for: mode)
-        sendSlot.update(for: mode)
+        railActionCenterYConstraint?.constant = BufferWorkbenchMetrics
+            .mainControlYOffset(row: .target, mode: mode)
+    }
+
+    private func refreshRailActionOverlayGeometry() {
+        railActionCluster.refreshGeometry()
+        updateMainControlAlignment(for: layoutMode)
+        panel.contentView?.layoutSubtreeIfNeeded()
+        bufferRail.setTrailingActionExclusion(width: railActionCluster.reservedWidth)
     }
 
     private func applyCollectionBehavior() {
@@ -4597,7 +5032,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         adjustingFrame = true
         panel.setFrame(frame, display: display)
         adjustingFrame = false
-        updateTargetAssociationTitleForCurrentWidth()
         visual.needsLayout = true
         panel.invalidateShadow()
     }
@@ -4815,12 +5249,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         for entry in BufferPluginMenuCatalog.entries(from: plugins) {
             pluginSelector.addItem(withTitle: entry.title)
             pluginSelector.lastItem?.representedObject = BufferPluginMenuIdentity(entry.key)
-            pluginSelector.lastItem?.image = PluginVisualIdentity.image(
-                symbolName: entry.symbolName,
-                accessibilityDescription: entry.title,
-                pointSize: 10,
-                weight: .semibold
-            )
             pluginSelector.lastItem?.toolTip = entry.key == nil
                 ? "使用默认缓冲，不加载插件"
                 : "切换到 \(entry.title)"
@@ -4831,6 +5259,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             return identity.key == activeKey
         } ?? 0
         pluginSelector.selectItem(at: selectedIndex)
+    }
+
+    @objc private func functionMenuTapped() {
+        guard functionMenuButton.isEnabled, pluginSelector.isEnabled else { return }
+        pluginSelector.performClick(nil)
     }
 
     @objc private func bufferPluginSelectionChanged() {
@@ -4885,44 +5318,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         )
     }
 
-    @objc private func targetAssociationTapped() {
-        dispatchPrecondition(condition: .onQueue(.main))
-        guard isVisible,
-              RimeInputSourceAuthority.currentSourceIsOwn(),
-              !hiddenForSession,
-              !sessionProtectionActive,
-              !IsSecureEventInputEnabled() else {
-            clearTargetAssociationCue()
-            refresh()
-            return
-        }
-
-        let model = BufferModel.shared
-        let replayed: Bool
-        if model.active {
-            if let token = model.captureFocusToken {
-                replayed = presentTargetAssociationCue(
-                    expected: token,
-                    requiresCapture: true
-                )
-            } else {
-                replayed = false
-            }
-        } else if let target = InputFocusCoordinator.shared.liveTarget(
-            forceOverlayVisibilityRefresh: true
-        ) {
-            replayed = presentTargetAssociationCue(
-                expected: target.token,
-                requiresCapture: false
-            )
-        } else {
-            replayed = false
-        }
-        if !replayed {
-            refresh()
-        }
-    }
-
     @objc private func sendTapped() {
         guard !sessionProtectionActive else { return }
         if IsSecureEventInputEnabled() {
@@ -4971,7 +5366,13 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             }
         }
         if !rimeOwnsInput || !RimeInputSourceAuthority.currentSourceIsOwn() {
-            _ = copyDetachedBufferAndClose()
+            // A paper-plane click always means delivery. If the target/source
+            // lease changed after mouse-down, fail closed and let refresh show
+            // the detached copy action instead of changing clipboard contents.
+            NSSound.beep()
+            IMELog.write("buffer send rejected after input source changed")
+            refresh()
+            RimeBufferController.refreshActiveUI()
             return
         }
         _ = BufferDeliveryCoordinator.shared.sendNext(resolveCompositionIfNeeded: true)
@@ -4980,12 +5381,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         RimeBufferController.refreshActiveUI()
     }
 
-    private func toggleToolbar() {
-        setToolbarExpanded(true, resize: true)
-    }
-
     @objc private func copyResultTapped() {
-        _ = copyGeneratedResultAndClose()
+        if RimeInputSourceAuthority.currentSourceIsOwn() {
+            _ = copyGeneratedResultAndClose()
+        } else {
+            _ = copyDetachedBufferAndClose()
+        }
     }
 
     @objc private func importClipboardTapped() {
