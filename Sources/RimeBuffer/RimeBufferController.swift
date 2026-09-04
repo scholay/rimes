@@ -433,6 +433,22 @@ enum ShiftGestureReleaseDecision: Equatable {
     case discard
 }
 
+/// `flagsChanged` reports the aggregate modifier mask, but `keyCode` still
+/// identifies the physical modifier that changed. A Command release after a
+/// Command-Shift global shortcut can therefore carry a Shift-only aggregate
+/// mask. Treating that aggregate delta as a new Shift press makes the later
+/// real Shift release look like a standalone language toggle. Only a physical
+/// left/right Shift event may create or finish a Shift gesture.
+enum ShiftModifierEventRules {
+    static func rimeKeycode(forHardwareKeyCode keyCode: UInt16) -> Int32? {
+        guard let eventKey = RimeKey.fromVirtualKeyCode(keyCode),
+              eventKey == RimeKey.shiftL || eventKey == RimeKey.shiftR else {
+            return nil
+        }
+        return eventKey
+    }
+}
+
 /// librime treats a sub-500ms Shift press/release with no intervening Rime key
 /// as its standalone ASCII switch. Defer that pair until physical release so
 /// a modified/held gesture can be discarded before `commit_code` mutates the
@@ -5664,8 +5680,8 @@ final class RimeBufferController: IMKInputController {
         let isSecondShiftTransition = changes.isEmpty
             && modifiers.contains(.shift)
             && (event.keyCode == 56 || event.keyCode == 60)
-        if modifiers.contains(.shift),
-           !nonShiftChanges.isEmpty || isSecondShiftTransition {
+        if !nonShiftChanges.isEmpty
+            || (modifiers.contains(.shift) && isSecondShiftTransition) {
             shiftGesture?.noteModifierUse()
         }
 
@@ -5712,12 +5728,22 @@ final class RimeBufferController: IMKInputController {
         // paths. Replay a matched press/release only after we have proved this
         // was a short standalone tap; modified, long and focus-cancelled
         // gestures never reach ascii_composer at all.
-        if changes.contains(.shift) {
+        let physicalShiftKey = changes.contains(.shift)
+            ? ShiftModifierEventRules.rimeKeycode(
+                forHardwareKeyCode: event.keyCode
+            )
+            : nil
+        if changes.contains(.shift), physicalShiftKey == nil {
+            // An aggregate Shift delta attached to another modifier cannot
+            // authenticate a tap. If a real gesture was already in flight,
+            // fail closed so a later physical release cannot toggle ASCII.
+            shiftGesture?.noteModifierUse()
+            IMELog.write(
+                "aggregate Shift delta ignored for non-Shift keyCode=\(event.keyCode)"
+            )
+        }
+        if let shiftKey = physicalShiftKey {
             let pressed = modifiers.contains(.shift)
-            let eventKey = RimeKey.fromVirtualKeyCode(event.keyCode)
-            let shiftKey = eventKey == RimeKey.shiftL || eventKey == RimeKey.shiftR
-                ? eventKey!
-                : RimeKey.shiftL
             if pressed {
                 // Preserve processRimeKey's non-chord boundary even though the
                 // mode-switch event itself is deferred until release.
@@ -5769,6 +5795,12 @@ final class RimeBufferController: IMKInputController {
                     )
                 }
             }
+        }
+        if changes.contains(.shift) {
+            // Keep the aggregate baseline synchronized even when a different
+            // modifier's flagsChanged callback exposed the Shift delta. The
+            // physical Shift callback, if any, is the only event allowed to
+            // authenticate a standalone language-toggle gesture.
             changes.remove(.shift)
             if changes.isEmpty {
                 lastModifiers = modifiers

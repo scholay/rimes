@@ -7162,10 +7162,28 @@ func runBufferWindowSmokeTest() -> Bool {
     overlappingShift.noteModifierUse()
     var cancelledShift = shortShiftTap
     cancelledShift.cancelForFocusChange()
+    let physicalLeftShift = ShiftModifierEventRules.rimeKeycode(
+        forHardwareKeyCode: UInt16(kVK_Shift)
+    )
+    let physicalRightShift = ShiftModifierEventRules.rimeKeycode(
+        forHardwareKeyCode: UInt16(kVK_RightShift)
+    )
+    let commandReleaseWithShiftMask = ShiftModifierEventRules.rimeKeycode(
+        forHardwareKeyCode: UInt16(kVK_Command)
+    )
+    let primaryHotKeyReleaseWithShiftMask = ShiftModifierEventRules.rimeKeycode(
+        forHardwareKeyCode: UInt16(kVK_ANSI_V)
+    )
+    var shiftInterruptedByAggregateDelta = shortShiftTap
+    if commandReleaseWithShiftMask == nil {
+        // Mirror handleFlags' fail-closed path: an aggregate Shift delta on a
+        // non-Shift callback must make an existing gesture non-replayable.
+        shiftInterruptedByAggregateDelta.noteModifierUse()
+    }
     // The real Carbon/IMK failure is not limited to one optional gesture. A
-    // process-wide tombstone must also catch a gesture rebuilt after the hot
+    // process-wide tombstone must catch a real Shift gesture spanning the hot
     // key callback and releases delivered to multiple controller instances,
-    // while leaving the next physical Shift tap untouched.
+    // while non-Shift modifier callbacks cannot synthesize a replacement.
     var hotKeyShiftTombstone = GlobalHotKeyShiftTombstone()
     let armedHotKeyShiftTombstone = hotKeyShiftTombstone.record(
         route: .toggleWorkbench,
@@ -7519,7 +7537,16 @@ func runBufferWindowSmokeTest() -> Bool {
             eventTimestamp: 90.0,
             eventIdentity: ordinaryVAfterMissingReleaseIdentity
         )
-    guard ShiftModifierGesture.standaloneTapLimit == 0.5,
+    guard physicalLeftShift == RimeKey.shiftL,
+          physicalRightShift == RimeKey.shiftR,
+          commandReleaseWithShiftMask == nil,
+          primaryHotKeyReleaseWithShiftMask == nil,
+          shiftInterruptedByAggregateDelta.releaseDecision(
+            at: 10.2,
+            currentSession: 7,
+            currentSchemaID: "rime_ice"
+          ) == .discard,
+          ShiftModifierGesture.standaloneTapLimit == 0.5,
           shortShiftTap.releaseDecision(
             at: 10.499,
             currentSession: 7,
