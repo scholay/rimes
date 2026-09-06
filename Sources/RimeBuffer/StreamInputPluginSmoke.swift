@@ -208,62 +208,30 @@ func runStreamInputPluginSmokeTest() -> Bool {
         return fail("local engine must decline unconverted ASCII tails")
     }
 
-    // The on-device decoder is a selectable model, not a fixed first stage.
-    // The request's own settings decide which engines run and in what order.
+    // Guessing belongs to the connector alone now: the on-device decoder is
+    // kept in the build for ordinary typing, not offered here.
     do {
-        func request(
-            localOnly: Bool,
-            localFirst: Bool
-        ) -> StreamInputInferenceRequest {
-            StreamInputInferenceRequest(
-                requestID: UUID(),
-                sourceText: "nihao",
-                automaticSyllableSpaceOffsets: [],
-                settings: StreamInputPluginSettings(
-                    connectorKind: .openAICompatible,
-                    candidateCount: 5,
-                    responsePace: .fast,
-                    usesLocalEngineOnly: localOnly,
-                    prefersLocalEngineFirst: localFirst
-                ),
-                enforcingMinimumAfterRetry: false,
-                excludedGuesses: []
+        let defaults = UserDefaults(
+            suiteName: "RimeBuffer.StreamInputEngineSelection.\(UUID())"
+        )
+        guard let defaults,
+              let model = try? PluginConfigurationCatalog.makeStreamInputModel(
+                defaults: defaults
+              ) else {
+            return fail("stream input configuration model")
+        }
+        let connectorField = model.schema.fields.first {
+            $0.id == StreamInputPluginConfigurationFieldID.connector
+        }
+        guard case let .choice(options)? = connectorField?.kind else {
+            return fail("stream input connector field")
+        }
+        guard options.allSatisfy({ AITextProviderKind(rawValue: $0.value) != nil }),
+              !model.schema.fields.contains(where: { $0.id == "localFirst" }) else {
+            return fail(
+                "stream input must offer connectors only: "
+                    + options.map(\.value).joined(separator: ",")
             )
-        }
-        func roles(localOnly: Bool, localFirst: Bool) -> [StreamInputEngineRole] {
-            request(localOnly: localOnly, localFirst: localFirst)
-                .settings.engineRoles
-        }
-        guard roles(localOnly: true, localFirst: true) == [.local],
-              roles(localOnly: true, localFirst: false) == [.local],
-              roles(localOnly: false, localFirst: true) == [.local, .connector],
-              roles(localOnly: false, localFirst: false) == [.connector] else {
-            return fail("engine selection must decide which models run")
-        }
-
-        // Picking a connector without local-first must not consult the
-        // on-device decoder at all.
-        let localModule = StreamInputSmokeInferenceEngine()
-        let connectorModule = StreamInputSmokeInferenceEngine()
-        let router = StreamInputModularInferenceEngine(modulesByRole: [
-            .local: localModule,
-            .connector: connectorModule,
-        ])
-        _ = router.infer(
-            request(localOnly: false, localFirst: false),
-            onEvent: { _ in }
-        ) { _ in }
-        guard localModule.pending.isEmpty,
-              connectorModule.pending.count == 1 else {
-            return fail("connector-only selection must skip the local engine")
-        }
-        _ = router.infer(
-            request(localOnly: true, localFirst: true),
-            onEvent: { _ in }
-        ) { _ in }
-        guard localModule.pending.count == 1,
-              connectorModule.pending.count == 1 else {
-            return fail("local-only selection must skip the connector")
         }
     }
 

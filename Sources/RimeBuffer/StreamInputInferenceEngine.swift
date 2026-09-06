@@ -3,13 +3,6 @@ import Foundation
 /// Frozen input shared by every consciousness-stream inference module. Focus
 /// authority deliberately stays in StreamInputWorkspace; engines can propose
 /// text, but cannot authorize or deliver it.
-/// Which decoder a request may use. The on-device engine is a peer of the
-/// connector-backed models, not a privileged pre-stage.
-enum StreamInputEngineRole: String, CaseIterable, Equatable {
-    case local
-    case connector
-}
-
 struct StreamInputInferenceRequest: Equatable {
     let requestID: UUID
     let sourceText: String
@@ -145,45 +138,14 @@ private final class StreamInputInferenceAttemptGate {
     }
 }
 
-/// Runs modules in the order the request's settings ask for. A module may
-/// decline an input with an ordinary failure; the next module then gets the
-/// same immutable request. The on-device decoder is one selectable model among
-/// the connectors rather than a fixed first stage, so a request may name it
-/// alone, name a connector alone, or keep the local-first hand-off that lets
-/// Rime answer ordinary pinyin and a model handle typos, Latin fragments, and
-/// long input.
+/// Runs modules in priority order. A module may decline an input with an
+/// ordinary failure; the next module then gets the same immutable request.
 final class StreamInputModularInferenceEngine: StreamInputInferenceEngine {
-    private let modulesByRole: [StreamInputEngineRole: any StreamInputInferenceEngine]
     private let modules: [any StreamInputInferenceEngine]
 
-    init(modulesByRole: [StreamInputEngineRole: any StreamInputInferenceEngine]) {
-        precondition(!modulesByRole.isEmpty)
-        self.modulesByRole = modulesByRole
-        self.modules = StreamInputEngineRole.allCases.compactMap {
-            modulesByRole[$0]
-        }
-    }
-
-    convenience init(modules: [any StreamInputInferenceEngine]) {
+    init(modules: [any StreamInputInferenceEngine]) {
         precondition(!modules.isEmpty)
-        var mapped: [StreamInputEngineRole: any StreamInputInferenceEngine] = [:]
-        for (index, module) in modules.enumerated() {
-            let role = StreamInputEngineRole.allCases.indices.contains(index)
-                ? StreamInputEngineRole.allCases[index]
-                : .connector
-            mapped[role] = module
-        }
-        self.init(modulesByRole: mapped)
-    }
-
-    /// The subset this request actually asked for, in order.
-    private func modules(
-        for request: StreamInputInferenceRequest
-    ) -> [any StreamInputInferenceEngine] {
-        let selected = request.settings.engineRoles.compactMap {
-            modulesByRole[$0]
-        }
-        return selected.isEmpty ? modules : selected
+        self.modules = modules
     }
 
     var displayName: String { "本地模块引擎" }
@@ -234,14 +196,13 @@ final class StreamInputModularInferenceEngine: StreamInputInferenceEngine {
             }
         }
 
-        let activeModules = modules(for: request)
         func attempt(_ index: Int, lastError: AITextProviderError?) {
             cancellation.ifActive {
-                guard index < activeModules.count else {
+                guard index < modules.count else {
                     completion(.failure(lastError ?? .failed))
                     return
                 }
-                let module = activeModules[index]
+                let module = modules[index]
                 guard case .ready = module.availability else {
                     let unavailable: AITextProviderError
                     if case let .unavailable(message) = module.availability {
@@ -293,6 +254,14 @@ final class StreamInputModularInferenceEngine: StreamInputInferenceEngine {
 /// Fast, fully local sentence decoder backed by a private librime session.
 /// The hidden schema enables Octagram when its model is bundled. Queries are
 /// bounded and serialized so they cannot pile up behind the bridge mutex.
+/// On-device decoding over a hidden `stream_input_local` schema ranked by the
+/// official simplified Octagram model.
+///
+/// Consciousness-stream guessing no longer runs through this: that path is the
+/// connector's alone. It is kept because ordinary typing and its candidate
+/// window are what this model is for, which is where it belongs next — the
+/// schema, grammar, and audited model ship with the app and its decode path is
+/// already covered by `smoke`. Do not delete it as dead code.
 final class RimeOctagramStreamInputEngine: StreamInputInferenceEngine {
     static let shared = RimeOctagramStreamInputEngine()
 

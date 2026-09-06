@@ -1053,13 +1053,12 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         if let inferenceEngine {
             self.inferenceEngine = inferenceEngine
         } else if usesLivePluginConfiguration {
-            self.inferenceEngine = StreamInputModularInferenceEngine(
-                modulesByRole: [
-                    .local: RimeOctagramStreamInputEngine.shared,
-                    .connector: AIStreamInputInferenceEngine(
-                        provider: selectedProvider
-                    ),
-                ]
+            // Consciousness-stream guessing is the connector's job alone.
+            // The on-device Rime + Octagram decoder stays in the build for
+            // ordinary typing and its candidate window, which is what that
+            // model is actually for; it no longer sits in this path.
+            self.inferenceEngine = AIStreamInputInferenceEngine(
+                provider: selectedProvider
             )
         } else {
             // Existing provider-based smoke tests intentionally stay AI-only;
