@@ -671,9 +671,9 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     var onDerivedTargetStep: ((Int) -> Void)?
     var onCaptureRequested: ((Int) -> Void)?
 
-    static let standardPreferredHeight: CGFloat = 34
-    static let translationPreferredHeight: CGFloat = 68
-    static let additionalTranslationTargetRowHeight: CGFloat = 31
+    static let standardPreferredHeight: CGFloat = 32
+    static let translationPreferredHeight: CGFloat = 64
+    static let additionalTranslationTargetRowHeight: CGFloat = 32
 
     static func translationPreferredHeight(targetRows: Int,
                                             showsSourceRail: Bool = true) -> CGFloat {
@@ -737,6 +737,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private var lastRenderSignature: RenderSignature?
     private var contentShielded = false
     private var trailingActionExclusionWidth: CGFloat = 0
+    private var sourceTrailingActionExclusionWidth: CGFloat = 0
     private var enterHoldProgress: CGFloat?
     private(set) var renderPassCount = 0
     private(set) var renderedSelectedStandardBlockCount = 0
@@ -1092,13 +1093,31 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             && rail.trailingSpacer === rail.row.arrangedSubviews.last
             && rail.trailingSpacer.frame.width + 0.5 >= expectedClearance
             && !rail.row.arrangedSubviews.contains(where: { $0 is NSButton })
+        // A split source/target layout carries its own source-row overlay; its
+        // clearance is independent of the target one and must not resize either
+        // rail.
+        let sourceOverlayWidth: CGFloat = 22
+        let expectedSourceClearance = sourceOverlayWidth
+            + BufferInlineMetrics.trailingActionSafetyGap
+        view.setSourceTrailingActionExclusion(width: sourceOverlayWidth)
+        host.layoutSubtreeIfNeeded()
+        view.layoutSubtreeIfNeeded()
+        let sourceRowStable = abs(view.bounds.width - railWidthBefore) < 0.5
+            && abs(view.sourceTrailingClearanceConstraint.constant
+                - expectedSourceClearance) < 0.5
+            && rail.trailingSpacer.frame.width + 0.5 >= expectedClearance
+
         let passed = standardStable && standardCaretClearsOverlay && targetStable
+            && sourceRowStable
         if !passed {
             print(
                 "FAILED: trailing action exclusion must not shrink rail",
                 "standard=\(standardStable)",
                 "caretClear=\(standardCaretClearsOverlay)",
                 "target=\(targetStable)",
+                "sourceRow=\(sourceRowStable)",
+                "sourceClearance=\(view.sourceTrailingClearanceConstraint.constant)",
+                "expectedSource=\(expectedSourceClearance)",
                 "clearance=\(rail.trailingSpacer.frame.width)",
                 "expected=\(expectedClearance)"
             )
@@ -1365,23 +1384,51 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         }
     }
 
+    /// The split layout gives the source rail its own trailing overlay, so this
+    /// clearance is tracked separately from the target/standard one.
+    func setSourceTrailingActionExclusion(width: CGFloat) {
+        let bounded = max(0, width) + (width > 0
+            ? BufferInlineMetrics.trailingActionSafetyGap
+            : 0)
+        guard abs(sourceTrailingActionExclusionWidth - bounded) >= 0.5 else { return }
+        sourceTrailingActionExclusionWidth = bounded
+        applyTrailingActionExclusion()
+        guard !translationContainer.isHidden else { return }
+        updateTranslationDocumentSizes()
+        if let phase = lastRenderSignature?.translation?.phase {
+            scrollTranslationRails(for: phase)
+        }
+    }
+
     private func applyTrailingActionExclusion() {
         standardTrailingClearanceConstraint.constant = 0
         sourceTrailingClearanceConstraint.constant = 0
         translationTargetRails.values.forEach { $0.setTrailingClearance(0) }
 
-        guard trailingActionExclusionWidth > 0 else { return }
-        if translationContainer.isHidden {
-            standardTrailingClearanceConstraint.constant = trailingActionExclusionWidth
-        } else if renderedTranslationTargetRowKeys.isEmpty {
-            sourceTrailingClearanceConstraint.constant = trailingActionExclusionWidth
-        } else {
-            for key in renderedTranslationTargetRowKeys {
-                translationTargetRails[key]?.setTrailingClearance(
-                    trailingActionExclusionWidth
-                )
+        if trailingActionExclusionWidth > 0 {
+            if translationContainer.isHidden {
+                standardTrailingClearanceConstraint.constant = trailingActionExclusionWidth
+            } else if renderedTranslationTargetRowKeys.isEmpty {
+                sourceTrailingClearanceConstraint.constant = trailingActionExclusionWidth
+            } else {
+                for key in renderedTranslationTargetRowKeys {
+                    translationTargetRails[key]?.setTrailingClearance(
+                        trailingActionExclusionWidth
+                    )
+                }
             }
         }
+
+        // Only a rendered target row means the source rail is a distinct row
+        // with its own overlay; otherwise the single visible row already owns
+        // the combined clearance above.
+        guard sourceTrailingActionExclusionWidth > 0,
+              !translationContainer.isHidden,
+              !renderedTranslationTargetRowKeys.isEmpty else { return }
+        sourceTrailingClearanceConstraint.constant = max(
+            sourceTrailingClearanceConstraint.constant,
+            sourceTrailingActionExclusionWidth
+        )
     }
 
     private func updateHairlineWidth() {
@@ -2234,6 +2281,11 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     }
 
     private func trailingActionExclusion(for scrollView: NSScrollView) -> CGFloat {
+        if !translationContainer.isHidden,
+           !renderedTranslationTargetRowKeys.isEmpty,
+           scrollView === translationSourceScroll {
+            return sourceTrailingActionExclusionWidth
+        }
         guard trailingActionExclusionWidth > 0 else { return 0 }
         if translationContainer.isHidden {
             return scrollView === chipScroll ? trailingActionExclusionWidth : 0
@@ -2480,7 +2532,7 @@ class FirstMouseButton: NSButton {
 }
 
 final class HoldProgressButton: FirstMouseButton {
-    var holdDuration: TimeInterval = 1.2
+    var holdDuration: TimeInterval = 0.6
 
     private var holdStartedAt: CFAbsoluteTime = 0
     private var completed = false

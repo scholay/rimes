@@ -758,6 +758,33 @@ if let i = CommandLine.arguments.firstIndex(of: "settings-render"),
 // Dev-only: `ETInput panel-render <path>
 // [translation|marine|candidate|linked|toolbar] [hover=<control>]
 // [width=<points>]` renders the actual compact workbench.
+if let i = CommandLine.arguments.firstIndex(of: "popup-menu-render"),
+   i + 1 < CommandLine.arguments.count {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    app.finishLaunching()
+    let rows: [BufferPopUpMenuRow] = [
+        BufferPopUpMenuRow(itemIndex: 0, title: "Codex CLI", isSeparator: false,
+                           isEnabled: true, isSelected: true),
+        BufferPopUpMenuRow(itemIndex: 1, title: "Claude Code CLI",
+                           isSeparator: false, isEnabled: true,
+                           isSelected: false),
+        BufferPopUpMenuRow(itemIndex: 2, title: "OpenAI 兼容 API",
+                           isSeparator: false, isEnabled: true,
+                           isSelected: false),
+        .separator(itemIndex: 3),
+        BufferPopUpMenuRow(itemIndex: 4, title: "未配置连接器",
+                           isSeparator: false, isEnabled: false,
+                           isSelected: false),
+    ]
+    let ok = renderBufferPopUpMenuPreview(
+        to: CommandLine.arguments[i + 1],
+        rows: rows
+    )
+    print(ok ? "rendered pull-down menu preview" : "FAILED: menu preview")
+    exit(ok ? 0 : 1)
+}
+
 if let i = CommandLine.arguments.firstIndex(of: "panel-render"),
    i + 1 < CommandLine.arguments.count {
     let app = NSApplication.shared
@@ -7041,6 +7068,7 @@ func runBufferWindowSmokeTest() -> Bool {
             hitIsInteractiveControl: true
           ) == .interactWithControl,
           runBufferWorkbenchToolbarHitTestProbe(),
+          runBufferPopUpMenuGeometryProbe(),
           runBufferInlineNoLeadingControlProbe(),
           runBufferInlineTrailingActionExclusionProbe(),
           BufferWorkbenchPointerRules.state(
@@ -7187,13 +7215,13 @@ func runBufferWindowSmokeTest() -> Bool {
           standardSourceOffset == 0,
           standardTargetOffset == 0,
           compactDerivedTargetOffset == 0,
-          translationSourceOffset == -15.5,
-          translationTargetOffset == 15.5,
+          translationSourceOffset == -16,
+          translationTargetOffset == 16,
           translationSourceOffset < 0,
           translationTargetOffset > 0,
           translationSourceOffset == -translationTargetOffset,
-          streamSourceOffset == -15.5,
-          streamTargetOffset == 15.5,
+          streamSourceOffset == -16,
+          streamTargetOffset == 16,
           streamSourceOffset == -streamTargetOffset,
           !BufferWorkbenchLayout.windowBackgroundDraggable,
           FirstMouseButton(frame: .zero).acceptsFirstMouse(for: nil),
@@ -7875,8 +7903,8 @@ func runBufferWindowSmokeTest() -> Bool {
 
     let halfHoldDecision = BufferEnterGestureRules.pollDecision(
         isPhysicalDown: true,
-        elapsed: 0.6,
-        holdDelay: 1.2
+        elapsed: 0.3,
+        holdDelay: 0.6
     )
     let halfHoldProgress: Double
     if case let .wait(progress) = halfHoldDecision {
@@ -7887,20 +7915,20 @@ func runBufferWindowSmokeTest() -> Bool {
     guard BufferEnterGestureRules.pollDecision(
             isPhysicalDown: false,
             elapsed: 0.2,
-            holdDelay: 1.2
+            holdDelay: 0.6
           ) == .sendNext,
           // A delayed poll after a quick release must remain a tap, never an
           // accidental send-all just because wall time crossed the threshold.
           BufferEnterGestureRules.pollDecision(
             isPhysicalDown: false,
             elapsed: 2.0,
-            holdDelay: 1.2
+            holdDelay: 0.6
           ) == .sendNext,
           abs(halfHoldProgress - 0.5) < 0.000_001,
           BufferEnterGestureRules.pollDecision(
             isPhysicalDown: true,
-            elapsed: 1.2,
-            holdDelay: 1.2
+            elapsed: 0.6,
+            holdDelay: 0.6
           ) == .sendAll else {
         print("FAILED: buffer Enter tap/hold poll decision")
         return false
@@ -9794,11 +9822,11 @@ func runBufferWindowSmokeTest() -> Bool {
     let pagerFrames = pagerProbe.rails
         .map(\.viewportFrame)
         .sorted { $0.minY < $1.minY }
-    let renderedPagerGeometry = pagerProbe.boundsHeight == 68
-        && pagerProbe.containerHeight == 58
+    let renderedPagerGeometry = pagerProbe.boundsHeight == 64
+        && pagerProbe.containerHeight == 54
         && pagerProbe.rails.count == 2
         && pagerProbe.rails.allSatisfy {
-            abs($0.viewportHeight - 27) < 0.5
+            abs($0.viewportHeight - 25) < 0.5
                 && abs($0.documentHeight - $0.viewportHeight) < 0.5
         }
         && zip(pagerFrames, pagerFrames.dropFirst()).allSatisfy {
@@ -10297,6 +10325,117 @@ func runBufferWindowSmokeTest() -> Bool {
         visibleFrames: [primary, secondary, leftSecondary],
         fallback: primary
     )
+    // Box-aligned openings: left edge follows the field, width adopts it, and
+    // the top edge sits one gap under the field's bottom edge.
+    let chatBox = NSRect(x: 300, y: 460, width: 760, height: 44)
+    let chatCaret = NSRect(x: 420, y: 468, width: 0, height: 22)
+    let boxAlignedOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: chatCaret,
+        boxRect: chatBox,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    // A field narrower than the readable minimum clamps up and keeps its left
+    // edge rather than shrinking the workbench.
+    let searchBox = NSRect(x: 240, y: 600, width: 220, height: 28)
+    let searchCaret = NSRect(x: 260, y: 604, width: 0, height: 20)
+    let narrowBoxOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: searchCaret,
+        boxRect: searchBox,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    // A document-sized text area still frames the workbench horizontally, but
+    // must not push it to the bottom of the editor.
+    let editorBox = NSRect(x: 120, y: 80, width: 900, height: 700)
+    let editorCaret = NSRect(x: 300, y: 700, width: 0, height: 22)
+    let tallBoxOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: editorCaret,
+        boxRect: editorBox,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    // A field wider than the workbench maximum clamps down, still left-aligned.
+    let wideBox = NSRect(x: 140, y: 300, width: 1200, height: 40)
+    let wideCaret = NSRect(x: 200, y: 308, width: 0, height: 22)
+    let wideBoxOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: wideCaret,
+        boxRect: wideBox,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    // A stale box that no longer surrounds the caret is rejected outright.
+    let staleBoxOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: chatCaret,
+        boxRect: NSRect(x: 20, y: 40, width: 300, height: 30),
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    let caretOnlyOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: chatCaret,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    // A box near the bottom has no room below, so it flips above while keeping
+    // its left edge and width.
+    let bottomBox = NSRect(x: 360, y: 30, width: 700, height: 40)
+    let bottomBoxCaret = NSRect(x: 400, y: 38, width: 0, height: 22)
+    let flippedBoxOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: bottomBoxCaret,
+        boxRect: bottomBox,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    guard boxAlignedOpening.side == .belowTarget,
+          boxAlignedOpening.frame.minX == chatBox.minX,
+          boxAlignedOpening.frame.width == chatBox.width,
+          boxAlignedOpening.frame.maxY
+            == chatBox.minY - BufferWindowGeometry.inputAnchorGap,
+          narrowBoxOpening.frame.minX == searchBox.minX,
+          narrowBoxOpening.frame.width
+            == BufferWindowGeometry.standardMinimumWidth,
+          narrowBoxOpening.frame.maxY
+            == searchBox.minY - BufferWindowGeometry.inputAnchorGap,
+          tallBoxOpening.frame.minX == editorBox.minX,
+          tallBoxOpening.frame.width == editorBox.width,
+          wideBoxOpening.frame.minX == wideBox.minX,
+          wideBoxOpening.frame.width
+            == BufferWindowGeometry.standardMaximumWidth,
+          tallBoxOpening.frame.maxY
+            == editorCaret.minY - BufferWindowGeometry.inputAnchorGap,
+          staleBoxOpening == caretOnlyOpening,
+          caretOnlyOpening.frame.minX == chatCaret.minX,
+          flippedBoxOpening.side == .aboveTarget,
+          flippedBoxOpening.frame.minX == bottomBox.minX,
+          flippedBoxOpening.frame.width == bottomBox.width,
+          flippedBoxOpening.frame.minY
+            == bottomBox.maxY + BufferWindowGeometry.inputAnchorGap,
+          BufferWindowGeometry.isPlausibleInputBox(chatBox,
+                                                   caret: chatCaret,
+                                                   visibleFrames: [primary]),
+          !BufferWindowGeometry.isPlausibleInputBox(
+            NSRect(x: 300, y: 460, width: 0, height: 44),
+            caret: chatCaret,
+            visibleFrames: [primary]
+          ),
+          !BufferWindowGeometry.isPlausibleInputBox(
+            chatBox,
+            caret: NSRect(x: 4000, y: 468, width: 0, height: 22),
+            visibleFrames: [primary]
+          ) else {
+        print("FAILED: input-box aligned workbench opening geometry",
+              boxAlignedOpening, narrowBoxOpening, tallBoxOpening,
+              wideBoxOpening, staleBoxOpening, flippedBoxOpening)
+        return false
+    }
+
     let manualOrigin = NSPoint(x: 160, y: 240)
     let transientPersistence = BufferWindowGeometry.canonicalPersistedFrame(
         belowCaret.frame,
@@ -10325,7 +10464,7 @@ func runBufferWindowSmokeTest() -> Bool {
               $0.maxY == middleCaret.minY - BufferWindowGeometry.inputAnchorGap
                   && !$0.intersects(middleCaret)
           }),
-          belowCaret.frame.midX == middleCaret.midX,
+          belowCaret.frame.minX == middleCaret.minX,
           aboveCaret.side == .aboveTarget,
           aboveCaret.frame.minY
             == bottomCaret.maxY + BufferWindowGeometry.inputAnchorGap,
@@ -10477,11 +10616,11 @@ func runBufferWindowSmokeTest() -> Bool {
           streamCandidatesExpanded.minY == streamCandidatesTwoExpanded.minY,
           standardAfterTranslation.height == BufferWindowGeometry.expandedHeight,
           standardAfterTranslation.minY == translationExpanded.minY,
-          BufferWindowGeometry.height(expanded: false) == 44,
-          BufferWindowGeometry.height(expanded: false, mode: .translation) == 78,
-          BufferWindowGeometry.height(expanded: true) == 78,
-          BufferWindowGeometry.height(expanded: true, mode: .translation) == 112,
-          floatingCandidateInvariant.height == 112,
+          BufferWindowGeometry.height(expanded: false) == 42,
+          BufferWindowGeometry.height(expanded: false, mode: .translation) == 74,
+          BufferWindowGeometry.height(expanded: true) == 73,
+          BufferWindowGeometry.height(expanded: true, mode: .translation) == 105,
+          floatingCandidateInvariant.height == 105,
           floatingCandidateInvariant.minY == migratedOldCompact.minY,
           canonicalFrame.height == BufferWindowGeometry.collapsedHeight,
           clampedCandidate.x + candidateSize.width <= primary.maxX - 6,

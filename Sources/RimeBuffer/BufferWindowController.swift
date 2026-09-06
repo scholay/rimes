@@ -273,14 +273,20 @@ struct BufferOpeningPlacement: Equatable {
 enum BufferWindowGeometry {
     static let standardMinimumWidth: CGFloat = 520
     static let standardMaximumWidth: CGFloat = 1100
-    static let collapsedHeight: CGFloat = 44
-    static let expandedHeight: CGFloat = 78
-    static let translationCollapsedHeight: CGFloat = 78
-    static let translationExpandedHeight: CGFloat = 112
+    static let collapsedHeight: CGFloat = 42
+    static let expandedHeight: CGFloat = 73
+    static let translationCollapsedHeight: CGFloat = 74
+    static let translationExpandedHeight: CGFloat = 105
     static let standardMinimumHeight = collapsedHeight
     static let screenSafetyMargin: CGFloat = 8
     static let inputAnchorGap: CGFloat = 10
     static let fallbackBottomOffset: CGFloat = 120
+    /// Above this height a focused element is a document-sized text area, not
+    /// the chat or search box this alignment is meant for. Its left edge and
+    /// width still frame the workbench, but the caret line — not the box's
+    /// distant bottom edge — stays the vertical anchor, so a full-window
+    /// editor does not push the workbench to the bottom of the screen.
+    static let boxVerticalAnchorMaximumHeight: CGFloat = 120
     static var maximumRuntimeHeight: CGFloat {
         height(expanded: true, mode: .derived(targetRows: 5))
     }
@@ -349,6 +355,7 @@ enum BufferWindowGeometry {
     /// than a remembered app/field coordinate.
     static func openingPlacement(currentFrame: NSRect,
                                  targetRect: NSRect?,
+                                 boxRect: NSRect? = nil,
                                  visibleFrames: [NSRect],
                                  fallback: NSRect,
                                  forecastHeight: CGFloat = maximumOpeningHeight)
@@ -361,9 +368,26 @@ enum BufferWindowGeometry {
         let horizontalMargin = min(screenSafetyMargin, max(0, (target.width - 1) / 2))
         let verticalMargin = min(screenSafetyMargin, max(0, (target.height - 1) / 2))
         let safeTarget = target.insetBy(dx: horizontalMargin, dy: verticalMargin)
+        // Box alignment applies only to a real, caret-containing text box on
+        // the caret's own screen. Anything else keeps the historical
+        // caret-centred opening.
+        let alignedBox: NSRect? = targetRect.flatMap { caret in
+            guard let boxRect,
+                  targetScreen != nil,
+                  isPlausibleInputBox(boxRect,
+                                      caret: caret,
+                                      visibleFrames: [target]) else { return nil }
+            return boxRect
+        }
+
         let minimumWidth = min(standardMinimumWidth, safeTarget.width)
         let maximumWidth = min(standardMaximumWidth, safeTarget.width)
-        let proposedWidth = currentFrame.width > 0 ? currentFrame.width : 680
+        // A box-aligned opening adopts the field's width; otherwise the panel
+        // keeps the width the user last chose. A field narrower than the
+        // readable minimum clamps up to it and keeps its left edge rather than
+        // shrinking the workbench past legibility.
+        let proposedWidth = alignedBox?.width
+            ?? (currentFrame.width > 0 ? currentFrame.width : 680)
         let proposedHeight = currentFrame.height > 0 ? currentFrame.height : collapsedHeight
         let width = min(max(proposedWidth, minimumWidth), maximumWidth)
         let height = min(proposedHeight, safeTarget.height)
@@ -384,13 +408,24 @@ enum BufferWindowGeometry {
             )
         }
 
-        var x = targetRect.midX - width / 2
+        // Left edge at the insertion point, so the workbench starts exactly
+        // where the next character would appear. Centring on the caret reads
+        // as a left-edge alignment only while the field is empty, and drifts
+        // off as soon as the user types.
+        var x = alignedBox?.minX ?? targetRect.minX
         x = min(max(x, safeTarget.minX), max(safeTarget.minX, safeTarget.maxX - width))
 
-        let belowRoom = max(0, targetRect.minY - inputAnchorGap - safeTarget.minY)
-        let aboveRoom = max(0, safeTarget.maxY - targetRect.maxY - inputAnchorGap)
-        let belowY = targetRect.minY - inputAnchorGap - height
-        let aboveY = targetRect.maxY + inputAnchorGap
+        // A short field anchors the workbench to the box, so its top edge sits
+        // flush under the field. A document-sized text area keeps the caret
+        // line, which is where the user actually is.
+        let verticalAnchor = alignedBox.map {
+            $0.height <= boxVerticalAnchorMaximumHeight ? $0 : targetRect
+        } ?? targetRect
+
+        let belowRoom = max(0, verticalAnchor.minY - inputAnchorGap - safeTarget.minY)
+        let aboveRoom = max(0, safeTarget.maxY - verticalAnchor.maxY - inputAnchorGap)
+        let belowY = verticalAnchor.minY - inputAnchorGap - height
+        let aboveY = verticalAnchor.maxY + inputAnchorGap
         let side: BufferOpeningSide
         let y: CGFloat
         if belowRoom >= plannedHeight {
@@ -445,6 +480,36 @@ enum BufferWindowGeometry {
                                     dy: -screenSafetyMargin)
             .contains(rect.origin)
     }
+
+    /// A focused-element frame is usable only when it is a real, on-screen
+    /// box that still surrounds the live caret. Accessibility can answer with
+    /// a stale frame from the previously focused field, or with a rect that
+    /// has been scrolled out of its container; either would align the
+    /// workbench to somewhere the user is not typing.
+    static func isPlausibleInputBox(_ box: NSRect,
+                                    caret: NSRect,
+                                    visibleFrames: [NSRect]) -> Bool {
+        guard box.origin.x.isFinite,
+              box.origin.y.isFinite,
+              box.width.isFinite,
+              box.height.isFinite,
+              box.width >= 1,
+              box.height > 2,
+              visibleFrames.contains(where: { $0.intersects(box) }) else {
+            return false
+        }
+        // The caret sits on a line inside the box. Tolerate a few points of
+        // border and inset rounding on each edge rather than demanding strict
+        // containment of a zero-width insertion point.
+        let relaxed = box.insetBy(dx: -inputBoxCaretTolerance,
+                                  dy: -inputBoxCaretTolerance)
+        return relaxed.minX <= caret.minX
+            && relaxed.maxX >= caret.minX
+            && relaxed.minY <= caret.minY
+            && relaxed.maxY >= caret.maxY
+    }
+
+    private static let inputBoxCaretTolerance: CGFloat = 4
 
     /// Contextual openings grow away from the input line: a below-target
     /// workbench keeps its top edge fixed, while an above-target workbench
@@ -798,7 +863,7 @@ enum BufferWorkbenchMetrics {
     }
 
     static func mainBarHeight(for mode: BufferWorkbenchLayoutMode) -> CGFloat {
-        mode.targetRows == nil ? 40 : railHeight(for: mode) + 6
+        mode.targetRows == nil ? 38 : railHeight(for: mode) + 6
     }
 
     /// Live-expand renders two equal rails inside a 5pt vertical inset with a
@@ -1136,6 +1201,28 @@ private final class FirstMousePopUpButton: RimeFixedAccentPopUpButton {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    /// The title column is the only part that grows with content; the divider
+    /// and disclosure columns are fixed.
+    override var intrinsicContentSize: NSSize {
+        let titleWidth = (currentTitle as NSString)
+            .size(withAttributes: [.font: currentFont])
+            .width
+        return NSSize(
+            width: BufferPopUpControlMetrics.intrinsicWidth(
+                titleWidth: ceil(titleWidth)
+            ),
+            height: max(super.intrinsicContentSize.height, 18)
+        )
+    }
+
+    private var currentFont: NSFont {
+        font ?? .systemFont(ofSize: 10)
+    }
+
+    private var currentTitle: String {
+        titleOfSelectedItem ?? title
+    }
+
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
         pointerHovered = true
@@ -1148,6 +1235,8 @@ private final class FirstMousePopUpButton: RimeFixedAccentPopUpButton {
         super.mouseExited(with: event)
     }
 
+    /// The workbench panel never becomes key, so the system menu's tracking
+    /// loop is replaced by the workbench's own nonactivating menu surface.
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
         pointerPressed = true
@@ -1156,22 +1245,96 @@ private final class FirstMousePopUpButton: RimeFixedAccentPopUpButton {
             pointerPressed = false
             refreshInteractionAppearance()
         }
-        super.mouseDown(with: event)
+        BufferPopUpMenuController.shared.toggle(for: self)
     }
 
-    func refreshInteractionAppearance() {
+    override func performClick(_ sender: Any?) {
+        guard isEnabled else { return }
+        BufferPopUpMenuController.shared.toggle(for: self)
+    }
+
+    /// The whole control is drawn here — base surface, pointer feedback, title,
+    /// divider, and disclosure — so the layer only carries clipping.
+    override func draw(_ dirtyRect: NSRect) {
         let state = previewPointerState ?? BufferWorkbenchPointerRules.state(
             enabled: isEnabled,
             hovered: pointerHovered,
             pressed: pointerPressed
         )
+        let alpha: CGFloat = isEnabled ? 1 : 0.46
+        let scale = window?.backingScaleFactor ?? 2
+        let hairline = 1 / max(scale, 1)
+        let surface = bounds.insetBy(dx: hairline / 2, dy: hairline / 2)
+        let shape = NSBezierPath(
+            roundedRect: surface,
+            xRadius: BufferPopUpControlMetrics.cornerRadius,
+            yRadius: BufferPopUpControlMetrics.cornerRadius
+        )
+        RimeUI.surface2.withAlphaComponent(alpha).setFill()
+        shape.fill()
+        let pointerFill = BufferWorkbenchPointerRules.backgroundColor(for: state)
+        if pointerFill != .clear {
+            pointerFill.setFill()
+            shape.fill()
+        }
+        let pointerBorder = BufferWorkbenchPointerRules.borderColor(for: state)
+        (pointerBorder == .clear
+            ? RimeUI.border.withAlphaComponent(alpha)
+            : pointerBorder).setStroke()
+        shape.lineWidth = hairline
+        shape.stroke()
+
+        let divider = BufferPopUpControlMetrics.dividerRect(in: bounds)
+        RimeUI.border.withAlphaComponent(alpha).setFill()
+        divider.fill()
+
+        let titleRect = BufferPopUpControlMetrics.titleRect(in: bounds)
+        if titleRect.width > 0 {
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineBreakMode = .byTruncatingTail
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: currentFont,
+                .foregroundColor: (isEnabled
+                    ? RimeUI.textPrimary
+                    : RimeUI.textMuted),
+                .paragraphStyle: paragraph,
+            ]
+            let text = currentTitle as NSString
+            let size = text.size(withAttributes: attributes)
+            text.draw(
+                in: NSRect(x: titleRect.minX,
+                           y: titleRect.midY - size.height / 2,
+                           width: titleRect.width,
+                           height: size.height),
+                withAttributes: attributes
+            )
+        }
+
+        let disclosure = BufferPopUpControlMetrics.disclosureRect(in: bounds)
+        (isEnabled ? RimeUI.textSecondary : RimeUI.textMuted).setStroke()
+        let chevron = NSBezierPath()
+        let half = BufferPopUpControlMetrics.chevronHalfWidth
+        let height = BufferPopUpControlMetrics.chevronHeight
+        // `NSPopUpButton` draws in a flipped coordinate system, so the apex of
+        // a downward chevron is the larger y there and the smaller y elsewhere.
+        let apexSign: CGFloat = isFlipped ? 1 : -1
+        let shoulderY = disclosure.midY - apexSign * height / 2
+        let apexY = disclosure.midY + apexSign * height / 2
+        chevron.move(to: NSPoint(x: disclosure.midX - half, y: shoulderY))
+        chevron.line(to: NSPoint(x: disclosure.midX, y: apexY))
+        chevron.line(to: NSPoint(x: disclosure.midX + half, y: shoulderY))
+        chevron.lineWidth = BufferPopUpControlMetrics.chevronLineWidth
+        chevron.lineCapStyle = .round
+        chevron.lineJoinStyle = .round
+        chevron.stroke()
+    }
+
+    func refreshInteractionAppearance() {
         wantsLayer = true
-        layer?.cornerRadius = 5
-        layer?.backgroundColor = BufferWorkbenchPointerRules.backgroundColor(for: state).cgColor
-        layer?.borderColor = BufferWorkbenchPointerRules.borderColor(for: state).cgColor
-        layer?.borderWidth = (state == .idle || state == .disabled)
-            ? 0
-            : 1 / max(window?.backingScaleFactor ?? 2, 1)
+        layer?.cornerRadius = BufferPopUpControlMetrics.cornerRadius
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.borderWidth = 0
+        needsDisplay = true
         window?.invalidateCursorRects(for: self)
     }
 
@@ -1183,6 +1346,7 @@ private final class FirstMousePopUpButton: RimeFixedAccentPopUpButton {
     private func configurePointerFeedback() {
         wantsLayer = true
         layer?.masksToBounds = true
+        isBordered = false
         refreshInteractionAppearance()
     }
 }
@@ -1233,7 +1397,7 @@ private final class BufferToolbarControlSlot: NSView {
 /// rail's trailing edge, so showing or hiding an action never changes the
 /// outer rail frame. Empty gaps pass through to the logical input surface.
 private final class BufferRailActionClusterView: NSView {
-    private let controls: [NSControl]
+    private var controls: [NSControl]
     private let row = NSStackView()
     private let fadeLayer = CAGradientLayer()
     private var widthConstraint: NSLayoutConstraint!
@@ -1273,6 +1437,21 @@ private final class BufferRailActionClusterView: NSView {
 
     var reservedWidth: CGFloat { widthConstraint.constant }
     var visibleControls: [NSControl] { controls.filter { !$0.isHidden } }
+
+    /// A derived layout that splits source and target rails owns one trailing
+    /// action per row, so the same button instance moves between clusters
+    /// instead of existing twice with two delivery authorities.
+    func setControls(_ newControls: [NSControl]) {
+        let current = controls.map(ObjectIdentifier.init)
+        guard current != newControls.map(ObjectIdentifier.init) else { return }
+        for control in controls {
+            row.removeArrangedSubview(control)
+            control.removeFromSuperview()
+        }
+        controls = newControls
+        newControls.forEach { row.addArrangedSubview($0) }
+        refreshGeometry()
+    }
 
     func refreshGeometry() {
         let visibleCount = visibleControls.count
@@ -1787,8 +1966,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private lazy var railActionCluster = BufferRailActionClusterView(
         controls: [clipboardImportButton, copyResultButton, sendButton]
     )
+    /// Only a split source/target layout uses this cluster; membership is
+    /// reconciled per layout mode by `reconcileRailActionMembership`.
+    private lazy var sourceActionCluster = BufferRailActionClusterView(controls: [])
     private lazy var exchangeEditSlot = BufferToolbarControlSlot(control: exchangeEditButton)
     private var railActionCenterYConstraint: NSLayoutConstraint?
+    private var sourceActionCenterYConstraint: NSLayoutConstraint?
     private var hiddenForSession = false
     private var sessionInactive = false
     private var screenLocked = false
@@ -2115,6 +2298,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     func hideWithoutPausing() {
+        BufferPopUpMenuController.shared.dismiss()
         workbenchSessionEpoch &+= 1
         applyTargetAssociationPresentation(state: .unavailable, appName: nil)
         setToolbarExpanded(false, resize: true)
@@ -2910,6 +3094,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         let rimeOwnsInput = RimeInputSourceAuthority.currentSourceIsOwn()
         let contentProtected = secureInputEnabled || sessionProtectionActive
         if contentProtected {
+            BufferPopUpMenuController.shared.dismiss()
             setToolbarExpanded(false, resize: true)
         }
         syncPanelLevel(
@@ -3609,7 +3794,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         pluginButtonRow.orientation = .horizontal
         pluginButtonRow.alignment = .centerY
         pluginButtonRow.distribution = .fill
-        pluginButtonRow.spacing = 2
+        pluginButtonRow.spacing = 6
         pluginButtonRow.detachesHiddenViews = false
         pluginButtonRow.userInterfaceLayoutDirection = .leftToRight
         pluginButtonRow.isHidden = true
@@ -3731,7 +3916,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         pluginActionsControl.orientation = .horizontal
         pluginActionsControl.alignment = .centerY
         pluginActionsControl.distribution = .fill
-        pluginActionsControl.spacing = 4
+        pluginActionsControl.spacing = 6
         pluginActionsControl.edgeInsets = NSEdgeInsets(top: 1, left: 5, bottom: 1, right: 3)
         // Hidden loading state and an empty action row must leave the layout;
         // otherwise the shared surface draws a blank tail after every plugin
@@ -3814,6 +3999,27 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             actionCenterY,
         ])
 
+        mainBar.addSubview(sourceActionCluster, positioned: .above, relativeTo: bufferRail)
+        let sourceActionCenterY = sourceActionCluster.centerYAnchor.constraint(
+            equalTo: bufferRail.centerYAnchor,
+            constant: BufferWorkbenchMetrics.mainControlYOffset(
+                row: .source,
+                mode: layoutMode
+            )
+        )
+        sourceActionCenterYConstraint = sourceActionCenterY
+        NSLayoutConstraint.activate([
+            sourceActionCluster.trailingAnchor.constraint(
+                equalTo: bufferRail.trailingAnchor,
+                constant: -BufferInlineMetrics.railHorizontalInset
+            ),
+            sourceActionCluster.leadingAnchor.constraint(
+                greaterThanOrEqualTo: bufferRail.leadingAnchor,
+                constant: BufferInlineMetrics.railHorizontalInset
+            ),
+            sourceActionCenterY,
+        ])
+
         let root = NSStackView(views: [utilityShelf, shelfDivider, mainBar])
         root.orientation = .vertical
         root.alignment = .width
@@ -3834,7 +4040,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             root.trailingAnchor.constraint(equalTo: visual.trailingAnchor),
             root.topAnchor.constraint(equalTo: visual.topAnchor),
             root.bottomAnchor.constraint(equalTo: visual.bottomAnchor),
-            utilityShelf.heightAnchor.constraint(equalToConstant: 33),
+            utilityShelf.heightAnchor.constraint(equalToConstant: 30),
             shelfDivider.heightAnchor.constraint(equalToConstant: 1),
             mainBarHeight,
             bufferRail.widthAnchor.constraint(greaterThanOrEqualToConstant: 190),
@@ -4599,13 +4805,35 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private func updateMainControlAlignment(for mode: BufferWorkbenchLayoutMode) {
         railActionCenterYConstraint?.constant = BufferWorkbenchMetrics
             .mainControlYOffset(row: .target, mode: mode)
+        sourceActionCenterYConstraint?.constant = BufferWorkbenchMetrics
+            .mainControlYOffset(row: .source, mode: mode)
+    }
+
+    /// Clipboard import edits the source text, so a split layout keeps it on
+    /// the source row while delivery and copy stay with the result. A single
+    /// rail has no second row to move to, so it keeps one combined cluster.
+    private func reconcileRailActionMembership(for mode: BufferWorkbenchLayoutMode) {
+        if mode.targetRows == nil {
+            sourceActionCluster.setControls([])
+            railActionCluster.setControls(
+                [clipboardImportButton, copyResultButton, sendButton]
+            )
+        } else {
+            railActionCluster.setControls([copyResultButton, sendButton])
+            sourceActionCluster.setControls([clipboardImportButton])
+        }
     }
 
     private func refreshRailActionOverlayGeometry() {
+        reconcileRailActionMembership(for: layoutMode)
         railActionCluster.refreshGeometry()
+        sourceActionCluster.refreshGeometry()
         updateMainControlAlignment(for: layoutMode)
         panel.contentView?.layoutSubtreeIfNeeded()
         bufferRail.setTrailingActionExclusion(width: railActionCluster.reservedWidth)
+        bufferRail.setSourceTrailingActionExclusion(
+            width: sourceActionCluster.reservedWidth
+        )
     }
 
     private func applyCollectionBehavior() {
@@ -4822,6 +5050,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         BufferModel.shared.routeDirectPreservingContent(reason: reason)
         if panel.isVisible || UserDefaults.standard.bool(forKey: Key.visible) {
             hiddenForSession = true
+            BufferPopUpMenuController.shared.dismiss()
             panel.orderOut(nil)
         }
     }
@@ -4960,7 +5189,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func positionForOpening(
-        focusedAnchor: (rect: NSRect, token: FocusToken)?
+        focusedAnchor: (rect: NSRect, box: NSRect?, token: FocusToken)?
     ) {
         let screens = NSScreen.screens
         let visibleFrames = screens.map(\.visibleFrame)
@@ -4971,6 +5200,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         let placement = BufferWindowGeometry.openingPlacement(
             currentFrame: panel.frame,
             targetRect: focusedAnchor?.rect,
+            boxRect: focusedAnchor?.box,
             visibleFrames: visibleFrames,
             fallback: fallback
         )
@@ -4983,11 +5213,21 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             ? nil
             : focusedAnchor?.token
         transientOpeningOrigin = true
+        // Alignment depends on a grant the user can revoke at any time, so say
+        // which inputs produced this placement rather than leaving a silent
+        // fallback looking like a broken feature.
+        IMELog.write(
+            "workbench opening side=\(placement.side) "
+            + "caret=\(focusedAnchor != nil) "
+            + "box=\(focusedAnchor?.box != nil) "
+            + "alignPref=\(FocusedInputBoxProbe.alignmentEnabled) "
+            + "axGranted=\(FocusedInputBoxProbe.isPermitted)"
+        )
     }
 
     private func freshFocusedInputAnchor(
         expected token: FocusToken? = nil
-    ) -> (rect: NSRect, token: FocusToken)? {
+    ) -> (rect: NSRect, box: NSRect?, token: FocusToken)? {
         guard RimeInputSourceAuthority.currentSourceIsOwn(),
               !IsSecureEventInputEnabled(),
               let lease = InputFocusCoordinator.shared.liveTarget(
@@ -4998,7 +5238,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         guard let rect = controller.workbenchCaretRect(expected: lease) else {
             return nil
         }
-        return (rect, lease.token)
+        // Optional by design: the caret alone already places the workbench, so
+        // a host with no usable Accessibility geometry simply keeps the
+        // caret-centred opening instead of losing its anchor.
+        let box = controller.workbenchInputBoxRect(expected: lease)
+        return (rect, box, lease.token)
     }
 
     private func clampFrameToScreens() {
