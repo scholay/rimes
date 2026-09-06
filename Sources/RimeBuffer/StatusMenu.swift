@@ -77,8 +77,12 @@ final class StatusMenu {
         capsule.target = target
         menu.addItem(capsule)
 
-        let maintenance = NSMenuItem(title: "维护…", action: nil, keyEquivalent: "")
-        let maintenanceMenu = NSMenu(title: "维护")
+        // InputMethodKit renders this menu in the system's own menu agent and
+        // routes a chosen item back to the controller by selector. Items nested
+        // in a submenu are drawn but never dispatched, which left every
+        // maintenance command silently dead — `deployAndRestart` and `restart`
+        // log on entry and never logged once. So they live at the top level.
+        menu.addItem(.separator())
 
         let pin = NSMenuItem(
             title: "常显于所有桌面与全屏空间",
@@ -86,15 +90,16 @@ final class StatusMenu {
             keyEquivalent: "")
         pin.target = target
         pin.state = BufferWindowController.shared.pinned ? .on : .off
-        maintenanceMenu.addItem(pin)
+        menu.addItem(pin)
 
         let move = NSMenuItem(
             title: "把缓冲工作台移到当前屏幕",
             action: #selector(RimeBufferController.moveBufferWindowFromInputMenu(_:)),
             keyEquivalent: "")
         move.target = target
-        maintenanceMenu.addItem(move)
-        maintenanceMenu.addItem(.separator())
+        menu.addItem(move)
+
+        menu.addItem(.separator())
 
         let updateManager = UpdateManager.shared
         let updateTitle: String
@@ -109,38 +114,35 @@ final class StatusMenu {
             action: #selector(RimeBufferController.checkUpdateFromInputMenu(_:)),
             keyEquivalent: "")
         checkUpdate.target = target
-        maintenanceMenu.addItem(checkUpdate)
+        menu.addItem(checkUpdate)
 
         let log = NSMenuItem(
             title: "打开日志 (~/rimebuffer.log)",
             action: #selector(RimeBufferController.openLogFromInputMenu(_:)),
             keyEquivalent: "")
         log.target = target
-        maintenanceMenu.addItem(log)
+        menu.addItem(log)
 
         let deploy = NSMenuItem(
             title: "重新部署并重启",
             action: #selector(RimeBufferController.deployAndRestartFromInputMenu(_:)),
             keyEquivalent: "")
         deploy.target = target
-        maintenanceMenu.addItem(deploy)
+        menu.addItem(deploy)
 
         let reinstall = NSMenuItem(
             title: "重新安装输入法…",
             action: #selector(RimeBufferController.reinstallFromInputMenu(_:)),
             keyEquivalent: "")
         reinstall.target = target
-        maintenanceMenu.addItem(reinstall)
+        menu.addItem(reinstall)
 
         let restart = NSMenuItem(
             title: "重启输入法进程",
             action: #selector(RimeBufferController.restartFromInputMenu(_:)),
             keyEquivalent: "")
         restart.target = target
-        maintenanceMenu.addItem(restart)
-
-        maintenance.submenu = maintenanceMenu
-        menu.addItem(maintenance)
+        menu.addItem(restart)
 
         return menu
     }
@@ -189,6 +191,7 @@ final class StatusMenu {
         BufferWindowController.shared.show()
         BufferWindowController.shared.moveToCurrentScreen()
     }
+
 
     func openMailbox() {
         let threadID = MailboxStore.shared.selectLatestUnreadOrMostRecent()

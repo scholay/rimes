@@ -162,7 +162,7 @@ enum RimeShortcutAction: String, CaseIterable {
     var detail: String {
         switch self {
         case .deliverBuffer:
-            return "轻按发送下一块；按住约 1.2 秒发送全部"
+            return "轻按发送下一块；按住约 0.6 秒发送全部"
         case .toggleWorkbench:
             return "在任何应用中呼出或收起缓冲工作台"
         case .toggleClipboardHistory:

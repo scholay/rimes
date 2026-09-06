@@ -1070,7 +1070,7 @@ final class RimeBufferController: IMKInputController {
     private static let duplicateArrowCommandWindow: CFTimeInterval = 0.05
     private static let duplicateClipboardCommandWindow: CFTimeInterval = 0.5
     private static let duplicateWorkbenchEscapeCommandWindow: CFTimeInterval = 0.25
-    private static let bufferEnterHoldDelay: TimeInterval = 1.2
+    private static let bufferEnterHoldDelay: TimeInterval = 0.6
     private static let bufferEnterPollInterval: TimeInterval = 0.02
     private static let keyboardLayoutOverrideCache = RimeKeyboardLayoutOverrideCache()
     /// Rime pages fetched per matrix batch — also the initial expand size, so
@@ -7026,6 +7026,36 @@ final class RimeBufferController: IMKInputController {
         return rect
     }
 
+    /// Focused text-box frame for a newly summoned workbench, behind the same
+    /// live lease validation as `workbenchCaretRect`. The Accessibility read
+    /// is bracketed by two ownership checks, so a synchronous focus change
+    /// discards the rectangle rather than aligning the workbench to a field
+    /// the user has already left. Returns nil whenever alignment is off, the
+    /// grant is missing, or the host exposes no usable text box.
+    func workbenchInputBoxRect(expected lease: FocusLease) -> NSRect? {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              !IsSecureEventInputEnabled(),
+              lease.controller === self,
+              focusToken == lease.token,
+              let client = lease.client,
+              ObjectIdentifier(client as AnyObject) == lease.clientIdentity,
+              InputFocusCoordinator.shared.liveTarget(
+                expected: lease.token,
+                forceOverlayVisibilityRefresh: true
+              ) === lease else { return nil }
+
+        guard let box = FocusedInputBoxProbe.focusedBoxFrame() else { return nil }
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              !IsSecureEventInputEnabled(),
+              focusToken == lease.token,
+              InputFocusCoordinator.shared.liveTarget(
+                expected: lease.token,
+                forceOverlayVisibilityRefresh: true
+              ) === lease else { return nil }
+        return box
+    }
+
     /// Caret rect in screen coords. Reliable while a marked-text session is
     /// active (§4.2); the candidate window validates it and only caches it for
     /// the lifetime of the current exact owner token.
@@ -7083,6 +7113,7 @@ final class RimeBufferController: IMKInputController {
     @objc func moveBufferWindowFromInputMenu(_ sender: Any?) {
         StatusMenu.shared.moveBufferWindowToCurrentScreen()
     }
+
 
     @objc func openMailboxFromInputMenu(_ sender: Any?) {
         StatusMenu.shared.openMailbox()

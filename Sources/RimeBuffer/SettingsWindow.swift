@@ -561,13 +561,23 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private var encodingRadios: [InputEncoding: RimeFixedAccentChoiceButton] = [:]
     private var chordSchemaStatusRow: NSView?
     private let appearancePopUp = RimeFixedAccentPopUpButton()
-    private let bufferCheck = RimeFixedAccentSwitch(frame: .zero)
-    private let bufferWindowVisibleCheck = RimeFixedAccentSwitch(frame: .zero)
+    private let alignToInputBoxCheck = RimeFixedAccentSwitch(frame: .zero)
+    private let alignToInputBoxStatusLabel = NSTextField(wrappingLabelWithString: "")
     private let clipboardHistoryCheck = RimeFixedAccentSwitch(frame: .zero)
+    private let clipboardAutoPasteCheck = RimeFixedAccentSwitch(frame: .zero)
+    private let clipboardAutoPasteStatusLabel =
+        NSTextField(wrappingLabelWithString: "")
     private let closeAfterLastDeliveryCheck = RimeFixedAccentSwitch(frame: .zero)
-    private let bufferPinnedCheck = RimeFixedAccentSwitch(frame: .zero)
     private let moveBufferWindowButton = SettingsPointingButton(
         title: "移到当前屏幕",
+        target: nil,
+        action: nil
+    )
+    /// The alignment and auto-paste features default to on but stay inert
+    /// without the grant, and the probe deliberately never prompts on its own.
+    /// This is the explicit user action that asks for it.
+    private let accessibilityGrantButton = SettingsPointingButton(
+        title: "请求辅助功能权限",
         target: nil,
         action: nil
     )
@@ -1641,21 +1651,24 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         claudeLoginStatusLabel.textColor = RimeUI.textMuted
         claudeLoginStatusLabel.translatesAutoresizingMaskIntoConstraints = false
         claudeLoginStatusLabel.widthAnchor.constraint(equalToConstant: 626).isActive = true
-        bufferCheck.target = self
-        bufferCheck.action = #selector(bufferToggled)
-        bufferCheck.setAccessibilityLabel("启用缓冲模式")
-        bufferWindowVisibleCheck.target = self
-        bufferWindowVisibleCheck.action = #selector(bufferWindowVisibilityToggled)
-        bufferWindowVisibleCheck.setAccessibilityLabel("显示独立缓冲工作台")
+        alignToInputBoxCheck.target = self
+        alignToInputBoxCheck.action = #selector(alignToInputBoxToggled)
+        alignToInputBoxCheck.setAccessibilityLabel("工作台对齐目标输入框")
+        alignToInputBoxStatusLabel.font = .systemFont(ofSize: 11)
+        alignToInputBoxStatusLabel.textColor = RimeUI.textMuted
         clipboardHistoryCheck.target = self
         clipboardHistoryCheck.action = #selector(clipboardHistoryToggled)
         clipboardHistoryCheck.setAccessibilityLabel("允许独立 Clipboard History 收录剪贴板内容")
+        accessibilityGrantButton.target = self
+        accessibilityGrantButton.action = #selector(requestAccessibilityGrant)
+        clipboardAutoPasteCheck.target = self
+        clipboardAutoPasteCheck.action = #selector(clipboardAutoPasteToggled)
+        clipboardAutoPasteCheck.setAccessibilityLabel("回车后自动粘贴")
+        clipboardAutoPasteStatusLabel.font = .systemFont(ofSize: 11)
+        clipboardAutoPasteStatusLabel.textColor = RimeUI.textMuted
         closeAfterLastDeliveryCheck.target = self
         closeAfterLastDeliveryCheck.action = #selector(closeAfterLastDeliveryToggled)
         closeAfterLastDeliveryCheck.setAccessibilityLabel("最后一块上屏后关闭工作台")
-        bufferPinnedCheck.target = self
-        bufferPinnedCheck.action = #selector(bufferPinnedToggled)
-        bufferPinnedCheck.setAccessibilityLabel("常显于所有桌面与全屏空间")
         moveBufferWindowButton.target = self
         moveBufferWindowButton.action = #selector(moveBufferWindow)
         resetOnAppSwitchCheck.target = self
@@ -2940,7 +2953,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             .shortcut(for: .deliverBuffer)
             .displayTitle
         let note = NSTextField(wrappingLabelWithString:
-            "缓冲区开启后，Rime 提交内容会进入单行缓冲条；轻按 \(deliveryShortcut) 或点击右侧纸飞机发送下一块，按住 \(deliveryShortcut) 约 1.2 秒发送全部。AI 生成插件会复用右侧主按钮和同一投递键请求 AI，结果就绪后再变回逐块发送。成功发送的块会立即消失；失败或未发送的块不会丢失，也不会保存发送历史。")
+            "缓冲区开启后，Rime 提交内容会进入单行缓冲条；轻按 \(deliveryShortcut) 或点击右侧纸飞机发送下一块，按住 \(deliveryShortcut) 约 0.6 秒发送全部。AI 生成插件会复用右侧主按钮和同一投递键请求 AI，结果就绪后再变回逐块发送。成功发送的块会立即消失；失败或未发送的块不会丢失，也不会保存发送历史。")
         note.font = .systemFont(ofSize: 11)
         note.textColor = RimeUI.textMuted
 
@@ -2953,29 +2966,19 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             title("缓冲区"),
             caption("关闭工作台会暂停捕获并收束瞬态状态，但保留已经形成的块。"),
             settingsRow(
-                title: "启用缓冲模式",
-                detail: "提交内容先暂存，确认后再发送到当前文本框。",
-                symbolName: "tray.full",
-                control: bufferCheck
-            ),
-            settingsRow(
-                title: "显示独立缓冲工作台",
-                detail: "打开后先由工作台接管输入；当前文本框保留为上屏目标。",
-                symbolName: "eye",
-                control: bufferWindowVisibleCheck
-            ),
-            settingsRow(
                 title: "最后一块上屏后关闭工作台",
                 detail: "适用于 Default 与所有缓冲插件；部分失败或内容变化时保持打开。",
                 symbolName: "checkmark.rectangle",
                 control: closeAfterLastDeliveryCheck
             ),
             settingsRow(
-                title: "常显于所有桌面与全屏空间",
-                detail: "适合在应用和全屏空间之间切换时持续使用。",
-                symbolName: "pin",
-                control: bufferPinnedCheck
+                title: "对齐目标输入框",
+                detail: "在目标输入框正下方打开：左边缘对齐、宽度随其变化；下方空间不足时改在上方。",
+                symbolName: "text.alignleft",
+                control: alignToInputBoxCheck
             ),
+            alignToInputBoxStatusLabel,
+            accessibilityGrantButton,
             settingsRow(
                 title: "切换应用时清空本地缓冲",
                 detail: "只在没有外部来源块时执行；默认关闭。",
@@ -3002,6 +3005,13 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 symbolName: "clipboard",
                 control: clipboardHistoryCheck
             ),
+            settingsRow(
+                title: "回车后自动粘贴",
+                detail: "无法经输入法直接上屏的内容，改为发送一次 ⌘V，省去手动粘贴。",
+                symbolName: "doc.on.clipboard",
+                control: clipboardAutoPasteCheck
+            ),
+            clipboardAutoPasteStatusLabel,
             secondaryLabel(
                 "⌘⇧P 呼出独立窗口。历史与 Buffer、Mailbox、Capsule 隔离，保存在 ~/Library/Application Support/RIMES/clipboard。"
             ),
@@ -3918,14 +3928,20 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
     private func reload() {
         refreshInputConfigurationSelection()
-        bufferCheck.state = BufferModel.shared.enabled ? .on : .off
-        bufferWindowVisibleCheck.state = BufferWindowController.shared.isVisible ? .on : .off
+        alignToInputBoxCheck.state = FocusedInputBoxProbe.alignmentEnabled ? .on : .off
+        accessibilityGrantButton.isHidden = FocusedInputBoxProbe.isPermitted
+        alignToInputBoxStatusLabel.stringValue = FocusedInputBoxProbe.isPermitted
+            ? "已授权辅助功能：工作台会贴合当前输入框；密码框与整页文本区仍跟随光标。"
+            : "未授权辅助功能：打开开关会请求权限。未授权时工作台保持跟随光标。"
         clipboardHistoryCheck.state = ClipboardHistoryWindowController.shared.captureEnabled
             ? .on
             : .off
+        clipboardAutoPasteCheck.state = ClipboardAutoPaste.enabled ? .on : .off
+        clipboardAutoPasteStatusLabel.stringValue = ClipboardAutoPaste.isPermitted
+            ? "已授权辅助功能：图片、文件等内容会在窗口关闭后自动粘贴到目标输入框。"
+            : "未授权辅助功能：打开开关会请求权限。未授权时内容仍会写入剪贴板，需要自己按 ⌘V。"
         closeAfterLastDeliveryCheck.state = BufferWindowController.shared
             .closeAfterLastDeliveryEnabled ? .on : .off
-        bufferPinnedCheck.state = BufferWindowController.shared.pinned ? .on : .off
         resetOnAppSwitchCheck.state = BufferModel.shared.resetOnAppSwitch ? .on : .off
         gatewayEnableCheck.state = LocalGateway.shared.enabled ? .on : .off
         gatewayConfigField.stringValue = gatewayConfigJSON(redactingToken: true)
@@ -5117,28 +5133,44 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         IMELog.write("setting resetOnAppSwitch=\(resetOnAppSwitchCheck.state == .on)")
     }
 
-    @objc private func bufferToggled() {
-        let enabled = bufferCheck.state == .on
-        if enabled {
-            BufferWindowController.shared.openAndResume()
-        } else {
-            ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
-            DerivedBufferWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
-            BuiltInBufferActionWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
-            BufferModel.shared.pauseCapturePreservingContent()
+    /// The switch records intent; the grant is what actually enables the
+    /// probe. Enabling without it would silently do nothing, so the first
+    /// enable raises the system prompt. macOS answers only after the user acts
+    /// in System Settings, so the status line — not the switch — reports
+    /// whether alignment is live.
+    @objc private func alignToInputBoxToggled() {
+        let enabled = alignToInputBoxCheck.state == .on
+        FocusedInputBoxProbe.alignmentEnabled = enabled
+        if enabled, !FocusedInputBoxProbe.isPermitted {
+            FocusedInputBoxProbe.requestPermission()
         }
-        RimeBufferController.refreshActiveUI()
         reload()
-        IMELog.write("setting bufferEnabled=\(enabled)")
+        IMELog.write(
+            "setting alignToInputBox=\(enabled) "
+            + "permitted=\(FocusedInputBoxProbe.isPermitted)"
+        )
     }
 
-    @objc private func bufferWindowVisibilityToggled() {
-        if bufferWindowVisibleCheck.state == .on {
-            BufferWindowController.shared.openAndResume()
-        } else {
-            BufferWindowController.shared.closeAndPause()
+    @objc private func requestAccessibilityGrant() {
+        FocusedInputBoxProbe.requestPermission()
+        reload()
+        IMELog.write(
+            "setting accessibility grant requested permitted="
+            + "\(FocusedInputBoxProbe.isPermitted)"
+        )
+    }
+
+    @objc private func clipboardAutoPasteToggled() {
+        let enabled = clipboardAutoPasteCheck.state == .on
+        ClipboardAutoPaste.enabled = enabled
+        if enabled, !ClipboardAutoPaste.isPermitted {
+            ClipboardAutoPaste.requestPermission()
         }
         reload()
+        IMELog.write(
+            "setting clipboardAutoPaste=\(enabled) "
+            + "permitted=\(ClipboardAutoPaste.isPermitted)"
+        )
     }
 
     @objc private func clipboardHistoryToggled() {
@@ -5150,11 +5182,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     @objc private func closeAfterLastDeliveryToggled() {
         BufferWindowController.shared.closeAfterLastDeliveryEnabled =
             closeAfterLastDeliveryCheck.state == .on
-        reload()
-    }
-
-    @objc private func bufferPinnedToggled() {
-        BufferWindowController.shared.pinned = bufferPinnedCheck.state == .on
         reload()
     }
 
