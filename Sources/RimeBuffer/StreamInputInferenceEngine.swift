@@ -3,6 +3,13 @@ import Foundation
 /// Frozen input shared by every consciousness-stream inference module. Focus
 /// authority deliberately stays in StreamInputWorkspace; engines can propose
 /// text, but cannot authorize or deliver it.
+/// Which decoder a request may use. The on-device engine is a peer of the
+/// connector-backed models, not a privileged pre-stage.
+enum StreamInputEngineRole: String, CaseIterable, Equatable {
+    case local
+    case connector
+}
+
 struct StreamInputInferenceRequest: Equatable {
     let requestID: UUID
     let sourceText: String
@@ -138,16 +145,45 @@ private final class StreamInputInferenceAttemptGate {
     }
 }
 
-/// Runs modules in priority order. A module may decline an input with an
-/// ordinary failure; the next module then gets the same immutable request.
-/// Local Rime is first and the configured AI connector is the compatibility
-/// fallback for typos, Latin fragments, long input, or unavailable data.
+/// Runs modules in the order the request's settings ask for. A module may
+/// decline an input with an ordinary failure; the next module then gets the
+/// same immutable request. The on-device decoder is one selectable model among
+/// the connectors rather than a fixed first stage, so a request may name it
+/// alone, name a connector alone, or keep the local-first hand-off that lets
+/// Rime answer ordinary pinyin and a model handle typos, Latin fragments, and
+/// long input.
 final class StreamInputModularInferenceEngine: StreamInputInferenceEngine {
+    private let modulesByRole: [StreamInputEngineRole: any StreamInputInferenceEngine]
     private let modules: [any StreamInputInferenceEngine]
 
-    init(modules: [any StreamInputInferenceEngine]) {
+    init(modulesByRole: [StreamInputEngineRole: any StreamInputInferenceEngine]) {
+        precondition(!modulesByRole.isEmpty)
+        self.modulesByRole = modulesByRole
+        self.modules = StreamInputEngineRole.allCases.compactMap {
+            modulesByRole[$0]
+        }
+    }
+
+    convenience init(modules: [any StreamInputInferenceEngine]) {
         precondition(!modules.isEmpty)
-        self.modules = modules
+        var mapped: [StreamInputEngineRole: any StreamInputInferenceEngine] = [:]
+        for (index, module) in modules.enumerated() {
+            let role = StreamInputEngineRole.allCases.indices.contains(index)
+                ? StreamInputEngineRole.allCases[index]
+                : .connector
+            mapped[role] = module
+        }
+        self.init(modulesByRole: mapped)
+    }
+
+    /// The subset this request actually asked for, in order.
+    private func modules(
+        for request: StreamInputInferenceRequest
+    ) -> [any StreamInputInferenceEngine] {
+        let selected = request.settings.engineRoles.compactMap {
+            modulesByRole[$0]
+        }
+        return selected.isEmpty ? modules : selected
     }
 
     var displayName: String { "本地模块引擎" }
@@ -198,13 +234,14 @@ final class StreamInputModularInferenceEngine: StreamInputInferenceEngine {
             }
         }
 
+        let activeModules = modules(for: request)
         func attempt(_ index: Int, lastError: AITextProviderError?) {
             cancellation.ifActive {
-                guard index < modules.count else {
+                guard index < activeModules.count else {
                     completion(.failure(lastError ?? .failed))
                     return
                 }
-                let module = modules[index]
+                let module = activeModules[index]
                 guard case .ready = module.availability else {
                     let unavailable: AITextProviderError
                     if case let .unavailable(message) = module.availability {
@@ -354,11 +391,12 @@ final class RimeOctagramStreamInputEngine: StreamInputInferenceEngine {
         _ request: StreamInputInferenceRequest
     ) -> Result<[AITextProviderBlock], AITextProviderError> {
         guard request.sourceText.utf8.count <= Self.maximumInputBytes,
-              let clauses = Self.rimeClauses(
+              let split = Self.clauseSplit(
                 rawInput: request.sourceText,
                 automaticSyllableSpaceOffsets:
                     request.automaticSyllableSpaceOffsets
               ),
+              case let clauses = split.clauses,
               clauses.count <= Self.maximumClauseCount,
               ensureSession() else {
             return .failure(.invalidResult)
@@ -390,6 +428,7 @@ final class RimeOctagramStreamInputEngine: StreamInputInferenceEngine {
         let excluded = Set(request.excludedGuesses)
         let combined = Self.combine(
             candidatesByClause,
+            separators: split.separators,
             maximumCount: limit
         ).filter { !excluded.contains($0) }
         guard !combined.isEmpty else { return .failure(.invalidResult) }
@@ -404,21 +443,45 @@ final class RimeOctagramStreamInputEngine: StreamInputInferenceEngine {
         rawInput: String,
         automaticSyllableSpaceOffsets: Set<Int>
     ) -> [String]? {
+        clauseSplit(rawInput: rawInput,
+                    automaticSyllableSpaceOffsets: automaticSyllableSpaceOffsets)?
+            .clauses
+    }
+
+    /// Clauses plus the separator that closed each one. A Space contributes no
+    /// text of its own; an explicit comma is the only boundary that writes a
+    /// character into the result.
+    static func clauseSplit(
+        rawInput: String,
+        automaticSyllableSpaceOffsets: Set<Int>
+    ) -> (clauses: [String], separators: [String])? {
         let bytes = Array(rawInput.utf8)
         guard !bytes.isEmpty,
               bytes.allSatisfy({ byte in
-                (0x61...0x7A).contains(byte) || byte == 0x20
+                (0x61...0x7A).contains(byte) || byte == 0x20 || byte == 0x2C
               }) else { return nil }
         var clauses: [String] = []
+        // `separators[i]` joins clause i to clause i + 1.
+        var separators: [String] = []
         var current: [UInt8] = []
-        func flushCurrent() {
+        var pendingSeparator: String?
+        @discardableResult
+        func flushCurrent() -> Bool {
             while current.last == 0x27 { current.removeLast() }
-            guard !current.isEmpty else { return }
+            guard !current.isEmpty else { return false }
+            if !clauses.isEmpty { separators.append(pendingSeparator ?? "") }
+            pendingSeparator = nil
             clauses.append(String(decoding: current, as: UTF8.self))
             current.removeAll(keepingCapacity: true)
+            return true
         }
         for (offset, byte) in bytes.enumerated() {
-            if byte == 0x20 {
+            if byte == 0x2C {
+                flushCurrent()
+                // A comma survives even when it follows another boundary, so
+                // the punctuation the user asked for is never dropped.
+                pendingSeparator = clauses.isEmpty ? nil : "，"
+            } else if byte == 0x20 {
                 if automaticSyllableSpaceOffsets.contains(offset) {
                     if !current.isEmpty, current.last != 0x27 {
                         current.append(0x27)
@@ -431,11 +494,12 @@ final class RimeOctagramStreamInputEngine: StreamInputInferenceEngine {
             }
         }
         flushCurrent()
-        return clauses.isEmpty ? nil : clauses
+        return clauses.isEmpty ? nil : (clauses, separators)
     }
 
     static func combine(
         _ candidatesByClause: [[String]],
+        separators: [String] = [],
         maximumCount: Int
     ) -> [String] {
         struct Path {
@@ -445,14 +509,19 @@ final class RimeOctagramStreamInputEngine: StreamInputInferenceEngine {
         }
         let limit = min(max(maximumCount, 1), 5)
         var paths = [Path(text: "", rank: 0, order: 0)]
-        for candidates in candidatesByClause {
+        for (clauseIndex, candidates) in candidatesByClause.enumerated() {
+            let separator = clauseIndex > 0 && clauseIndex - 1 < separators.count
+                ? separators[clauseIndex - 1]
+                : ""
             var next: [Path] = []
             for path in paths {
                 for (candidateRank, candidate) in candidates.enumerated() {
+                    // A user pause is a segmentation boundary, not punctuation:
+                    // its separator is empty and the host segmenter chunks the
+                    // bare concatenation for delivery. Only a comma the user
+                    // typed contributes a character of its own.
                     next.append(Path(
-                        text: path.text.isEmpty
-                            ? candidate
-                            : path.text + "，" + candidate,
+                        text: path.text + separator + candidate,
                         rank: path.rank + candidateRank,
                         order: next.count
                     ))

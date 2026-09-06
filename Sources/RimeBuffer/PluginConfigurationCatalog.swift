@@ -7,6 +7,7 @@ enum AITextPluginConfigurationFieldID {
 
 enum StreamInputPluginConfigurationFieldID {
     static let connector = "connector"
+    static let localFirst = "localFirst"
     static let candidateCount = "candidateCount"
     static let responsePace = "latency"
 
@@ -125,9 +126,36 @@ struct StreamInputPluginSettings: Equatable {
     static let maximumCandidateCount = 5
     static let defaultCandidateCount = 5
 
+    /// The on-device decoder is one of the selectable models, so this value
+    /// is the raw choice rather than an AI connector kind.
+    static let localEngineChoiceValue = "local.rime"
+
     let connectorKind: AITextProviderKind
     let candidateCount: Int
     let responsePace: StreamInputResponsePace
+    /// True when the user picked the on-device Rime + Octagram decoder.
+    let usesLocalEngineOnly: Bool
+    /// True when the on-device decoder runs ahead of the chosen AI channel and
+    /// hands over only what it declines.
+    let prefersLocalEngineFirst: Bool
+
+    init(connectorKind: AITextProviderKind,
+         candidateCount: Int,
+         responsePace: StreamInputResponsePace,
+         usesLocalEngineOnly: Bool = false,
+         prefersLocalEngineFirst: Bool = true) {
+        self.connectorKind = connectorKind
+        self.candidateCount = candidateCount
+        self.responsePace = responsePace
+        self.usesLocalEngineOnly = usesLocalEngineOnly
+        self.prefersLocalEngineFirst = prefersLocalEngineFirst
+    }
+
+    /// Engines to try, in order, for this request.
+    var engineRoles: [StreamInputEngineRole] {
+        if usesLocalEngineOnly { return [.local] }
+        return prefersLocalEngineFirst ? [.local, .connector] : [.connector]
+    }
 
     var debounce: TimeInterval { responsePace.debounce }
     var maximumWait: TimeInterval { responsePace.maximumWait }
@@ -213,11 +241,23 @@ enum PluginConfigurationCatalog {
             fields: [
                 .choice(
                     id: StreamInputPluginConfigurationFieldID.connector,
-                    title: "猜测渠道",
-                    helpText: "这是意识流输入自己的选择，不会改动普通 AI 生成的渠道。",
-                    options: aiConnectorChoices,
+                    title: "猜测模型",
+                    helpText: "端侧 Rime 与所有连接器模型并列可选；这是意识流输入自己的选择，不会改动普通 AI 生成的渠道。",
+                    options: [
+                        PluginConfigurationChoice(
+                            value: StreamInputPluginSettings
+                                .localEngineChoiceValue,
+                            title: "本地 Rime + Octagram（端侧）"
+                        ),
+                    ] + aiConnectorChoices,
                     defaultValue:
                         AITextProviderKind.openAICompatible.rawValue
+                ),
+                .toggle(
+                    id: StreamInputPluginConfigurationFieldID.localFirst,
+                    title: "端侧优先",
+                    helpText: "选择 AI 模型时，先用端侧 Rime 解码，只把它拒绝的复杂输入交给该模型；关闭后每次都直接用所选模型。选择端侧模型时此项不适用。",
+                    defaultValue: true
                 ),
                 .number(
                     id: StreamInputPluginConfigurationFieldID.candidateCount,
@@ -472,11 +512,14 @@ enum PluginConfigurationCatalog {
                 StreamInputPluginConfigurationFieldID.candidateCount
             ) ?? Double(StreamInputPluginSettings.defaultCandidateCount)
         )
+        let selection = snapshot.string(
+            StreamInputPluginConfigurationFieldID.connector
+        ) ?? ""
+        let usesLocalOnly = selection
+            == StreamInputPluginSettings.localEngineChoiceValue
         return StreamInputPluginSettings(
             connectorKind: AITextProviderKind(
-                rawValue: snapshot.string(
-                    StreamInputPluginConfigurationFieldID.connector
-                ) ?? ""
+                rawValue: selection
             ) ?? .openAICompatible,
             candidateCount: min(
                 max(
@@ -489,7 +532,11 @@ enum PluginConfigurationCatalog {
                 rawValue: snapshot.string(
                     StreamInputPluginConfigurationFieldID.responsePace
                 ) ?? ""
-            ) ?? .defaultValue
+            ) ?? .defaultValue,
+            usesLocalEngineOnly: usesLocalOnly,
+            prefersLocalEngineFirst: snapshot.bool(
+                StreamInputPluginConfigurationFieldID.localFirst
+            ) ?? true
         )
     }
 

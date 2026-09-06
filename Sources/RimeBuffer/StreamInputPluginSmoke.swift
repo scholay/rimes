@@ -155,9 +155,50 @@ func runStreamInputPluginSmokeTest() -> Bool {
         maximumCount: 3
     )
     guard localCombined.count == 3,
-          localCombined.first == "我，知道",
+          localCombined.first == "我知道",
           Set(localCombined).count == localCombined.count else {
         return fail("local engine bounded alternative beam")
+    }
+    // The local decoder must not answer a pause with punctuation either; that
+    // was invisible to the model prompt and reached the user's text field.
+    guard !localCombined.contains(where: {
+        $0.contains("，") || $0.contains(",")
+    }) else {
+        return fail("local clause join must not insert punctuation")
+    }
+    // The comma key is the explicit way to ask for one, and it is the only
+    // boundary that writes a character.
+    guard let commaSplit = RimeOctagramStreamInputEngine.clauseSplit(
+        rawInput: "wo,zhidao ta",
+        automaticSyllableSpaceOffsets: []
+    ) else {
+        return fail("comma clause split")
+    }
+    guard commaSplit.clauses == ["wo", "zhidao", "ta"],
+          commaSplit.separators == ["，", ""] else {
+        return fail(
+            "comma must close a clause and a pause must not: "
+                + commaSplit.clauses.joined(separator: "/")
+                + " sep=" + commaSplit.separators.joined(separator: "|")
+        )
+    }
+    let commaCombined = RimeOctagramStreamInputEngine.combine(
+        [["我"], ["知道"], ["他"]],
+        separators: ["，", ""],
+        maximumCount: 1
+    )
+    guard commaCombined == ["我，知道他"] else {
+        return fail(
+            "explicit comma must survive the join: "
+                + commaCombined.joined(separator: "/")
+        )
+    }
+    guard StreamInputPasteRules.appending(
+        "ni hao, shi jie",
+        to: "",
+        maximumBytes: 64
+    ) == "ni hao,shi jie" else {
+        return fail("pasted comma must normalize to the comma boundary")
     }
     guard RimeOctagramStreamInputEngine.usableCandidate("你好像") == "你好像",
           RimeOctagramStreamInputEngine.usableCandidate("  修复一个问题  ")
@@ -165,6 +206,65 @@ func runStreamInputPluginSmokeTest() -> Bool {
           RimeOctagramStreamInputEngine.usableCandidate("你好x") == nil,
           RimeOctagramStreamInputEngine.usableCandidate("你好abc") == nil else {
         return fail("local engine must decline unconverted ASCII tails")
+    }
+
+    // The on-device decoder is a selectable model, not a fixed first stage.
+    // The request's own settings decide which engines run and in what order.
+    do {
+        func request(
+            localOnly: Bool,
+            localFirst: Bool
+        ) -> StreamInputInferenceRequest {
+            StreamInputInferenceRequest(
+                requestID: UUID(),
+                sourceText: "nihao",
+                automaticSyllableSpaceOffsets: [],
+                settings: StreamInputPluginSettings(
+                    connectorKind: .openAICompatible,
+                    candidateCount: 5,
+                    responsePace: .fast,
+                    usesLocalEngineOnly: localOnly,
+                    prefersLocalEngineFirst: localFirst
+                ),
+                enforcingMinimumAfterRetry: false,
+                excludedGuesses: []
+            )
+        }
+        func roles(localOnly: Bool, localFirst: Bool) -> [StreamInputEngineRole] {
+            request(localOnly: localOnly, localFirst: localFirst)
+                .settings.engineRoles
+        }
+        guard roles(localOnly: true, localFirst: true) == [.local],
+              roles(localOnly: true, localFirst: false) == [.local],
+              roles(localOnly: false, localFirst: true) == [.local, .connector],
+              roles(localOnly: false, localFirst: false) == [.connector] else {
+            return fail("engine selection must decide which models run")
+        }
+
+        // Picking a connector without local-first must not consult the
+        // on-device decoder at all.
+        let localModule = StreamInputSmokeInferenceEngine()
+        let connectorModule = StreamInputSmokeInferenceEngine()
+        let router = StreamInputModularInferenceEngine(modulesByRole: [
+            .local: localModule,
+            .connector: connectorModule,
+        ])
+        _ = router.infer(
+            request(localOnly: false, localFirst: false),
+            onEvent: { _ in }
+        ) { _ in }
+        guard localModule.pending.isEmpty,
+              connectorModule.pending.count == 1 else {
+            return fail("connector-only selection must skip the local engine")
+        }
+        _ = router.infer(
+            request(localOnly: true, localFirst: true),
+            onEvent: { _ in }
+        ) { _ in }
+        guard localModule.pending.count == 1,
+              connectorModule.pending.count == 1 else {
+            return fail("local-only selection must skip the connector")
+        }
     }
 
     // A module may decline synchronously. The returned root task must still
@@ -455,6 +555,55 @@ func runStreamInputPluginSmokeTest() -> Bool {
     guard forcedSpaceSegments.count >= 2,
           forcedSpaceSegments.map(\.text).joined() == "这是第一段这是第二段" else {
         return fail("Space clauses must enforce visible and deliverable segmentation")
+    }
+    // A hard Space is a pause, not a comma. The result must carry no
+    // punctuation the sentence did not need, and the chips must land on the
+    // clauses the user actually paused between.
+    let pauseAlignedSegments = StreamInputOutputSegmenter.fragments(
+        text: "这个就是我的什么呢就是",
+        sourceIndex: 0,
+        rawInput: "zhege jiu shi wodeshenmenejiushi"
+    )
+    guard pauseAlignedSegments.map(\.text)
+            == ["这个", "就", "是", "我的什么呢就是"] else {
+        return fail(
+            "hard Space clauses must segment where the user paused: "
+                + pauseAlignedSegments.map(\.text).joined(separator: "/")
+        )
+    }
+    guard !pauseAlignedSegments.contains(where: {
+        $0.text.contains(",") || $0.text.contains("，")
+    }) else {
+        return fail("pause segmentation must not introduce punctuation")
+    }
+    // The same input as it actually arrives: chord-inserted syllable spaces
+    // between the letters, user pauses only after `ge`, `jiu`, and `shi`.
+    let chordPauseSegments = StreamInputOutputSegmenter.fragments(
+        text: "这个就是我的什么呢就是",
+        sourceIndex: 0,
+        rawInput: "zhe ge jiu shi wo de shen me ne jiu shi",
+        automaticSyllableSpaceOffsets: [3, 17, 20, 25, 28, 31, 35]
+    )
+    guard chordPauseSegments.map(\.text)
+            == ["这个", "就", "是", "我的什么呢就是"] else {
+        return fail(
+            "chord syllable spaces must not count as pauses: "
+                + chordPauseSegments.map(\.text).joined(separator: "/")
+        )
+    }
+    // The local decoder concatenates its per-clause results bare, so the
+    // pause alignment is what restores the user's chunks.
+    let localPauseSegments = StreamInputOutputSegmenter.fragments(
+        text: "你好我的朋友我的左右名师",
+        sourceIndex: 0,
+        rawInput: "nihaowodepengyou wodezuoyou mingsh"
+    )
+    guard localPauseSegments.map(\.text)
+            == ["你好我的朋友", "我的左右", "名师"] else {
+        return fail(
+            "local clause concatenation must re-chunk at the pauses: "
+                + localPauseSegments.map(\.text).joined(separator: "/")
+        )
     }
     let whitespaceSegments = StreamInputOutputSegmenter.fragments(
         text: "你好 世界",
@@ -1574,7 +1723,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
                                           focusToken: focus),
               workspace.rawInput == "qing ",
               workspace.automaticSyllableSpaceOffsets.isEmpty,
-              workspace.railSnapshot.sourceText == "qing · ",
+              workspace.railSnapshot.sourceText == "qing ",
               provider.pending.count == 1,
               provider.pending[0].request.preparedPrompt?.contains(
                 "\"automaticSyllableSpaceOffsets\":["
@@ -1713,6 +1862,41 @@ func runStreamInputPluginSmokeTest() -> Bool {
         }
     }
 
+    // The comma key is the explicit request for punctuation a pause no longer
+    // provides. It writes one comma, replaces a pending pause rather than
+    // standing beside it, and refuses to lead or repeat.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false
+        )
+        workspace.start()
+        defer { workspace.stop() }
+
+        guard workspace.consumeIgnoredKey(keycode: 0x2c, focusToken: focus),
+              workspace.rawInput.isEmpty,
+              workspace.capture(letter: "a", focusToken: focus),
+              workspace.consumeIgnoredKey(keycode: 0x2c, focusToken: focus),
+              workspace.rawInput == "a,",
+              workspace.railSnapshot.sourceText == "a,",
+              workspace.consumeIgnoredKey(keycode: 0x2c, focusToken: focus),
+              workspace.rawInput == "a," else {
+            return fail("comma key must write exactly one explicit comma")
+        }
+        guard workspace.capture(letter: "b", focusToken: focus),
+              workspace.consumeIgnoredKey(keycode: 0x20, focusToken: focus),
+              workspace.rawInput == "a,b ",
+              workspace.consumeIgnoredKey(keycode: 0x2c, focusToken: focus),
+              workspace.rawInput == "a,b," else {
+            return fail("comma must supersede a pending pause")
+        }
+    }
+
     // Space ends a short sentence and immediately requests the complete raw
     // snapshot. Leading/repeated spaces do not create revisions or requests.
     // Continuing to type creates a fresh trailing debounce for the complete
@@ -1737,7 +1921,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
               workspace.capture(letter: "b", focusToken: focus),
               workspace.consumeIgnoredKey(keycode: 0x20, focusToken: focus),
               workspace.rawInput == "ab ",
-              workspace.railSnapshot.sourceText == "ab · ",
+              workspace.railSnapshot.sourceText == "ab ",
               provider.pending.count == 1,
               provider.pending[0].request.sourceText == "ab ",
               provider.pending[0].request.preparedPrompt?.contains(
@@ -1752,7 +1936,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
               workspace.capture(letter: "c", focusToken: focus),
               workspace.capture(letter: "d", focusToken: focus),
               workspace.rawInput == "ab cd",
-              workspace.railSnapshot.sourceText == "ab · cd",
+              workspace.railSnapshot.sourceText == "ab cd",
               provider.pending.count == 1,
               workspace.maximumWaitTimerForTesting != nil else {
             return fail("repeated Space must coalesce and later typing must debounce")
@@ -1829,7 +2013,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
               workspace.insertPastedText("NI  HAO", focusToken: focus),
               workspace.rawInput == "ni hao",
               !workspace.rawInputAllSelected,
-              workspace.railSnapshot.sourceText == "ni · hao",
+              workspace.railSnapshot.sourceText == "ni hao",
               provider.pending.count == 1,
               provider.pending[0].request.sourceText == "ni hao" else {
             return fail("stream select-all paste replacement")
@@ -1877,7 +2061,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
         guard workspace.capture(letter: "a", focusToken: focus),
               workspace.consumeIgnoredKey(keycode: 0x20, focusToken: focus),
               workspace.rawInput == "a ",
-              workspace.railSnapshot.sourceText == "a · ",
+              workspace.railSnapshot.sourceText == "a ",
               workspace.deleteBackward(focusToken: focus),
               workspace.rawInput == "a",
               workspace.railSnapshot.sourceText == "a",
