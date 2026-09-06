@@ -341,8 +341,8 @@ enum ClipboardHistorySmoke {
                 deltaY: 4,
                 precise: true,
                 shiftHeld: true
-            ) == -10,
-            "Shift precise-wheel reversed acceleration"
+            ) == 10,
+            "Shift precise-wheel acceleration follows the trackpad"
         )
         expect(
             ClipboardHistoryScrollRules.horizontalDelta(
@@ -360,7 +360,7 @@ enum ClipboardHistorySmoke {
                 precise: true,
                 shiftHeld: false
             ) == 5,
-            "native horizontal delta direction"
+            "trackpad horizontal delta follows the fingers"
         )
         expect(
             ClipboardHistoryScrollRules.horizontalDelta(
@@ -368,8 +368,26 @@ enum ClipboardHistorySmoke {
                 deltaY: 1,
                 precise: false,
                 shiftHeld: false
-            ) == 32,
+            ) == -32,
             "unmodified vertical timeline direction"
+        )
+        // macOS inverts scroll direction per device, so the wheel and the
+        // trackpad must take opposite signs to feel identical in the hand.
+        // Every trackpad path agrees with itself; the wheel opposes it.
+        expect(
+            ClipboardHistoryScrollRules.horizontalDelta(
+                deltaX: 0, deltaY: 3, precise: true, shiftHeld: false
+            ) > 0
+                && ClipboardHistoryScrollRules.horizontalDelta(
+                    deltaX: 0, deltaY: 3, precise: true, shiftHeld: true
+                ) > 0
+                && ClipboardHistoryScrollRules.horizontalDelta(
+                    deltaX: 3, deltaY: 0, precise: true, shiftHeld: false
+                ) > 0
+                && ClipboardHistoryScrollRules.horizontalDelta(
+                    deltaX: 0, deltaY: 3, precise: false, shiftHeld: true
+                ) < 0,
+            "trackpad must oppose the wheel, not match it"
         )
 
         let pasteboard = ClipboardHistoryPasteboardDouble()
@@ -1603,6 +1621,60 @@ enum ClipboardHistorySmoke {
             plainClickActivationCount == 0,
             "plain single-click activated an item"
         )
+
+        // A click selects where the pointer already is, so the rail must not
+        // scroll underneath it — otherwise the second click of a double click
+        // lands on a different card. Keyboard selection still scrolls, because
+        // nothing is under the pointer to keep still.
+        do {
+            let scrollModel = ClipboardHistoryModel(
+                configuration: .init(),
+                pasteboard: ClipboardHistoryPasteboardDouble(),
+                schedulesAutomaticPolling: false
+            )
+            scrollModel.start()
+            scrollModel.update(windowVisible: true, captureEnabled: true,
+                               protection: [])
+            for index in 0..<12 { _ = scrollModel.ingest("overflow card \(index)") }
+            let scrollPane = ClipboardHistoryPaneView(model: scrollModel)
+            scrollPane.frame = NSRect(
+                x: 0,
+                y: 0,
+                width: ClipboardHistoryWindowMetrics.preferredWidth,
+                height: ClipboardHistoryWindowMetrics.preferredHeight
+            )
+            scrollPane.layoutSubtreeIfNeeded()
+            let overflowIDs = scrollModel.items.map(\.id)
+            guard overflowIDs.count == 12, let lastID = overflowIDs.last else {
+                expect(false, "click-scroll fixture")
+                return
+            }
+            _ = scrollModel.select(id: overflowIDs[0])
+            scrollPane.layoutSubtreeIfNeeded()
+            let restingOrigin = scrollPane.scrollOriginXForSmoke
+            _ = scrollPane.handleCardInteraction(
+                itemID: lastID,
+                modifiers: [],
+                clickCount: 1
+            )
+            scrollPane.layoutSubtreeIfNeeded()
+            expect(
+                abs(scrollPane.scrollOriginXForSmoke - restingOrigin) < 0.5,
+                "a click scrolled the rail out from under the pointer"
+            )
+            expect(
+                scrollModel.selectedID == lastID,
+                "click on an off-screen card did not select it"
+            )
+            _ = scrollModel.select(id: overflowIDs[0])
+            scrollPane.layoutSubtreeIfNeeded()
+            _ = scrollModel.select(id: lastID)
+            scrollPane.layoutSubtreeIfNeeded()
+            expect(
+                scrollPane.scrollOriginXForSmoke > restingOrigin + 0.5,
+                "keyboard selection stopped scrolling into view"
+            )
+        }
 
         _ = model.select(id: multiIDs[0])
         expect(

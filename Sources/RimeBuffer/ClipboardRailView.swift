@@ -58,10 +58,15 @@ enum ClipboardHistoryScrollRules {
         } else {
             scale = precise ? 1.35 : 32
         }
-        // Shift turns a vertical wheel gesture into horizontal timeline
-        // movement. Reverse that mapped direction so the content follows the
-        // user's left/right expectation instead of moving against it.
-        let signedRaw = shiftHeld ? -raw : raw
+        // The two devices need opposite signs, so one shared rule cannot serve
+        // both: macOS applies its natural-scroll inversion per input device,
+        // and a wheel gesture mapped onto a horizontal rail is an app
+        // convention rather than a reported axis. `hasPreciseScrollingDeltas`
+        // separates them reliably — precise deltas come from the trackpad,
+        // coarse steps from a wheel. The wheel direction is the one that
+        // already matches expectation, so it keeps its negation and the
+        // trackpad follows the content the other way.
+        let signedRaw = precise ? raw : -raw
         let scaled = signedRaw * scale
         let maximumStep: CGFloat = precise ? 180 : 240
         return min(maximumStep, max(-maximumStep, scaled))
@@ -146,6 +151,10 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     private var clearConfirmationGeneration: UInt64 = 0
     private var clearConfirmationArmed = false
     private var selectionAnchorID: UUID?
+    /// Nonzero while a click is mutating the selection; see
+    /// `handleCardInteraction`. A counter, not a flag, because activation can
+    /// re-enter the model while the click is still on the stack.
+    private var pointerDrivenSelectionDepth = 0
     private var visibleItemByID: [UUID: ClipboardHistoryItem] = [:]
     private let thumbnailCache: NSCache<NSUUID, NSImage> = {
         let cache = NSCache<NSUUID, NSImage>()
@@ -522,8 +531,16 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         reconcileCards(items: visibleItems)
         needsLayout = true
         layoutSubtreeIfNeeded()
-        scrollSelectedIntoView()
+        if pointerDrivenSelectionDepth == 0 {
+            scrollSelectedIntoView()
+        }
         requestAssetsForVisibleCards()
+    }
+
+    /// Smoke-only: the rail's horizontal scroll offset, so a test can prove a
+    /// click leaves the card where the pointer already is.
+    var scrollOriginXForSmoke: CGFloat {
+        scrollView.contentView.bounds.origin.x
     }
 
     func snapshotForSmoke() -> ClipboardHistoryPaneSnapshot {
@@ -960,12 +977,20 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         requestedThumbnailIDs.removeAll(keepingCapacity: false)
     }
 
+    /// Selecting a card notifies the model synchronously, which reloads this
+    /// pane. A reload normally scrolls the selection into view — correct for
+    /// keyboard and search, wrong for a click: the rail would slide the card
+    /// out from under the pointer, so the second click of a double click lands
+    /// on a different card and the first click reads as having selected
+    /// something else. Clicks therefore hold the rail still.
     @discardableResult
     func handleCardInteraction(
         itemID: UUID,
         modifiers rawModifiers: NSEvent.ModifierFlags,
         clickCount: Int
     ) -> Bool {
+        pointerDrivenSelectionDepth += 1
+        defer { pointerDrivenSelectionDepth -= 1 }
         let modifiers = rawModifiers
             .intersection(.deviceIndependentFlagsMask)
             .intersection([.command, .control, .option, .shift])
@@ -1166,6 +1191,17 @@ private final class ClipboardHistoryCardButton: NSButton {
 
     required init?(coder: NSCoder) { fatalError() }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// The preview label alone covers most of the card, and a plain
+    /// NSTextField consumes the click that lands on it rather than passing it
+    /// up. Answer as one control so a click anywhere on the card selects it,
+    /// and so the second click of a double click still reaches this button
+    /// with clickCount 2 instead of being counted against a subview.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, isEnabled else { return nil }
+        let local = superview.map { convert(point, from: $0) } ?? point
+        return bounds.contains(local) ? self : nil
+    }
 
     override func mouseDown(with event: NSEvent) {
         // NSButton sends its target/action synchronously while super is tracking

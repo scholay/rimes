@@ -861,6 +861,10 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
         richActivationInFlight = false
         IMELog.write("clipboard archive activation settled pasteboard-ready=true")
         hideImmediately()
+        // The window vanishing is the only feedback this path had. Say where
+        // the content went, since it is on the pasteboard rather than in the
+        // user's field.
+        ClipboardCopyToast.show()
     }
 
     private func activateArchives(
@@ -1012,6 +1016,10 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
                     self.syncCaptureState()
                     if closesAfterWrite {
                         self.closePreparedArchiveActivation()
+                        // IMKit could not insert this content directly, so the
+                        // value is on the pasteboard. Finish the gesture the
+                        // user already made instead of asking them to paste.
+                        ClipboardAutoPaste.pasteAfterWindowClose()
                     }
                 } catch {
                     IMELog.write(
