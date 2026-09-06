@@ -2,37 +2,85 @@ import CryptoKit
 import Darwin
 import Foundation
 
+/// The sensitive half of a Capsule password entry: one free-form Markdown
+/// body. Entries hold whatever the secret actually is — an API key, a
+/// username and password pair, a recovery phrase, connection details — so a
+/// fixed field set only ever fit some of them. The title stays in plaintext
+/// for retrieval; everything here is encrypted.
 struct CapsulePasswordSecret: Codable, Equatable {
+    let body: String
+}
+
+/// The pre-v2 field set, retained only so existing records still open. Its
+/// values are folded into a Markdown body on read, and the entry is stored in
+/// the new shape the next time it is saved.
+private struct CapsulePasswordLegacySecret: Codable {
     let url: String?
     let app: String?
     let username: String?
     let password: String
     let previousPasswords: [String]
+
+    var markdownBody: String {
+        var lines: [String] = []
+        if let url, !url.isEmpty { lines.append("- 网址：\(url)") }
+        if let app, !app.isEmpty { lines.append("- App：\(app)") }
+        if let username, !username.isEmpty {
+            lines.append("- 用户名：\(username)")
+        }
+        lines.append("- 密码：\(password)")
+        for (index, previous) in previousPasswords.enumerated()
+        where !previous.isEmpty {
+            lines.append("- 曾用密码 \(index + 1)：\(previous)")
+        }
+        return lines.joined(separator: "\n")
+    }
 }
 
 struct CapsulePasswordWriteRequest: Codable, Equatable {
     let id: UUID?
     let title: String
-    let url: String?
-    let app: String?
-    let username: String?
-    let password: String
-    let previousPasswords: [String]
+    let body: String
 
-    init(id: UUID? = nil,
-         title: String,
-         url: String? = nil,
-         app: String? = nil,
-         username: String? = nil,
-         password: String,
-         previousPasswords: [String] = []) {
+    init(id: UUID? = nil, title: String, body: String) {
         self.id = id
         self.title = title
-        self.url = url
-        self.app = app
-        self.username = username
-        self.password = password
-        self.previousPasswords = previousPasswords
+        self.body = body
+    }
+
+    /// Accepts the retired field set so a stored JSON payload or an older
+    /// caller still imports, folded into the same Markdown body.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        if let body = try container.decodeIfPresent(String.self, forKey: .body) {
+            self.body = body
+            return
+        }
+        let legacy = CapsulePasswordLegacySecret(
+            url: try container.decodeIfPresent(String.self, forKey: .url),
+            app: try container.decodeIfPresent(String.self, forKey: .app),
+            username: try container.decodeIfPresent(String.self,
+                                                    forKey: .username),
+            password: try container.decode(String.self, forKey: .password),
+            previousPasswords: try container.decodeIfPresent(
+                [String].self,
+                forKey: .previousPasswords
+            ) ?? []
+        )
+        body = legacy.markdownBody
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(body, forKey: .body)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, body, url, app, username, password, previousPasswords
     }
 }
 
@@ -61,28 +109,16 @@ struct CapsulePasswordImportResult: Equatable {
 
 private struct CapsulePasswordIdentity: Hashable {
     let title: String
-    let url: String?
-    let app: String?
-    let username: String?
-    let password: String
-    let previousPasswords: [String]
+    let body: String
 
     init(_ request: CapsulePasswordWriteRequest) {
         title = request.title
-        url = request.url
-        app = request.app
-        username = request.username
-        password = request.password
-        previousPasswords = request.previousPasswords
+        body = request.body
     }
 
     init(_ record: CapsulePasswordRecord) {
         title = record.summary.title
-        url = record.secret.url
-        app = record.secret.app
-        username = record.secret.username
-        password = record.secret.password
-        previousPasswords = record.secret.previousPasswords
+        body = record.secret.body
     }
 }
 
@@ -141,6 +177,7 @@ final class CapsulePasswordStore {
     static let maximumRecordCount = 20_000
     static let maximumTitleCharacters = 256
     static let maximumFieldCharacters = 16_384
+    static let maximumBodyCharacters = 65_536
     static let maximumPreviousPasswordCount = 100
 
     let rootURL: URL
@@ -336,13 +373,7 @@ final class CapsulePasswordStore {
         }
 
         let updatedAt = now()
-        let secret = CapsulePasswordSecret(
-            url: normalized.url,
-            app: normalized.app,
-            username: normalized.username,
-            password: normalized.password,
-            previousPasswords: normalized.previousPasswords
-        )
+        let secret = CapsulePasswordSecret(body: normalized.body)
         let key = try loadOrCreateMasterKeyWithoutLock(
             hasExistingRecords: hasExistingRecords
         )
@@ -415,6 +446,20 @@ final class CapsulePasswordStore {
             )
         } catch {
             throw CapsulePasswordStoreError.decryptionFailed
+        }
+        if let legacy = try? JSONDecoder().decode(
+            CapsulePasswordLegacySecret.self,
+            from: secretData
+        ) {
+            return CapsulePasswordRecord(
+                summary: CapsulePasswordSummary(
+                    id: parsed.id,
+                    title: parsed.title,
+                    updatedAt: parsed.updatedAt,
+                    fileURL: url
+                ),
+                secret: CapsulePasswordSecret(body: legacy.markdownBody)
+            )
         }
         guard let secret = try? JSONDecoder().decode(
             CapsulePasswordSecret.self,
@@ -561,7 +606,7 @@ final class CapsulePasswordStore {
             fields[key] = value
         }
         guard fields["capsule"] == "password",
-              fields["version"] == "1",
+              fields["version"] == "1" || fields["version"] == "2",
               let idRaw = fields["id"],
               let titleRaw = fields["title"],
               let updatedRaw = fields["updated_at"],
@@ -764,35 +809,19 @@ final class CapsulePasswordStore {
               !title.contains("\0") else {
             throw CapsulePasswordStoreError.invalidRequest("标题为空或过长")
         }
-        guard !request.password.isEmpty,
-              request.password.count <= maximumFieldCharacters,
-              !request.password.contains("\0") else {
-            throw CapsulePasswordStoreError.invalidRequest("密码为空或过长")
-        }
-        guard request.previousPasswords.count <= maximumPreviousPasswordCount,
-              request.previousPasswords.allSatisfy({
-                  !$0.isEmpty
-                      && $0.count <= maximumFieldCharacters
-                      && !$0.contains("\0")
-              }) else {
-            throw CapsulePasswordStoreError.invalidRequest("曾用密码数量或长度无效")
-        }
-        func checkedOptional(_ value: String?, field: String) throws -> String? {
-            guard let value else { return nil }
-            guard value.count <= maximumFieldCharacters,
-                  !value.contains("\0") else {
-                throw CapsulePasswordStoreError.invalidRequest("\(field)过长")
-            }
-            return value.isEmpty ? nil : value
+        // The body keeps its own leading/trailing shape: Markdown structure is
+        // the user's, and trimming it would quietly rewrite their record.
+        guard !request.body.trimmingCharacters(
+                in: .whitespacesAndNewlines
+              ).isEmpty,
+              request.body.count <= maximumBodyCharacters,
+              !request.body.contains("\0") else {
+            throw CapsulePasswordStoreError.invalidRequest("敏感信息为空或过长")
         }
         return CapsulePasswordWriteRequest(
             id: request.id,
             title: title,
-            url: try checkedOptional(request.url, field: "网址"),
-            app: try checkedOptional(request.app, field: "App"),
-            username: try checkedOptional(request.username, field: "用户名"),
-            password: request.password,
-            previousPasswords: request.previousPasswords
+            body: request.body
         )
     }
 
@@ -803,7 +832,7 @@ final class CapsulePasswordStore {
         """
         ---
         capsule: password
-        version: 1
+        version: 2
         id: \(encodeJSONScalar(id.uuidString.lowercased()))
         title: \(encodeJSONScalar(title))
         updated_at: \(encodeJSONScalar(iso8601.string(from: updatedAt)))

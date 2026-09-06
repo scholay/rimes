@@ -24,7 +24,7 @@ func runCapsulePasswordSmokeTest() -> Bool {
         let seeded = try contentStore.record(
             id: CapsuleContentStore.defaultEntryID
         )
-        guard seeded.summary.type == .memory,
+        guard seeded.summary.type == .note,
               seeded.summary.title == CapsuleContentStore.defaultEntryTitle,
               seeded.content == CapsuleContentStore.defaultEntryContent,
               permissions(seeded.summary.fileURL.path) == 0o600,
@@ -36,7 +36,7 @@ func runCapsulePasswordSmokeTest() -> Bool {
             contentsOf: seeded.summary.fileURL,
             encoding: .utf8
         )
-        guard seededMarkdown.contains("capsule: memory"),
+        guard seededMarkdown.contains("capsule: note"),
               seededMarkdown.contains("title: \"RIMES 默认词条\""),
               seededMarkdown.contains("\nRIMES") else {
             return fail("Obsidian-readable default Markdown")
@@ -52,18 +52,50 @@ func runCapsulePasswordSmokeTest() -> Bool {
             // Expected: the seed marker preserves the user's deletion.
         }
 
+        // Files written when Prompt/Memory/URL still existed stay on disk.
+        // Listing must step over them: one retired record cannot be allowed to
+        // hide every current entry, which is what an aborted listing would do.
+        for retired in ["prompt", "memory", "url"] {
+            let retiredID = UUID()
+            let retiredURL = contentStore.entryDirectoryURL
+                .appendingPathComponent("\(retiredID.uuidString.lowercased()).md")
+            try Data("""
+            ---
+            capsule: \(retired)
+            version: 1
+            id: "\(retiredID.uuidString.lowercased())"
+            title: "退役条目 \(retired)"
+            updated_at: "2026-01-01T00:00:00Z"
+            ---
+
+            retired body
+            """.utf8).write(to: retiredURL)
+        }
+        let survivors = try contentStore.listRecords()
+        guard survivors.allSatisfy({
+            !$0.summary.title.hasPrefix("退役条目")
+        }) else {
+            return fail("retired kinds must not be listed")
+        }
+        let retiredFiles = try FileManager.default.contentsOfDirectory(
+            atPath: contentStore.entryDirectoryURL.path
+        ).filter { $0.hasSuffix(".md") }
+        guard retiredFiles.count >= 3 else {
+            return fail("retired files must stay on disk untouched")
+        }
+
         instant.addTimeInterval(1)
         let imageFixture = root.appendingPathComponent("example.png")
         let pdfFixture = root.appendingPathComponent("example.pdf")
         try Data([0x89, 0x50, 0x4e, 0x47]).write(to: imageFixture)
         try Data("%PDF-1.4\n".utf8).write(to: pdfFixture)
         let prompt = try contentStore.put(CapsuleContentWriteRequest(
-            type: .prompt,
+            type: .note,
             title: "总结论文",
             content: "请总结这篇论文的核心贡献。"
         ))
         let memory = try contentStore.put(CapsuleContentWriteRequest(
-            type: .memory,
+            type: .note,
             title: "项目事实",
             content: "Capsule 条目使用 Markdown 管理。"
         ))
@@ -77,11 +109,6 @@ func runCapsulePasswordSmokeTest() -> Bool {
             title: "会议笔记",
             content: "# 决策\n\n每个 Capsule 文件保存一条记录。"
         ))
-        let webURL = try contentStore.put(CapsuleContentWriteRequest(
-            type: .url,
-            title: "项目主页",
-            content: "https://example.invalid/project?private=redacted#section"
-        ))
         let image = try contentStore.put(CapsuleContentWriteRequest(
             type: .image,
             title: "示例图片",
@@ -94,7 +121,7 @@ func runCapsulePasswordSmokeTest() -> Bool {
         ))
         guard try contentStore.record(id: prompt.id).content
                 == "请总结这篇论文的核心贡献。",
-              try contentStore.search("核心贡献", kind: .memory, limit: 5)
+              try contentStore.search("核心贡献", kind: .skill, limit: 5)
                 .isEmpty,
               try contentStore.search("核心贡献", limit: 5)
                 .map(\.summary.id) == [prompt.id],
@@ -103,20 +130,18 @@ func runCapsulePasswordSmokeTest() -> Bool {
               try contentStore.record(id: skill.id).content
                 == "/tmp/example-skill",
               try contentStore.record(id: note.id).content.contains("# 决策"),
-              try contentStore.record(id: webURL.id).snippet
-                == "example.invalid/project",
               try contentStore.record(id: image.id).snippet
                 == "Image · example.png",
               try contentStore.record(id: pdf.id).snippet
                 == "PDF · example.pdf",
               Set(try contentStore.listRecords().map(\.summary.type))
-                == Set([.prompt, .memory, .skill, .note, .url, .image, .pdf]) else {
+                == Set([.skill, .note, .image, .pdf]) else {
             return fail("all ordinary Capsule kinds Markdown round trip")
         }
         instant.addTimeInterval(1)
         let updatedPrompt = try contentStore.put(CapsuleContentWriteRequest(
             id: prompt.id,
-            type: .prompt,
+            type: .note,
             title: "总结论文（精简）",
             content: "用三点总结论文。"
         ))
@@ -138,16 +163,6 @@ func runCapsulePasswordSmokeTest() -> Bool {
         }
         for invalid in [
             CapsuleContentWriteRequest(
-                type: .url,
-                title: "脚本网址",
-                content: "javascript:alert(1)"
-            ),
-            CapsuleContentWriteRequest(
-                type: .url,
-                title: "无主机网址",
-                content: "https:missing-host"
-            ),
-            CapsuleContentWriteRequest(
                 type: .image,
                 title: "错误图片类型",
                 content: pdfFixture.path
@@ -168,11 +183,11 @@ func runCapsulePasswordSmokeTest() -> Bool {
 
         let firstRequest = CapsulePasswordWriteRequest(
             title: "示例站点",
-            url: "https://example.invalid/login",
-            app: "Example Browser",
-            username: "fixture-user",
-            password: "fixture-current-password",
-            previousPasswords: ["fixture-old-password"]
+            body: """
+            - 网址：https://example.invalid/login
+            - 用户名：fixture-user
+            - 密码：fixture-current-password
+            """
         )
         let first = try passwordStore.put(firstRequest)
         guard permissions(passwordStore.passwordDirectoryURL.path) == 0o700,
@@ -220,31 +235,50 @@ func runCapsulePasswordSmokeTest() -> Bool {
         try FileManager.default.removeItem(at: copiedPasswordURL)
 
         let decrypted = try passwordStore.record(id: first.id)
-        guard decrypted.secret.url == firstRequest.url,
-              decrypted.secret.app == firstRequest.app,
-              decrypted.secret.username == firstRequest.username,
-              decrypted.secret.password == firstRequest.password,
-              decrypted.secret.previousPasswords
-                == firstRequest.previousPasswords else {
+        guard decrypted.secret.body == firstRequest.body else {
             return fail("encrypted password round trip")
         }
+
+        // Records written before the body replaced the fixed field set must
+        // still open. Their values fold into the same Markdown rather than
+        // failing to decode and stranding the user's only copy.
+        let legacyRequest = try? JSONDecoder().decode(
+            CapsulePasswordWriteRequest.self,
+            from: Data("""
+            {"title":"旧结构条目",
+             "url":"https://legacy.invalid",
+             "username":"legacy-user",
+             "password":"legacy-secret",
+             "previousPasswords":["legacy-old"]}
+            """.utf8)
+        )
+        guard let legacyRequest,
+              legacyRequest.title == "旧结构条目",
+              legacyRequest.body.contains("- 网址：https://legacy.invalid"),
+              legacyRequest.body.contains("- 用户名：legacy-user"),
+              legacyRequest.body.contains("- 密码：legacy-secret"),
+              legacyRequest.body.contains("- 曾用密码 1：legacy-old") else {
+            return fail("retired password field set must fold into a body")
+        }
+        let legacySummary = try passwordStore.put(legacyRequest)
+        guard try passwordStore.record(id: legacySummary.id).secret.body
+                == legacyRequest.body else {
+            return fail("migrated legacy password round trip")
+        }
+        // Leave the fixture store as it was for the assertions that follow.
+        try passwordStore.remove(id: legacySummary.id)
 
         instant.addTimeInterval(10)
         let updated = try passwordStore.put(CapsulePasswordWriteRequest(
             id: first.id,
             title: "示例站点（工作）",
-            url: firstRequest.url,
-            app: firstRequest.app,
-            username: firstRequest.username,
-            password: "fixture-rotated-password",
-            previousPasswords: [firstRequest.password]
+            body: "- 密码：fixture-rotated-password"
         ))
         let updatedRecord = try passwordStore.record(id: first.id)
         guard updated.id == first.id,
               updated.title == "示例站点（工作）",
               updated.updatedAt == instant,
-              updatedRecord.secret.password == "fixture-rotated-password",
-              updatedRecord.secret.previousPasswords == [firstRequest.password] else {
+              updatedRecord.secret.body == "- 密码：fixture-rotated-password" else {
             return fail("password update and previous password")
         }
 

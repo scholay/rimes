@@ -661,13 +661,6 @@ private enum CapsuleCloudDocumentCodec {
                 throw CapsuleCloudSyncError.malformedDocument(fileURL.path)
             }
             assetName = decoded
-        } else if type == .url {
-            guard let components = URLComponents(string: content),
-                  let scheme = components.scheme?.lowercased(),
-                  ["http", "https"].contains(scheme),
-                  components.host?.isEmpty == false else {
-                throw CapsuleCloudSyncError.malformedDocument(fileURL.path)
-            }
         }
         return CapsuleCloudParsedDocument(
             id: id,
@@ -796,7 +789,7 @@ private enum CapsuleCloudDocumentCodec {
             return allowedImageExtensions.contains(ext)
         case .pdf:
             return ext == "pdf"
-        case .prompt, .memory, .password, .skill, .note, .url:
+        case .password, .skill, .note:
             return false
         }
     }
@@ -1877,7 +1870,7 @@ final class CapsuleCloudSyncEngine {
     ) -> Bool {
         baseline == nil
             && local.record.summary.id == CapsuleContentStore.defaultEntryID
-            && local.record.summary.type == .memory
+            && local.record.summary.type == .note
             && local.record.summary.title
                 == CapsuleContentStore.defaultEntryTitle
             && local.record.content == CapsuleContentStore.defaultEntryContent

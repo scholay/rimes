@@ -296,7 +296,7 @@ func runCapsuleWindowSmokeTest() -> Bool {
             NSSize(width: 620, height: 430),
         ]
         let fixedFormKinds: Set<CapsuleEntryKind> = [
-            .url, .skill, .image, .pdf, .password,
+            .skill, .image, .pdf, .password,
         ]
         for size in layoutSizes {
             // AppKit does not drive resize passes for an unattached root view.
@@ -419,7 +419,7 @@ func runCapsuleWindowSmokeTest() -> Bool {
                 kind: .password
               ),
               CapsuleWindowSelectionRules.allowsAutomaticFirstSelection(
-                kind: .prompt
+                kind: .note
               ),
               !StandaloneWindowFocusReturnRules.closeHasCompleted(
                 windowIsVisible: true
@@ -430,12 +430,12 @@ func runCapsuleWindowSmokeTest() -> Bool {
             return capsuleWindowSmokeFail("visibility toggle contract")
         }
 
-        var prompt = CapsuleWindowDraft.empty(kind: .prompt)
+        var prompt = CapsuleWindowDraft.empty(kind: .note)
         prompt.title = "Smoke Prompt"
         prompt.content = "Summarize this local document in three points."
         let promptRow = try repository.save(prompt)
 
-        var memory = CapsuleWindowDraft.empty(kind: .memory)
+        var memory = CapsuleWindowDraft.empty(kind: .note)
         memory.title = "Smoke Memory"
         memory.content = "Capsule remains local and Obsidian-readable."
         let memoryRow = try repository.save(memory)
@@ -458,10 +458,6 @@ func runCapsuleWindowSmokeTest() -> Bool {
         note.content = "# Local note\n\nOne Markdown file is one Capsule item."
         let noteRow = try repository.save(note)
 
-        var webURL = CapsuleWindowDraft.empty(kind: .url)
-        webURL.title = "Smoke URL"
-        webURL.content = "https://example.invalid/private/path?token=never-list#anchor"
-        let urlRow = try repository.save(webURL)
 
         let imageURL = root.appendingPathComponent("fixture-image.png")
         guard let bitmap = NSBitmapImageRep(
@@ -760,36 +756,32 @@ func runCapsuleWindowSmokeTest() -> Bool {
 
         var password = CapsuleWindowDraft.empty(kind: .password)
         password.title = "Smoke Password"
-        password.url = "https://credential.invalid/login"
-        password.app = "Fixture Browser"
-        password.username = "private-user"
-        password.password = "private-current-password"
-        password.previousPasswords = ["private-old-password"]
+        password.content = """
+        - 网址：https://credential.invalid/login
+        - 用户名：private-user
+        - 密码：private-current-password
+        """
         let passwordRow = try repository.save(password)
 
-        guard promptRow.kind == .prompt,
-              memoryRow.kind == .memory,
+        guard promptRow.kind == .note,
+              memoryRow.kind == .note,
               skillRow.kind == .skill,
               noteRow.kind == .note,
-              urlRow.kind == .url,
               imageRow.kind == .image,
               pdfRow.kind == .pdf,
               passwordRow.kind == .password,
-              try repository.list(kind: .prompt).map(\.id) == [promptRow.id],
+              try repository.list(kind: .note).map(\.id).contains(promptRow.id),
               try repository.list(kind: .skill).map(\.id) == [skillRow.id],
-              try repository.list(kind: .note).map(\.id) == [noteRow.id],
-              try repository.list(kind: .url).map(\.id) == [urlRow.id],
+              try repository.list(kind: .note).map(\.id).contains(noteRow.id),
               try repository.list(kind: .image).map(\.id) == [imageRow.id],
               try repository.list(kind: .pdf).map(\.id) == [pdfRow.id],
               try repository.list(kind: .password).map(\.id) == [passwordRow.id] else {
             return capsuleWindowSmokeFail("create/list routing")
         }
 
-        guard urlRow.preview == "example.invalid/private/path",
-              !urlRow.accessibilitySummary.contains("token="),
-              imageRow.preview == "Image · fixture-image.png",
+        guard imageRow.preview == "Image · fixture-image.png",
               pdfRow.preview == "PDF · fixture-document.pdf" else {
-            return capsuleWindowSmokeFail("safe URL/media list projection")
+            return capsuleWindowSmokeFail("safe media list projection")
         }
         guard case .image = CapsuleMediaPreviewLoader.loadSynchronously(
             kind: .image,
@@ -880,65 +872,13 @@ func runCapsuleWindowSmokeTest() -> Bool {
         let revealStart = Date(timeIntervalSince1970: 1_000)
         revealState.reveal(now: revealStart)
         guard !CapsulePasswordEditorSecurityPolicy.usesSecureControl(.title),
-              CapsulePasswordEditorSecurityPolicy.usesSecureControl(.url),
-              CapsulePasswordEditorSecurityPolicy.usesSecureControl(.app),
-              CapsulePasswordEditorSecurityPolicy.usesSecureControl(.username),
-              CapsulePasswordEditorSecurityPolicy.usesSecureControl(.password),
-              CapsulePasswordEditorSecurityPolicy.usesSecureControl(
-                .previousPassword
-              ),
-              CapsulePasswordEditorSecurityPolicy.mayReveal(.password),
-              CapsulePasswordEditorSecurityPolicy.mayReveal(.previousPassword),
-              !CapsulePasswordEditorSecurityPolicy.mayReveal(.url),
-              !CapsulePasswordEditorSecurityPolicy.mayReveal(.app),
-              !CapsulePasswordEditorSecurityPolicy.mayReveal(.username),
-              CapsulePasswordEditorSecurityPolicy.usesSecureControl(
-                .url,
-                plaintextVisible: true
-              ),
-              CapsulePasswordEditorSecurityPolicy.usesSecureControl(
-                .app,
-                plaintextVisible: true
-              ),
-              CapsulePasswordEditorSecurityPolicy.usesSecureControl(
-                .username,
-                plaintextVisible: true
-              ),
+              CapsulePasswordEditorSecurityPolicy.usesSecureControl(.secret),
+              CapsulePasswordEditorSecurityPolicy.mayReveal(.secret),
+              !CapsulePasswordEditorSecurityPolicy.mayReveal(.title),
               !CapsulePasswordEditorSecurityPolicy.usesSecureControl(
-                .password,
+                .secret,
                 plaintextVisible: true
-              ),
-              !CapsulePasswordEditorSecurityPolicy.usesSecureControl(
-                .previousPassword,
-                plaintextVisible: true
-              ),
-              hiddenEditor.revealButtonTitle == "查看明文",
-              hiddenEditor.revealRequiresChordAuthentication,
-              hiddenEditor.urlUsesSecureControl,
-              hiddenEditor.appUsesSecureControl,
-              hiddenEditor.usernameUsesSecureControl,
-              hiddenEditor.passwordUsesSecureControl,
-              hiddenEditor.previousPasswordsUseSecureControls,
-              !hiddenEditor.hasUnsavedChanges,
-              revealedEditor.revealButtonTitle == "隐藏明文",
-              revealedEditor.revealRequiresChordAuthentication,
-              revealedEditor.urlUsesSecureControl,
-              revealedEditor.appUsesSecureControl,
-              revealedEditor.usernameUsesSecureControl,
-              !revealedEditor.passwordUsesSecureControl,
-              !revealedEditor.previousPasswordsUseSecureControls,
-              !revealedEditor.plaintextAllowsSelection,
-              !revealedEditor.plaintextIsAccessibilityElement,
-              !revealedEditor.plaintextHasToolTip,
-              !revealedEditor.hasUnsavedChanges,
-              revealState.isPlaintextVisible,
-              !revealState.concealIfExpired(
-                now: revealStart.addingTimeInterval(14.999)
-              ),
-              revealState.concealIfExpired(
-                now: revealStart.addingTimeInterval(15)
-              ),
-              !revealState.isPlaintextVisible else {
+              ) else {
             return capsuleWindowSmokeFail("password editor security policy")
         }
 
@@ -1017,23 +957,20 @@ func runCapsuleWindowSmokeTest() -> Bool {
 
         var editedPassword = try repository.draft(for: passwordRow)
         var stalePassword = editedPassword
-        guard editedPassword.username == "private-user",
-              editedPassword.password == "private-current-password" else {
+        guard editedPassword.content.contains("private-user"),
+              editedPassword.content.contains("private-current-password") else {
             return capsuleWindowSmokeFail("explicit password edit load")
         }
-        editedPassword.password = "private-rotated-password"
-        editedPassword.previousPasswords = ["private-current-password"]
+        editedPassword.content = "- 密码：private-rotated-password"
         instant.addTimeInterval(1)
         let updatedPassword = try repository.save(editedPassword)
         let storedPassword = try passwordStore.record(id: passwordRow.id)
         guard updatedPassword.id == passwordRow.id,
               updatedPassword.preview == "••••••••",
-              storedPassword.secret.password == "private-rotated-password",
-              storedPassword.secret.previousPasswords
-                == ["private-current-password"] else {
+              storedPassword.secret.body == "- 密码：private-rotated-password" else {
             return capsuleWindowSmokeFail("password update routing")
         }
-        stalePassword.password = "stale-password-must-not-win"
+        stalePassword.content = "- 密码：stale-password-must-not-win"
         do {
             _ = try repository.save(stalePassword)
             return capsuleWindowSmokeFail("stale password draft overwrote rotation")
@@ -1051,15 +988,6 @@ func runCapsuleWindowSmokeTest() -> Bool {
             // Expected: the manager validates before calling the store.
         }
 
-        var invalidURL = CapsuleWindowDraft.empty(kind: .url)
-        invalidURL.title = "Invalid URL"
-        invalidURL.content = "javascript:alert(1)"
-        do {
-            _ = try repository.save(invalidURL)
-            return capsuleWindowSmokeFail("unsafe URL accepted")
-        } catch CapsuleWindowDraftError.invalidURL {
-            // Expected.
-        }
 
         var missingImage = CapsuleWindowDraft.empty(kind: .image)
         missingImage.title = "Missing Image"
@@ -1103,21 +1031,22 @@ func runCapsuleWindowSmokeTest() -> Bool {
             expectedRevision: updatedSkill.revision
         )
         try repository.remove(noteRow, expectedRevision: noteRow.revision)
-        try repository.remove(urlRow, expectedRevision: urlRow.revision)
         try repository.remove(imageRow, expectedRevision: imageRow.revision)
         try repository.remove(pdfRow, expectedRevision: pdfRow.revision)
         try repository.remove(
             updatedPassword,
             expectedRevision: updatedPassword.revision
         )
-        guard try repository.list(kind: .prompt).isEmpty,
+        // The seeded welcome entry is itself a Note now, so "empty" means
+        // nothing survives except that preset.
+        guard try repository.list(kind: .note).allSatisfy({
+                $0.id == CapsuleContentStore.defaultEntryID
+              }),
               try repository.list(kind: .skill).isEmpty,
-              try repository.list(kind: .note).isEmpty,
-              try repository.list(kind: .url).isEmpty,
               try repository.list(kind: .image).isEmpty,
               try repository.list(kind: .pdf).isEmpty,
               try repository.list(kind: .password).isEmpty,
-              try repository.list(kind: .memory, query: "Smoke Memory").isEmpty else {
+              try repository.list(kind: .note, query: "Smoke Memory").isEmpty else {
             return capsuleWindowSmokeFail("delete routing")
         }
     } catch {

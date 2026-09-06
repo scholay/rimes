@@ -271,7 +271,7 @@ enum CapsuleFilePasteboardWriter {
                 },
                 originalImageData: data
             )
-        case .prompt, .memory, .password, .note, .url:
+        case .password, .note:
             throw CapsuleFilePasteboardError.unsupportedKind
         }
     }
@@ -549,7 +549,7 @@ final class CapsuleMediaPreviewLoader {
                 return .unavailable
             }
             return .pdf(image: image, pageCount: document.numberOfPages)
-        case .prompt, .memory, .password, .skill, .note, .url:
+        case .password, .skill, .note:
             return .unavailable
         }
     }
@@ -558,14 +558,11 @@ final class CapsuleMediaPreviewLoader {
 struct CapsulePasswordEditorSnapshot: Equatable {
     let revealButtonTitle: String
     let revealRequiresChordAuthentication: Bool
-    let urlUsesSecureControl: Bool
-    let appUsesSecureControl: Bool
-    let usernameUsesSecureControl: Bool
-    let passwordUsesSecureControl: Bool
-    let previousPasswordsUseSecureControls: Bool
+    /// The body has no editable view at all while concealed, so there is no
+    /// masked control to read, select, or expose to accessibility.
+    let secretIsConcealed: Bool
     let plaintextAllowsSelection: Bool
     let plaintextIsAccessibilityElement: Bool
-    let plaintextHasToolTip: Bool
     let hasUnsavedChanges: Bool
 }
 
@@ -590,18 +587,14 @@ struct CapsuleWindowEntryRow: Equatable, Identifiable {
 
 enum CapsulePasswordEditorField: CaseIterable {
     case title
-    case url
-    case app
-    case username
-    case password
-    case previousPassword
+    case secret
 }
 
 enum CapsulePasswordEditorSecurityPolicy {
     static let revealDuration: TimeInterval = 15
 
     static func mayReveal(_ field: CapsulePasswordEditorField) -> Bool {
-        field == .password || field == .previousPassword
+        field == .secret
     }
 
     static func usesSecureControl(
@@ -611,9 +604,7 @@ enum CapsulePasswordEditorSecurityPolicy {
         switch field {
         case .title:
             return false
-        case .url, .app, .username:
-            return true
-        case .password, .previousPassword:
+        case .secret:
             return !plaintextVisible
         }
     }
@@ -693,33 +684,20 @@ struct CapsuleWindowDraft: Equatable {
     var id: UUID?
     var kind: CapsuleEntryKind
     var title: String
+    /// Every kind — passwords included — carries its payload here. A password
+    /// entry holds free-form Markdown that happens to be encrypted at rest.
     var content: String
-    var url: String
-    var app: String
-    var username: String
-    var password: String
-    var previousPasswords: [String]
     var loadedRevision: String?
 
     init(id: UUID? = nil,
          kind: CapsuleEntryKind,
          title: String,
          content: String,
-         url: String,
-         app: String,
-         username: String,
-         password: String,
-         previousPasswords: [String],
          loadedRevision: String? = nil) {
         self.id = id
         self.kind = kind
         self.title = title
         self.content = content
-        self.url = url
-        self.app = app
-        self.username = username
-        self.password = password
-        self.previousPasswords = previousPasswords
         self.loadedRevision = loadedRevision
     }
 
@@ -729,11 +707,6 @@ struct CapsuleWindowDraft: Equatable {
             kind: kind,
             title: "",
             content: "",
-            url: "",
-            app: "",
-            username: "",
-            password: "",
-            previousPasswords: [],
             loadedRevision: nil
         )
     }
@@ -747,20 +720,9 @@ struct CapsuleWindowDraft: Equatable {
             throw CapsuleWindowDraftError.missingTitle
         }
         switch kind {
-        case .prompt, .memory, .note:
+        case .note:
             guard !content.isEmpty else {
                 throw CapsuleWindowDraftError.missingContent
-            }
-        case .url:
-            guard !content.isEmpty,
-                  let components = URLComponents(string: content),
-                  let scheme = components.scheme,
-                  ["http", "https"].contains(scheme.lowercased()),
-                  components.host?.isEmpty == false,
-                  content == content.trimmingCharacters(
-                    in: .whitespacesAndNewlines
-                  ) else {
-                throw CapsuleWindowDraftError.invalidURL
             }
         case .skill:
             guard !content.isEmpty else {
@@ -802,10 +764,9 @@ struct CapsuleWindowDraft: Equatable {
                 )
             }
         case .password:
-            guard !password.isEmpty else {
-                throw CapsuleWindowDraftError.missingPassword
-            }
-            guard previousPasswords.allSatisfy({ !$0.isEmpty }) else {
+            guard !content.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty else {
                 throw CapsuleWindowDraftError.missingPassword
             }
         }
@@ -843,7 +804,7 @@ final class CapsuleWindowRepository {
                     fileURL: summary.fileURL
                 )
             }
-        case .prompt, .memory, .skill, .note, .url, .image, .pdf:
+        case .skill, .note, .image, .pdf:
             return try contentStore.listRecords().filter { record in
                 record.summary.type == kind
                     && Self.matches(
@@ -877,15 +838,10 @@ final class CapsuleWindowRepository {
                 id: record.summary.id,
                 kind: .password,
                 title: record.summary.title,
-                content: "",
-                url: record.secret.url ?? "",
-                app: record.secret.app ?? "",
-                username: record.secret.username ?? "",
-                password: record.secret.password,
-                previousPasswords: record.secret.previousPasswords,
+                content: record.secret.body,
                 loadedRevision: after
             )
-        case .prompt, .memory, .skill, .note, .url, .image, .pdf:
+        case .skill, .note, .image, .pdf:
             let before = try Self.fileRevision(row.fileURL)
             let record = try contentStore.record(id: row.id)
             let after = try Self.fileRevision(record.summary.fileURL)
@@ -900,11 +856,6 @@ final class CapsuleWindowRepository {
                 kind: record.summary.type,
                 title: record.summary.title,
                 content: record.content,
-                url: "",
-                app: "",
-                username: "",
-                password: "",
-                previousPasswords: [],
                 loadedRevision: after
             )
         }
@@ -925,11 +876,7 @@ final class CapsuleWindowRepository {
                     CapsulePasswordWriteRequest(
                         id: draft.id,
                         title: draft.title,
-                        url: draft.url,
-                        app: draft.app,
-                        username: draft.username,
-                        password: draft.password,
-                        previousPasswords: draft.previousPasswords
+                        body: draft.content
                     ),
                     expectedRevision: draft.loadedRevision
                 )
@@ -945,7 +892,7 @@ final class CapsuleWindowRepository {
                 revision: try Self.fileRevision(summary.fileURL),
                 fileURL: summary.fileURL
             )
-        case .prompt, .memory, .skill, .note, .url, .image, .pdf:
+        case .skill, .note, .image, .pdf:
             let summary: CapsuleContentSummary
             do {
                 summary = try contentStore.put(
@@ -987,7 +934,7 @@ final class CapsuleWindowRepository {
                     id: row.id,
                     expectedRevision: expectedRevision
                 )
-            case .prompt, .memory, .skill, .note, .url, .image, .pdf:
+            case .skill, .note, .image, .pdf:
                 try contentStore.remove(
                     id: row.id,
                     expectedRevision: expectedRevision
@@ -1271,8 +1218,8 @@ final class CapsulePaneViewController: NSViewController,
     )
 
     private var rows: [CapsuleWindowEntryRow] = []
-    private var selectedKind: CapsuleEntryKind = .memory
-    private var draft = CapsuleWindowDraft.empty(kind: .memory)
+    private var selectedKind: CapsuleEntryKind = .note
+    private var draft = CapsuleWindowDraft.empty(kind: .note)
     private var titleField: NSTextField?
     private var contentTextView: NSTextView?
     private var skillPathField: NSTextField?
@@ -1285,10 +1232,7 @@ final class CapsulePaneViewController: NSViewController,
     private weak var formBottomSpacer: NSView?
     private weak var fileCopyButton: NSButton?
     private weak var editorActions: NSStackView?
-    private var passwordURLField: NSSecureTextField?
-    private var passwordAppField: NSSecureTextField?
-    private var passwordUsernameField: NSSecureTextField?
-    private var passwordField: NSTextField?
+    private var passwordSecretTextView: NSTextView?
     private var previousPasswordFields: [NSTextField] = []
     private var passwordRevealButton: NSButton?
     private var passwordRevealState = CapsulePasswordRevealState()
@@ -2041,7 +1985,7 @@ final class CapsulePaneViewController: NSViewController,
             of: .password
         ) ?? 0
         draft = .empty(kind: .password)
-        draft.previousPasswords = [""]
+        draft.content = "- 示例：值"
         editorDirty = false
         passwordRevealState.conceal()
         if plaintextVisible {
@@ -2051,17 +1995,13 @@ final class CapsulePaneViewController: NSViewController,
         let snapshot = CapsulePasswordEditorSnapshot(
             revealButtonTitle: passwordRevealButton?.title ?? "",
             revealRequiresChordAuthentication: true,
-            urlUsesSecureControl: passwordURLField != nil,
-            appUsesSecureControl: passwordAppField != nil,
-            usernameUsesSecureControl: passwordUsernameField != nil,
-            passwordUsesSecureControl: passwordField is NSSecureTextField,
-            previousPasswordsUseSecureControls: previousPasswordFields.allSatisfy {
-                $0 is NSSecureTextField
-            },
-            plaintextAllowsSelection: passwordField?.isSelectable ?? false,
-            plaintextIsAccessibilityElement: passwordField?
+            // The body exists as an editable view only while revealed, so
+            // concealment is the absence of the control rather than a mask.
+            secretIsConcealed: passwordSecretTextView == nil,
+            plaintextAllowsSelection: passwordSecretTextView?.isSelectable
+                ?? false,
+            plaintextIsAccessibilityElement: passwordSecretTextView?
                 .isAccessibilityElement() ?? false,
-            plaintextHasToolTip: passwordField?.toolTip != nil,
             hasUnsavedChanges: editorDirty
         )
         passwordRevealState.conceal()
@@ -2343,10 +2283,7 @@ final class CapsulePaneViewController: NSViewController,
         firstDetailFormRow = nil
         formBottomSpacer = nil
         fileCopyButton = nil
-        passwordURLField = nil
-        passwordAppField = nil
-        passwordUsernameField = nil
-        passwordField = nil
+        passwordSecretTextView = nil
         previousPasswordFields = []
         passwordRevealButton = nil
 
@@ -2402,21 +2339,13 @@ final class CapsulePaneViewController: NSViewController,
         titleFormRow = addField(label: "TITLE", field: title)
 
         switch draft.kind {
-        case .prompt, .memory, .note:
+        case .note:
             let textView = makeContentTextView(text: draft.content)
             contentTextView = textView
             firstDetailFormRow = addTextArea(
-                label: draft.kind == .note ? "NOTE · MARKDOWN" : "CONTENT",
+                label: "NOTE · MARKDOWN",
                 textView: textView
             )
-        case .url:
-            let field = NSTextField(string: draft.content)
-            field.placeholderString = "https://example.com/path"
-            field.font = MailboxTerminalTypography.font(ofSize: 11)
-            field.setAccessibilityLabel("完整 URL")
-            field.delegate = self
-            urlContentField = field
-            firstDetailFormRow = addField(label: "URL", field: field)
         case .skill:
             let pathField = NSTextField(string: draft.content)
             pathField.placeholderString = "/Users/name/path/to/skill"
@@ -2455,9 +2384,7 @@ final class CapsulePaneViewController: NSViewController,
             addPasswordFields()
         }
 
-        if draft.kind != .prompt,
-           draft.kind != .memory,
-           draft.kind != .note {
+        if draft.kind != .note {
             addFixedFormBottomSpacer()
         }
 
@@ -2488,73 +2415,51 @@ final class CapsulePaneViewController: NSViewController,
         editorScrollView.reflectScrolledClipView(clip)
     }
 
+    /// Title plus one encrypted Markdown body. Entries hold different shapes
+    /// of secret — API keys, credential pairs, recovery phrases — so the body
+    /// is free-form, and it is only rendered or editable once the passcode has
+    /// been entered.
     private func addPasswordFields() {
-        let url = makeSecureField(
-            value: draft.url,
-            label: "网址",
-            policyField: .url
-        )
-        let app = makeSecureField(
-            value: draft.app,
-            label: "App",
-            policyField: .app
-        )
-        let username = makeSecureField(
-            value: draft.username,
-            label: "用户名",
-            policyField: .username
-        )
-        let password = makePasswordEditorField(
-            value: draft.password,
-            label: "密码",
-            policyField: .password
-        )
-        passwordURLField = url
-        passwordAppField = app
-        passwordUsernameField = username
-        passwordField = password
-        firstDetailFormRow = addField(label: "URL · SECURE", field: url)
-        addField(label: "APP · SECURE", field: app)
-        addField(label: "USERNAME · SECURE", field: username)
-        addField(label: "PASSWORD · SECURE", field: password)
-
-        let previousHeading = NSStackView()
-        previousHeading.orientation = .horizontal
-        previousHeading.alignment = .centerY
-        let label = fieldLabel("PREVIOUS PASSWORDS · SECURE")
-        let add = RimePointingHandButton(
-            title: "＋ 添加",
-            target: self,
-            action: #selector(addPreviousPassword)
-        )
-        add.bezelStyle = .inline
-        add.font = MailboxTerminalTypography.font(ofSize: 9)
-        previousHeading.addArrangedSubview(label)
-        previousHeading.addArrangedSubview(NSView())
-        previousHeading.addArrangedSubview(add)
-        addFormRow(previousHeading)
-
-        for (index, value) in draft.previousPasswords.enumerated() {
-            let field = makePasswordEditorField(
-                value: value,
-                label: "曾用密码 \(index + 1)",
-                policyField: .previousPassword
+        guard passwordRevealState.isPlaintextVisible else {
+            passwordSecretTextView = nil
+            firstDetailFormRow = addField(
+                label: "SECRET · SECURE",
+                field: makeConcealedSecretPlaceholder()
             )
-            previousPasswordFields.append(field)
-            let remove = RimePointingHandButton(
-                title: "−",
-                target: self,
-                action: #selector(removePreviousPassword(_:))
-            )
-            remove.tag = index
-            remove.bezelStyle = .inline
-            remove.setAccessibilityLabel("删除曾用密码 \(index + 1)")
-            let row = NSStackView(views: [field, remove])
-            row.orientation = .horizontal
-            row.alignment = .centerY
-            row.spacing = 8
-            addFormRow(row)
+            return
         }
+        let textView = makeContentTextView(text: draft.content)
+        passwordSecretTextView = textView
+        firstDetailFormRow = addTextArea(
+            label: "SECRET · MARKDOWN · SECURE",
+            textView: textView
+        )
+    }
+
+    /// Stands in for the body while it is concealed. It shows that a secret
+    /// exists without hinting at its length or shape.
+    private func makeConcealedSecretPlaceholder() -> NSView {
+        let label = NSTextField(labelWithString: "已加密 · 输入口令后查看与编辑")
+        label.font = MailboxTerminalTypography.font(ofSize: 11)
+        label.textColor = RimeUI.textMuted
+        label.setAccessibilityLabel("敏感信息已加密，需要口令才能查看")
+        let box = NSView()
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 6
+        box.layer?.borderWidth = 1
+        box.layer?.borderColor = RimeUI.border.cgColor
+        box.layer?.backgroundColor = RimeUI.surface2.cgColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(label)
+        NSLayoutConstraint.activate([
+            // Stays within the compact first-row height the other fixed-form
+            // kinds use, so a locked entry keeps the pane's usual shape.
+            box.heightAnchor.constraint(equalToConstant: 32),
+            label.leadingAnchor.constraint(equalTo: box.leadingAnchor,
+                                           constant: 10),
+            label.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+        ])
+        return box
     }
 
     @discardableResult
@@ -2966,20 +2871,18 @@ final class CapsulePaneViewController: NSViewController,
     private func captureDraftFromFields() {
         draft.title = titleField?.stringValue ?? draft.title
         switch draft.kind {
-        case .prompt, .memory, .note:
+        case .note:
             draft.content = contentTextView?.string ?? draft.content
-        case .url:
-            draft.content = urlContentField?.stringValue ?? draft.content
         case .skill:
             draft.content = skillPathField?.stringValue ?? draft.content
         case .image, .pdf:
             draft.content = assetPathField?.stringValue ?? draft.content
         case .password:
-            draft.url = passwordURLField?.stringValue ?? draft.url
-            draft.app = passwordAppField?.stringValue ?? draft.app
-            draft.username = passwordUsernameField?.stringValue ?? draft.username
-            draft.password = passwordField?.stringValue ?? draft.password
-            draft.previousPasswords = previousPasswordFields.map(\.stringValue)
+            // Only read back a body the user could actually see; a concealed
+            // editor has no text view and must not blank the stored secret.
+            if let passwordSecretTextView {
+                draft.content = passwordSecretTextView.string
+            }
         }
     }
 
@@ -3076,9 +2979,6 @@ final class CapsulePaneViewController: NSViewController,
     @objc private func saveCurrent() {
         concealPasswordPlaintext()
         captureDraftFromFields()
-        if draft.kind == .password {
-            draft.previousPasswords.removeAll(where: \.isEmpty)
-        }
         do {
             let saved = try repository.save(draft)
             draft.id = saved.id
@@ -3220,7 +3120,7 @@ final class CapsulePaneViewController: NSViewController,
                             self.setStatus("已复制 PDF 文件")
                         case .skill:
                             self.setStatus("已复制 Skill 文件或文件夹")
-                        case .prompt, .memory, .password, .note, .url:
+                        case .password, .note:
                             break
                         }
                     } catch {
@@ -3231,27 +3131,6 @@ final class CapsulePaneViewController: NSViewController,
                 }
             }
         }
-    }
-
-    @objc private func addPreviousPassword() {
-        captureDraftFromFields()
-        draft.previousPasswords.append("")
-        editorDirty = true
-        renderEditor(scrollToTop: false)
-        if let field = previousPasswordFields.last {
-            editorScrollView.layoutSubtreeIfNeeded()
-            formStack.layoutSubtreeIfNeeded()
-            view.window?.makeFirstResponder(field)
-            field.scrollToVisible(field.bounds)
-        }
-    }
-
-    @objc private func removePreviousPassword(_ sender: NSButton) {
-        captureDraftFromFields()
-        guard draft.previousPasswords.indices.contains(sender.tag) else { return }
-        draft.previousPasswords.remove(at: sender.tag)
-        editorDirty = true
-        renderEditor(scrollToTop: false)
     }
 
     @objc private func togglePasswordPlaintext() {
