@@ -408,11 +408,12 @@ enum BufferWindowGeometry {
             )
         }
 
-        // Left edge at the insertion point, so the workbench starts exactly
-        // where the next character would appear. Centring on the caret reads
-        // as a left-edge alignment only while the field is empty, and drifts
-        // off as soon as the user types.
-        var x = alignedBox?.minX ?? targetRect.minX
+        // The caret marks where the host's next character appears, so the
+        // workbench's own first character has to land there — not its window
+        // edge, which sits one content inset further left. A box anchor is a
+        // frame rather than a text position, so those two edges stay flush.
+        var x = alignedBox?.minX
+            ?? (targetRect.minX - BufferWorkbenchMetrics.contentLeadingInset)
         x = min(max(x, safeTarget.minX), max(safeTarget.minX, safeTarget.maxX - width))
 
         // A short field anchors the workbench to the box, so its top edge sits
@@ -848,6 +849,16 @@ enum BufferWorkbenchMetrics {
     static let actionOverlayFadeWidth: CGFloat = 18
     static let shelfSpacing: CGFloat = 4
     static let mainHorizontalInset: CGFloat = 5
+    /// Transparent margin between the panel edge and the drawn chrome, kept
+    /// for the shadow and the rounded border.
+    static let chromeInset: CGFloat = 2
+    /// Panel edge to the first rendered character: chrome margin, main-bar
+    /// inset, and the rail's own inset. Derived rather than written as a
+    /// number so a later layout change cannot leave the caret alignment
+    /// silently stale.
+    static var contentLeadingInset: CGFloat {
+        chromeInset + mainHorizontalInset + BufferInlineMetrics.railHorizontalInset
+    }
     static let shelfHorizontalInset: CGFloat = 6
     static let shelfStatusWidth: CGFloat = 88
     static let translationVerticalInset: CGFloat = 5
@@ -3691,10 +3702,22 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         visual.translatesAutoresizingMaskIntoConstraints = false
         outerContainer.addSubview(visual)
         NSLayoutConstraint.activate([
-            visual.leadingAnchor.constraint(equalTo: outerContainer.leadingAnchor, constant: 2),
-            visual.trailingAnchor.constraint(equalTo: outerContainer.trailingAnchor, constant: -2),
-            visual.topAnchor.constraint(equalTo: outerContainer.topAnchor, constant: 2),
-            visual.bottomAnchor.constraint(equalTo: outerContainer.bottomAnchor, constant: -2),
+            visual.leadingAnchor.constraint(
+                equalTo: outerContainer.leadingAnchor,
+                constant: BufferWorkbenchMetrics.chromeInset
+            ),
+            visual.trailingAnchor.constraint(
+                equalTo: outerContainer.trailingAnchor,
+                constant: -BufferWorkbenchMetrics.chromeInset
+            ),
+            visual.topAnchor.constraint(
+                equalTo: outerContainer.topAnchor,
+                constant: BufferWorkbenchMetrics.chromeInset
+            ),
+            visual.bottomAnchor.constraint(
+                equalTo: outerContainer.bottomAnchor,
+                constant: -BufferWorkbenchMetrics.chromeInset
+            ),
         ])
         panel.contentView = outerContainer
 
