@@ -1143,11 +1143,13 @@ final class RimeBufferController: IMKInputController {
     /// recovery uses the same base to preserve all pre-existing raw input.
     private var pendingFlyChordBase: (context: RimeContextModel,
                                       policy: FlyChordSettlementPolicy,
+                                      profile: ChordKeymapProfile,
                                       owner: FocusToken,
                                       clientIdentity: ObjectIdentifier)?
     private var mutualPairingState = FlyChordMutualPairingState()
     private var chordDurationObserver: NSObjectProtocol?
     private var chordExtensionObserver: NSObjectProtocol?
+    private var chordKeymapObserver: NSObjectProtocol?
     private var userDictionaryMaintenanceObserver: NSObjectProtocol?
     private var userDictionaryMaintenanceEndObserver: NSObjectProtocol?
 
@@ -1158,7 +1160,7 @@ final class RimeBufferController: IMKInputController {
                                             ChordExtensionStore.shared.isEnabled)
     }
     private var flyChordSettlementPolicy: FlyChordSettlementPolicy {
-        ChordExtensionStore.shared.mode.settlementPolicy
+        ChordExtensionStore.shared.settlementPolicy
     }
 
     private func shouldUseBufferCommands(client: IMKTextInput?) -> Bool {
@@ -1665,6 +1667,13 @@ final class RimeBufferController: IMKInputController {
         ) { [weak self] notification in
             self?.chordExtensionDidChange(notification)
         }
+        chordKeymapObserver = NotificationCenter.default.addObserver(
+            forName: .chordKeymapDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.chord.invalidate()
+            self?.pendingFlyChordBase = nil
+            self?.mutualPairingState.reset()
+        }
         userDictionaryMaintenanceObserver = NotificationCenter.default.addObserver(
             forName: .rimeUserDictionaryMaintenanceWillBegin,
             object: rimeEngine,
@@ -1693,6 +1702,9 @@ final class RimeBufferController: IMKInputController {
         }
         if let chordExtensionObserver {
             NotificationCenter.default.removeObserver(chordExtensionObserver)
+        }
+        if let chordKeymapObserver {
+            NotificationCenter.default.removeObserver(chordKeymapObserver)
         }
         if let userDictionaryMaintenanceObserver {
             NotificationCenter.default.removeObserver(userDictionaryMaintenanceObserver)
@@ -1926,6 +1938,7 @@ final class RimeBufferController: IMKInputController {
     /// duration and schema gating before its first processKey.
     @discardableResult
     private func ensureSessionReady(applyPreference: Bool = false) -> Bool {
+        guard !ChordKeymapActivationCoordinator.shared.isApplying else { return false }
         guard rimeEngine.isHealthy else {
             clearTransientCompositionAfterSessionFailure()
             return false
@@ -5606,7 +5619,7 @@ final class RimeBufferController: IMKInputController {
         ) != 0
         let isChordKey = isPress
             && !hasCommandModifier
-            && RimeKey.isChordingKey(keycode)
+            && ChordKeymapStore.shared.activeProfile.half(for: keycode) != nil
             && chordGated
         // Prototype semantics: a PRESS of a non-chord key resolves the pending
         // chord before processing; release events never pre-flush.
@@ -5626,6 +5639,7 @@ final class RimeBufferController: IMKInputController {
                 pendingFlyChordBase = (
                     context: rimeEngine.getContext(session: session),
                     policy: policy,
+                    profile: ChordKeymapStore.shared.activeProfile,
                     owner: focusToken,
                     clientIdentity: ObjectIdentifier(client as AnyObject)
                 )
@@ -5637,7 +5651,8 @@ final class RimeBufferController: IMKInputController {
                 keycode,
                 mask: mask,
                 client: client,
-                policy: batchPolicy
+                policy: batchPolicy,
+                layout: pendingFlyChordBase?.profile
             )
             switch decision {
             case .consume:
@@ -5647,7 +5662,7 @@ final class RimeBufferController: IMKInputController {
                 return true
             case let .process(keys):
                 // Presses are deliberately staged until the batch boundary.
-                // Every shape settles; only 互击 may later recombine a left-only
+                // Every shape settles; unified 并击 may later recombine a left-only
                 // batch with the following right-only batch.
                 for key in keys {
                     chord.noteHandledChordKey(key.keycode, mask: key.mask)
@@ -5937,6 +5952,7 @@ final class RimeBufferController: IMKInputController {
         // timer from a displaced field must not first mutate Rime and only
         // discover the stale destination when it is ready to drain a commit.
         guard let base,
+              base.profile == ChordKeymapStore.shared.activeProfile,
               focusToken == base.owner,
               client.map({ ObjectIdentifier($0 as AnyObject) == base.clientIdentity }) != false else {
             mutualPairingState.reset()
@@ -5963,7 +5979,8 @@ final class RimeBufferController: IMKInputController {
             // the old private Rime session.
             initialTarget = nil
         }
-        guard let shape = FlyChordBatchShape(keys: keys) else {
+        let profile = base.profile
+        guard let shape = FlyChordBatchShape(keys: keys, layout: profile) else {
             IMELog.write("FlyYao batch rejected unknown keyboard-half shape")
             return
         }
@@ -5973,11 +5990,11 @@ final class RimeBufferController: IMKInputController {
         var engineKeys = keys
         var engineBaseInput = contextBefore.input
         var replayedLeft: FlyChordMutualPairingState.SettledLeft?
-        var boundaryPlan = FlyChordBoundaryRules.plan(for: contextBefore)
+        var boundaryPlan = ChordKeymapBoundaryRules.plan(for: contextBefore, profile: profile)
 
         func replaySettledLeft(_ left: FlyChordMutualPairingState.SettledLeft) -> Bool {
-            let insertsBoundary = FlyChordBoundaryRules.shouldInsert(
-                forKeyCount: left.keys.count
+            let insertsBoundary = ChordKeymapBoundaryRules.shouldInsert(
+                keys: left.keys.map(\.keycode), profile: profile
             )
             if insertsBoundary,
                left.boundaryPlan.before,
@@ -6017,6 +6034,8 @@ final class RimeBufferController: IMKInputController {
             currentKeyCount: keys.count,
             policy: policy,
             currentContext: contextBefore
+        ), ChordKeymapBoundaryRules.mayCombine(
+            keys: previousLeft.keys.map(\.keycode) + keys.map(\.keycode), profile: profile
         ) {
             var rollbackHandled = true
             for _ in 0..<previousLeft.insertedScalarCount {
@@ -6059,8 +6078,8 @@ final class RimeBufferController: IMKInputController {
             }
         }
 
-        let insertsBoundary = FlyChordBoundaryRules.shouldInsert(
-            forKeyCount: engineKeys.count
+        let insertsBoundary = ChordKeymapBoundaryRules.shouldInsert(
+            keys: engineKeys.map(\.keycode), profile: profile
         )
         let leadingBoundaryAccepted = !insertsBoundary
             || !boundaryPlan.before
@@ -6100,7 +6119,9 @@ final class RimeBufferController: IMKInputController {
                 baseInput: contextBefore.input,
                 settledContext: settledContext,
                 boundaryPlan: boundaryPlan,
-                policy: policy,
+                policy: ChordKeymapBoundaryRules.mayAwaitComplement(
+                    keys: engineKeys.map(\.keycode), profile: profile
+                ) ? policy : .sameBatchOnly,
                 shape: shape
             )
         } else {
@@ -6762,20 +6783,25 @@ final class RimeBufferController: IMKInputController {
 
         // A schema switch made INSIDE Rime (F4 switcher) must feel as global
         // as a menu switch: persist it so other controllers adopt it on focus.
-        if !currentSchemaId.isEmpty, status.schemaId != currentSchemaId, !status.schemaId.isEmpty {
+        let staleChordSchema = ChordExtensionStore.isChordSchema(status.schemaId)
+            && (status.schemaId != ChordExtensionStore.schemaID || !ChordExtensionStore.shared.isEnabled)
+        if staleChordSchema || (!currentSchemaId.isEmpty && status.schemaId != currentSchemaId && !status.schemaId.isEmpty) {
             let adopted = InputConfigurationStore.shared.adoptRuntimeSchema(
                 status.schemaId
             )
             if !adopted,
-               status.schemaId == ChordExtensionStore.schemaID,
-               !ChordExtensionStore.shared.isEnabled {
+               ChordExtensionStore.isChordSchema(status.schemaId) {
                 let fallback = InputConfigurationStore.shared.runtimeProfile.schemaID
                 rimeEngine.clearComposition(session: session)
                 composition.markCleared()
                 pendingFlyChordBase = nil
                 mutualPairingState.reset()
-                if fallback != status.schemaId {
-                    _ = rimeEngine.selectSchema(fallback, session: session)
+                chord.invalidate()
+                guard fallback != status.schemaId,
+                      rimeEngine.selectSchema(fallback, session: session),
+                      rimeEngine.getStatus(session: session).schemaId == fallback else {
+                    candidateWindow.hideAll()
+                    return
                 }
                 refreshSchema()
                 IMELog.write(

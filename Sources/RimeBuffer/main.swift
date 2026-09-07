@@ -2,6 +2,7 @@ import Cocoa
 import InputMethodKit
 import Carbon
 import Darwin
+import CRimeBridge
 
 // OpenSSH invokes this same executable as a narrowly scoped SSH_ASKPASS
 // helper. Handle that request before any smoke, installer, AppKit, or IMK
@@ -411,7 +412,8 @@ if StandaloneRimeCommandRules.requiresIsolatedUserDir(
         exit(1)
     }
     if (CommandLine.arguments.contains("smoke")
-        || CommandLine.arguments.contains("user-lexicon-bridge-smoke")),
+        || CommandLine.arguments.contains("user-lexicon-bridge-smoke")
+        || CommandLine.arguments.contains("chord-keymap-engine-smoke")),
        !configureEngineSmokeRuntime(isolatedUserDir: isolatedUserDir) {
         exit(1)
     }
@@ -660,6 +662,28 @@ if CommandLine.arguments.contains("typing-speed-smoke") {
 if CommandLine.arguments.contains("fly-chord-learning-smoke") {
     exit(runFlyChordLearningSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("chord-keymap-smoke") {
+    exit(runChordKeymapSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("chord-keymap-engine-smoke") {
+    exit(runChordKeymapEngineSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("chord-keymap-activation-smoke") {
+    exit(runChordKeymapActivationSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("chord-unification-smoke") {
+    exit(runChordUnificationSmokeTest() ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "chord-settings-smoke") {
+    let output = CommandLine.arguments.indices.contains(index + 1)
+        ? URL(fileURLWithPath: CommandLine.arguments[index + 1]) : nil
+    exit(runChordSettingsSmokeTest(outputURL: output) ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "chord-keymap-ui-smoke") {
+    let output = CommandLine.arguments.indices.contains(index + 1)
+        ? URL(fileURLWithPath: CommandLine.arguments[index + 1]) : nil
+    exit(runChordKeymapEditorSmokeTest(outputURL: output) ? 0 : 1)
+}
 if CommandLine.arguments.contains("input-telemetry-smoke") {
     exit(runInputTelemetrySmokeTest() ? 0 : 1)
 }
@@ -714,6 +738,12 @@ if CommandLine.arguments.contains("--repair-pending-install") {
 if CommandLine.arguments.contains("--prepare-update") {
     exit(selectFallbackInputSourceForUpdate() ? 0 : 1)
 }
+// A misspelled smoke command must not fall through into a second IMK server.
+if CommandLine.arguments.dropFirst().contains(where: { $0.hasSuffix("-smoke") }) {
+    FileHandle.standardError.write(Data("unknown smoke command\n".utf8))
+    exit(2)
+}
+
 // A standalone SettingsWindowController spins up its OWN RimeEngine. If that
 // engine opened the live ~/Library/RimeBuffer userdb while the installed IME is
 // running, the two librime instances would fight over the LevelDB lock and break
@@ -931,6 +961,24 @@ let startupRimeUserDir = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DI
 let startupSchemaListURL = startupRimeUserDir.appendingPathComponent(
     "default.custom.yaml"
 )
+// Recreate only the active custom schema from the durable snapshot. Updating
+// the app or reseeding Rime data must never overwrite the user's keymap source.
+let startupChordProfile = ChordKeymapStore.shared.activeProfile
+if let error = ChordKeymapStore.shared.loadError {
+    ChordKeymapActivationCoordinator.shared.suspendChordAfterFailure(
+        "已应用键位方案无法读取，已暂停并击；文件未被覆盖。\(error.localizedDescription)"
+    )
+}
+do {
+    try ChordKeymapRuntimeFiles(root: startupRimeUserDir).writeSchema(
+        for: startupChordProfile
+    )
+} catch {
+    IMELog.write("startup: custom chord schema preparation failed \(error.localizedDescription)")
+    ChordKeymapActivationCoordinator.shared.suspendChordAfterFailure(
+        "无法恢复已应用的键位方案，已暂停并击并退回普通输入。请重新启用扩展重试。"
+    )
+}
 let desiredStartupSchemaIDs = InputSchemaCatalog.enabledIDs(
     chordExtensionEnabled: ChordExtensionStore.shared.isEnabled
 )
@@ -977,6 +1025,20 @@ _ = globalHotKeyController.setRuntimeEnabledForInputSource(
 )
 // Warm the engine so the first keystroke isn't slow / so failures surface early.
 _ = rimeEngine.start()
+if ChordExtensionStore.shared.isEnabled,
+   !ChordKeymapStore.shared.activeProfile.isBuiltIn {
+    if ChordKeymapActivationCoordinator.verify(ChordKeymapStore.shared.activeProfile, engine: rimeEngine) {
+        ChordKeymapActivationCoordinator.shared.clearRecoveryMessage()
+    } else {
+        ChordKeymapActivationCoordinator.shared.suspendChordAfterFailure(
+            "已应用键位与 Rime 部署不一致，已暂停并击并退回普通输入。请重新启用扩展重试。"
+        )
+        try? SchemaListStore.writeEnabledIDs(InputSchemaCatalog.defaultEnabledIDs,
+                                            to: startupSchemaListURL)
+        _ = BBRimeDeploy()
+        rimeEngine.invalidateSchemaListCacheAfterDeployment()
+    }
+}
 
 // Mouse-selection routes to whichever controller currently owns focus — the
 // shared window must never bind to one specific controller.
@@ -1642,7 +1704,9 @@ func runEngineSmokeTest() -> Bool {
     func typeFlyChordStrokes(
         _ strokes: [String],
         clearComposition: Bool = true,
-        policy: FlyChordSettlementPolicy = .independentHalves
+        policy: FlyChordSettlementPolicy = ChordExtensionConfiguration(
+            isEnabled: true, duration: 0.1
+        ).settlementPolicy
     )
         -> (context: RimeContextModel, allPressesHandled: Bool) {
         if clearComposition {
@@ -1740,13 +1804,12 @@ func runEngineSmokeTest() -> Bool {
         return (contexts, texts, pagingWorked)
     }
 
-    // 并击 settles every current timer batch, including a useful one-sided
-    // initial/final. It differs from 互击 only by refusing to recombine two
-    // already-settled batches into one syllable.
+    // Keep the internal no-pair primitive covered, while proving the single
+    // product policy gives split strokes the same result as a combined chord.
     let sameBatchOneSided = typeFlyChordStrokes(["dv"], policy: .sameBatchOnly)
     let sameBatchCombined = typeFlyChordStrokes(["qkm"], policy: .sameBatchOnly)
     let sameBatchSplit = typeFlyChordStrokes(["q", "km"], policy: .sameBatchOnly)
-    let mutualSplit = typeFlyChordStrokes(["q", "km"], policy: .independentHalves)
+    let unifiedSplit = typeFlyChordStrokes(["q", "km"])
     guard sameBatchOneSided.allPressesHandled,
           !sameBatchOneSided.context.input.isEmpty,
           !sameBatchOneSided.context.candidates.isEmpty,
@@ -1754,15 +1817,15 @@ func runEngineSmokeTest() -> Bool {
           sameBatchSplit.allPressesHandled,
           !sameBatchSplit.context.candidates.isEmpty,
           sameBatchSplit.context.input != sameBatchCombined.context.input,
-          mutualSplit.context.input == sameBatchCombined.context.input,
-          mutualSplit.context.candidates.map(\.text)
+          unifiedSplit.context.input == sameBatchCombined.context.input,
+          unifiedSplit.context.candidates.map(\.text)
             == sameBatchCombined.context.candidates.map(\.text) else {
-        print("FAILED: FlyYao same-batch/mutual settlement distinction",
+        print("FAILED: unified chord split equivalence or internal no-pair guard",
               sameBatchOneSided.context.input,
               sameBatchOneSided.context.candidates.map(\.text),
               sameBatchCombined.context.input,
               sameBatchSplit.context.input,
-              mutualSplit.context.input)
+              unifiedSplit.context.input)
         return false
     }
 
@@ -2156,9 +2219,9 @@ func runSchemaListStoreSmokeTest() -> Bool {
     guard chordSelection == .init(encoding: .fullPinyin, keyingMode: .chord),
           naturalSelection == .init(encoding: .naturalDoublePinyin,
                                     keyingMode: .sequential),
-          mutualSelection == .init(encoding: .fullPinyin, keyingMode: .mutual),
+          mutualSelection == .init(encoding: .fullPinyin, keyingMode: .chord),
           InputConfigurationResolver.profile(schemaID: "my_combo")?.configuration
-            == .init(encoding: .fullPinyin, keyingMode: .mutual) else {
+            == .init(encoding: .fullPinyin, keyingMode: .chord) else {
         print("FAILED: input configuration reducer")
         return false
     }
@@ -2502,7 +2565,7 @@ func runSchemaListStoreSmokeTest() -> Bool {
     // residue, not interpret it as a new request to enable the extension.
     defaults.removePersistentDomain(forName: defaultsName)
     defaults.set(false, forKey: "chord.extension.enabled.v1")
-    defaults.set(ChordExtensionMode.mutual.rawValue,
+    defaults.set("mutual",
                  forKey: "chord.extension.mode.v1")
     defaults.set("my_combo", forKey: "input.configuration.schemaID.v2")
     defaults.set("my_combo", forKey: "preferredSchema")
@@ -2525,7 +2588,7 @@ func runSchemaListStoreSmokeTest() -> Bool {
 
     defaults.removePersistentDomain(forName: defaultsName)
     defaults.set(false, forKey: "chord.extension.enabled.v1")
-    defaults.set(ChordExtensionMode.mutual.rawValue,
+    defaults.set("mutual",
                  forKey: "chord.extension.mode.v1")
     defaults.set(InputEncoding.fullPinyin.rawValue,
                  forKey: "input.configuration.encoding.v1")
@@ -2590,8 +2653,8 @@ func runSchemaListStoreSmokeTest() -> Bool {
         }
     }
 
-    // A v1 FlyYao selection was necessarily labelled chord. It migrates once
-    // to mutual; an explicit same-batch chord choice made under v2 is retained.
+    // Every legacy FlyYao mode now migrates to unified 并击. A previous strict
+    // v2 setting must not resurrect the removed same-batch-only product mode.
     defaults.removePersistentDomain(forName: defaultsName)
     defaults.set(InputEncoding.fullPinyin.rawValue,
                  forKey: "input.configuration.encoding.v1")
@@ -2606,11 +2669,11 @@ func runSchemaListStoreSmokeTest() -> Bool {
         chordExtensionStore: migratedFlyYaoChordStore
     )
     guard migratedFlyYaoStore.configuration
-            == .init(encoding: .fullPinyin, keyingMode: .mutual),
+            == .init(encoding: .fullPinyin, keyingMode: .chord),
           migratedFlyYaoStore.selectedSchemaID == "my_combo",
           migratedFlyYaoChordStore.isEnabled,
-          migratedFlyYaoChordStore.mode == .mutual else {
-        print("FAILED: legacy FlyYao chord-to-mutual migration")
+          migratedFlyYaoChordStore.settlementPolicy == .independentHalves else {
+        print("FAILED: legacy FlyYao unified chord migration")
         return false
     }
 
@@ -2638,7 +2701,7 @@ func runSchemaListStoreSmokeTest() -> Bool {
     )
     weakExplicitStore = explicitChordStore
     guard safeExplicitChordExtension.isEnabled,
-          safeExplicitChordExtension.mode == .chord,
+          safeExplicitChordExtension.settlementPolicy == .independentHalves,
           explicitChordStore.configuration
             == .init(encoding: .fullPinyin, keyingMode: .chord),
           explicitChordStore.adoptRuntimeSchema("my_combo"),

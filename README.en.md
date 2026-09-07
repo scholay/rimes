@@ -2,7 +2,7 @@
 
 **[中文](README.md)** · **[English](README.en.md)**
 
-A modern macOS input method built from scratch: **librime** engine + custom candidate UI + a persistent **buffer workbench**. Its core schemes are Rime Ice full Pinyin, Natural Code double Pinyin, Xiaohe double Pinyin, Wubi 86, and English; Feiyao chord/mutual typing is supplied by the disabled-by-default Chording extension. **Self-contained** — librime and Rime data are bundled; no separate Squirrel install required.
+A modern macOS input method built from scratch: **librime** engine + custom candidate UI + a persistent **buffer workbench**. Its core schemes are Rime Ice full Pinyin, Natural Code double Pinyin, Xiaohe double Pinyin, Wubi 86, and English; the disabled-by-default Chording extension supplies the Feiyao preset and custom keymaps, with one behavior supporting both combined and left-then-right split strokes. **Self-contained** — librime and Rime data are bundled; no separate Squirrel install required.
 
 > Internal codename remains **RimeBuffer** (SPM target, `Sources/RimeBuffer/`). `ETInput.app` is kept as a compatibility path for existing installs and in-app updates. The public product name is **RIMES** (rime-scholay).
 
@@ -62,7 +62,7 @@ Every plug-in in the table is bundled with RIMES and enabled on a clean first ru
 | Typing Speed | `builtin.typing-speed` | 1.0 | Enabled |
 | Chording | `builtin.fly-chord-learning` | 2.0 | Disabled |
 
-Chording 2.0 preserves the legacy ID and learning progress while taking ownership of Feiyao chord/mutual input, the chord window, lessons, practice, and progress. When disabled, ordinary input cannot enter the Feiyao schema and Stream Input returns to sequential full Pinyin.
+Chording preserves the legacy ID and learning progress, with a single behavior supporting combined and left-then-right split strokes instead of separate modes. It manages editable keymaps, the chord window, lessons, practice, and progress; Feiyao is a built-in preset that can be copied and customized. When disabled, ordinary input returns to an ordinary scheme and Stream Input returns to sequential full Pinyin. See the [keymap and migration guide](CHORD-KEYMAPS.md).
 
 ## Install
 
@@ -126,7 +126,7 @@ included in a public release.
 
 The public data preview does not include the macOS buffer workbench, AI/translation/OCR, native
 settings, the experimental Windows TSF described above, or a Linux Fcitx5/IBus frontend.
-Cross-batch mutual typing is a current macOS frontend feature and cannot be supplied by a data
+Cross-batch split-stroke pairing is a current macOS frontend feature and cannot be supplied by a data
 package alone. Use the
 **Pre-release** assets named `RIMES-Windows-Data-Preview-*` or
 `RIMES-Linux-Data-Preview-*`; see [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)

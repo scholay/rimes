@@ -1570,6 +1570,17 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         showCurrentRoute()
     }
 
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        confirmLeavingChordEditor()
+    }
+
+    private func confirmLeavingChordEditor() -> Bool {
+        guard !ChordKeymapActivationCoordinator.shared.isApplying,
+              !chordExtensionDeploymentInProgress else { return false }
+        return (activePluginSettingsController as? FlyChordLearningSettingsViewController)?
+            .confirmCanLeave() ?? true
+    }
+
     func windowWillClose(_ notification: Notification) {
         guard let closingWindow = notification.object as? NSWindow,
               closingWindow === window else { return }
@@ -2170,7 +2181,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             case BuiltInPluginID.statistics:
                 return "查看按键分布、每日计数与全部历史。"
             case BuiltInPluginID.flyChordLearning:
-                return "配置飞耀并击或互击输入，并进行课程与专项练习。"
+                return "创建、导入和可视化配置并击键位方案，并进行课程与专项练习。"
             default:
                 return PluginRegistry.shared.internalPlugin(pluginKey: pluginKey)?
                     .descriptor.summary ?? "管理这个扩展的本地设置与状态。"
@@ -2252,11 +2263,15 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             ])
         default:
             let chordStatus = chordSchemaStatusView()
+            let recovery = caption(ChordKeymapActivationCoordinator.shared.recoveryMessage ?? "")
+            recovery.textColor = .systemRed
+            recovery.isHidden = ChordKeymapActivationCoordinator.shared.recoveryMessage == nil
             return contentColumn([
                 title("输入方案"),
                 caption("单独轻点 Shift 切换中英；Shift 与字母/标点组合或持续按住 500 ms 后，会保持按下前的输入模式。"),
                 spacer(8),
                 chordStatus,
+                recovery,
                 inputEncodingSelectionView(),
             ])
         }
@@ -2662,14 +2677,14 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     private func chordSchemaStatusView() -> NSView {
-        let mode = ChordExtensionStore.shared.mode.implementationName
+        let implementation = ChordExtensionStore.shared.implementationName
         let badge = NSTextField(labelWithString: "并击")
         badge.font = .systemFont(ofSize: 10, weight: .semibold)
         badge.textColor = themeStatusColor
         badge.setContentHuggingPriority(.required, for: .horizontal)
         let row = settingsRow(
             title: "当前使用并击扩展",
-            detail: "正在使用\(mode)；选择下方任一方案即可切回普通输入。",
+            detail: "正在使用\(implementation)；选择下方任一方案即可切回普通输入。",
             symbolName: "hands.sparkles",
             control: badge
         )
@@ -4417,6 +4432,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             refreshSidebarSelection()
             return
         }
+        guard confirmLeavingChordEditor() else { return }
         guard navigation.selectRoute(sender.routeID, catalog: routeCatalog) else { return }
         if let route = routeCatalog.route(for: sender.routeID) {
             settingsStatusLabel.stringValue = "已打开\(route.title)"
@@ -4431,6 +4447,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
               route.subpages.indices.contains(sender.selectedSegment) else { return }
         let subpage = route.subpages[sender.selectedSegment].id
         if subpage == navigation.selectedSubpage() { return }
+        guard confirmLeavingChordEditor() else {
+            if let old = route.subpages.firstIndex(where: { $0.id == navigation.selectedSubpage() }) {
+                sender.selectedSegment = old
+            }
+            return
+        }
         guard navigation.selectSubpage(subpage, catalog: routeCatalog) else { return }
         settingsStatusLabel.stringValue = "已打开\(route.subpages[sender.selectedSegment].title)"
         settingsStatusLabel.textColor = RimeUI.textMuted
@@ -4681,7 +4703,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         pluginName: String
     ) {
         let store = ChordExtensionStore.shared
-        guard !chordExtensionDeploymentInProgress else {
+        guard !chordExtensionDeploymentInProgress,
+              !ChordKeymapActivationCoordinator.shared.isApplying else {
             sender.state = store.isEnabled ? .on : .off
             return
         }
@@ -4702,6 +4725,11 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
         RimeBufferController.active?.forceCommit()
         do {
+            if enabled {
+                try ChordKeymapRuntimeFiles(root: userDir).writeSchema(
+                    for: ChordKeymapStore.shared.activeProfile
+                )
+            }
             try PluginRegistry.shared.setEnabled(enabled, for: sender.pluginKey)
             let nextIDs = InputSchemaCatalog.enabledIDs(
                 chordExtensionEnabled: store.isEnabled
@@ -4722,6 +4750,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         }
 
         chordExtensionDeploymentInProgress = true
+        ChordKeymapActivationCoordinator.shared.extensionDeploymentInProgress = true
         sender.isEnabled = false
         setPluginStatus(
             enabled
@@ -4742,6 +4771,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             DispatchQueue.main.async { [weak self, weak sender] in
                 guard let self else { return }
                 self.chordExtensionDeploymentInProgress = false
+                ChordKeymapActivationCoordinator.shared.extensionDeploymentInProgress = false
                 if deployed {
                     self.setPluginStatus(
                         enabled

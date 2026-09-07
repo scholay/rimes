@@ -536,6 +536,11 @@ jobs:
             history-heatmap-smoke
             typing-speed-smoke
             fly-chord-learning-smoke
+            chord-keymap-smoke
+            chord-keymap-ui-smoke
+            chord-keymap-activation-smoke
+            chord-unification-smoke
+            chord-settings-smoke
             input-telemetry-smoke
             user-lexicon-smoke
           )

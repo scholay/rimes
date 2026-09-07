@@ -60,6 +60,7 @@ reset_rime_user_dir_preserving_product_state() {
         ! -name ai \
         ! -name stats \
         ! -name learning \
+        ! -name chord-keymaps \
         ! -name my-prompt \
         ! -name mailbox \
         ! -name capsule \
@@ -121,6 +122,7 @@ import_rime_user_dir_preserving_product_state() {
         --exclude ai
         --exclude stats
         --exclude learning
+        --exclude chord-keymaps
         --exclude my-prompt
         --exclude mailbox
         --exclude capsule

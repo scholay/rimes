@@ -90,12 +90,14 @@ struct StreamInputChordRoute: Equatable {
 }
 
 enum StreamInputChordRoutingRules {
-    static func route(for configuration: ChordExtensionConfiguration)
+    static func route(for configuration: ChordExtensionConfiguration,
+                      profile: ChordKeymapProfile? = nil)
         -> StreamInputChordRoute? {
-        guard configuration.isEnabled else { return nil }
+        guard configuration.isEnabled,
+              !ChordKeymapActivationCoordinator.shared.isApplying else { return nil }
         return StreamInputChordRoute(
-            schemaID: ChordExtensionStore.schemaID,
-            policy: configuration.mode.settlementPolicy
+            schemaID: (profile ?? ChordKeymapStore.shared.activeProfile).schemaID,
+            policy: configuration.settlementPolicy
         )
     }
 
@@ -111,9 +113,8 @@ enum StreamInputChordRoutingRules {
         -> StreamInputChordRoute? {
         let policy: FlyChordSettlementPolicy
         switch configuration.keyingMode {
-        case .chord:
-            policy = .sameBatchOnly
-        case .mutual:
+        case .chord, .mutual:
+            // Both persisted spellings now name the one public chord mode.
             policy = .independentHalves
         case .sequential:
             return nil
@@ -129,9 +130,16 @@ enum StreamInputChordRoutingRules {
         route(for: configuration)?.schemaID
     }
 
-    static func isChordKey(_ keycode: Int32, schemaID: String) -> Bool {
-        schemaID == FlyChordLearningIdentity.schemaID
-            && FlyChordLayout.half(for: keycode) != nil
+    static func isChordKey(_ keycode: Int32, schemaID: String,
+                           profile: ChordKeymapProfile? = nil) -> Bool {
+        if let profile {
+            return profile.schemaID == schemaID && profile.half(for: keycode) != nil
+        }
+        if schemaID == FlyChordLearningIdentity.schemaID {
+            return FlyChordLayout.half(for: keycode) != nil
+        }
+        let profile = ChordKeymapStore.shared.activeProfile
+        return profile.schemaID == schemaID && profile.half(for: keycode) != nil
     }
 }
 
@@ -143,6 +151,7 @@ struct StreamInputMutualPairingState {
     struct SettledLeft: Equatable {
         let keys: [FlyChordKeyEvent]
         let schemaID: String
+        let layout: ChordKeymapProfile?
         let focusToken: FocusToken
         let baseRawInput: String
         let baseAutomaticSyllableSpaceOffsets: Set<Int>
@@ -160,7 +169,8 @@ struct StreamInputMutualPairingState {
         baseRawInput: String,
         baseAutomaticSyllableSpaceOffsets: Set<Int>,
         settledRawInput: String,
-        settledAutomaticSyllableSpaceOffsets: Set<Int>
+        settledAutomaticSyllableSpaceOffsets: Set<Int>,
+        layout: ChordKeymapProfile? = nil
     ) {
         guard route.policy == .independentHalves,
               shape == .leftOnly else {
@@ -170,6 +180,7 @@ struct StreamInputMutualPairingState {
         settledLeft = SettledLeft(
             keys: keys,
             schemaID: route.schemaID,
+            layout: layout,
             focusToken: focusToken,
             baseRawInput: baseRawInput,
             baseAutomaticSyllableSpaceOffsets:
@@ -187,13 +198,15 @@ struct StreamInputMutualPairingState {
         focusToken: FocusToken,
         rawInput: String,
         automaticSyllableSpaceOffsets: Set<Int>,
-        rawInputAllSelected: Bool
+        rawInputAllSelected: Bool,
+        layout: ChordKeymapProfile? = nil
     ) -> SettledLeft? {
         guard route.policy == .independentHalves,
               shape == .rightOnly,
               let pending = settledLeft,
               pending.keys.count > 1 || currentKeys.count > 1,
               pending.schemaID == route.schemaID,
+              pending.layout == layout,
               pending.focusToken == focusToken,
               !rawInputAllSelected,
               pending.settledRawInput == rawInput,
@@ -211,10 +224,8 @@ struct StreamInputMutualPairingState {
     }
 }
 
-/// A frozen, order-independent view of the effective chord algebra. The
-/// parser already prefers the deployed user build over the bundled fallback,
-/// so stream capture follows `my_combo.custom.yaml` without maintaining a
-/// second hard-coded mapping table.
+/// A frozen, order-independent view of the active canonical keymap. Schema
+/// construction remains a compatibility seam for exact-algebra fixtures.
 struct StreamInputChordMapping {
     struct DecodedBatch: Equatable {
         let text: String
@@ -224,12 +235,16 @@ struct StreamInputChordMapping {
 
     let schemaID: String
     let alphabet: Set<Int32>
+    let layout: ChordKeymapProfile?
 
     private let alphabetOrder: [Int32: Int]
     private let outputByKeySet: [Set<Int32>: String]
+    private let syllableByKeySet: [Set<Int32>: Bool]
 
     init(schema: FlyChordSchema) {
         schemaID = schema.schemaID
+        layout = nil
+        syllableByKeySet = [:]
         let orderedAlphabet = schema.alphabet.unicodeScalars.map {
             Int32($0.value)
         }
@@ -256,11 +271,32 @@ struct StreamInputChordMapping {
         outputByKeySet = outputs
     }
 
+    /// Both the stream and direct-input paths consume this exact profile. The
+    /// explicit kind, rather than the physical half layout, defines a syllable.
+    init(profile: ChordKeymapProfile) {
+        schemaID = profile.schemaID
+        layout = profile
+        let ordered = profile.alphabet.unicodeScalars.map { Int32($0.value) }
+        alphabet = Set(ordered)
+        alphabetOrder = Dictionary(uniqueKeysWithValues: ordered.enumerated().map {
+            ($0.element, $0.offset)
+        })
+        var outputs: [Set<Int32>: String] = [:]
+        var syllables: [Set<Int32>: Bool] = [:]
+        for entry in profile.mappings {
+            let keys = Set(entry.keys.unicodeScalars.map { Int32($0.value) })
+            guard outputs[keys] == nil else { continue }
+            outputs[keys] = entry.output
+            syllables[keys] = entry.kind == .syllable
+        }
+        outputByKeySet = outputs
+        syllableByKeySet = syllables
+    }
+
     static func loadEffective(schemaID: String) -> StreamInputChordMapping? {
-        guard schemaID == FlyChordLearningIdentity.schemaID,
-              let schema = try? FlyChordSchemaParser.loadDefault(),
-              schema.schemaID == schemaID else { return nil }
-        return StreamInputChordMapping(schema: schema)
+        let profile = ChordKeymapStore.shared.activeProfile
+        guard profile.schemaID == schemaID, !profile.mappings.isEmpty else { return nil }
+        return StreamInputChordMapping(profile: profile)
     }
 
     func decode(_ keys: [FlyChordKeyEvent]) -> DecodedBatch? {
@@ -287,14 +323,14 @@ struct StreamInputChordMapping {
         if let output = outputByKeySet[unique] {
             let shape = FlyChordBatchShape(keys: keys.map {
                 (keycode: $0.keycode, mask: $0.mask)
-            })
+            }, layout: layout)
             return DecodedBatch(
                 text: output,
-                // One-sided mappings such as dv→n and km→ong are pinyin
-                // fragments in the effective FlyYao algebra. Only a chord
-                // spanning both keyboard halves is a complete syllable that
-                // can safely receive the requested automatic separator.
-                insertsAutomaticSyllableSpace: shape == .bothHalves,
+                // Canonical profiles explicitly distinguish complete syllables
+                // from fragments. Legacy schema fixtures retain the original
+                // FlyYao both-halves inference.
+                insertsAutomaticSyllableSpace: syllableByKeySet[unique]
+                    ?? (shape == .bothHalves),
                 usedMappedOutput: true
             )
         }
@@ -333,9 +369,9 @@ struct StreamInputChordMapping {
 /// pinyin is deliberately narrower than ordinary buffer interaction: transient
 /// buffer content, internal editors, and shortcut modifiers do not grant this
 /// plugin control of a key. Sequential configurations treat captured physical
-/// ASCII letters as continuous full pinyin. Both FlyYao modes stage the
-/// effective alphabet before raw is mutated, with their policy frozen in the
-/// pending batch.
+/// ASCII letters as continuous full pinyin. The unified chord route stages the
+/// effective alphabet before raw is mutated, with its profile and policy frozen
+/// in the pending batch.
 enum StreamInputCaptureRules {
     enum Disposition: Equatable {
         case passThrough
@@ -370,7 +406,8 @@ enum StreamInputCaptureRules {
                             pluginSelected: Bool,
                             secureInput: Bool,
                             exactExternalFocus: Bool,
-                            chordSchemaID: String? = nil) -> Disposition {
+                            chordSchemaID: String? = nil,
+                            chordProfile: ChordKeymapProfile? = nil) -> Disposition {
         guard bufferEnabled,
               pluginSelected,
               let keycode else { return .passThrough }
@@ -387,7 +424,8 @@ enum StreamInputCaptureRules {
         if let chordSchemaID,
            StreamInputChordRoutingRules.isChordKey(
                keycode,
-               schemaID: chordSchemaID
+               schemaID: chordSchemaID,
+               profile: chordProfile
            ) {
             return .stageChordKey(keycode)
         }
@@ -967,6 +1005,7 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
     private var chordTimer: Timer?
     private var chordBatch = FlyChordBatchState()
     private var chordBatchSchemaID: String?
+    private var chordBatchMapping: StreamInputChordMapping?
     private var chordBatchPolicy: FlyChordSettlementPolicy?
     private var chordBatchFocusToken: FocusToken?
     private var mutualPairingState = StreamInputMutualPairingState()
@@ -1122,6 +1161,10 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
 
     func bufferStateDidChangeForTesting() {
         bufferStateDidChange()
+    }
+
+    func chordExtensionDidChangeForTesting() {
+        inputConfigurationDidChange()
     }
 
     var isSelected: Bool {
@@ -1305,6 +1348,20 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         ) { [weak self] _ in
             self?.inputConfigurationDidChange()
         })
+        observers.append(center.addObserver(
+            forName: .chordKeymapWillChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.chordKeymapDidChange()
+        })
+        observers.append(center.addObserver(
+            forName: .chordKeymapDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.chordKeymapDidChange()
+        })
         let timer = Timer(timeInterval: 0.20, repeats: true) { [weak self] _ in
             self?.privacyTick()
         }
@@ -1377,6 +1434,13 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
                              forceOverlayVisibilityRefresh: true),
               Self.isLowercaseASCIILetter(letter) else { return false }
         prepareInferenceIfNeeded()
+        // An unassigned letter in a custom participating-key subset is still
+        // sequential pinyin. It closes the preceding physical batch before
+        // extending raw, rather than cancelling those already-owned presses.
+        _ = settlePendingChord(focusToken: focusToken,
+                               closesPairingAfterSettlement: true)
+        guard canCaptureKeys(focusToken: focusToken,
+                             forceOverlayVisibilityRefresh: true) else { return false }
         invalidatePendingChord()
         if let boundFocusToken, boundFocusToken != focusToken {
             invalidate(clearRaw: true, nextPhase: .idle)
@@ -1414,15 +1478,12 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
     @discardableResult
     func captureChordKey(_ keycode: Int32,
                          schemaID: String,
-                         policy: FlyChordSettlementPolicy = .sameBatchOnly,
+                         policy: FlyChordSettlementPolicy = .independentHalves,
                          focusToken: FocusToken) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
         guard canCaptureKeys(focusToken: focusToken,
-                             forceOverlayVisibilityRefresh: true),
-              StreamInputChordRoutingRules.isChordKey(
-                  keycode,
-                  schemaID: schemaID
-              ) else { return false }
+                             forceOverlayVisibilityRefresh: true)
+            else { return false }
         if let boundFocusToken, boundFocusToken != focusToken {
             invalidate(clearRaw: true, nextPhase: .idle)
         }
@@ -1439,17 +1500,19 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
             resetForFreshInputAfterPartialDelivery()
             beginPendingChordIntent()
             chordBatchSchemaID = schemaID
+            chordBatchMapping = chordMapping(for: schemaID)
             chordBatchPolicy = policy
             chordBatchFocusToken = focusToken
         }
-        guard let mapping = chordMapping(for: schemaID),
+        guard let mapping = chordBatchMapping,
               mapping.alphabet.contains(keycode) else {
             failPendingChordMapping()
             return true
         }
 
         let event = FlyChordKeyEvent(keycode: keycode, mask: 0)
-        let decision = chordBatch.stage(event, policy: policy)
+        let decision = chordBatch.stage(event, policy: policy,
+                                        layout: mapping.layout)
         if case let .process(events) = decision {
             events.forEach { chordBatch.noteHandled($0) }
         }
@@ -1466,10 +1529,11 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         return true
     }
 
-    /// Resolves one physical batch. 并击 maps only this batch; 互击 may replace
-    /// the immediately preceding left-only batch plus this right-only batch
-    /// with their combined full-pinyin mapping. A complete syllable receives
-    /// one trailing soft ASCII Space.
+    /// Resolves one physical batch. The unified chord route may replace the
+    /// immediately preceding left-only fragment plus this right-only batch
+    /// with their exact complete-syllable mapping. A complete syllable receives
+    /// one trailing soft ASCII Space; low-level same-batch policy remains only
+    /// for explicit settlement boundaries and compatibility probes.
     @discardableResult
     func settlePendingChord(focusToken: FocusToken,
                             closesPairingAfterSettlement: Bool = false) -> Bool {
@@ -1479,6 +1543,7 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
             return false
         }
         let schemaID = chordBatchSchemaID
+        let settledMapping = chordBatchMapping
         let policy = chordBatchPolicy
         let owner = chordBatchFocusToken
         guard owner == focusToken,
@@ -1500,19 +1565,20 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         chordTimer?.invalidate()
         chordTimer = nil
         chordBatchSchemaID = nil
+        chordBatchMapping = nil
         chordBatchPolicy = nil
         chordBatchFocusToken = nil
 
         guard let schemaID,
               let policy,
-              let mapping = chordMapping(for: schemaID) else {
+              let mapping = settledMapping else {
             invalidate(clearRaw: true, nextPhase: .idle)
             return true
         }
         let route = StreamInputChordRoute(schemaID: schemaID, policy: policy)
         guard let shape = FlyChordBatchShape(keys: keys.map {
             (keycode: $0.keycode, mask: $0.mask)
-        }) else {
+        }, layout: mapping.layout) else {
             mutualPairingState.reset()
             resumeAfterIgnoredChord()
             return true
@@ -1526,7 +1592,8 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
             rawInput: rawInput,
             automaticSyllableSpaceOffsets:
                 automaticSyllableSpaceOffsets,
-            rawInputAllSelected: rawInputAllSelected
+            rawInputAllSelected: rawInputAllSelected,
+            layout: mapping.layout
         )
         if let pendingLeft,
            let combined = mapping.decode(pendingLeft.keys + keys),
@@ -1582,17 +1649,20 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
                 $0.insert(prefixByteCount + decoded.text.utf8.count)
             }
         }
-        mutualPairingState.recordSettledLeft(
-            keys: keys,
-            route: route,
-            focusToken: focusToken,
-            shape: shape,
-            baseRawInput: baseRawInput,
-            baseAutomaticSyllableSpaceOffsets: baseAutomaticOffsets,
-            settledRawInput: rawInput,
-            settledAutomaticSyllableSpaceOffsets:
-                automaticSyllableSpaceOffsets
-        )
+        if !decoded.insertsAutomaticSyllableSpace {
+            mutualPairingState.recordSettledLeft(
+                keys: keys,
+                route: route,
+                focusToken: focusToken,
+                shape: shape,
+                baseRawInput: baseRawInput,
+                baseAutomaticSyllableSpaceOffsets: baseAutomaticOffsets,
+                settledRawInput: rawInput,
+                settledAutomaticSyllableSpaceOffsets:
+                    automaticSyllableSpaceOffsets,
+                layout: mapping.layout
+            )
+        }
         if closesPairingAfterSettlement { mutualPairingState.reset() }
         if !decoded.usedMappedOutput, keys.count > 1 {
             inputFeedback = "当前并击没有精确映射，已保留原码"
@@ -1637,6 +1707,7 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         chordTimer = nil
         chordBatch.reset()
         chordBatchSchemaID = nil
+        chordBatchMapping = nil
         chordBatchPolicy = nil
         chordBatchFocusToken = nil
         mutualPairingState.reset()
@@ -2601,6 +2672,16 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
         }
     }
 
+    /// A profile edit/switch changes the meaning of physical batches. Retire
+    /// all result leases and requests together with their original raw snapshot,
+    /// so neither a late timer nor an AI callback can deliver the previous map.
+    func chordKeymapDidChange() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        chordMappings.removeAll(keepingCapacity: true)
+        unavailableChordMappingIDs.removeAll(keepingCapacity: true)
+        invalidate(clearRaw: true, nextPhase: .idle)
+    }
+
     private func configurationOrSelectionDidChange() {
         dispatchPrecondition(condition: .onQueue(.main))
         let selected = isSelected
@@ -2636,6 +2717,7 @@ final class StreamInputWorkspace: DerivedBufferWorkspace {
     private func bufferStateDidChange() {
         guard started,
               isSelected,
+              !ChordKeymapActivationCoordinator.shared.isApplying,
               !protectedSession,
               !runtime.secureInput() else {
             invalidate(clearRaw: true, nextPhase: .idle)

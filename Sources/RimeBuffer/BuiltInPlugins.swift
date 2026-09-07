@@ -166,7 +166,7 @@ private final class FlyChordLearningInternalPlugin: InternalPlugin {
         name: "并击",
         symbolName: "hands.sparkles",
         version: "2.0",
-        summary: "启用飞耀并击或互击输入，配置组键间隔，并提供本地课程与练习。",
+        summary: "配置支持同批与先左后右组键的并击，编辑键位方案，并提供本地课程与练习。",
         source: .builtIn,
         capabilities: [.settingsPage, .chordLearning, .localStorage],
         settings: PluginSettingsContribution(
@@ -175,6 +175,7 @@ private final class FlyChordLearningInternalPlugin: InternalPlugin {
             symbolName: "hands.sparkles",
             subpages: [
                 PluginSettingsSubpage(id: "settings", title: "设置"),
+                PluginSettingsSubpage(id: "keymap", title: "键位方案"),
                 PluginSettingsSubpage(id: "lessons", title: "课程"),
                 PluginSettingsSubpage(id: "practice", title: "练习"),
                 PluginSettingsSubpage(id: "progress", title: "进度"),

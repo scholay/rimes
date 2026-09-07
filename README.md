@@ -2,7 +2,7 @@
 
 **[中文](README.md)** · **[English](README.en.md)**
 
-从零做的现代 macOS 输入法：**librime** 引擎 + 自绘候选窗 + 常驻缓冲区（buffer）。内置雾凇全拼、自然码双拼、小鹤双拼、五笔 86 与英文核心方案；飞耀并击 / 互击由默认关闭的“并击”扩展提供。**自包含**打包 librime 与词库，装一个就能用，无需单独安装 Squirrel。
+从零做的现代 macOS 输入法：**librime** 引擎 + 自绘候选窗 + 常驻缓冲区（buffer）。内置雾凇全拼、自然码双拼、小鹤双拼、五笔 86 与英文核心方案；默认关闭的“并击”扩展提供飞耀预设和自定义键位，统一支持同拍组合与左右分开击键。**自包含**打包 librime 与词库，装一个就能用，无需单独安装 Squirrel。
 
 > 仓库/内部代号仍是 **RimeBuffer**（SPM target、`Sources/RimeBuffer/`）；`ETInput.app` 为兼容旧安装与自动更新保留的内部路径。对外产品名统一为 **RIMES**（rime-scholay）。
 
@@ -61,7 +61,7 @@
 | 打字测速 | `builtin.typing-speed` | 1.0 | 启用 |
 | 并击 | `builtin.fly-chord-learning` | 2.0 | 关闭 |
 
-“并击”2.0 保留旧 ID 与学习进度，但现在统一拥有飞耀并击 / 互击输入、组键间隔、课程、练习与进度；关闭后普通输入不再进入飞耀方案，意识流输入自动回到逐字连续全拼。
+“并击”保留旧 ID 与学习进度，只提供一种支持同拍组合及左右分开击键的输入行为，不再区分模式。扩展管理键位方案、组键间隔、课程、练习与进度，飞耀是可复制修改的内置预设；关闭后普通输入退回普通方案，意识流输入自动回到逐字连续全拼。详见[键位方案与迁移说明](CHORD-KEYMAPS.md)。
 
 ## 安装
 
@@ -116,7 +116,7 @@ Windows 11 实机验证。它目前仍是 commit-only 开发里程碑，尚无�
 登录启动、签名安装包，以及 macOS 缓冲区和工作台能力，因此没有进入公开 Release。
 
 公开的数据预览包不包含 macOS 版的缓冲工作台、AI/翻译/OCR、原生设置窗口，也不包含
-上述实验性 Windows TSF 或 Linux Fcitx5/IBus 前端。跨批互击是当前 macOS 前端能力，不能
+上述实验性 Windows TSF 或 Linux Fcitx5/IBus 前端。并击中的跨批分离击键配对是当前 macOS 前端能力，不能
 由数据包单独提供。请从 Releases 中标记为 **Pre-release** 的
 `RIMES-Windows-Data-Preview-*` / `RIMES-Linux-Data-Preview-*` 资产安装；完整边界、
 安全策略和验证方式见 [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)。
