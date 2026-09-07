@@ -1208,6 +1208,7 @@ final class RimeBufferController: IMKInputController {
     private func streamInputDisposition(keycode: Int32?,
                                         mask: Int32,
                                         exactExternalFocus: Bool,
+                                        hasLiveComposition: Bool = false,
                                         chordRoute: StreamInputChordRoute?)
         -> StreamInputCaptureRules.Disposition {
         StreamInputCaptureRules.disposition(
@@ -1221,6 +1222,7 @@ final class RimeBufferController: IMKInputController {
             ),
             secureInput: IsSecureEventInputEnabled(),
             exactExternalFocus: exactExternalFocus,
+            hasLiveComposition: hasLiveComposition,
             chordSchemaID: chordRoute?.schemaID
         )
     }
@@ -3597,11 +3599,34 @@ final class RimeBufferController: IMKInputController {
             updateUI(client: client)
             return true
         }
+        // A keysym only covers printable ASCII, so any other script arrives
+        // with no keycode at all and would otherwise fall through to the host
+        // — the one case where stream input silently loses what was typed.
+        // Hand the characters straight to the raw line instead.
+        if routedKeycode == nil,
+           let streamLease,
+           routedMask & (RimeKey.controlMask | RimeKey.altMask
+               | RimeKey.superMask) == 0,
+           let typed = event.characters,
+           !typed.isEmpty,
+           typed.unicodeScalars.allSatisfy({
+               !CharacterSet.controlCharacters.contains($0)
+           }),
+           prepareForStreamInputCapture(client: client, lease: streamLease),
+           StreamInputWorkspace.shared.insertTypedText(
+             typed,
+             focusToken: streamLease.token
+           ),
+           streamInputLease(client: client) === streamLease {
+            updateUI(client: client)
+            return true
+        }
         let streamChordRoute = streamInputChordRoute
         switch streamInputDisposition(
             keycode: routedKeycode,
             mask: routedMask,
             exactExternalFocus: streamLease != nil,
+            hasLiveComposition: composition.composing || chord.hasPending,
             chordRoute: streamChordRoute
         ) {
         case .passThrough:
@@ -5543,6 +5568,24 @@ final class RimeBufferController: IMKInputController {
                 owner: expectedLease.token
             )
             candidateWindow.hide(owner: expectedLease.token)
+            // Rime declines ASCII letters in English mode and passes most
+            // symbols straight through. Those keys are exactly how the user
+            // writes English and punctuation, so in stream mode they belong in
+            // the raw line rather than as hidden buffer blocks.
+            if streamInputModeSelected,
+               StreamInputWorkspace.shared.insertTypedText(
+                 text,
+                 focusToken: expectedLease.token
+               ) {
+                clearCompositionPresentation(client: client)
+                publishAuthoredCommitTelemetry(characterCount: text.count,
+                                               source: .buffer,
+                                               client: client)
+                IMELog.write(
+                    "\(source) text \(IMELog.redact(text)) -> stream raw"
+                )
+                return true
+            }
             BufferModel.shared.appendDirectInputFragment(
                 text,
                 owner: .focus(expectedLease.token)
@@ -6443,6 +6486,23 @@ final class RimeBufferController: IMKInputController {
             if let focusToken {
                 BufferWindowController.shared.clearInlineComposition(owner: focusToken)
                 candidateWindow.hide(owner: focusToken)
+            }
+            // Consciousness-stream input is an ordinary input surface, so what
+            // Rime commits is what the user wrote: it belongs in that raw line
+            // rather than as a finished buffer block.
+            if streamInputModeSelected, let focusToken,
+               StreamInputWorkspace.shared.insertTypedText(
+                 commit,
+                 focusToken: focusToken
+               ) {
+                clearCompositionPresentation(client: client)
+                publishAuthoredCommitTelemetry(characterCount: commit.count,
+                                               source: .buffer,
+                                               client: client)
+                IMELog.write(
+                    "commit \(IMELog.redact(commit)) -> stream raw"
+                )
+                return nil
             }
             BufferModel.shared.append(commit)
             clearCompositionPresentation(client: client)

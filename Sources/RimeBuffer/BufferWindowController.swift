@@ -757,6 +757,7 @@ enum BufferWorkbenchControl: String, Equatable {
     case functionMenu
     case pluginActions
     case exchangeEdit
+    case autoSend
     case close
 }
 
@@ -905,6 +906,7 @@ enum BufferWorkbenchShelfLayout {
                           flexibleSpace: NSView,
                           statusIndicators: NSView,
                           exchangeEdit: NSView,
+                          autoSend: NSView,
                           targetAssociation: NSView,
                           close: NSView) {
         shelf.orientation = .horizontal
@@ -934,7 +936,7 @@ enum BufferWorkbenchShelfLayout {
                                                               for: .horizontal)
 
         [functionMenu, pluginActions, status, flexibleSpace, statusIndicators,
-         exchangeEdit, targetAssociation, close].forEach {
+         exchangeEdit, autoSend, targetAssociation, close].forEach {
             shelf.addArrangedSubview($0)
         }
     }
@@ -948,11 +950,11 @@ enum BufferWorkbenchLayout {
     ]
     static let toolbar: [BufferWorkbenchControl] = [
         .functionMenu, .pluginActions, .status, .exchangeEdit,
-        .targetAssociation, .close,
+        .autoSend, .targetAssociation, .close,
     ]
     static let hoverControls: Set<BufferWorkbenchControl> = [
         .copyResult, .send, .clipboardImport, .functionMenu,
-        .pluginActions, .exchangeEdit, .close,
+        .pluginActions, .exchangeEdit, .autoSend, .close,
     ]
     static let passiveControls: Set<BufferWorkbenchControl> = [
         .bufferRail, .status, .targetAssociation,
@@ -1925,7 +1927,13 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         static let frame = "bufferWindow.frame.v2"
         static let legacyFrame = "bufferWindow.frame.v1"
         static let pinned = "bufferWindow.pinned.v1"
+        static let autoSend = "bufferWindow.autoSend.v1"
     }
+
+    /// Seconds a block sits in the rail before it is delivered on its own.
+    /// The chip dims across this window so the countdown is visible rather
+    /// than a surprise.
+    static let autoSendLifetime: TimeInterval = 1
 
     private let panel: BufferPanel
     private let outerContainer = NSView()
@@ -1973,6 +1981,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private let sendButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let sendButtonProgressIndicator = NSProgressIndicator()
     private let exchangeEditButton = FirstMouseButton(title: "", target: nil, action: nil)
+    private let autoSendButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let closeButton = FirstMouseButton(title: "", target: nil, action: nil)
     private lazy var railActionCluster = BufferRailActionClusterView(
         controls: [clipboardImportButton, copyResultButton, sendButton]
@@ -1982,6 +1991,15 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private lazy var sourceActionCluster = BufferRailActionClusterView(controls: [])
     private lazy var exchangeEditSlot = BufferToolbarControlSlot(control: exchangeEditButton)
     private var railActionCenterYConstraint: NSLayoutConstraint?
+    private var autoSendTimer: Timer?
+    /// How long each block has been alive, keyed by block id. Accumulated
+    /// rather than derived from a start date so an interruption pauses a
+    /// countdown instead of restarting it, and each block ages on its own
+    /// clock: one block leaving, or arriving, never touches another's.
+    private var autoSendAges: [UUID: TimeInterval] = [:]
+    /// Timestamp of the last tick that actually advanced ages. Cleared while
+    /// paused so resuming does not credit the paused interval.
+    private var autoSendLastTick: Date?
     private var sourceActionCenterYConstraint: NSLayoutConstraint?
     private var hiddenForSession = false
     private var sessionInactive = false
@@ -2661,6 +2679,41 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         applyAppearance()
         applyPreviewPointerState(hoveredControl)
         return renderCurrentContent(to: path, scale: scale)
+    }
+
+    /// Advances a set of independent block ages by one tick. Each block owns
+    /// its own age, an interruption pauses rather than resets, and the head is
+    /// the only block eligible to leave because delivery is ordered.
+    static func autoSendTickForSmoke(
+        ages: [UUID: TimeInterval],
+        order: [UUID],
+        elapsed: TimeInterval,
+        deliverable: Bool
+    ) -> (ages: [UUID: TimeInterval], sends: UUID?) {
+        guard deliverable else { return (ages: ages, sends: nil) }
+        let advance = min(max(elapsed, 0), autoSendLifetime)
+        var next: [UUID: TimeInterval] = [:]
+        for id in order { next[id] = (ages[id] ?? 0) + advance }
+        guard let head = order.first,
+              (next[head] ?? 0) >= autoSendLifetime else {
+            return (ages: next, sends: nil)
+        }
+        next.removeValue(forKey: head)
+        return (ages: next, sends: head)
+    }
+
+    /// Pure rules behind the auto-send switch, so its safety conditions are
+    /// checkable without a live focus lease or a real host to type into.
+    static func autoSendDecisionForSmoke(
+        enabled: Bool,
+        deliverable: Bool,
+        secureInput: Bool,
+        age: TimeInterval
+    ) -> (fades: Bool, sends: Bool) {
+        guard enabled, deliverable, !secureInput else {
+            return (fades: false, sends: false)
+        }
+        return (fades: true, sends: age >= autoSendLifetime)
     }
 
     /// Exercises the approved in-rail action layout against the real view tree
@@ -3776,13 +3829,19 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         )
         exchangeEditSlot.setControlVisible(false)
         configureIconButton(
+            autoSendButton,
+            "timer",
+            "自动发送：块在 \(Int(Self.autoSendLifetime)) 秒后自行上屏",
+            #selector(toggleAutoSend)
+        )
+        configureIconButton(
             closeButton,
             "xmark",
             "关闭并暂停缓冲（保留内容）",
             #selector(closeTapped)
         )
         [functionMenuButton, clipboardImportButton, copyResultButton,
-         sendButton, exchangeEditButton, closeButton].forEach {
+         sendButton, exchangeEditButton, autoSendButton, closeButton].forEach {
             $0.showsPersistentInteractionSurface = true
         }
 
@@ -3968,6 +4027,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             for: .horizontal
         )
 
+        syncAutoSendTimer()
         BufferWorkbenchShelfLayout.configure(
             utilityShelf,
             status: statusLabel,
@@ -3976,6 +4036,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             flexibleSpace: shelfFlexibleSpace,
             statusIndicators: contextualStatusControl,
             exchangeEdit: exchangeEditSlot,
+            autoSend: autoSendButton,
             targetAssociation: targetApplicationIndicator,
             close: closeButton
         )
@@ -4157,6 +4218,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         case .functionMenu: return functionMenuButton
         case .pluginActions: return pluginActionsControl
         case .exchangeEdit: return exchangeEditSlot
+        case .autoSend: return autoSendButton
         case .close: return closeButton
         }
     }
@@ -4172,7 +4234,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         pluginActionsControl.layer?.borderColor = RimeUI.border.cgColor
         pluginActionsControl.layer?.borderWidth = 1 / max(panel.backingScaleFactor, 1)
         [functionMenuButton, clipboardImportButton, exchangeEditButton,
-         closeButton, copyResultButton, sendButton].forEach {
+         autoSendButton, closeButton, copyResultButton, sendButton].forEach {
             $0.contentTintColor = $0.isEnabled
                 ? RimeUI.textSecondary
                 : RimeUI.textMuted
@@ -4185,6 +4247,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             ? (RimeUI.isRasta ? RimeUI.brandGreen : RimeUI.accentBlue)
             : RimeUI.textSecondary
         targetApplicationIndicator.applyAppearance()
+        refreshAutoSendButton()
         railActionCluster.applyAppearance()
         translationSwapButton.contentTintColor = RimeUI.textSecondary
         translationSwapButton.refreshInteractionAppearance()
@@ -4210,7 +4273,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func applyPreviewPointerState(_ hoveredControl: BufferWorkbenchControl?) {
         [functionMenuButton, copyResultButton, sendButton, clipboardImportButton,
-         exchangeEditButton, closeButton].forEach {
+         exchangeEditButton, autoSendButton, closeButton].forEach {
             $0.setPreviewPointerState(nil)
         }
         pluginSelector.setPreviewPointerState(nil)
@@ -4238,6 +4301,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             pluginSelector.setPreviewPointerState(.hovered)
         case .exchangeEdit:
             exchangeEditButton.setPreviewPointerState(.hovered)
+        case .autoSend:
+            autoSendButton.setPreviewPointerState(.hovered)
         case .close:
             closeButton.setPreviewPointerState(.hovered)
         case .bufferRail, .status, .targetAssociation, .none:
@@ -4857,6 +4922,144 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         bufferRail.setSourceTrailingActionExclusion(
             width: sourceActionCluster.reservedWidth
         )
+    }
+
+    /// Shared by all three plugin modes: turning it on in one turns it on
+    /// everywhere, because it describes how the user wants delivery to work
+    /// rather than anything about a particular plugin.
+    var autoSendEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: Key.autoSend) }
+        set {
+            guard newValue != autoSendEnabled else { return }
+            UserDefaults.standard.set(newValue, forKey: Key.autoSend)
+            autoSendAges.removeAll()
+            autoSendLastTick = nil
+            bufferRail.setAutoSendFade([:])
+            syncAutoSendTimer()
+            refresh()
+            IMELog.write("buffer auto-send enabled=\(newValue)")
+        }
+    }
+
+    @objc private func toggleAutoSend() {
+        autoSendEnabled.toggle()
+        refreshAutoSendButton()
+    }
+
+    /// Off and on have to be legible at a glance, so they differ in glyph,
+    /// tint, and a filled pill — a tint change alone reads as noise next to
+    /// the app icon.
+    private func refreshAutoSendButton() {
+        let on = autoSendEnabled
+        let accent = RimeUI.isRasta ? RimeUI.brandGreen : RimeUI.accentBlue
+        autoSendButton.image = RimeUI.symbol(
+            on ? "timer.circle.fill" : "timer",
+            pointSize: on ? 13 : 11,
+            weight: .semibold
+        )
+        autoSendButton.image?.isTemplate = true
+        autoSendButton.wantsLayer = true
+        autoSendButton.layer?.cornerRadius = 5
+        autoSendButton.layer?.backgroundColor = on
+            ? accent.withAlphaComponent(0.22).cgColor
+            : NSColor.clear.cgColor
+        autoSendButton.layer?.borderWidth = on
+            ? 1 / max(panel.backingScaleFactor, 1)
+            : 0
+        autoSendButton.layer?.borderColor = on
+            ? accent.withAlphaComponent(0.6).cgColor
+            : NSColor.clear.cgColor
+        autoSendButton.contentTintColor = on ? accent : RimeUI.textMuted
+        autoSendButton.toolTip = on
+            ? "自动发送已开启：块会在 \(Int(Self.autoSendLifetime)) 秒后自行上屏，点击可关闭"
+            : "自动发送已关闭：点击后块会在 \(Int(Self.autoSendLifetime)) 秒后自行上屏"
+        autoSendButton.setAccessibilityLabel(
+            on ? "关闭自动发送" : "开启自动发送"
+        )
+        autoSendButton.refreshInteractionAppearance()
+    }
+
+    private func syncAutoSendTimer() {
+        autoSendTimer?.invalidate()
+        autoSendTimer = nil
+        guard autoSendEnabled else {
+            autoSendAges.removeAll()
+            autoSendLastTick = nil
+            bufferRail.setAutoSendFade([:])
+            return
+        }
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.tickAutoSend()
+        }
+        autoSendTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// One tick: age the visible blocks, dim them, and hand the oldest to the
+    /// ordinary delivery path once its lifetime is up. Everything the manual
+    /// gesture checks — exact focus, secure input, composition — is checked
+    /// there too, so this cannot deliver anywhere a Return could not.
+    private func tickAutoSend() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard autoSendEnabled, panel.isVisible else { return }
+        let blocks = BufferModel.shared.blocks
+        guard !blocks.isEmpty else {
+            if !autoSendAges.isEmpty {
+                autoSendAges.removeAll()
+                autoSendLastTick = nil
+                bufferRail.setAutoSendFade([:])
+            }
+            return
+        }
+        let deliverable: Bool
+        if case .ready = BufferDeliveryCoordinator.shared.availability() {
+            deliverable = true
+        } else {
+            deliverable = false
+        }
+        // Losing the target or hitting a password field pauses every countdown
+        // where it stands. Ages survive, so a block that had one second left
+        // still has one second left when the target comes back.
+        guard Self.autoSendDecisionForSmoke(
+            enabled: true,
+            deliverable: deliverable,
+            secureInput: IsSecureEventInputEnabled(),
+            age: 0
+        ).fades else {
+            autoSendLastTick = nil
+            return
+        }
+
+        let now = Date()
+        let elapsed = autoSendLastTick.map { now.timeIntervalSince($0) } ?? 0
+        autoSendLastTick = now
+        // A tick can be late — a busy main thread, a wake from sleep — but a
+        // block must never jump the queue because of it.
+        let advance = min(max(elapsed, 0), Self.autoSendLifetime)
+
+        let liveIDs = Set(blocks.map(\.id))
+        autoSendAges = autoSendAges.filter { liveIDs.contains($0.key) }
+        var fade: [UUID: Double] = [:]
+        for block in blocks {
+            let age = (autoSendAges[block.id] ?? 0) + advance
+            autoSendAges[block.id] = age
+            fade[block.id] = min(max(age / Self.autoSendLifetime, 0), 1)
+        }
+        bufferRail.setAutoSendFade(fade)
+
+        // Delivery is ordered, so the head block is the only one that can
+        // leave; it is also the oldest, so its own age is what decides.
+        guard let head = blocks.first,
+              Self.autoSendDecisionForSmoke(
+                enabled: true,
+                deliverable: true,
+                secureInput: false,
+                age: autoSendAges[head.id] ?? 0
+              ).sends else {
+            return
+        }
+        autoSendAges.removeValue(forKey: head.id)
+        BufferDeliveryCoordinator.shared.sendNext()
     }
 
     private func applyCollectionBehavior() {

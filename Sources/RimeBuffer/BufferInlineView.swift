@@ -737,6 +737,10 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private var lastRenderSignature: RenderSignature?
     private var contentShielded = false
     private var trailingActionExclusionWidth: CGFloat = 0
+    /// Auto-send dims chips in place through `standardBlockViews`; re-rendering
+    /// ten times a second just to change an alpha would fight the caret, the
+    /// scroll position, and the preedit projection.
+    private var autoSendFade: [UUID: Double] = [:]
     private var sourceTrailingActionExclusionWidth: CGFloat = 0
     private var enterHoldProgress: CGFloat?
     private(set) var renderPassCount = 0
@@ -2007,6 +2011,19 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         return dot
     }
 
+    /// Dims each chip in proportion to how much of its life has passed, so an
+    /// automatic send is visibly imminent rather than sudden. Values are
+    /// clamped well short of invisible: a block the user can no longer read is
+    /// worse than one that simply looks stale.
+    func setAutoSendFade(_ fade: [UUID: Double]) {
+        guard autoSendFade != fade else { return }
+        autoSendFade = fade
+        for (id, view) in standardBlockViews {
+            let progress = fade[id] ?? 0
+            view.alphaValue = 1 - 0.55 * CGFloat(min(max(progress, 0), 1))
+        }
+    }
+
     private func chip(for block: BufferModel.Block,
                       index: Int,
                       selected: Bool = false) -> NSView {
@@ -2057,6 +2074,9 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             : 0
         box.toolTip = blockToolTip(block)
         standardBlockViews[block.id] = box
+        box.alphaValue = 1 - 0.55 * CGFloat(
+            min(max(autoSendFade[block.id] ?? 0, 0), 1)
+        )
         row.translatesAutoresizingMaskIntoConstraints = false
         box.addSubview(row)
         NSLayoutConstraint.activate([
