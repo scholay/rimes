@@ -16,6 +16,27 @@ enum KeyboardHeatmapColorRules {
     }
 }
 
+/// Drawing-only abbreviations. Key identifiers, stored counts, tooltips and
+/// accessibility continue to use the canonical keyboard layout names.
+enum KeyboardHeatmapLabelRules {
+    static func displayLabel(_ label: String) -> String {
+        switch label {
+        case "Control": return "⌃"
+        case "Option": return "⌥"
+        case "Command": return "⌘"
+        default: return label
+        }
+    }
+
+    static func fontSize(for label: String, availableWidth: CGFloat, preferredSize: CGFloat) -> CGFloat {
+        let width = (label as NSString).size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: preferredSize, weight: .semibold),
+        ]).width
+        guard width > availableWidth, width > 0 else { return preferredSize }
+        return max(6, preferredSize * max(0, availableWidth) / width)
+    }
+}
+
 final class KeyboardHeatmapView: NSView {
     var snapshot: KeyFrequencySnapshot = .empty {
         didSet {
@@ -101,12 +122,17 @@ final class KeyboardHeatmapView: NSView {
         path.lineWidth = hoveredKeyId == key.keyId ? 1.6 : 1
         path.stroke()
 
-        let labelFontSize: CGFloat = rect.height < 24 ? 9 : 11
+        let label = KeyboardHeatmapLabelRules.displayLabel(key.label)
+        let labelRect = rect.insetBy(dx: 3, dy: rect.height * 0.28)
+        let labelFontSize = KeyboardHeatmapLabelRules.fontSize(
+            for: label, availableWidth: labelRect.width,
+            preferredSize: rect.height < 24 ? 9 : 11
+        )
         let labelAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: labelFontSize, weight: .semibold),
             .foregroundColor: foreground
         ]
-        drawCentered(key.label, in: rect.insetBy(dx: 2, dy: rect.height * 0.28), attributes: labelAttrs)
+        drawCentered(label, in: labelRect, attributes: labelAttrs)
 
         if count > 0, rect.width >= 28, rect.height >= 26 {
             let countAttrs: [NSAttributedString.Key: Any] = [
@@ -134,7 +160,13 @@ final class KeyboardHeatmapView: NSView {
             width: size.width,
             height: size.height
         )
+        // Font fitting covers the standard layout; clipping is a final guard
+        // for unusually narrow embedded previews, never a neighboring key.
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: NSRect(x: rect.minX, y: drawRect.minY,
+                                 width: max(0, rect.width), height: drawRect.height)).addClip()
         value.draw(in: drawRect, withAttributes: attributes)
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func updateHover(at point: NSPoint?) {

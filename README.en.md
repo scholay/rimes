@@ -58,8 +58,8 @@ Every plug-in in the table is bundled with RIMES and enabled on a clean first ru
 
 | Extension | Stable ID | Version | Default state |
 |---|---|---:|---|
-| Statistics | `builtin.statistics` | 1.0 | Enabled |
-| Typing Speed | `builtin.typing-speed` | 1.0 | Enabled |
+| Statistics | `builtin.statistics` | 2.0 | Enabled |
+| Typing Speed | `builtin.typing-speed` | 2.0 | Enabled |
 | Chording | `builtin.fly-chord-learning` | 2.0 | Disabled |
 
 Chording preserves the legacy ID and learning progress, with a single behavior supporting combined and left-then-right split strokes instead of separate modes. It manages editable keymaps, the chord window, lessons, practice, and progress; Feiyao is a built-in preset that can be copied and customized. When disabled, ordinary input returns to an ordinary scheme and Stream Input returns to sequential full Pinyin. See the [keymap and migration guide](CHORD-KEYMAPS.md).

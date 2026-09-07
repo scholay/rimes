@@ -77,10 +77,10 @@ private final class StatisticsInternalPlugin: InternalPlugin {
         wireID: nil,
         name: "统计",
         symbolName: "chart.bar.xaxis",
-        version: "1.0",
-        summary: "按日查看键盘热力图与全部历史趋势；仅保存本地计数。",
+        version: "2.0",
+        summary: "用趋势图、键盘热力图和活动日历查看日常输入；仅保存本机计数。",
         source: .builtIn,
-        capabilities: [.settingsPage, .keyMetrics, .localStorage],
+        capabilities: [.settingsPage, .keyMetrics, .commitMetrics, .localStorage],
         settings: PluginSettingsContribution(
             id: "statistics",
             title: "统计",
@@ -88,28 +88,45 @@ private final class StatisticsInternalPlugin: InternalPlugin {
             subpages: [
                 PluginSettingsSubpage(id: "daily", title: "每日"),
                 PluginSettingsSubpage(id: "history", title: "历史"),
+                PluginSettingsSubpage(id: "test-results", title: "测速成绩"),
             ]
         ),
         canUninstall: false
     )
 
     private var observation: InputTelemetryObservation?
+    private var preferencesObserver: NSObjectProtocol?
+
+    deinit {
+        if let preferencesObserver { NotificationCenter.default.removeObserver(preferencesObserver) }
+    }
 
     func start() {
         guard observation == nil else { return }
+        preferencesObserver = NotificationCenter.default.addObserver(
+            forName: .dailyMetricsPreferencesDidChange, object: DailyMetricsPreferences.shared,
+            queue: .main
+        ) { _ in TypingSpeedStore.shared.endCurrentSession() }
         observation = InputTelemetryBus.shared.observe { event in
-            guard case let .key(key) = event else { return }
-            KeyFrequencyStore.shared.record(
-                keyID: key.keyID,
-                at: Date(timeIntervalSince1970: key.timestamp)
-            )
+            let preferences = DailyMetricsPreferences.shared
+            if preferences.recordsKeyFrequency, case let .key(key) = event {
+                KeyFrequencyStore.shared.record(
+                    keyID: key.keyID,
+                    at: Date(timeIntervalSince1970: key.timestamp)
+                )
+            }
+            if preferences.recordsTypingActivity { TypingSpeedStore.shared.consume(event) }
         }
     }
 
     func stop() {
         observation?.cancel()
         observation = nil
+        if let preferencesObserver { NotificationCenter.default.removeObserver(preferencesObserver) }
+        preferencesObserver = nil
+        TypingSpeedStore.shared.endCurrentSession()
         KeyFrequencyStore.shared.saveNow()
+        TypingSpeedStore.shared.saveNow()
     }
 
     func makeSettingsViewController(subpageID: String) -> NSViewController? {
@@ -123,36 +140,24 @@ private final class TypingSpeedInternalPlugin: InternalPlugin {
         wireID: nil,
         name: "打字测速",
         symbolName: "speedometer",
-        version: "1.0",
-        summary: "按活跃输入时间计算按键和成文字符速度；成文字符按 Rime commit 计数，不保存输入正文。",
+        version: "2.0",
+        summary: "中英文多篇文章跟打，观察速度曲线、击键、回退与正确率。",
         source: .builtIn,
-        capabilities: [.settingsPage, .keyMetrics, .commitMetrics, .localStorage],
+        capabilities: [.settingsPage, .localStorage],
         settings: PluginSettingsContribution(
             id: "typing-speed",
             title: "打字测速",
             symbolName: "speedometer",
             subpages: [
-                PluginSettingsSubpage(id: "overview", title: "概览"),
-                PluginSettingsSubpage(id: "history", title: "历史"),
+                PluginSettingsSubpage(id: "overview", title: "文章跟打"),
+                PluginSettingsSubpage(id: "history", title: "成绩"),
             ]
         ),
         canUninstall: false
     )
 
-    private var observation: InputTelemetryObservation?
-
-    func start() {
-        guard observation == nil else { return }
-        observation = InputTelemetryBus.shared.observe { event in
-            TypingSpeedStore.shared.consume(event)
-        }
-    }
-
-    func stop() {
-        observation?.cancel()
-        observation = nil
-        TypingSpeedStore.shared.saveNow()
-    }
+    func start() {}
+    func stop() {}
 
     func makeSettingsViewController(subpageID: String) -> NSViewController? {
         BuiltInPluginPageFactory.makeTypingSpeed(subpageID: subpageID)
@@ -467,7 +472,10 @@ private final class StreamInputInternalPlugin:
 /// settings window's routing shell. Each call returns a page-owned controller.
 enum BuiltInPluginPageFactory {
     static func makeStatistics(subpageID: String) -> NSViewController {
-        StatisticsSettingsViewController(subpageID: subpageID)
+        if subpageID == "test-results" {
+            return TypingSpeedSettingsViewController(subpageID: "history")
+        }
+        return StatisticsSettingsViewController(subpageID: subpageID)
     }
 
     static func makeTypingSpeed(subpageID: String) -> NSViewController {

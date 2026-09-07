@@ -410,7 +410,8 @@ Delivery.insert(_ text, into: client)
 ### 5.4 其它 UI
 - **StatusMenu**：系统输入法菜单里的命令入口。
 - **MailboxWindowController / MailboxPaneViewController**：双栏 CLI transcript 只存在于独立可编辑会话窗口，关闭时不恢复 Buffer。设置页读取同一 Store 的汇总状态，但不创建 pane 或改变选中会话。独立窗口的“新建对话”先维护进程内草稿与会话级模型选择，首次 Return 才通过 `AITextMailboxGenerationCoordinator` 创建持久会话并启动生成，因此取消或关闭草稿不会留下空会话，也不会改写全局连接器偏好。
-- **KeyboardHeatmapView / YearHistoryHeatmapView**：统计内置扩展中的每日键盘热力图与全部历史日历热力图。
+- **KeyboardHeatmapView / YearHistoryHeatmapView / MetricsLineChartView**：统计内置扩展合并每日键盘分布、活动日历与旧被动测速，以数字卡和趋势为主。旧采集选择独立迁移，旧统计历史不重算。
+- **TypingTestSession / TypingTestTextView / TypingTestHistoryStore**：独立的多篇中英文文章跟打，原生 IME 组字不判错，按连续时间、成文字对齐、过程准确率、物理键与真实并击批次计分。只在受控首响应输入区观察键，成绩聚合与日常计数隔离；详见 [测速口径](TYPING-METRICS.md)。
 - **开发预览模式**：`settings-preview/render`、`panel-render`、`gateway-serve` 子命令，无头渲染/验证，不接进正式菜单。
 
 ---
@@ -467,7 +468,7 @@ Delivery.insert(_ text, into: client)
   - 仅进程内：缓冲 blocks 与工具栏展开态；输入法进程重启后不恢复，发送历史与清空撤销不再保留。
   - 本机私有 SQLite + 压缩负载：Clipboard History 的文本、链接、图片、文件、颜色与未知 representation；缩略图按需异步解码且有界，不上传云端。
   - 0600 文件：gateway-token、marine-chrome 专用 token/origin、remote 身份私钥、`ai/openai-compatible.json`（Base URL/model/API key）。
-  - 0600 JSON：按键统计（按日 + 全历史）、打字测速聚合、并击课程/练习进度；沿用旧飞耀学习文件与路径。测速中的“成文字符”按 Rime commit 计数（直输或进入缓冲均计入），只保存数量、不保存正文；损坏、超限或非普通文件均 fail-closed，不覆盖原数据。
+  - 0600 JSON：按键统计（按日 + 全历史）、日常活跃输入聚合、文章跟打成绩、并击课程/练习进度；沿用旧飞耀学习文件与路径。日常“成文字符”按 Rime commit 计数（直输或进入缓冲均计入），不保存正文。文章成绩另存 `stats/typing_tests.json`，仅存文章/输入配置身份、计分及有界聚合曲线；练习正文和逐键时间线不落盘。损坏、超限或非普通文件均 fail-closed，不覆盖原数据。
   - Rime 用户数据：`~/Library/RimeBuffer`；词库维护只经官方 `levers` 导入/导出 portable TSV 或恢复官方快照，不直接复制/修改 LevelDB。
   - 日志：`~/rimebuffer.log`（0600，脱敏）。
 - **自更新**：UpdateManager 每小时查 GitHub Releases（这是隐私清单要计入的第 5 处出站）；只下载严格版本名的 `.pkg`，以 GitHub HTTPS/大小上限、`pkgutil` + `spctl` 与当前 app Team ID 同时验证，再交给系统 Installer；不自替换 `/Library` payload。

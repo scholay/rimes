@@ -1606,6 +1606,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         // pages must not be: they observe high-frequency metric stores. Drop
         // the hosted view/controller so a closed Settings window does no
         // hidden AppKit work on the IME main thread.
+        activePluginSettingsController?.viewWillDisappear()
         contentHost.subviews.forEach { $0.removeFromSuperview() }
         activePluginSettingsController = nil
         candidatePreview = nil
@@ -1947,6 +1948,10 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private func showCurrentRoute() {
         guard let route = selectedRoute else { return }
         refreshSidebarSelection()
+        // Plugin views are embedded directly, not as child controllers. Notify
+        // the page before releasing its owner so active practice can freeze and
+        // save an interrupted result before its editor disappears.
+        activePluginSettingsController?.viewWillDisappear()
         activePluginSettingsController = nil
         contentHost.subviews.forEach { $0.removeFromSuperview() }
 

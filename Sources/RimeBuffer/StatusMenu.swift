@@ -1,6 +1,15 @@
 import Cocoa
 import CRimeBridge
 
+/// A value-only snapshot keeps menu construction independent of live stores.
+struct InputSourceMenuState {
+    let healthy: Bool
+    let bufferTitle: String
+    let clipboardTitle: String
+    let mailboxTitle: String
+    let capsuleTitle: String
+}
+
 /// Builds ETInput's commands for the system input-source menu. The menu items
 /// target the live IMKInputController because InputMethodKit dispatches text
 /// input menu commands through that controller.
@@ -27,9 +36,22 @@ final class StatusMenu {
     /// InputMethodKit asks the active controller for a fresh menu whenever the
     /// system input menu opens, so every item reflects current engine state.
     func makeInputSourceMenu(target: RimeBufferController) -> NSMenu {
+        let clipboardShortcut = RimeShortcutPreferences
+            .shortcut(for: .toggleClipboardHistory)
+            .displayTitle
+        return Self.makeInputSourceMenu(target: target, state: InputSourceMenuState(
+            healthy: healthy,
+            bufferTitle: bufferTitle,
+            clipboardTitle: "Clipboard History…（\(clipboardShortcut)）",
+            mailboxTitle: mailboxTitle,
+            capsuleTitle: capsuleTitle
+        ))
+    }
+
+    static func makeInputSourceMenu(target: NSObject, state: InputSourceMenuState) -> NSMenu {
         let menu = NSMenu()
 
-        if !healthy {
+        if !state.healthy {
             let health = NSMenuItem(
                 title: "⚠️ 输入引擎异常 — 已退化为英文直通",
                 action: nil,
@@ -47,68 +69,50 @@ final class StatusMenu {
         menu.addItem(settings)
 
         let buffer = NSMenuItem(
-            title: bufferTitle,
+            title: state.bufferTitle,
             action: #selector(RimeBufferController.toggleBufferWindowFromInputMenu(_:)),
             keyEquivalent: "")
         buffer.target = target
         menu.addItem(buffer)
 
-        let clipboardShortcut = RimeShortcutPreferences
-            .shortcut(for: .toggleClipboardHistory)
-            .displayTitle
         let clipboard = NSMenuItem(
-            title: "Clipboard History…（\(clipboardShortcut)）",
+            title: state.clipboardTitle,
             action: #selector(RimeBufferController.toggleClipboardHistoryFromInputMenu(_:)),
             keyEquivalent: "")
         clipboard.target = target
         menu.addItem(clipboard)
 
         let mailbox = NSMenuItem(
-            title: mailboxTitle,
+            title: state.mailboxTitle,
             action: #selector(RimeBufferController.openMailboxFromInputMenu(_:)),
             keyEquivalent: "")
         mailbox.target = target
         menu.addItem(mailbox)
 
         let capsule = NSMenuItem(
-            title: capsuleTitle,
+            title: state.capsuleTitle,
             action: #selector(RimeBufferController.openCapsuleFromInputMenu(_:)),
             keyEquivalent: "")
         capsule.target = target
         menu.addItem(capsule)
 
-        // InputMethodKit renders this menu in the system's own menu agent and
-        // routes a chosen item back to the controller by selector. Items nested
-        // in a submenu are drawn but never dispatched, which left every
-        // maintenance command silently dead — `deployAndRestart` and `restart`
-        // log on entry and never logged once. So they live at the top level.
+        // Keep one top-level IMK action. Nested items previously appeared in
+        // TextInputMenuAgent but did not dispatch; the controller opens the
+        // five-command AppKit menu inside this process instead.
         menu.addItem(.separator())
-
-        let pin = NSMenuItem(
-            title: "常显于所有桌面与全屏空间",
-            action: #selector(RimeBufferController.toggleBufferPinnedFromInputMenu(_:)),
+        let maintenance = NSMenuItem(
+            title: "维护…",
+            action: #selector(RimeBufferController.openMaintenanceFromInputMenu(_:)),
             keyEquivalent: "")
-        pin.target = target
-        pin.state = BufferWindowController.shared.pinned ? .on : .off
-        menu.addItem(pin)
+        maintenance.target = target
+        menu.addItem(maintenance)
 
-        let move = NSMenuItem(
-            title: "把缓冲工作台移到当前屏幕",
-            action: #selector(RimeBufferController.moveBufferWindowFromInputMenu(_:)),
-            keyEquivalent: "")
-        move.target = target
-        menu.addItem(move)
+        return menu
+    }
 
-        menu.addItem(.separator())
-
-        let updateManager = UpdateManager.shared
-        let updateTitle: String
-        if updateManager.isUpdateReady,
-           let pendingVersion = updateManager.pendingVersion {
-            updateTitle = "安装 RIMES v\(pendingVersion)…"
-        } else {
-            updateTitle = "检查更新…"
-        }
+    static func makeMaintenanceMenu(target: NSObject, pendingVersion: String?) -> NSMenu {
+        let menu = NSMenu(title: "维护")
+        let updateTitle = pendingVersion.map { "安装 RIMES v\($0)…" } ?? "检查更新…"
         let checkUpdate = NSMenuItem(
             title: updateTitle,
             action: #selector(RimeBufferController.checkUpdateFromInputMenu(_:)),
@@ -147,6 +151,25 @@ final class StatusMenu {
         return menu
     }
 
+    func showMaintenanceMenu(target: RimeBufferController) {
+        let location = NSEvent.mouseLocation
+        // Leave the system menu's command callback before tracking a menu in
+        // our process. The ellipsis intentionally means click-to-open, not a
+        // nonfunctional hover submenu forwarded through InputMethodKit.
+        DispatchQueue.main.async {
+            guard RimeInputSourceAuthority.currentSourceIsOwn() else { return }
+            let updateManager = UpdateManager.shared
+            let menu = Self.makeMaintenanceMenu(
+                target: target,
+                pendingVersion: updateManager.isUpdateReady ? updateManager.pendingVersion : nil
+            )
+            IMELog.write("input menu: maintenance opened")
+            withExtendedLifetime(target) {
+                _ = menu.popUp(positioning: nil, at: location, in: nil)
+            }
+        }
+    }
+
     private var bufferTitle: String {
         let shortcut = RimeShortcutPreferences
             .shortcut(for: .toggleWorkbench)
@@ -183,16 +206,6 @@ final class StatusMenu {
         ClipboardHistoryWindowController.shared.toggleVisibility()
     }
 
-    func toggleBufferPinned() {
-        BufferWindowController.shared.pinned.toggle()
-    }
-
-    func moveBufferWindowToCurrentScreen() {
-        BufferWindowController.shared.show()
-        BufferWindowController.shared.moveToCurrentScreen()
-    }
-
-
     func openMailbox() {
         let threadID = MailboxStore.shared.selectLatestUnreadOrMostRecent()
         MailboxWindowController.shared.show(selecting: threadID)
@@ -207,6 +220,7 @@ final class StatusMenu {
     }
 
     func openLog() {
+        IMELog.write("input menu: log requested")
         let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("rimebuffer.log")
         NSWorkspace.shared.open(url)
     }

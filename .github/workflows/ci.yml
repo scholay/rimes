@@ -533,8 +533,14 @@ jobs:
             capsule-smoke
             stream-input-smoke
             settings-routing-smoke
+            status-menu-smoke
             history-heatmap-smoke
             typing-speed-smoke
+            daily-metrics-migration-smoke
+            typing-test-smoke
+            typing-practice-telemetry-smoke
+            statistics-dashboard-smoke
+            typing-test-ui-smoke
             fly-chord-learning-smoke
             chord-keymap-smoke
             chord-keymap-ui-smoke

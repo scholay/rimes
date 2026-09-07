@@ -257,6 +257,13 @@ final class TypingSpeedStore {
         )
     }
 
+    /// Do not bridge an excluded practice session or a disabled collector
+    /// into the surrounding day's active-time denominator.
+    func endCurrentSession() {
+        currentSessionIndex = nil
+        lastEventAt = nil
+    }
+
     func clearAll() {
         guard storageIssue == nil else { return }
         file = Self.emptyFile()

@@ -398,6 +398,11 @@ final class PluginRegistry {
                          "Duplicate internal plugin ID: \(descriptor.key.rawID)")
             internalPlugins[descriptor.key.rawID] = plugin
         }
+        if internalPlugins[BuiltInPluginID.statistics] != nil,
+           internalPlugins[BuiltInPluginID.typingSpeed] != nil {
+            DailyMetricsPreferences.migrate(disabledIDs: &disabledInternalIDs,
+                                            defaults: defaults)
+        }
         // The former learning-only plugin ID is retained for routes and user
         // preferences, but enablement now belongs to the chord feature store.
         // Bootstrap the legacy schema/keying preferences, then retire this ID

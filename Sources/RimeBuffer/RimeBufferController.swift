@@ -6475,7 +6475,23 @@ final class RimeBufferController: IMKInputController {
         return true
     }
 
+    private func practiceAllowsObservation(client: IMKTextInput) -> Bool {
+        guard TypingPracticeTelemetry.isPracticeInputFocused,
+              !IsSecureEventInputEnabled(), let focusToken,
+              let target = InputFocusCoordinator.shared.interactionTarget(expected: focusToken),
+              !target.isExternalTarget, target.controller === self,
+              target.clientIdentity == ObjectIdentifier(client as AnyObject) else { return false }
+        return true
+    }
+
     private func publishTelemetryKey(_ event: NSEvent, client: IMKTextInput) {
+        if practiceAllowsObservation(client: client) {
+            TypingPracticeTelemetry.shared.noteIMEKey(
+                event, isComposing: composition.composing || chord.hasPending,
+                owner: ObjectIdentifier(client as AnyObject)
+            )
+            return
+        }
         guard telemetryAllowsObservation(client: client),
               let keyID = KeyboardLayout.keyId(forKeyCode: event.keyCode) else { return }
         InputTelemetryBus.shared.publish(.key(.init(
@@ -6509,6 +6525,12 @@ final class RimeBufferController: IMKInputController {
         handledReleaseCount: Int,
         client: IMKTextInput
     ) {
+        if practiceAllowsObservation(client: client) {
+            TypingPracticeTelemetry.shared.noteIMEChord(
+                schemaID: currentSchemaId, owner: ObjectIdentifier(client as AnyObject)
+            )
+            return
+        }
         guard telemetryAllowsObservation(client: client) else { return }
         InputTelemetryBus.shared.publish(.chord(.init(
             rimeKeyCodes: keys.map(\.keycode),
@@ -7132,15 +7154,9 @@ final class RimeBufferController: IMKInputController {
         StatusMenu.shared.toggleClipboardHistory()
     }
 
-    @objc func toggleBufferPinnedFromInputMenu(_ sender: Any?) {
-        StatusMenu.shared.toggleBufferPinned()
+    @objc func openMaintenanceFromInputMenu(_ sender: Any?) {
+        StatusMenu.shared.showMaintenanceMenu(target: self)
     }
-
-    @objc func moveBufferWindowFromInputMenu(_ sender: Any?) {
-        StatusMenu.shared.moveBufferWindowToCurrentScreen()
-    }
-
-
     @objc func openMailboxFromInputMenu(_ sender: Any?) {
         StatusMenu.shared.openMailbox()
     }

@@ -653,11 +653,36 @@ if CommandLine.arguments.contains("remarkable-plugin-smoke") {
 if CommandLine.arguments.contains("settings-routing-smoke") {
     exit(runSettingsRoutingSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("status-menu-smoke") {
+    exit(runStatusMenuSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("status-menu-preview-smoke") {
+    exit(runStatusMaintenanceMenuPreview() ? 0 : 1)
+}
 if CommandLine.arguments.contains("history-heatmap-smoke") {
     exit(runHistoryHeatmapSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("typing-speed-smoke") {
     exit(runTypingSpeedStoreSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("daily-metrics-migration-smoke") {
+    exit(runDailyMetricsMigrationSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("typing-test-smoke") {
+    exit(runTypingTestSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("typing-practice-telemetry-smoke") {
+    exit(runTypingPracticeTelemetrySmokeTest() ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "statistics-dashboard-smoke") {
+    let output = CommandLine.arguments.indices.contains(index + 1)
+        ? URL(fileURLWithPath: CommandLine.arguments[index + 1]) : nil
+    exit(runStatisticsDashboardSmokeTest(outputURL: output) ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "typing-test-ui-smoke") {
+    let output = CommandLine.arguments.indices.contains(index + 1)
+        ? URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true) : nil
+    exit(runTypingTestUISmokeTest(outputDirectory: output) ? 0 : 1)
 }
 if CommandLine.arguments.contains("fly-chord-learning-smoke") {
     exit(runFlyChordLearningSmokeTest() ? 0 : 1)
