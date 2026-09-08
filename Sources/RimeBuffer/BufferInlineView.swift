@@ -280,6 +280,7 @@ private final class TranslationRailChipView: NSStackView {
     private var renderedSelected = false
     private var renderedStale = false
     private var renderedScale: CGFloat = 2
+    private var autoSendProgress: Double = 0
     private(set) var renderedRetainedTailStart: Int?
     var acceptsPointerActivation: Bool { activationHandler != nil }
 
@@ -435,9 +436,15 @@ private final class TranslationRailChipView: NSStackView {
         applySurfaceAppearance()
     }
 
+    func setAutoSendProgress(_ progress: Double) {
+        autoSendProgress = min(max(progress, 0), 1)
+        applySurfaceAppearance()
+    }
+
     private func applySurfaceAppearance() {
         let selectable = activationHandler != nil && !renderedStale
-        alphaValue = renderedStale ? 0.70 : (pointerPressed ? 0.82 : 1)
+        let stateOpacity: CGFloat = renderedStale ? 0.70 : (pointerPressed ? 0.82 : 1)
+        alphaValue = stateOpacity * (1 - 0.55 * CGFloat(autoSendProgress))
         layer?.cornerRadius = BufferInlineMetrics.chipCornerRadius
         let extraEmphasis: CGFloat
         if selectable, pointerPressed {
@@ -759,6 +766,9 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         renderedBlockIDs.compactMap {
             translationTargetChipViews[$0].map(ObjectIdentifier.init)
         }
+    }
+    var renderedTranslationTargetOpacities: [UUID: CGFloat] {
+        translationTargetChipViews.mapValues(\.alphaValue)
     }
     var renderedTranslationRetainedTailStarts: [UUID: Int] {
         Dictionary(uniqueKeysWithValues: translationTargetChipViews.compactMap { id, chip in
@@ -1893,12 +1903,13 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
                     targetViews.append(translationTargetEmptyLabel)
                 }
             } else {
-                let targetIsCurrent = snapshot.phase == .ready
                 for block in rowSnapshot.blocks {
+                    let targetIsCurrent = snapshot.phase == .ready || block.deliveryReady
                     renderedBlockIDs.append(block.id)
                     let chip = translationTargetChipViews[block.id]
                         ?? TranslationRailChipView(target: true)
                     translationTargetChipViews[block.id] = chip
+                    chip.setAutoSendProgress(autoSendFade[block.id] ?? 0)
                     chip.update(
                         text: block.text,
                         ordinal: alternativeCount > 1 ? nil : block.ordinal,
@@ -2021,6 +2032,9 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         for (id, view) in standardBlockViews {
             let progress = fade[id] ?? 0
             view.alphaValue = 1 - 0.55 * CGFloat(min(max(progress, 0), 1))
+        }
+        for (id, view) in translationTargetChipViews {
+            view.setAutoSendProgress(fade[id] ?? 0)
         }
     }
 

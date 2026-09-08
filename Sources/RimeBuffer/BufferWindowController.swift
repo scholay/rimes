@@ -1992,14 +1992,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private lazy var exchangeEditSlot = BufferToolbarControlSlot(control: exchangeEditButton)
     private var railActionCenterYConstraint: NSLayoutConstraint?
     private var autoSendTimer: Timer?
-    /// How long each block has been alive, keyed by block id. Accumulated
-    /// rather than derived from a start date so an interruption pauses a
-    /// countdown instead of restarting it, and each block ages on its own
-    /// clock: one block leaving, or arriving, never touches another's.
-    private var autoSendAges: [UUID: TimeInterval] = [:]
-    /// Timestamp of the last tick that actually advanced ages. Cleared while
-    /// paused so resuming does not credit the paused interval.
-    private var autoSendLastTick: Date?
+    private var autoSendClock = BufferAutoSendClock()
     private var sourceActionCenterYConstraint: NSLayoutConstraint?
     private var hiddenForSession = false
     private var sessionInactive = false
@@ -2327,6 +2320,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     func hideWithoutPausing() {
+        autoSendClock.pause()
+        bufferRail.setAutoSendFade([:])
         BufferPopUpMenuController.shared.dismiss()
         workbenchSessionEpoch &+= 1
         applyTargetAssociationPresentation(state: .unavailable, appName: nil)
@@ -2527,6 +2522,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// that was frozen under the previous owner.
     func notePluginSelectionChanged() {
         workbenchSessionEpoch &+= 1
+        autoSendClock.reset()
+        bufferRail.setAutoSendFade([:])
     }
 
     func closeAfterTerminalDrain(
@@ -2679,41 +2676,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         applyAppearance()
         applyPreviewPointerState(hoveredControl)
         return renderCurrentContent(to: path, scale: scale)
-    }
-
-    /// Advances a set of independent block ages by one tick. Each block owns
-    /// its own age, an interruption pauses rather than resets, and the head is
-    /// the only block eligible to leave because delivery is ordered.
-    static func autoSendTickForSmoke(
-        ages: [UUID: TimeInterval],
-        order: [UUID],
-        elapsed: TimeInterval,
-        deliverable: Bool
-    ) -> (ages: [UUID: TimeInterval], sends: UUID?) {
-        guard deliverable else { return (ages: ages, sends: nil) }
-        let advance = min(max(elapsed, 0), autoSendLifetime)
-        var next: [UUID: TimeInterval] = [:]
-        for id in order { next[id] = (ages[id] ?? 0) + advance }
-        guard let head = order.first,
-              (next[head] ?? 0) >= autoSendLifetime else {
-            return (ages: next, sends: nil)
-        }
-        next.removeValue(forKey: head)
-        return (ages: next, sends: head)
-    }
-
-    /// Pure rules behind the auto-send switch, so its safety conditions are
-    /// checkable without a live focus lease or a real host to type into.
-    static func autoSendDecisionForSmoke(
-        enabled: Bool,
-        deliverable: Bool,
-        secureInput: Bool,
-        age: TimeInterval
-    ) -> (fades: Bool, sends: Bool) {
-        guard enabled, deliverable, !secureInput else {
-            return (fades: false, sends: false)
-        }
-        return (fades: true, sends: age >= autoSendLifetime)
     }
 
     /// Exercises the approved in-rail action layout against the real view tree
@@ -3342,6 +3304,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         if inlineComposition != nil {
             candidateWindow.syncWorkbenchLayout()
         }
+        _ = reconcileAutoSendClock()
     }
 
     private func refreshTargetAssociation(rimeOwnsInput: Bool,
@@ -4932,8 +4895,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         set {
             guard newValue != autoSendEnabled else { return }
             UserDefaults.standard.set(newValue, forKey: Key.autoSend)
-            autoSendAges.removeAll()
-            autoSendLastTick = nil
+            autoSendClock.reset()
             bufferRail.setAutoSendFade([:])
             syncAutoSendTimer()
             refresh()
@@ -4983,8 +4945,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         autoSendTimer?.invalidate()
         autoSendTimer = nil
         guard autoSendEnabled else {
-            autoSendAges.removeAll()
-            autoSendLastTick = nil
+            autoSendClock.reset()
             bufferRail.setAutoSendFade([:])
             return
         }
@@ -4995,71 +4956,65 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    /// One tick: age the visible blocks, dim them, and hand the oldest to the
-    /// ordinary delivery path once its lifetime is up. Everything the manual
-    /// gesture checks — exact focus, secure input, composition — is checked
-    /// there too, so this cannot deliver anywhere a Return could not.
+    /// Reconcile on model/workspace refresh as well as timer callbacks, so a
+    /// drain and refill entirely between ticks still creates a fresh lifetime.
+    private func reconcileAutoSendClock()
+        -> BufferDeliveryCoordinator.AutomaticDeliverySnapshot? {
+        guard autoSendEnabled else {
+            autoSendClock.reset()
+            bufferRail.setAutoSendFade([:])
+            return nil
+        }
+        guard !sessionProtectionActive, !hiddenForSession,
+              !IsSecureEventInputEnabled() else {
+            autoSendClock.reset()
+            bufferRail.setAutoSendFade([:])
+            return nil
+        }
+        let source = BufferDeliveryContentRouter.current()
+        autoSendClock.synchronize(
+            sourceIdentity: ObjectIdentifier(source),
+            workspaceID: source.deliveryWorkspaceID,
+            blocks: source.deliveryPendingBlocks
+        )
+        guard isVisible, source.automaticDeliverySessionActive,
+              let snapshot = BufferDeliveryCoordinator.shared
+                .automaticDeliverySnapshot() else {
+            autoSendClock.pause()
+            bufferRail.setAutoSendFade([:])
+            return nil
+        }
+        // A focus lookup may synchronously refresh state: age exactly the
+        // concrete source and target prefix that the coordinator validated.
+        autoSendClock.synchronize(
+            sourceIdentity: snapshot.sourceIdentity,
+            workspaceID: snapshot.workspaceID,
+            blocks: snapshot.blocks
+        )
+        bufferRail.setAutoSendFade(autoSendClock.ages.mapValues {
+            min(max($0 / Self.autoSendLifetime, 0), 1)
+        })
+        return snapshot
+    }
+
     private func tickAutoSend() {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard autoSendEnabled, panel.isVisible else { return }
-        let blocks = BufferModel.shared.blocks
-        guard !blocks.isEmpty else {
-            if !autoSendAges.isEmpty {
-                autoSendAges.removeAll()
-                autoSendLastTick = nil
-                bufferRail.setAutoSendFade([:])
-            }
-            return
+        guard let snapshot = reconcileAutoSendClock() else { return }
+        let head = autoSendClock.tick(
+            uptime: ProcessInfo.processInfo.systemUptime,
+            canAge: true,
+            lifetime: Self.autoSendLifetime
+        )
+        bufferRail.setAutoSendFade(autoSendClock.ages.mapValues {
+            min(max($0 / Self.autoSendLifetime, 0), 1)
+        })
+        guard head != nil, snapshot.canSendWithoutResolvingComposition else { return }
+        // The timer never settles composition. A ready prefix may finish its
+        // countdown during editing, but insertion waits for a safe idle client.
+        BufferDeliveryCoordinator.shared.sendNextAutomatically(snapshot) {
+            [weak self] _ in
+            _ = self?.reconcileAutoSendClock()
         }
-        let deliverable: Bool
-        if case .ready = BufferDeliveryCoordinator.shared.availability() {
-            deliverable = true
-        } else {
-            deliverable = false
-        }
-        // Losing the target or hitting a password field pauses every countdown
-        // where it stands. Ages survive, so a block that had one second left
-        // still has one second left when the target comes back.
-        guard Self.autoSendDecisionForSmoke(
-            enabled: true,
-            deliverable: deliverable,
-            secureInput: IsSecureEventInputEnabled(),
-            age: 0
-        ).fades else {
-            autoSendLastTick = nil
-            return
-        }
-
-        let now = Date()
-        let elapsed = autoSendLastTick.map { now.timeIntervalSince($0) } ?? 0
-        autoSendLastTick = now
-        // A tick can be late — a busy main thread, a wake from sleep — but a
-        // block must never jump the queue because of it.
-        let advance = min(max(elapsed, 0), Self.autoSendLifetime)
-
-        let liveIDs = Set(blocks.map(\.id))
-        autoSendAges = autoSendAges.filter { liveIDs.contains($0.key) }
-        var fade: [UUID: Double] = [:]
-        for block in blocks {
-            let age = (autoSendAges[block.id] ?? 0) + advance
-            autoSendAges[block.id] = age
-            fade[block.id] = min(max(age / Self.autoSendLifetime, 0), 1)
-        }
-        bufferRail.setAutoSendFade(fade)
-
-        // Delivery is ordered, so the head block is the only one that can
-        // leave; it is also the oldest, so its own age is what decides.
-        guard let head = blocks.first,
-              Self.autoSendDecisionForSmoke(
-                enabled: true,
-                deliverable: true,
-                secureInput: false,
-                age: autoSendAges[head.id] ?? 0
-              ).sends else {
-            return
-        }
-        autoSendAges.removeValue(forKey: head.id)
-        BufferDeliveryCoordinator.shared.sendNext()
     }
 
     private func applyCollectionBehavior() {
@@ -5258,6 +5213,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func protectForSession(reason: String) {
+        autoSendClock.reset()
+        bufferRail.setAutoSendFade([:])
         applyTargetAssociationPresentation(state: .protected, appName: nil)
         setToolbarExpanded(false, resize: true)
         inlineCompositionProjection = nil

@@ -1,5 +1,10 @@
 # Buffer UI Notes
 
+## Latest Override — 2026-09-08 Translation Units and Optional Auto-Send
+
+- The user-controlled auto-send switch is an intentional exception to the historical manual-only rules below. Use the actual routed delivery source and stable target UUID/text with a monotonic per-block clock. New/changed blocks start at zero; empty, hidden, paused, focus-loss and protection intervals never accrue retroactive lifetime. A stable translation prefix may age during tail editing/composition, but timer delivery must never settle composition and must revalidate exact source, head, generation, focus and secure state through the normal coordinator.
+- Realtime translation owns sentence-sized exact source slices, independently of its smaller post-translation chips. Once any child is accepted by the host, retire that exact source range and retain unsent translated children as immutable pending output. New requests exclude retired source. Ordinary pause, owner/configuration changes preserve that unsent output; privacy discard and shutdown erase it. Incremental ready-prefix delivery is opt-in; full-result copy and terminal drain still require the whole workspace to be complete.
+
 ## Latest Override — 2026-09-04 Full-Width Rail Actions
 
 - Every visible body rail spans the full usable width of its row: ordinary and single-exchange presentations show one rail, while live source-plus-target presentations show two independent full-width rails. Clipboard import, copy-and-close, and the current primary action form one trailing action cluster visually inside the rail. The cluster is an overlay, never an arranged sibling of `BufferInlineView`, so its controls cannot shorten any rail frame or leave an exterior blank column. Standard and single-rail presentations center it on the one visible rail; live source-plus-target presentations align it with the target rail. Each scroll document keeps enough trailing clearance for its last chip, message, loading state, and logical caret to scroll fully to the left of the overlay without changing the rail's outer width.

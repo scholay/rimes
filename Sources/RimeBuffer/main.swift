@@ -611,7 +611,7 @@ if CommandLine.arguments.contains("plugin-configuration-smoke") {
     exit(runPluginConfigurationSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("translation-smoke") {
-    exit(runTranslationPluginSmokeTest() ? 0 : 1)
+    exit(runTranslationPluginSmokeTest() && runTranslationLifecycleSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("ai-text-smoke") {
     exit(runAITextPluginSmokeTest() ? 0 : 1)
@@ -6299,43 +6299,7 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
 /// elders keep their progress, a pause preserves every age rather than
 /// resetting it, and only the head block can leave.
 func runBufferAutoSendLifecycleProbe() -> Bool {
-    let first = UUID()
-    let second = UUID()
-
-    // Two blocks, the second arriving three seconds late.
-    var state = BufferWindowController.autoSendTickForSmoke(
-        ages: [:], order: [first], elapsed: 0.5, deliverable: true
-    )
-    state = BufferWindowController.autoSendTickForSmoke(
-        ages: state.ages, order: [first, second], elapsed: 0.3, deliverable: true
-    )
-    guard state.ages[first] == 0.8, state.ages[second] == 0.3,
-          state.sends == nil else {
-        print("FAILED: auto-send ages must be independent per block")
-        return false
-    }
-
-    // A pause leaves both ages exactly where they were.
-    let paused = BufferWindowController.autoSendTickForSmoke(
-        ages: state.ages, order: [first, second], elapsed: 60, deliverable: false
-    )
-    guard paused.ages == state.ages, paused.sends == nil else {
-        print("FAILED: an interruption must pause ages, not reset them")
-        return false
-    }
-
-    // The head reaches its lifetime and leaves alone; the younger block keeps
-    // its own remaining time rather than following it out.
-    let sent = BufferWindowController.autoSendTickForSmoke(
-        ages: paused.ages, order: [first, second], elapsed: 0.3, deliverable: true
-    )
-    guard sent.sends == first,
-          sent.ages[first] == nil,
-          abs((sent.ages[second] ?? 0) - 0.6) < 0.000_001 else {
-        print("FAILED: only the head block may leave on its own age")
-        return false
-    }
-    return true
+    runBufferAutoSendClockSmoke()
 }
 
 func runBufferWindowSmokeTest() -> Bool {
@@ -7203,24 +7167,6 @@ func runBufferWindowSmokeTest() -> Bool {
           ) == .interactWithControl,
           runBufferWorkbenchToolbarHitTestProbe(),
           runBufferPopUpMenuGeometryProbe(),
-          // Auto-send only ever runs where a manual Return could: it needs the
-          // switch on, a deliverable target, and no secure input. Nothing ages
-          // while any of those is false.
-          BufferWindowController.autoSendDecisionForSmoke(
-            enabled: true, deliverable: true, secureInput: false, age: 1
-          ) == (fades: true, sends: true),
-          BufferWindowController.autoSendDecisionForSmoke(
-            enabled: true, deliverable: true, secureInput: false, age: 0.9
-          ) == (fades: true, sends: false),
-          BufferWindowController.autoSendDecisionForSmoke(
-            enabled: false, deliverable: true, secureInput: false, age: 99
-          ) == (fades: false, sends: false),
-          BufferWindowController.autoSendDecisionForSmoke(
-            enabled: true, deliverable: false, secureInput: false, age: 99
-          ) == (fades: false, sends: false),
-          BufferWindowController.autoSendDecisionForSmoke(
-            enabled: true, deliverable: true, secureInput: true, age: 99
-          ) == (fades: false, sends: false),
           BufferWindowController.autoSendLifetime == 1,
           runBufferAutoSendLifecycleProbe(),
           runBufferInlineNoLeadingControlProbe(),
