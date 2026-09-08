@@ -10,6 +10,7 @@ enum BuiltInPluginID {
     static let remarkable = "builtin.remarkable"
     static let marineChrome = "builtin.marine-chrome"
     static let streamInput = "builtin.stream-input"
+    static let music = "builtin.music"
     static let aiText = AITextBuiltInPluginID.aiText
     // Provider-specific IDs are retained for preference/source compatibility.
     static let codexCLI = AITextBuiltInPluginID.codexCLI
@@ -25,6 +26,7 @@ enum BuiltInPlugins {
             FlyChordLearningInternalPlugin(),
             AppleTranslationInternalPlugin(),
             StreamInputInternalPlugin(),
+            BufferMusicInternalPlugin(),
             AITextInternalPlugin(),
         ]
     }

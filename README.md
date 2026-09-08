@@ -49,6 +49,7 @@
 | AI 生成 | `builtin.ai-text` | 2.1 | 随 RIMES 预装 | 启用 |
 | 实时翻译 | `builtin.apple-translation` | 2.1 | 随 RIMES 预装 | 启用 |
 | 意识流输入 | `builtin.stream-input` | 1.4 | 随 RIMES 预装 | 启用 |
+| 电音演奏 | `builtin.music` | 0.2.3 | 随 RIMES 预装 | 启用 |
 
 表中插件均随 RIMES 预装，并在全新安装后默认启用。
 <!-- END PRESET BUFFER PLUGINS -->

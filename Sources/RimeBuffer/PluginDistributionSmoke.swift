@@ -94,6 +94,7 @@ func runPluginDistributionSmokeTest() -> Bool {
         BuiltInPluginID.aiText,
         BuiltInPluginID.appleTranslation,
         BuiltInPluginID.streamInput,
+        BuiltInPluginID.music,
     ]
     let legacyCapsuleBufferPluginID = "builtin.capsule"
     let expectedOptionalIDs: Set<String> = []
@@ -106,6 +107,7 @@ func runPluginDistributionSmokeTest() -> Bool {
         BuiltInPluginID.aiText: "2.1",
         BuiltInPluginID.appleTranslation: "2.1",
         BuiltInPluginID.streamInput: "1.4",
+        BuiltInPluginID.music: "0.2.3",
     ]
 
     func fail(_ message: String) -> Bool {

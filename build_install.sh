@@ -171,6 +171,12 @@ rm -rf "$APP_PATH"
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources" \
          "$APP_PATH/Contents/Frameworks" "$APP_PATH/Contents/SharedSupport"
 cp "$BIN" "$APP_PATH/Contents/MacOS/$EXE"
+# Ship the music sample bank and dependency privacy manifests inside the signed
+# Resources directory; the installed instrument resolves its asset here.
+for resource_bundle in ".build/$CONFIG/"*.bundle; do
+    [ -d "$resource_bundle" ] || continue
+    cp -R "$resource_bundle" "$APP_PATH/Contents/Resources/"
+done
 cp Info.plist "$APP_PATH/Contents/Info.plist"
 
 # Bump CFBundleVersion on the installed copy each build so LaunchServices/TIS

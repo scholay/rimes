@@ -57,12 +57,13 @@ enum BufferWorkbenchLayoutMode: Equatable {
     case standard
     case singleDerived
     case derived(targetRows: Int)
+    case music(tracks: Int)
 
     static let translation = BufferWorkbenchLayoutMode.derived(targetRows: 1)
 
     var targetRows: Int? {
         switch self {
-        case .standard: return nil
+        case .standard, .music: return nil
         case .singleDerived: return 1
         case let .derived(targetRows): return min(max(targetRows, 1), 5)
         }
@@ -306,6 +307,8 @@ enum BufferWindowGeometry {
             // Alternatives page inside one target rail. Candidate count no
             // longer changes the panel height or moves the host-side anchor.
             baseHeight = expanded ? translationExpandedHeight : translationCollapsedHeight
+        case let .music(tracks):
+            baseHeight = BufferMusicView.bodyHeight(tracks: tracks) + 35
         }
         return baseHeight
     }
@@ -871,11 +874,14 @@ enum BufferWorkbenchMetrics {
             return BufferInlineView.standardPreferredHeight
         case let .derived(targetRows):
             return BufferInlineView.translationPreferredHeight(targetRows: targetRows)
+        case let .music(tracks):
+            return BufferMusicView.bodyHeight(tracks: tracks) - 6
         }
     }
 
     static func mainBarHeight(for mode: BufferWorkbenchLayoutMode) -> CGFloat {
-        mode.targetRows == nil ? 38 : railHeight(for: mode) + 6
+        if case let .music(tracks) = mode { return BufferMusicView.bodyHeight(tracks: tracks) }
+        return mode.targetRows == nil ? 38 : railHeight(for: mode) + 6
     }
 
     /// Live-expand renders two equal rails inside a 5pt vertical inset with a
@@ -1116,8 +1122,17 @@ enum BufferWorkbenchPreferences {
 }
 
 private final class BufferPanel: NSPanel {
-    override var canBecomeKey: Bool { false }
+    var musicKeyboardEnabled = false
+    var musicKeyHandler: ((NSEvent) -> Bool)?
+    override var canBecomeKey: Bool { musicKeyboardEnabled }
     override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        if musicKeyboardEnabled, isKeyWindow,
+           event.type == .keyDown || event.type == .keyUp,
+           musicKeyHandler?(event) == true { return }
+        super.sendEvent(event)
+    }
 }
 
 private final class BufferWorkbenchToolbarView: NSStackView {
@@ -1185,7 +1200,7 @@ func runBufferWorkbenchToolbarHitTestProbe() -> Bool {
     BufferWorkbenchToolbarView.runHitTestProbe()
 }
 
-private final class FirstMousePopUpButton: RimeFixedAccentPopUpButton {
+final class FirstMousePopUpButton: RimeFixedAccentPopUpButton {
     private var pointerHovered = false
     private var pointerPressed = false
     private var previewPointerState: BufferWorkbenchPointerState?
@@ -1939,6 +1954,13 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private let outerContainer = NSView()
     private let visual = BufferChromeView()
     private let bufferRail = BufferInlineView()
+    private lazy var musicView = BufferMusicView()
+    private var musicPresentationActive = false
+    private var musicKeyboardRouting = BufferMusicKeyboardRouting()
+    private var musicSelected: Bool {
+        BufferPluginSelectionStore.shared.activeKey == BufferMusicInternalPlugin.key
+            && PluginRegistry.shared.isEnabled(BufferMusicInternalPlugin.key)
+    }
     private let mainBar = NSStackView()
     private lazy var translationBridgeView = AppleTranslationWorkspace.shared.makeBridgeView()
     private let utilityShelf = BufferWorkbenchToolbarView()
@@ -2103,7 +2125,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
     }
     func shouldPresentCandidatesAtBufferCaret(for owner: FocusToken?) -> Bool {
-        guard let owner else { return false }
+        guard !musicSelected, let owner else { return false }
         let capturesExactFocus = BufferModel.shared.capturesInput(for: owner)
             && InputFocusCoordinator.shared.interactionTarget(expected: owner) != nil
         return BufferCandidateRoutingRules.shouldFollowBufferCaret(
@@ -2201,6 +2223,14 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                             backing: .buffered,
                             defer: false)
         super.init()
+        panel.musicKeyHandler = { [weak self] in self?.handleMusicKey($0) ?? false }
+        musicView.onRequestKeyboardFocus = { [weak self] in self?.focusMusicSurface() }
+        musicView.onKeyEvent = { [weak self] in self?.handleMusicKey($0) ?? false }
+        musicView.onTrackCountChanged = { [weak self] count in
+            guard let self, self.musicPresentationActive else { return }
+            self.syncLayoutMode(.music(tracks: count))
+            self.panel.contentView?.layoutSubtreeIfNeeded()
+        }
         layoutMode = initialLayoutMode
         bufferRail.onDerivedTargetSelection = { [weak self] blockID in
             self?.selectDerivedTarget(blockID: blockID)
@@ -2266,7 +2296,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             panel.orderOut(nil)
         }
         panel.orderFrontRegardless()
-        if rimeOwnsInput {
+        if musicSelected {
+            if repositionOnOpen { focusMusicSurface() }
+        } else if rimeOwnsInput {
             RimeBufferController.refreshActiveUI()
         }
     }
@@ -2275,6 +2307,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// itself no longer implies capture; this method requests an exact-focus
     /// capture grant and still shows the workbench when no trusted field exists.
     func openAndResume() {
+        if musicSelected { show(); return }
         guard RimeInputSourceAuthority.currentSourceIsOwn() else {
             BufferModel.shared.routeDirectPreservingContent(
                 reason: "external input source clipboard channel"
@@ -2294,6 +2327,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// made the previous evaluation stale.
     func focusedInputDidActivate(expected token: FocusToken) {
         dispatchPrecondition(condition: .onQueue(.main))
+        guard !musicSelected else { return }
         guard lastFocusFollowToken != token || activeSpaceFocusFollowPending else {
             return
         }
@@ -2319,7 +2353,131 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Music deliberately becomes a key panel, unlike the passive text rail.
+    /// No input source is switched and no global key monitor is installed.
+    private func focusMusicSurface() {
+        guard musicSelected, musicPresentationActive, isVisible,
+              !sessionProtectionActive, !hiddenForSession,
+              !IsSecureEventInputEnabled() else { return }
+        if !panel.isKeyWindow {
+            // Resolve against the still-live host before AppKit hands its focus
+            // away. In capture mode this keeps the pending word in Buffer.
+            if RimeInputSourceAuthority.currentSourceIsOwn(),
+               let target = InputFocusCoordinator.shared.owner {
+                target.controller?.resolveCompositionForWorkbenchTransition(target: target)
+            }
+            BufferModel.shared.routeDirectPreservingContent(reason: "music performance focus")
+            clearInlineComposition()
+            candidateWindow.hideAll()
+            clearTargetAssociationCue()
+            panel.musicKeyboardEnabled = true
+            panel.makeKey()
+        }
+        panel.makeFirstResponder(musicView)
+        if panel.isKeyWindow { BufferMusicSession.shared.setActive(true) }
+        musicView.refresh()
+    }
+
+    private func deactivateMusicSurface() {
+        guard musicPresentationActive else { return }
+        musicKeyboardRouting.reset()
+        BufferMusicSession.shared.setActive(false)
+        if panel.isKeyWindow { panel.resignKey() }
+    }
+
+    private func handleMusicKey(_ event: NSEvent) -> Bool {
+        guard musicSelected, isVisible, panel.isKeyWindow,
+              !sessionProtectionActive, !hiddenForSession,
+              !IsSecureEventInputEnabled(),
+              event.type == .keyDown || event.type == .keyUp else { return false }
+        if handlePluginNavigationKey(event) { return true }
+        let editingText = (panel.firstResponder as? NSTextView)?.isFieldEditor == true
+        guard musicKeyboardRouting.shouldConsume(
+            code: event.keyCode, isDown: event.type == .keyDown,
+            modifiers: event.modifierFlags, editingText: editingText
+        ) else { return false }
+        _ = BufferMusicSession.shared.handleKey(code: event.keyCode,
+                                                isDown: event.type == .keyDown,
+                                                isRepeat: event.isARepeat)
+        // Unmapped plain keys stay inside this instrument too; they must not
+        // enter an IMK text client or beep through the responder chain.
+        return true
+    }
+
+    /// Selecting a visible workbench plugin is a UI command. It must remain
+    /// available after Music has intentionally suspended the text-capture lease.
+    var canNavigatePlugins: Bool {
+        isVisible && !sessionProtectionActive && !hiddenForSession && !IsSecureEventInputEnabled()
+    }
+
+    @discardableResult
+    func navigatePlugin(direction: Int) -> Bool {
+        guard canNavigatePlugins else { return false }
+        let entry = BufferPluginMenuCatalog.adjacentEntry(
+            from: BufferPluginSelectionStore.shared.activeKey, direction: direction,
+            plugins: PluginRegistry.shared.plugins(capability: .bufferAction))
+        do {
+            if let key = entry.key { try PluginRegistry.shared.setBufferPluginActive(true, for: key) }
+            else { BufferPluginSelectionStore.shared.clear() }
+            refresh()
+            IMELog.write("buffer UI plugin switched direction=\(direction)")
+        } catch { NSSound.beep(); IMELog.write("buffer UI plugin switch failed") }
+        return true
+    }
+
+    @discardableResult
+    func handlePluginNavigationKey(_ event: NSEvent) -> Bool {
+        guard canNavigatePlugins, event.type == .keyDown || event.type == .keyUp,
+              let direction = BufferPluginKeyboardShortcutRules.direction(
+                hardwareKeyCode: event.keyCode, modifierFlags: event.modifierFlags) else { return false }
+        if event.type == .keyDown, !event.isARepeat { return navigatePlugin(direction: direction) }
+        return true
+    }
+
+    /// Mount a bounded instrument viewport; notes never determine panel size.
+    /// Refreshes/Space changes must not steal keyboard focus from another app.
+    private func refreshMusicPresentation(protected: Bool) -> Bool {
+        guard musicSelected else {
+            if musicPresentationActive {
+                deactivateMusicSurface()
+                musicPresentationActive = false
+                panel.musicKeyboardEnabled = false
+                musicView.isHidden = true
+                bufferRail.isHidden = false
+                railActionCluster.isHidden = false
+                sourceActionCluster.isHidden = false
+                autoSendButton.isHidden = false
+                targetApplicationIndicator.isHidden = false
+                exchangeEditSlot.isHidden = false
+                resetDerivedControlRendering()
+            }
+            return false
+        }
+        musicPresentationActive = true
+        panel.musicKeyboardEnabled = !protected
+        if protected { deactivateMusicSurface() }
+        autoSendClock.reset()
+        bufferRail.setAutoSendFade([:])
+        clearTargetAssociationCue()
+        musicView.isHidden = protected
+        bufferRail.isHidden = true
+        railActionCluster.isHidden = true
+        sourceActionCluster.isHidden = true
+        statusLabel.isHidden = true
+        contextualStatusControl.isHidden = true
+        autoSendButton.isHidden = true
+        targetApplicationIndicator.isHidden = true
+        exchangeEditSlot.isHidden = true
+        syncLayoutMode(.music(tracks: BufferMusicSession.shared.snapshot.loops.count))
+        refreshPluginActions()
+        applyAppearance()
+        musicView.refresh()
+        panel.contentView?.layoutSubtreeIfNeeded()
+        return true
+    }
+
     func hideWithoutPausing() {
+        deactivateMusicSurface()
         autoSendClock.pause()
         bufferRail.setAutoSendFade([:])
         BufferPopUpMenuController.shared.dismiss()
@@ -2335,6 +2493,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// The optional external-app privacy purge clears staged plaintext and all
     /// plugin state before a different application can become the target.
     func discardForPrivacyTransition() {
+        deactivateMusicSurface()
         applyTargetAssociationPresentation(state: .unavailable, appName: nil)
         clearInlineComposition()
         ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
@@ -2877,6 +3036,157 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         )
     }
 
+    /// Exercises the production panel without ordering it or opening audio.
+    /// The executable smoke harness isolates defaults before constructing us.
+    func exerciseMusicPresentationForSmoke(outputURL: URL? = nil) -> Bool {
+        let liveCapture = ProcessInfo.processInfo.environment["RB_MUSIC_VISIBLE_SMOKE"] == "1"
+        defer { if liveCapture { BufferMusicSession.shared.setActive(false); panel.orderOut(nil) } }
+        let selection = BufferPluginSelectionStore.shared
+        let registry = PluginRegistry.shared
+        let previous = selection.activeKey
+        defer {
+            if let previous { _ = selection.select(previous, among: registry.allPlugins()) }
+            else { selection.clear() }
+            refresh()
+        }
+        guard selection.select(BufferMusicInternalPlugin.key, among: registry.allPlugins()) else {
+            print("FAILED: music missing from enabled catalog")
+            return false
+        }
+        rebuildPluginSelector()
+        for width: CGFloat in [520, 760, 1040] {
+            setConfiguredWidth(width)
+            refresh()
+            if liveCapture {
+                panel.orderFrontRegardless()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+                BufferMusicSession.shared.setActive(true)
+                BufferMusicSession.shared.waitUntilIdleForTesting()
+                BufferMusicSession.shared.setBPM(120)
+                BufferMusicSession.shared.setMeter(.sixEight)
+                BufferMusicSession.shared.waitUntilIdleForTesting()
+            }
+            for count in [0, 1, 2, 1, 0] {
+            var display = BufferMusicSnapshot()
+            display.isRecording = count > 0
+            display.isReady = true
+            display.isDrumsEnabled = true
+            display.pressedKeys = [18:43, 14:40, 3:36, 6:28]
+            display.loops = (0..<count).map { .init(id: $0 + 1, bars: 1, recording: $0 == count - 1, queued: false, muted: false, progress: 0.4, activity: [Int](repeating: 1, count: 32)) }
+            if liveCapture {
+                let music = BufferMusicSession.shared
+                if count == 0 { music.stop() }
+                else if count == 1, music.snapshot.loops.isEmpty {
+                    music.toggleLoopRecording()
+                    _ = music.handleKey(code: 18, isDown: true)
+                    music.waitUntilIdleForTesting()
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.04))
+                    _ = music.handleKey(code: 18, isDown: false)
+                } else if count == 2 {
+                    music.toggleLoopRecording()
+                    music.waitUntilIdleForTesting()
+                    music.toggleLoopRecording()
+                } else if count == 1, music.snapshot.isRecording {
+                    music.toggleLoopRecording()
+                }
+                music.waitUntilIdleForTesting()
+                display = music.snapshot
+            }
+            musicView.render(display)
+            if liveCapture {
+                for _ in 1...6 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.025))
+                    musicView.refresh()
+                }
+                if let outputURL {
+                    let capture = Process()
+                    capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                    capture.arguments = ["-x", "-l", String(panel.windowNumber), outputURL.deletingPathExtension().path + "-live-\(Int(width))-\(count)-\(BufferMusicSession.shared.snapshot.isRecording ? "recording" : "playback").png"]
+                    do { try capture.run() } catch { return false }
+                    capture.waitUntilExit()
+                    guard capture.terminationStatus == 0 else { return false }
+                }
+            }
+            let expectedHeight = BufferMusicView.bodyHeight(tracks: count)
+            let content = panel.contentView!
+            content.layoutSubtreeIfNeeded()
+            let bodyFrame = musicView.convert(musicView.bounds, to: content)
+            let toolbarFrame = musicView.toolbarView.convert(musicView.toolbarView.bounds, to: content)
+            let closeFrame = closeButton.convert(closeButton.bounds, to: content)
+            let tolerance = content.bounds.insetBy(dx: -1, dy: -1)
+            guard layoutMode == .music(tracks: count), abs(panel.frame.height - expectedHeight - 35) < 1,
+                  abs(bodyFrame.height - expectedHeight) < 1,
+                  musicView.layoutIsContained,
+                  !mainBar.arrangedSubviews.contains(where: { $0 === musicView }),
+                  tolerance.contains(bodyFrame), tolerance.contains(toolbarFrame),
+                  !toolbarFrame.intersects(closeFrame),
+                  bufferRail.isHidden, railActionCluster.isHidden,
+                  autoSendButton.isHidden, panel.canBecomeKey,
+                  (liveCapture || !BufferMusicSession.shared.snapshot.isActive) else {
+                print("FAILED: music panel layout at \(width), tracks \(count): panel=\(panel.frame) body=\(bodyFrame) toolbar=\(toolbarFrame) close=\(closeFrame); \(musicView.layoutDiagnostics); rail=\(bufferRail.isHidden) actions=\(railActionCluster.isHidden) send=\(autoSendButton.isHidden) key=\(panel.canBecomeKey) active=\(BufferMusicSession.shared.snapshot.isActive)")
+                return false
+            }
+            if let outputURL {
+                let path = outputURL.deletingPathExtension().path + "-\(Int(width))-\(count).png"
+                guard renderCurrentContent(to: path, scale: 2) else { return false }
+            }
+            }
+        }
+        if liveCapture {
+            // Keep selection and the paused capture state between every key.
+            // Resetting to Music before each press hides the exit-focus bug.
+            _ = selection.select(BufferMusicInternalPlugin.key, among: registry.allPlugins())
+            refresh(); focusMusicSurface()
+            let entries = BufferPluginMenuCatalog.entries(from: registry.plugins(capability: .bufferAction))
+            guard entries.count >= 3 else { return false }
+            let before = BufferMusicSession.shared.snapshot
+            var index = entries.firstIndex { $0.key == selection.activeKey }!
+            for direction in [-1, 1] {
+                let shortcut = RimeShortcutPreferences.shortcut(for: direction < 0 ? .previousPlugin : .nextPlugin)
+                for _ in 0..<(entries.count * 3) {
+                    index = (index + direction + entries.count) % entries.count
+                    func event(_ type: NSEvent.EventType, repeatKey: Bool = false) -> NSEvent {
+                        NSEvent.keyEvent(with: type, location: .zero,
+                            modifierFlags: shortcut.modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
+                            windowNumber: panel.windowNumber, context: nil, characters: "",
+                            charactersIgnoringModifiers: "", isARepeat: repeatKey, keyCode: shortcut.keyCode)!
+                    }
+                    let handled = musicSelected ? handleMusicKey(event(.keyDown))
+                        : handlePluginNavigationKey(event(.keyDown))
+                    guard handled, selection.activeKey == entries[index].key else {
+                        print("FAILED: continuous plugin cycle direction=\(direction), index=\(index)")
+                        return false
+                    }
+                    guard handlePluginNavigationKey(event(.keyDown, repeatKey: true)),
+                          handlePluginNavigationKey(event(.keyUp)),
+                          selection.activeKey == entries[index].key else {
+                        print("FAILED: plugin repeat/release changed selection")
+                        return false
+                    }
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+                    BufferMusicSession.shared.waitUntilIdleForTesting()
+                    guard BufferMusicSession.shared.snapshot.transpose == before.transpose,
+                          BufferMusicSession.shared.snapshot.octaveShift == before.octaveShift,
+                          !BufferModel.shared.enabled else { return false }
+                }
+            }
+            panel.orderOut(nil)
+            guard !canNavigatePlugins, !navigatePlugin(direction: 1) else { return false }
+            panel.orderFrontRegardless()
+            print("Music continuous plugin cycle: OK (\(entries.count) entries, 3 laps each direction, paused capture, repeat/keyUp, hidden pass-through)")
+        }
+        selection.clear()
+        refresh()
+        guard !musicPresentationActive, !panel.canBecomeKey, !bufferRail.isHidden,
+              layoutMode == .standard,
+              abs(panel.frame.height - BufferWindowGeometry.expandedHeight) < 1 else {
+            print("FAILED: music panel did not restore passive Buffer")
+            return false
+        }
+        print("Music production panel smoke: OK (520/760/1040, passive restoration)")
+        return true
+    }
+
     /// Exercises one real `NSPanel` and its existing constraints through the
     /// exact compact -> live-derived -> compact lifecycle. The optional PNGs
     /// make a failed geometry assertion directly inspectable without adding a
@@ -3075,6 +3385,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// Re-renders only the text rail for a composition keystroke. Toolbar,
     /// provider status and plugin controls do not need to churn at IME speed.
     private func renderInlineRail(preedit: String, cursorPosUTF8: Int) {
+        guard !musicSelected else { return }
         let contentProtected = sessionProtectionActive
             || hiddenForSession
             || IsSecureEventInputEnabled()
@@ -3148,6 +3459,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         // state. A secure refresh must not ask any source for a text snapshot.
         DerivedBufferWorkspaceRouter.setProtectedOnAll(contentProtected)
         BuiltInBufferActionWorkspaceRouter.setProtectedOnAll(contentProtected)
+        if refreshMusicPresentation(protected: contentProtected) { return }
         let derivedWorkspace = DerivedBufferWorkspaceRouter.selectedWorkspace
         let derivedWorkspaceSelected = derivedWorkspace != nil
         let derivedPresentationStyle = BufferDerivedPresentationRules.style(
@@ -3663,6 +3975,17 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         saveFrame()
         candidateWindow.syncWorkbenchLayout()
     }
+    func windowDidResignKey(_ notification: Notification) {
+        guard musicPresentationActive else { return }
+        musicKeyboardRouting.reset()
+        BufferMusicSession.shared.setActive(false)
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard musicSelected, isVisible, !sessionProtectionActive, !hiddenForSession,
+              !IsSecureEventInputEnabled() else { return }
+        BufferMusicSession.shared.setActive(true)
+    }
     func windowDidResize(_ notification: Notification) {
         guard !adjustingFrame else { return }
         clearTargetAssociationCue()
@@ -4074,6 +4397,18 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         root.detachesHiddenViews = true
         root.translatesAutoresizingMaskIntoConstraints = false
         visual.addSubview(root)
+        // Keep the instrument out of NSStackView entirely. Detaching hidden
+        // arranged rails during live resize must not adopt/collapse this view.
+        musicView.translatesAutoresizingMaskIntoConstraints = false
+        musicView.isHidden = true
+        visual.addSubview(musicView, positioned: .above, relativeTo: root)
+        NSLayoutConstraint.activate([
+            musicView.leadingAnchor.constraint(equalTo: visual.leadingAnchor),
+            musicView.trailingAnchor.constraint(equalTo: visual.trailingAnchor),
+            musicView.topAnchor.constraint(equalTo: mainBar.topAnchor),
+            musicView.bottomAnchor.constraint(equalTo: mainBar.bottomAnchor),
+        ])
+
         let mainBarHeight = mainBar.heightAnchor.constraint(
             equalToConstant: BufferWorkbenchMetrics.mainBarHeight(for: layoutMode)
         )
@@ -4109,7 +4444,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         rimeOwnsInput: Bool
     ) {
         let resolved: NSWindow.Level
-        if rimeOwnsInput,
+        if !musicSelected, rimeOwnsInput,
            !secureInputEnabled,
            !sessionProtectionActive,
            let token = BufferModel.shared.captureFocusToken,
@@ -4370,6 +4705,16 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             pluginLoadingIndicator.isHidden = true
             pluginLoadingIndicator.stopAnimation(nil)
             pluginSelector.toolTip = "安全输入已开启，插件控制已隐藏"
+            return
+        }
+        if musicSelected {
+            if musicView.toolbarView.superview !== pluginButtonRow {
+                resetDerivedControlRendering()
+                pluginButtonRow.addArrangedSubview(musicView.toolbarView)
+            }
+            pluginLoadingIndicator.isHidden = true
+            pluginLoadingIndicator.stopAnimation(nil)
+            pluginSelector.toolTip = "当前插件：电音演奏（\(pluginSwitchShortcutTitle) 切换）"
             return
         }
         if let workspace = DerivedBufferWorkspaceRouter.selectedWorkspace {
@@ -4960,7 +5305,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// drain and refill entirely between ticks still creates a fresh lifetime.
     private func reconcileAutoSendClock()
         -> BufferDeliveryCoordinator.AutomaticDeliverySnapshot? {
-        guard autoSendEnabled else {
+        guard !musicSelected, autoSendEnabled else {
             autoSendClock.reset()
             bufferRail.setAutoSendFade([:])
             return nil
@@ -5107,6 +5452,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             BuiltInBufferActionWorkspaceRouter.activeSelectionDidChange()
             self?.schedulePluginSelectorRefresh()
             self?.refresh()
+            // A popup may still own mouse tracking here. Take keyboard focus
+            // after it closes, only for this explicit selection transition.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.musicSelected, self.isVisible else { return }
+                self.focusMusicSurface()
+            }
         })
         observers.append(center.addObserver(
             forName: .pluginRegistryDidChange,
@@ -5120,6 +5471,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                                                object: nil,
                                                queue: .main) { [weak self] _ in
             self?.activeSpaceFocusFollowPending = true
+            if let self, !self.isVisible { self.deactivateMusicSurface() }
             self?.clearTargetAssociationCue()
             self?.refresh()
             RimeBufferController.refreshActiveUI()
@@ -5213,6 +5565,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func protectForSession(reason: String) {
+        deactivateMusicSurface()
         autoSendClock.reset()
         bufferRail.setAutoSendFade([:])
         applyTargetAssociationPresentation(state: .protected, appName: nil)
@@ -5627,6 +5980,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func externalPointerDidRequestHostInput() {
         dispatchPrecondition(condition: .onQueue(.main))
+        if musicPresentationActive {
+            deactivateMusicSurface()
+            return
+        }
         guard BufferModel.shared.active else { return }
         clearTargetAssociationCue()
         guard RimeInputSourceAuthority.currentSourceIsOwn() else {

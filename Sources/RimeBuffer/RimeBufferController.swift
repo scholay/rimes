@@ -1332,6 +1332,7 @@ final class RimeBufferController: IMKInputController {
         // A protected workbench must neither reveal nor activate a plugin;
         // leave native Command+Shift+arrow selection intact in secure fields.
         guard !IsSecureEventInputEnabled() else { return .passThrough }
+        if BufferWindowController.shared.canNavigatePlugins { return .executeBufferAction }
         return bufferControlDisposition(client: client)
     }
 
@@ -4712,6 +4713,9 @@ final class RimeBufferController: IMKInputController {
     private func performBufferPluginSwitch(direction: Int,
                                            client: IMKTextInput,
                                            source: String) -> Bool {
+        if BufferWindowController.shared.canNavigatePlugins {
+            return BufferWindowController.shared.navigatePlugin(direction: direction)
+        }
         guard shouldUseBufferCommands(client: client),
               !IsSecureEventInputEnabled() else { return false }
         let plugins = PluginRegistry.shared.plugins(capability: .bufferAction)

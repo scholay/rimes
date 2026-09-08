@@ -248,6 +248,11 @@ jobs:
           # SPM target is still "RimeBuffer"; ETInput is the frozen internal
           # compatibility filename while the user-facing product is RIMES.
           cp "$BIN_DIR/RimeBuffer" "$APP/Contents/MacOS/ETInput"
+          for resource_bundle in "$BIN_DIR/"*.bundle; do
+            [ -d "$resource_bundle" ] || continue
+            cp -R "$resource_bundle" "$APP/Contents/Resources/"
+          done
+          cp THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
           cp Info.plist "$APP/Contents/Info.plist"
           cp -R Vendor/rime/Frameworks/* "$APP/Contents/Frameworks/"
           cp -R Vendor/rime/SharedSupport/* "$APP/Contents/SharedSupport/"
@@ -277,6 +282,8 @@ jobs:
           BIN="$APP/Contents/MacOS/ETInput"
           SHARED="$APP/Contents/SharedSupport"
           FRAMEWORKS="$APP/Contents/Frameworks"
+          "$BIN" buffer-music-smoke
+          "$BIN" buffer-music-audio-smoke
           ENGINE_ROOT="$RUNNER_TEMP/rimebuffer-engine-smoke"
           LEXICON_ROOT="$RUNNER_TEMP/rimebuffer-lexicon-smoke"
           mkdir -p "$ENGINE_ROOT" "$LEXICON_ROOT"

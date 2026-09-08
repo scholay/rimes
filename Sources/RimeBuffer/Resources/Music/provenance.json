@@ -1,0 +1,18 @@
+{
+  "name": "AVL Drumkits Black Pearl 4pc",
+  "authors": [
+    "Glen MacArthur",
+    "Robin Gareus"
+  ],
+  "source": "https://github.com/x42/avldrums.lv2/blob/9389f16f139410d9a55f9006976bd54cbd8b7806/sf2/Black_Pearl_4_LV2.sf2",
+  "license": "CC-BY-SA-3.0 with musical-works exception; see AVL-README.txt",
+  "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+  "sha256": "e0542ec19f2816ef4e0d00aeb087e7aa311e888d6f4805f971688bb267c6d405",
+  "bytes": 19448258,
+  "modified": false,
+  "midi_notes": [
+    36,
+    61
+  ],
+  "velocity_layers": 5
+}

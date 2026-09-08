@@ -507,6 +507,10 @@ jobs:
             schema-smoke
             buffer-smoke
             buffer-window-smoke
+            buffer-music-smoke
+            buffer-music-audio-smoke
+            buffer-music-view-smoke
+            buffer-music-panel-smoke
             clipboard-history-smoke
             stats-smoke
             matrix-smoke
