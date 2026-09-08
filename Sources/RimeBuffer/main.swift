@@ -7882,6 +7882,47 @@ func runBufferWindowSmokeTest() -> Bool {
             currentSchemaID: "rime_ice"
           ) == .discard,
           ShiftModifierGesture.standaloneTapLimit == 0.5,
+          // macOS redelivers flagsChanged for one physical Shift press: same
+          // key, no aggregate delta. Only the *other* Shift key is a real
+          // second transition. Reading a redelivery as one voided the gesture
+          // its own press had just created, so no standalone tap ever reached
+          // librime and Chinese/English could not be switched at all.
+          !ShiftModifierEventRules.isSecondShiftTransition(
+            aggregateDeltaIsEmpty: true,
+            shiftIsDown: true,
+            hardwareKeyCode: 56,
+            inFlightGestureKeycode: RimeKey.shiftL
+          ),
+          ShiftModifierEventRules.isSecondShiftTransition(
+            aggregateDeltaIsEmpty: true,
+            shiftIsDown: true,
+            hardwareKeyCode: 60,
+            inFlightGestureKeycode: RimeKey.shiftL
+          ),
+          ShiftModifierEventRules.isSecondShiftTransition(
+            aggregateDeltaIsEmpty: true,
+            shiftIsDown: true,
+            hardwareKeyCode: 56,
+            inFlightGestureKeycode: nil
+          ),
+          !ShiftModifierEventRules.isSecondShiftTransition(
+            aggregateDeltaIsEmpty: false,
+            shiftIsDown: true,
+            hardwareKeyCode: 60,
+            inFlightGestureKeycode: RimeKey.shiftL
+          ),
+          !ShiftModifierEventRules.isSecondShiftTransition(
+            aggregateDeltaIsEmpty: true,
+            shiftIsDown: false,
+            hardwareKeyCode: 60,
+            inFlightGestureKeycode: RimeKey.shiftL
+          ),
+          !ShiftModifierEventRules.isSecondShiftTransition(
+            aggregateDeltaIsEmpty: true,
+            shiftIsDown: true,
+            hardwareKeyCode: 55,
+            inFlightGestureKeycode: RimeKey.shiftL
+          ),
           shortShiftTap.releaseDecision(
             at: 10.499,
             currentSession: 7,

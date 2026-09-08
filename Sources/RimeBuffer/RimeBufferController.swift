@@ -447,6 +447,24 @@ enum ShiftModifierEventRules {
         }
         return eventKey
     }
+
+    /// True only when the *other* Shift key goes down while one is already
+    /// held. Both that and a redelivered flagsChanged for a single press carry
+    /// an empty aggregate delta, and only the physical key tells them apart.
+    /// Reading a redelivery as a second Shift voids the gesture the press just
+    /// created, which silently removes the standalone tap that switches
+    /// librime between Chinese and English.
+    static func isSecondShiftTransition(aggregateDeltaIsEmpty: Bool,
+                                        shiftIsDown: Bool,
+                                        hardwareKeyCode: UInt16,
+                                        inFlightGestureKeycode: Int32?) -> Bool {
+        guard aggregateDeltaIsEmpty,
+              shiftIsDown,
+              let key = rimeKeycode(forHardwareKeyCode: hardwareKeyCode) else {
+            return false
+        }
+        return inFlightGestureKeycode != key
+    }
 }
 
 /// librime treats a sub-500ms Shift press/release with no intervening Rime key
@@ -1817,7 +1835,7 @@ final class RimeBufferController: IMKInputController {
         } else {
             // A Shift that began outside this trusted focus can modify keys,
             // but its eventual release must never become a standalone toggle.
-            shiftGesture?.cancelForFocusChange()
+            voidShiftGesture("activateServer", focusChange: true)
         }
         let activeClient: IMKTextInput? = (sender as? IMKTextInput)
             ?? currentControllerClientWithSourceAuthority()
@@ -3348,7 +3366,7 @@ final class RimeBufferController: IMKInputController {
         }
 
         if event.modifierFlags.contains(.shift) {
-            shiftGesture?.noteModifierUse()
+            voidShiftGesture("clipboardSearchKeyDown")
         }
         publishTelemetryKey(event, client: client)
 
@@ -3435,7 +3453,7 @@ final class RimeBufferController: IMKInputController {
         // do not feed this keyDown to librime, but it still means Shift was a
         // modifier rather than a standalone mode-toggle tap.
         if event.modifierFlags.contains(.shift) {
-            shiftGesture?.noteModifierUse()
+            voidShiftGesture("handleKeyDown")
         }
         publishTelemetryKey(event, client: client)
 
@@ -3853,7 +3871,19 @@ final class RimeBufferController: IMKInputController {
             bufferEnabled: captureAuthorized,
             exactExternalFocus: exactExternalFocus,
             secureInputEnabled: IsSecureEventInputEnabled()
-        ) else { return false }
+        ) else {
+            if streamInputModeSelected, let characters = event.characters,
+               !characters.isEmpty {
+                IMELog.write(
+                    "stream diag: ASCII fallback declined "
+                        + "\(IMELog.redact(characters)) "
+                        + "authorized=\(captureAuthorized) "
+                        + "exactExternalFocus=\(exactExternalFocus) "
+                        + "secure=\(IsSecureEventInputEnabled())"
+                )
+            }
+            return false
+        }
         return insertDirectText(text,
                                 client: client,
                                 source: "Rime ASCII fallback",
@@ -4766,11 +4796,26 @@ final class RimeBufferController: IMKInputController {
         return !ctx.active && ctx.input.isEmpty && ctx.preedit.isEmpty
     }
 
+    /// Every route that can turn a standalone Shift tap into "used as a
+    /// modifier" reports which one it was. Without this the tap simply
+    /// disappears and there is no way to tell a real modifier combination from
+    /// an unrelated focus or panel event cancelling the user's language switch.
+    private func voidShiftGesture(_ site: String, focusChange: Bool = false) {
+        guard var gesture = shiftGesture, !gesture.usedAsModifier else { return }
+        if focusChange {
+            gesture.cancelForFocusChange()
+        } else {
+            gesture.noteModifierUse()
+        }
+        shiftGesture = gesture
+        IMELog.write("stream diag: Shift gesture voided at \(site)")
+    }
+
     private func cancelFocusBoundGestures() {
         // Shift press is deferred, so cancellation creates no librime release
         // debt. Keep the physical gesture only to discard a later same-focus
         // release if the key remains held across activation.
-        shiftGesture?.cancelForFocusChange()
+        voidShiftGesture("cancelFocusBoundGestures", focusChange: true)
         let mustConsumeRelease = bufferEnterPending
             || bufferEnterSuppressUntilPhysicalUp
             || bufferEnterCallbackOwnership.suppressesKeyUp
@@ -5572,19 +5617,23 @@ final class RimeBufferController: IMKInputController {
             // symbols straight through. Those keys are exactly how the user
             // writes English and punctuation, so in stream mode they belong in
             // the raw line rather than as hidden buffer blocks.
-            if streamInputModeSelected,
-               StreamInputWorkspace.shared.insertTypedText(
-                 text,
-                 focusToken: expectedLease.token
-               ) {
-                clearCompositionPresentation(client: client)
-                publishAuthoredCommitTelemetry(characterCount: text.count,
-                                               source: .buffer,
-                                               client: client)
-                IMELog.write(
-                    "\(source) text \(IMELog.redact(text)) -> stream raw"
+            if streamInputModeSelected {
+                let accepted = deliverToStreamRawIfSelected(
+                    text,
+                    owner: expectedLease.token
                 )
-                return true
+                if accepted {
+                    clearCompositionPresentation(client: client)
+                    publishAuthoredCommitTelemetry(
+                        characterCount: text.count,
+                        source: .buffer,
+                        client: client
+                    )
+                    IMELog.write(
+                        "\(source) text \(IMELog.redact(text)) -> stream raw"
+                    )
+                    return true
+                }
             }
             BufferModel.shared.appendDirectInputFragment(
                 text,
@@ -5735,12 +5784,26 @@ final class RimeBufferController: IMKInputController {
         }
 
         let nonShiftChanges = changes.subtracting(.shift)
-        let isSecondShiftTransition = changes.isEmpty
-            && modifiers.contains(.shift)
-            && (event.keyCode == 56 || event.keyCode == 60)
+        // A second Shift is the *other* Shift key going down while the first is
+        // still held: no aggregate delta, but a different physical key. macOS
+        // also redelivers flagsChanged for a single press — same key, same
+        // empty delta — and reading that as a second Shift voided the gesture
+        // the press had just created, so an ordinary tap could never reach
+        // librime's ASCII switch and Chinese/English could not be toggled.
+        let isSecondShiftTransition = ShiftModifierEventRules
+            .isSecondShiftTransition(
+                aggregateDeltaIsEmpty: changes.isEmpty,
+                shiftIsDown: modifiers.contains(.shift),
+                hardwareKeyCode: event.keyCode,
+                inFlightGestureKeycode: shiftGesture?.rimeKeycode
+            )
         if !nonShiftChanges.isEmpty
             || (modifiers.contains(.shift) && isSecondShiftTransition) {
-            shiftGesture?.noteModifierUse()
+            voidShiftGesture(
+                "flagsChanged nonShift=\(nonShiftChanges.rawValue) "
+                    + "secondShift=\(isSecondShiftTransition) "
+                    + "keyCode=\(event.keyCode)"
+            )
         }
 
         // Every trusted flagsChanged is a physical boundary for stream chords,
@@ -5795,7 +5858,7 @@ final class RimeBufferController: IMKInputController {
             // An aggregate Shift delta attached to another modifier cannot
             // authenticate a tap. If a real gesture was already in flight,
             // fail closed so a later physical release cannot toggle ASCII.
-            shiftGesture?.noteModifierUse()
+            voidShiftGesture("aggregateShiftDelta keyCode=\(event.keyCode)")
             IMELog.write(
                 "aggregate Shift delta ignored for non-Shift keyCode=\(event.keyCode)"
             )
@@ -5850,6 +5913,20 @@ final class RimeBufferController: IMKInputController {
                     IMELog.write(
                         "standalone Shift tap discarded by global hotkey tombstone "
                             + "route=\(Self.globalHotKeyShiftTombstone.route)"
+                    )
+                } else if let releaseGesture {
+                    let elapsed = max(0, event.timestamp - releaseGesture.beganAt)
+                    IMELog.write(
+                        "stream diag: Shift tap discarded "
+                            + "usedAsModifier=\(releaseGesture.usedAsModifier) "
+                            + "elapsed=\(String(format: "%.3f", elapsed)) "
+                            + "sessionMatch=\(releaseGesture.session == session) "
+                            + "schemaMatch="
+                            + "\(releaseGesture.schemaID == currentSchemaId)"
+                    )
+                } else {
+                    IMELog.write(
+                        "stream diag: Shift release with no gesture in flight"
                     )
                 }
             }
@@ -6413,6 +6490,19 @@ final class RimeBufferController: IMKInputController {
         ctx.candidates.map { "\($0.label):\($0.text):\($0.comment)" }.joined(separator: "|")
     }
 
+    /// librime hands finished text back through three separate doors: an
+    /// ordinary commit, the ASCII fallback for keys it declines, and Return
+    /// over a live composition. All three must reach the same sink. In stream
+    /// mode that sink is the raw line the user is looking at — anything else
+    /// lands in BufferModel blocks that stay invisible until another plugin is
+    /// selected, which reads as the text having been swallowed.
+    private func deliverToStreamRawIfSelected(_ text: String,
+                                              owner: FocusToken) -> Bool {
+        guard streamInputModeSelected else { return false }
+        return StreamInputWorkspace.shared.insertTypedText(text,
+                                                           focusToken: owner)
+    }
+
     private func commitRawInput(client: IMKTextInput) -> Bool {
         guard session != 0 else { return false }
 
@@ -6444,6 +6534,24 @@ final class RimeBufferController: IMKInputController {
             if let focusToken {
                 BufferWindowController.shared.clearInlineComposition(owner: focusToken)
                 candidateWindow.hide(owner: focusToken)
+            }
+            // Return over a live composition is librime's "commit what I
+            // actually typed". In stream mode those letters belong in the raw
+            // line the user is looking at; appending them to BufferModel hides
+            // them in blocks that only reappear once another plugin is
+            // selected, which reads as the letters having been swallowed.
+            if let focusToken,
+               deliverToStreamRawIfSelected(raw, owner: focusToken) {
+                clearCompositionPresentation(client: client)
+                publishAuthoredCommitTelemetry(characterCount: raw.count,
+                                               source: .buffer,
+                                               client: client)
+                IMELog.write(
+                    "raw input \(IMELog.redact(raw)) -> stream raw"
+                )
+                publishCompositionActive(false)
+                updateUI(client: client)
+                return true
             }
             BufferModel.shared.append(raw)
             clearCompositionPresentation(client: client)
@@ -6490,11 +6598,8 @@ final class RimeBufferController: IMKInputController {
             // Consciousness-stream input is an ordinary input surface, so what
             // Rime commits is what the user wrote: it belongs in that raw line
             // rather than as a finished buffer block.
-            if streamInputModeSelected, let focusToken,
-               StreamInputWorkspace.shared.insertTypedText(
-                 commit,
-                 focusToken: focusToken
-               ) {
+            if let focusToken,
+               deliverToStreamRawIfSelected(commit, owner: focusToken) {
                 clearCompositionPresentation(client: client)
                 publishAuthoredCommitTelemetry(characterCount: commit.count,
                                                source: .buffer,
