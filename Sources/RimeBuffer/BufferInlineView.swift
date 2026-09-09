@@ -532,13 +532,28 @@ private final class TranslationTargetRail {
     let row = NSStackView()
     let leadingPlaceholder = NSView()
     let trailingSpacer = NSView()
+    /// Status text sits here rather than in the row. As a flow item it landed
+    /// wherever the content ended — at the far left in an empty box — and it
+    /// scrolled away with the content. Pinned to the scroll view itself, it
+    /// stays at the trailing edge and covers only the width it needs, so the
+    /// rest of the result stays readable underneath.
+    let statusOverlay = NSStackView()
     private let trailingClearanceConstraint: NSLayoutConstraint
+    private var statusOverlayTrailingConstraint: NSLayoutConstraint?
 
     init(key: Int) {
         self.key = key
         trailingClearanceConstraint = trailingSpacer.widthAnchor.constraint(
             greaterThanOrEqualToConstant: 0
         )
+        statusOverlay.orientation = .horizontal
+        statusOverlay.alignment = .centerY
+        statusOverlay.spacing = 5
+        statusOverlay.edgeInsets = NSEdgeInsets(top: 0, left: 8,
+                                                bottom: 0, right: 6)
+        statusOverlay.translatesAutoresizingMaskIntoConstraints = false
+        statusOverlay.wantsLayer = true
+        statusOverlay.layer?.cornerRadius = 5
         leadingPlaceholder.translatesAutoresizingMaskIntoConstraints = false
         trailingSpacer.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -556,6 +571,65 @@ private final class TranslationTargetRail {
 
     func setTrailingClearance(_ width: CGFloat) {
         trailingClearanceConstraint.constant = max(0, width)
+    }
+
+    /// Added to the scroll view rather than to its document, so it is drawn
+    /// above the content and stays put while the row scrolls beneath it.
+    /// Attached to the scroll view's *parent*, not the scroll view: NSScrollView
+    /// owns the layout of its own subviews and left an overlay added there at
+    /// zero size. Anchored to the scroll's edges it still reads as part of the
+    /// box, while staying outside the scrolling content so a long result
+    /// cannot carry the status off-screen.
+    func syncStatusOverlayAttachment(trailingInset: CGFloat) {
+        guard let container = scroll.superview else { return }
+        guard statusOverlay.superview !== container else {
+            statusOverlayTrailingConstraint?.constant = -max(3, trailingInset)
+            return
+        }
+        statusOverlay.removeFromSuperview()
+        container.addSubview(statusOverlay, positioned: .above, relativeTo: scroll)
+        let trailing = statusOverlay.trailingAnchor.constraint(
+            equalTo: scroll.trailingAnchor,
+            constant: -max(3, trailingInset)
+        )
+        statusOverlayTrailingConstraint = trailing
+        NSLayoutConstraint.activate([
+            trailing,
+            statusOverlay.centerYAnchor.constraint(
+                equalTo: scroll.centerYAnchor
+            ),
+            statusOverlay.leadingAnchor.constraint(
+                greaterThanOrEqualTo: scroll.leadingAnchor,
+                constant: 3
+            ),
+        ])
+    }
+
+    /// Keeps the status clear of the trailing action cluster, which floats
+    /// over the same corner of the box.
+    func setStatusOverlayInset(_ inset: CGFloat) {
+        syncStatusOverlayAttachment(trailingInset: inset)
+    }
+
+    func setStatusViews(_ views: [NSView], background: CGColor?) {
+        for view in statusOverlay.arrangedSubviews where !views.contains(view) {
+            statusOverlay.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for (index, view) in views.enumerated() {
+            if view.superview !== statusOverlay {
+                (view.superview as? NSStackView)?.removeArrangedSubview(view)
+                view.removeFromSuperview()
+                statusOverlay.insertArrangedSubview(view, at: index)
+            } else if statusOverlay.arrangedSubviews.firstIndex(of: view) != index {
+                statusOverlay.removeArrangedSubview(view)
+                statusOverlay.insertArrangedSubview(view, at: index)
+            }
+        }
+        statusOverlay.isHidden = views.isEmpty
+        // Opaque only while it actually overlaps content; an empty box needs
+        // no plate behind one line of grey text.
+        statusOverlay.layer?.backgroundColor = views.isEmpty ? nil : background
     }
 }
 
@@ -775,16 +849,61 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             chip.renderedRetainedTailStart.map { (id, $0) }
         })
     }
+    /// Status placement, for assertions. A flow item cannot be distinguished
+    /// from an overlay by reading text alone, and placement is the whole point
+    /// of the change.
+    struct RenderedStatusPlacement: Equatable {
+        let texts: [String]
+        let isTrailingOverlay: Bool
+        let overlapsContent: Bool
+        /// Distance from the status's leading edge to the box's leading edge.
+        /// A left-aligned status reports ~0; a trailing one reports the width
+        /// it left clear.
+        let leadingClearance: CGFloat
+    }
+
+    var renderedStatusPlacement: RenderedStatusPlacement? {
+        guard let key = renderedTranslationTargetRowKeys.sorted().last,
+              let rail = translationTargetRails[key] else { return nil }
+        let overlay = rail.statusOverlay
+        guard !overlay.isHidden, overlay.superview != nil else { return nil }
+        // Geometry is the assertion here, so the whole subtree must settle
+        // first; a rail measured before layout reports a zero-width box.
+        layoutSubtreeIfNeeded()
+        rail.scroll.layoutSubtreeIfNeeded()
+        func collect(_ view: NSView) -> [String] {
+            let own = (view as? NSTextField).map { [$0.stringValue] } ?? []
+            return own + view.subviews.flatMap(collect)
+        }
+        let frame = overlay.convert(overlay.bounds, to: rail.scroll)
+        let trailingGap = rail.scroll.bounds.maxX - frame.maxX
+        return RenderedStatusPlacement(
+            texts: collect(overlay).filter { !$0.isEmpty },
+            isTrailingOverlay: trailingGap < frame.minX,
+            overlapsContent: rail.row.arrangedSubviews.contains {
+                $0 !== rail.trailingSpacer
+                    && $0.convert($0.bounds, to: rail.scroll).maxX > frame.minX
+            },
+            leadingClearance: frame.minX
+        )
+    }
+
     var isEnterHoldProgressVisible: Bool { enterHoldProgress != nil }
     var renderedTextFragments: [String] {
         func collect(_ view: NSView) -> [String] {
             let own = (view as? NSTextField).map { [$0.stringValue] } ?? []
             return own + view.subviews.flatMap(collect)
         }
+        // Status text is pinned beside the row rather than inside it, but it
+        // is still text the box is showing, so it belongs in this inventory.
         return collect(chipRow)
             + (renderedShowsSourceRail ? collect(translationSourceRow) : [])
-            + renderedTranslationTargetRowKeys.flatMap {
-                translationTargetRails[$0].map { collect($0.row) } ?? []
+            + renderedTranslationTargetRowKeys.flatMap { key -> [String] in
+                guard let rail = translationTargetRails[key] else { return [] }
+                return collect(rail.row)
+                    + (rail.statusOverlay.isHidden
+                        ? []
+                        : collect(rail.statusOverlay))
             }
     }
 
@@ -1419,6 +1538,11 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         sourceTrailingClearanceConstraint.constant = 0
         translationTargetRails.values.forEach { $0.setTrailingClearance(0) }
 
+        for key in renderedTranslationTargetRowKeys {
+            translationTargetRails[key]?.setStatusOverlayInset(
+                trailingActionExclusionWidth + 3
+            )
+        }
         if trailingActionExclusionWidth > 0 {
             if translationContainer.isHidden {
                 standardTrailingClearanceConstraint.constant = trailingActionExclusionWidth
@@ -1899,9 +2023,8 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
                 targetViews.append(translationPagerView)
             }
             if snapshot.outputBlocks.isEmpty, rowIndex == 0 {
-                if !loading, message == nil {
-                    targetViews.append(translationTargetEmptyLabel)
-                }
+                // The placeholder is status, not content, so it joins the
+                // trailing overlay below rather than opening the row.
             } else {
                 for block in rowSnapshot.blocks {
                     let targetIsCurrent = snapshot.phase == .ready || block.deliveryReady
@@ -1924,12 +2047,28 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
                     targetViews.append(chip)
                 }
             }
+            // Status is pinned to the trailing edge instead of flowing after
+            // the result: as a flow item it sat at the far left of an empty
+            // box and scrolled out of sight once a long result arrived.
+            var statusViews: [NSView] = []
             if rowIndex == rowSnapshots.count - 1 {
-                if loading { targetViews.append(loadingIndicator) }
+                if loading { statusViews.append(loadingIndicator) }
                 if let messageView = translationMessageView, message != nil {
-                    targetViews.append(messageView)
+                    statusViews.append(messageView)
+                }
+                if statusViews.isEmpty, snapshot.outputBlocks.isEmpty {
+                    translationTargetEmptyLabel.stringValue =
+                        snapshot.targetEmptyText
+                    statusViews.append(translationTargetEmptyLabel)
                 }
             }
+            rail.syncStatusOverlayAttachment(trailingInset: 3)
+            rail.setStatusViews(
+                statusViews,
+                background: snapshot.outputBlocks.isEmpty
+                    ? nil
+                    : RimeUI.bufferTargetRail.withAlphaComponent(0.94).cgColor
+            )
             targetViews.append(rail.trailingSpacer)
             reconcileArrangedSubviews(targetViews, in: rail.row)
         }

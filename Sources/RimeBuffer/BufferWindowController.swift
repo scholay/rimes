@@ -2020,6 +2020,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private lazy var sourceActionCluster = BufferRailActionClusterView(controls: [])
     private lazy var exchangeEditSlot = BufferToolbarControlSlot(control: exchangeEditButton)
     private var railActionCenterYConstraint: NSLayoutConstraint?
+    private var pendingCaptureRequest: BufferPendingCaptureRequest?
     private var autoSendTimer: Timer?
     private var autoSendClock = BufferAutoSendClock()
     private var sourceActionCenterYConstraint: NSLayoutConstraint?
@@ -3436,6 +3437,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         let secureInputEnabled = IsSecureEventInputEnabled()
         let rimeOwnsInput = RimeInputSourceAuthority.currentSourceIsOwn()
+        // Focus transitions all land here, so a click made while no field
+        // owned a lease binds itself as soon as one does.
+        if !secureInputEnabled, rimeOwnsInput {
+            completePendingCaptureIfPossible()
+        }
         let contentProtected = secureInputEnabled || sessionProtectionActive
         if contentProtected {
             BufferPopUpMenuController.shared.dismiss()
@@ -6081,12 +6087,69 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func activateLogicalInput(at insertionIndex: Int) {
-        guard activateCaptureForCurrentFocus(showWorkbench: false) else {
-            NSSound.beep()
+        let decision = BufferCaptureRequestRules.decision(
+            hasTrustedLease: InputFocusCoordinator.shared.liveTarget(
+                forceOverlayVisibilityRefresh: true
+            ) != nil,
+            holdsCaptureRoute: BufferModel.shared.capturesInput(
+                for: BufferModel.shared.captureFocusToken
+            ),
+            captureTokenIsLive: BufferModel.shared.captureFocusToken.map {
+                InputFocusCoordinator.shared.liveTarget(expected: $0) != nil
+            } ?? false
+        )
+        switch decision {
+        case .grant:
+            guard activateCaptureForCurrentFocus(showWorkbench: false) else {
+                armPendingCapture(at: insertionIndex)
+                return
+            }
+            pendingCaptureRequest = nil
+            _ = BufferModel.shared.setInsertionPoint(insertionIndex)
+            refresh()
+        case .keepExistingCapture:
+            // The route is still bound to a live field. Move the caret and
+            // leave the route alone rather than tearing it down.
+            pendingCaptureRequest = nil
+            _ = BufferModel.shared.setInsertionPoint(insertionIndex)
+            refresh()
+        case .awaitTarget:
+            armPendingCapture(at: insertionIndex)
+        case .revoke:
+            BufferModel.shared.routeDirectPreservingContent(
+                reason: "capture route target no longer live"
+            )
+            armPendingCapture(at: insertionIndex)
+        }
+    }
+
+    /// Keeps the click rather than discarding it. Switching applications and
+    /// immediately reaching for the Buffer is the ordinary case, and IMK has
+    /// usually not activated the new field yet at that instant.
+    private func armPendingCapture(at insertionIndex: Int) {
+        pendingCaptureRequest = BufferPendingCaptureRequest(
+            insertionIndex: insertionIndex,
+            requestedAt: Date()
+        )
+        IMELog.write("buffer capture deferred; waiting for a trusted field")
+        refresh()
+    }
+
+    /// Called from `refresh()`, which already runs on every focus transition,
+    /// so a deferred click completes the moment a field becomes available.
+    private func completePendingCaptureIfPossible() {
+        guard let pending = pendingCaptureRequest else { return }
+        guard pending.isLive(at: Date()) else {
+            pendingCaptureRequest = nil
             return
         }
-        _ = BufferModel.shared.setInsertionPoint(insertionIndex)
-        refresh()
+        guard InputFocusCoordinator.shared.liveTarget(
+            forceOverlayVisibilityRefresh: false
+        ) != nil else { return }
+        pendingCaptureRequest = nil
+        guard activateCaptureForCurrentFocus(showWorkbench: false) else { return }
+        _ = BufferModel.shared.setInsertionPoint(pending.insertionIndex)
+        IMELog.write("buffer capture completed from a deferred click")
     }
 
     private func externalPointerDidRequestHostInput() {
