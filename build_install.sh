@@ -217,8 +217,30 @@ cp Resources/menubar-template.png "$APP_PATH/Contents/Resources/" 2>/dev/null ||
 cp THIRD_PARTY_NOTICES.md "$APP_PATH/Contents/Resources/"
 
 # Ad-hoc sign. --deep now that we have nested dylibs (librime + plugins).
-echo "==> ad-hoc signing (deep)"
-codesign --force --deep --sign - "$APP_PATH"
+# Signing identity decides whether permissions survive a rebuild, which is
+# not obvious from the outside. An ad-hoc signature's designated requirement
+# is a cdhash — a new value every build — so macOS stops matching the recorded
+# Accessibility grant while System Settings still shows the checkbox ticked.
+# A real identity produces a requirement naming the certificate instead, with
+# no cdhash in it, and the grant persists across rebuilds.
+SIGN_IDENTITY="${RIMES_SIGN_IDENTITY:-}"
+if [ -z "$SIGN_IDENTITY" ]; then
+    SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+        | /usr/bin/awk 'NR == 1 && $2 ~ /^[0-9A-F]{40}$/ { print $2 }')"
+fi
+if [ -n "$SIGN_IDENTITY" ]; then
+    echo "==> signing (deep) with $SIGN_IDENTITY"
+    if ! codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_PATH"; then
+        echo "!! signing with $SIGN_IDENTITY failed; falling back to ad-hoc"
+        echo "   Accessibility will need re-granting after every rebuild."
+        codesign --force --deep --sign - "$APP_PATH"
+    fi
+else
+    echo "==> ad-hoc signing (deep) — no code-signing identity found"
+    echo "   Accessibility grants will not survive a rebuild. Set"
+    echo "   RIMES_SIGN_IDENTITY, or add any code-signing certificate."
+    codesign --force --deep --sign - "$APP_PATH"
+fi
 
 echo "==> handing active clients to a safe fallback input source"
 if ! /bin/launchctl asuser "$(id -u)" "$APP_PATH/Contents/MacOS/$EXE" --prepare-update; then

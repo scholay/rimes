@@ -3790,6 +3790,15 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             rows.append(mismatch)
         }
 
+        if let authority = SystemPermissionAudit.signingAuthority() {
+            let signed = NSTextField(wrappingLabelWithString:
+                "签名证书：\(authority)。授权记录绑定在证书上而不是二进制哈希上，"
+                + "因此重新构建之后无需重新授权。")
+            signed.font = .systemFont(ofSize: 11)
+            signed.textColor = RimeUI.textMuted
+            rows.append(spacer(8))
+            rows.append(signed)
+        }
         if SystemPermissionAudit.isAdHocSigned() {
             // The single most useful sentence on this page for this build.
             let note = NSTextField(wrappingLabelWithString:

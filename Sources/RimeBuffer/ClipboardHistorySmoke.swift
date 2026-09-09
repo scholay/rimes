@@ -1972,6 +1972,23 @@ func runClipboardActivationPolicySmokeTest() -> Bool {
         return clipboardPermissionFail("empty identifier must not be reset")
     }
 
+    // Signing decides whether a grant outlives a rebuild: an ad-hoc
+    // requirement is a cdhash, which changes every build, while an identity
+    // requirement names a certificate and does not. The two readings must
+    // never both be true, or the page would claim both at once.
+    let adHoc = SystemPermissionAudit.isAdHocSigned()
+    let authority = SystemPermissionAudit.signingAuthority()
+    guard !(adHoc && authority != nil) else {
+        return clipboardPermissionFail(
+            "a build cannot be both ad-hoc and identity-signed"
+        )
+    }
+    if let authority {
+        guard !authority.isEmpty else {
+            return clipboardPermissionFail("a signing authority must be named")
+        }
+    }
+
     print("clipboard activation policy smoke: OK")
     return true
 }

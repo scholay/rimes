@@ -5,8 +5,8 @@
 # System Settings and the input menu discover a newly installed source.
 set -u
 
-APP="/Library/Input Methods/ETInput.app"
-EXE="$APP/Contents/MacOS/ETInput"
+APP="/Library/Input Methods/RIMES.app"
+EXE="$APP/Contents/MacOS/RIMES"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 . "$SCRIPT_DIR/rimes-install-common.sh"
 USER_AGENT_HELPER="$SCRIPT_DIR/rimes-user-activation-agent.sh"
@@ -47,7 +47,7 @@ wait_for_canonical_app_process() {
     while [ "$attempts" -lt 20 ]; do
         pids="$(
             rimes_run_bounded 2 /usr/bin/pgrep \
-                -U "$RIMES_LOGIN_UID" -x ETInput 2>/dev/null || true
+                -U "$RIMES_LOGIN_UID" -x RIMES 2>/dev/null || true
         )"
         found=0
         for pid in $pids; do
@@ -93,7 +93,7 @@ if ! rimes_run_bounded 5 /bin/test -x "$EXE"; then
     echo "RIMES postinstall: canonical payload executable is missing"
     exit 1
 fi
-if [ "$(rimes_bundle_identifier "$APP")" != "com.isaac.inputmethod.RimeBuffer" ]; then
+if [ "$(rimes_bundle_identifier "$APP")" != "com.scholay.isaac" ]; then
     echo "RIMES postinstall: canonical payload has the wrong bundle identity"
     exit 1
 fi
@@ -373,7 +373,9 @@ fi
 # Never kill imklaunchagent or TextInputMenuAgent here. They are Apple-owned
 # implementation details, and restarting them immediately before TIS calls is
 # exactly the race that made successful enable calls fail later verification.
-rimes_run_console_user_bounded 3 /usr/bin/killall ETInput 2>/dev/null || true
+for legacy_exe in RIMES ETInput RimeBuffer; do
+    rimes_run_console_user_bounded 3 /usr/bin/killall "$legacy_exe" 2>/dev/null || true
+done
 rimes_run_console_user_bounded 3 /usr/bin/killall RimeBuffer 2>/dev/null || true
 if ! rimes_run_bounded 5 /bin/bash "$COMPANION_AGENT_HELPER" \
         wait-user-processes-stopped "$RIMES_LOGIN_UID"; then

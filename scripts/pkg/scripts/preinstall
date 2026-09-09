@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runs before Installer replaces /Library/Input Methods/ETInput.app. If an old
+# Runs before Installer replaces /Library/Input Methods/RIMES.app. If an old
 # RIMES process is active, hand its clients to a safe ASCII source while the old
 # executable and controller are still intact.
 set -u
@@ -66,7 +66,7 @@ HANDOFF_HELPER="$STAGED_HANDOFF"
 # migration: older RIMES builds used com.isaac.inputmethod.ETInput at this same
 # frozen path. Relocation is disabled, so explicitly accept only current/legacy
 # RIMES here and refuse to overwrite any unrelated or malformed occupant.
-CANONICAL_APP="/Library/Input Methods/ETInput.app"
+CANONICAL_APP="/Library/Input Methods/RIMES.app"
 if [ -e "$CANONICAL_APP" ] || [ -L "$CANONICAL_APP" ]; then
     if [ -L "$CANONICAL_APP" ] || [ ! -d "$CANONICAL_APP" ] \
         || ! rimes_is_owned_bundle "$CANONICAL_APP"; then
@@ -114,7 +114,9 @@ if ! rimes_run_console_user_bounded 5 "$HANDOFF_HELPER"; then
 fi
 rimes_run_bounded 1 /bin/sleep 0.5 || true
 
-rimes_run_console_user_bounded 3 /usr/bin/killall ETInput 2>/dev/null || true
+for legacy_exe in RIMES ETInput RimeBuffer; do
+    rimes_run_console_user_bounded 3 /usr/bin/killall "$legacy_exe" 2>/dev/null || true
+done
 rimes_run_console_user_bounded 3 /usr/bin/killall RimeBuffer 2>/dev/null || true
 if ! rimes_run_bounded 4 /bin/bash "$COMPANION_AGENT_HELPER" \
         wait-user-processes-stopped "$RIMES_LOGIN_UID" \

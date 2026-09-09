@@ -96,6 +96,30 @@ enum SystemPermissionAudit {
     /// and `AXIsProcessTrustedWithOptions` will not prompt for an app it has
     /// already recorded. That combination is why a grant looks present and
     /// behaves absent.
+    /// The signing authority, when there is one. An identity-signed build has
+    /// a designated requirement naming its certificate rather than a cdhash,
+    /// which is what lets a grant outlive a rebuild.
+    static func signingAuthority(bundleURL: URL = Bundle.main.bundleURL) -> String? {
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(bundleURL as CFURL, [], &staticCode)
+                == errSecSuccess,
+              let staticCode else { return nil }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            staticCode,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &information
+        ) == errSecSuccess,
+              let details = information as? [String: Any],
+              let certificates = details[kSecCodeInfoCertificates as String]
+                as? [SecCertificate],
+              let leaf = certificates.first else { return nil }
+        var common: CFString?
+        guard SecCertificateCopyCommonName(leaf, &common) == errSecSuccess,
+              let name = common as String? else { return nil }
+        return name
+    }
+
     static func isAdHocSigned(bundleURL: URL = Bundle.main.bundleURL) -> Bool {
         var staticCode: SecStaticCode?
         guard SecStaticCodeCreateWithPath(bundleURL as CFURL, [], &staticCode)

@@ -37,7 +37,7 @@ verify_agent() {
         && [ "$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$agent" 2>/dev/null)" = "true" ] \
         && [ "$(/usr/libexec/PlistBuddy -c 'Print :LimitLoadToSessionType' "$agent" 2>/dev/null)" = "Aqua" ] \
         && [ "$(/usr/libexec/PlistBuddy -c 'Print :ProcessType' "$agent" 2>/dev/null)" = "Background" ] \
-        && [ "$(/usr/libexec/PlistBuddy -c 'Print :AssociatedBundleIdentifiers:0' "$agent" 2>/dev/null)" = "com.isaac.inputmethod.RimeBuffer" ] \
+        && [ "$(/usr/libexec/PlistBuddy -c 'Print :AssociatedBundleIdentifiers:0' "$agent" 2>/dev/null)" = "com.scholay.isaac" ] \
         && ! /usr/libexec/PlistBuddy -c 'Print :KeepAlive' "$agent" >/dev/null 2>&1 \
         || return 1
 
@@ -113,7 +113,7 @@ write_agent() {
     /usr/libexec/PlistBuddy -c 'Add :AssociatedBundleIdentifiers array' "$temporary" \
         || return 1
     /usr/libexec/PlistBuddy \
-        -c 'Add :AssociatedBundleIdentifiers:0 string com.isaac.inputmethod.RimeBuffer' \
+        -c 'Add :AssociatedBundleIdentifiers:0 string com.scholay.isaac' \
         "$temporary" || return 1
     /bin/chmod 644 "$temporary" || return 1
     if [ "$owner_kind" = "system" ] && [ -z "$TEST_ROOT" ]; then
@@ -433,7 +433,7 @@ audit_user_record() {
     local allowed_uid="$3"
     local app agent state owner_uid
 
-    app="$home/Library/Input Methods/ETInput.app"
+    app="$home/Library/Input Methods/RIMES.app"
     agent="$home/Library/LaunchAgents/$USER_LABEL.plist"
     if [ -z "$TEST_ROOT" ]; then
         owner_uid="$(/usr/bin/stat -f '%u' "$home" 2>/dev/null)" || {
@@ -446,7 +446,7 @@ audit_user_record() {
         }
     fi
 
-    audit_exact_user_leaf "$home" "Input Methods" "ETInput.app"
+    audit_exact_user_leaf "$home" "Input Methods" "RIMES.app"
     state=$?
     case "$state" in
         0)

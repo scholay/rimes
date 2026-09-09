@@ -2,9 +2,9 @@
 # =============================================================================
 # 打包「RIMES」为向导式 .pkg 安装器（装到 /Library/Input Methods 并自动注册）。
 #
-#   ./scripts/make-pkg.sh <version> <path-to-ETInput.app> [output.pkg]
+#   ./scripts/make-pkg.sh <version> <path-to-RIMES.app> [output.pkg]
 #
-# 与 build_install.sh / CI 组装出来的 ETInput.app 配套使用。正式发布由
+# 与 build_install.sh / CI 组装出来的 RIMES.app 配套使用。正式发布由
 # RIMES_INSTALLER_IDENTITY + RIMES_SIGNING_KEYCHAIN 签署最终 product archive；
 # 手动演练未提供 identity 时仍可生成 unsigned pkg。
 # =============================================================================
@@ -24,10 +24,10 @@ parse_boolean() {
     esac
 }
 
-VERSION="${1:?用法: make-pkg.sh <version> <ETInput.app> [out.pkg]}"
-APP="${2:?缺少 ETInput.app 路径}"
+VERSION="${1:?用法: make-pkg.sh <version> <RIMES.app> [out.pkg]}"
+APP="${2:?缺少 RIMES.app 路径}"
 OUT="${3:-RIMES-${VERSION}.pkg}"
-IDENT="com.isaac.inputmethod.RimeBuffer"
+IDENT="com.scholay.isaac"
 MAX_PACKAGE_BYTES=$((512 * 1024 * 1024))
 
 [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] \
@@ -152,17 +152,17 @@ for helper in rimes-timeout rimes-update-handoff; do
     fi
 done
 
-# 组件包：把内部兼容路径 ETInput.app 装到 /Library/Input Methods，带 pre/postinstall 注册脚本。
+# 组件包：把 RIMES.app 装到 /Library/Input Methods，带 pre/postinstall 注册脚本。
 mkdir -p "$TMP/root"
-/usr/bin/ditto "$APP" "$TMP/root/ETInput.app"
+/usr/bin/ditto "$APP" "$TMP/root/RIMES.app"
 /bin/chmod 755 "$SCRIPT_STAGE/preinstall" "$SCRIPT_STAGE/postinstall" \
     "$SCRIPT_STAGE/rimes-companion-launch-agent.sh"
 
 if [[ "$signed_package" == true ]]; then
-    /usr/bin/codesign --verify --deep --strict --verbose=2 "$TMP/root/ETInput.app"
+    /usr/bin/codesign --verify --deep --strict --verbose=2 "$TMP/root/RIMES.app"
 fi
 if [[ "$require_notarization" == true ]]; then
-    /usr/bin/xcrun stapler validate -v "$TMP/root/ETInput.app"
+    /usr/bin/xcrun stapler validate -v "$TMP/root/RIMES.app"
 fi
 
 pkgbuild \
@@ -176,7 +176,7 @@ pkgbuild \
 
 # 产品包：套上欢迎/说明/完成三页向导。
 distribution="$TMP/distribution.xml"
-[[ "$(/usr/bin/grep -Fc '<pkg-ref id="com.isaac.inputmethod.RimeBuffer" version="0"' \
+[[ "$(/usr/bin/grep -Fc '<pkg-ref id="com.scholay.isaac" version="0"' \
     scripts/pkg/distribution.xml)" == "1" ]] \
     || die "distribution template must contain one version placeholder"
 /usr/bin/sed "s/version=\"0\"/version=\"$VERSION\"/" \
@@ -229,7 +229,7 @@ verify_component="$verify_product/component.pkg"
     "$verify_component/PackageInfo")" == "1" ]] \
     || die "component PackageInfo must describe exactly one direct payload bundle"
 [[ "$(/usr/bin/xmllint --xpath \
-    "count(/pkg-info/bundle[@id='$IDENT' and @path='./ETInput.app' and @CFBundleShortVersionString='$VERSION'])" \
+    "count(/pkg-info/bundle[@id='$IDENT' and @path='./RIMES.app' and @CFBundleShortVersionString='$VERSION'])" \
     "$verify_component/PackageInfo")" == "1" ]] \
     || die "component payload bundle id/path/version does not match the updater contract"
 for required_script in \
