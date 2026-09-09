@@ -346,6 +346,27 @@ enum BufferUnhandledPrintableRules {
     }
 }
 
+/// Whether Return belongs to the Buffer at all.
+///
+/// Capture routes a field's keys to the Buffer, and Return is the delivery
+/// gesture — tap sends the next block, hold sends every block. But a paste
+/// never passes through the input method: Command-V puts a paragraph straight
+/// into the host field, so the Buffer can be capturing a field that already
+/// holds text it knows nothing about, with nothing of its own to send.
+///
+/// Claiming Return there swallowed the keystroke for the length of the
+/// tap/hold decision and delivered nothing, which is why a pasted message
+/// could not be sent. A gesture with no work to do is not a gesture; the key
+/// belongs to the application.
+enum BufferEnterOwnershipRules {
+    static func ownsReturn(pendingBlockCount: Int,
+                           hasIncompleteBlocks: Bool) -> Bool {
+        // An incomplete block still counts: a plugin mid-generation owns the
+        // key so a half-finished result cannot be sent by an early Return.
+        pendingBlockCount > 0 || hasIncompleteBlocks
+    }
+}
+
 enum BufferEnterSecureInputDisposition: Equatable {
     case normal
     case consumeWithoutGuardOrGeneration
@@ -4028,6 +4049,16 @@ final class RimeBufferController: IMKInputController {
             hardwareKeyCode: hardwareKeyCode
         ) {
             return true
+        }
+        let deliverySource = BufferDeliveryContentRouter.current()
+        guard BufferEnterOwnershipRules.ownsReturn(
+            pendingBlockCount: deliverySource.deliveryPendingBlocks.count,
+            hasIncompleteBlocks: deliverySource.hasIncompleteDeliveryBlocks
+        ) else {
+            // Nothing staged: hand Return back so the host acts on whatever
+            // the user put in the field by other means.
+            IMELog.write("buffer enter released to host; nothing staged")
+            return false
         }
         beginBufferEnterGesture(client: client,
                                 hardwareKeyCode: hardwareKeyCode)

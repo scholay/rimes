@@ -5357,18 +5357,31 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func rebuildAutoSendMenuItems() {
         let menu = NSMenu()
-        if autoSendAvailable {
-            let off = NSMenuItem(title: "关闭自动上屏", action: nil, keyEquivalent: "")
-            off.representedObject = TimeInterval(0)
-            menu.addItem(off)
-            menu.addItem(.separator())
-            for choice in Self.autoSendLifetimeChoices {
-                let item = NSMenuItem(title: "\(Int(choice)) 秒后自动上屏",
-                                      action: nil,
-                                      keyEquivalent: "")
-                item.representedObject = choice
-                menu.addItem(item)
-            }
+        // Every option is always listed. Hiding the timing rows outside
+        // Default left a menu with a single line in it, which reads as a
+        // broken control rather than as a mode restriction — and the choice
+        // is a stored preference that still applies the moment Default
+        // returns, so there is nothing dishonest about setting it here.
+        let off = NSMenuItem(title: "关闭自动上屏", action: nil, keyEquivalent: "")
+        off.representedObject = TimeInterval(0)
+        menu.addItem(off)
+        menu.addItem(.separator())
+        for choice in Self.autoSendLifetimeChoices {
+            let item = NSMenuItem(title: "\(Int(choice)) 秒后自动上屏",
+                                  action: nil,
+                                  keyEquivalent: "")
+            item.representedObject = choice
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        if !autoSendAvailable {
+            // Says why the rows above are inert here instead of leaving the
+            // user to discover it by watching nothing happen.
+            let note = NSMenuItem(title: "自动上屏仅在 Default 模式生效",
+                                  action: nil,
+                                  keyEquivalent: "")
+            note.isEnabled = false
+            menu.addItem(note)
             menu.addItem(.separator())
         }
         // Applies to Default and every buffer plugin, so it stays reachable
@@ -5381,10 +5394,6 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         menu.addItem(close)
         autoSendOptionPopup.menu = menu
 
-        guard autoSendAvailable else {
-            autoSendOptionPopup.selectItem(at: -1)
-            return
-        }
         let lifetime = autoSendLifetime
         let selected = autoSendEnabled
             ? (Self.autoSendLifetimeChoices.firstIndex(of: lifetime).map { $0 + 2 } ?? 2)

@@ -65,6 +65,28 @@ func runBufferCaptureRequestSmokeTest() -> Bool {
         return captureFail("pending capture lifetime")
     }
 
+    // Return ownership. A paste never passes through the input method, so a
+    // captured field can hold a paragraph the Buffer knows nothing about with
+    // nothing of its own staged. Claiming Return there ate the keystroke for
+    // the length of the tap/hold decision and delivered nothing, which is
+    // what stopped a pasted message from being sent.
+    guard !BufferEnterOwnershipRules.ownsReturn(pendingBlockCount: 0,
+                                                hasIncompleteBlocks: false) else {
+        return captureFail("an empty buffer must hand Return to the host")
+    }
+    guard BufferEnterOwnershipRules.ownsReturn(pendingBlockCount: 1,
+                                               hasIncompleteBlocks: false),
+          BufferEnterOwnershipRules.ownsReturn(pendingBlockCount: 40,
+                                               hasIncompleteBlocks: false) else {
+        return captureFail("staged blocks must keep the delivery gesture")
+    }
+    // A plugin still generating owns the key even with nothing pending yet,
+    // so an early Return cannot send a half-finished result.
+    guard BufferEnterOwnershipRules.ownsReturn(pendingBlockCount: 0,
+                                               hasIncompleteBlocks: true) else {
+        return captureFail("an incomplete result must keep Return")
+    }
+
     // Status placement: waiting text belongs at the trailing edge, not at the
     // far left of an empty box, and it must not scroll away behind a result.
     let view = BufferInlineView(frame: NSRect(x: 0, y: 0, width: 760, height: 78))
