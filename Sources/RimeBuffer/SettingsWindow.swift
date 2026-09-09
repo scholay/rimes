@@ -541,6 +541,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private var activePluginSettingsController: NSViewController?
     private var activeMailboxController: MailboxPaneViewController?
     private var activeCapsuleController: CapsulePaneViewController?
+    private var activePersonalLexiconController: PersonalLexiconViewController?
+    private var personalLexiconKind: UserLexiconKind = .chinese
     private var statsObserver: NSObjectProtocol?
     private var pluginObserver: NSObjectProtocol?
     private var registryObserver: NSObjectProtocol?
@@ -1054,12 +1056,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             "雾凇拼音", "五笔86", "Easy English",
         ]
         var lexiconOK = expectedLexiconTitles.isSubset(of: lexiconLabels)
-            && lexiconButtons.count == UserLexiconKind.allCases.count * 2
+            && lexiconButtons.count == UserLexiconKind.allCases.count * 3
         for kind in UserLexiconKind.allCases {
             let actions = lexiconButtons.filter { $0.lexiconKind == kind }
             lexiconOK = lexiconOK
-                && actions.count == 2
-                && Set(actions.map(\.title)) == ["导入学习…", "导出学习…"]
+                && actions.count == 3
+                && Set(actions.map(\.title)) == ["管理个人词库…", "导入学习…", "导出学习…"]
         }
         if !lexiconOK {
             print("settings lexicon card smoke: missing or misrouted dictionary actions")
@@ -1514,6 +1516,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         contentHost.subviews.forEach { $0.removeFromSuperview() }
         activePluginSettingsController = nil
         activeMailboxController = nil
+        activePersonalLexiconController = nil
         activeCapsuleController?.discardEditorForClose()
         activeCapsuleController = nil
         candidatePreview = nil
@@ -1860,6 +1863,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         refreshSidebarSelection()
         activePluginSettingsController = nil
         activeMailboxController = nil
+        activePersonalLexiconController = nil
         activeCapsuleController?.discardEditorForClose()
         activeCapsuleController = nil
         contentHost.subviews.forEach { $0.removeFromSuperview() }
@@ -1992,6 +1996,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
         let bodyHost: NSView
         if body is NSScrollView
+            || body.identifier?.rawValue == "settings.personal-lexicon-pane"
             || body.identifier?.rawValue == "settings.mailbox-pane"
             || body.identifier?.rawValue == "settings.capsule-pane" {
             // Page-owned controllers may preserve their own scroll positions;
@@ -2152,9 +2157,15 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         note.textColor = RimeUI.textMuted
 
         switch subpageID {
+        case "personal-lexicon":
+            let controller = PersonalLexiconViewController(kind: personalLexiconKind)
+            controller.onImport = { [weak self] kind in self?.importUserLexicon(kind: kind) }
+            controller.onExport = { [weak self] kind in self?.exportUserLexicon(kind: kind) }
+            activePersonalLexiconController = controller
+            return controller.view
         case "dictionaries":
             let learning = NSTextField(wrappingLabelWithString:
-                "Rime 会在独立的 ~/Library/RimeBuffer 中学习词频。这里导入、导出的只是可移植学习记录，不会复制或替换正在使用的 LevelDB。")
+                "上方展示内置词库概况。“管理个人词库”、导入和导出操作针对你积累的个人学习记录；内置词库由应用维护。")
             learning.font = .systemFont(ofSize: 11)
             learning.textColor = RimeUI.textMuted
             return contentColumn([
@@ -2360,7 +2371,11 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         copy.spacing = 3
         copy.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let actions = NSStackView(views: [importButton, exportButton])
+        let manageButton = SettingsLexiconButton(title: "管理个人词库…", target: self,
+                                                  action: #selector(manageUserLexicon(_:)))
+        manageButton.lexiconKind = kind
+        manageButton.controlSize = .small
+        let actions = NSStackView(views: [manageButton, importButton, exportButton])
         actions.orientation = .horizontal
         actions.alignment = .centerY
         actions.spacing = 6
@@ -4725,7 +4740,16 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     @objc private func importUserLexicon(_ sender: SettingsLexiconButton) {
-        let kind = sender.lexiconKind
+        importUserLexicon(kind: sender.lexiconKind)
+    }
+
+    @objc private func manageUserLexicon(_ sender: SettingsLexiconButton) {
+        personalLexiconKind = sender.lexiconKind
+        _ = navigation.selectSubpage(SettingsSubpageID(rawValue: "personal-lexicon"), catalog: routeCatalog)
+        showCurrentRoute()
+    }
+
+    private func importUserLexicon(kind: UserLexiconKind) {
         let panel = NSOpenPanel()
         panel.title = "导入\(kind.displayName)"
         panel.message = "选择由 \(ProductIdentity.displayName) 或 Rime 用户词典管理器导出的 TSV；记录会合并，不会替换现有学习数据。"
@@ -4754,14 +4778,17 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             let result = try UserLexiconService.shared.importLearningData(kind,
                                                                           from: sourceURL)
             info("已向\(kind.displayName)合并 \(result.entryCount) 条学习记录。")
-            showCurrentRoute()
+            if activePersonalLexiconController == nil { showCurrentRoute() }
         } catch {
             showLexiconError(error, operation: "导入")
         }
     }
 
     @objc private func exportUserLexicon(_ sender: SettingsLexiconButton) {
-        let kind = sender.lexiconKind
+        exportUserLexicon(kind: sender.lexiconKind)
+    }
+
+    private func exportUserLexicon(kind: UserLexiconKind) {
         let panel = NSSavePanel()
         panel.title = "导出\(kind.displayName)"
         panel.message = "导出为可再次导入的 UTF-8 TSV，不包含基础词库、输入正文或其他统计。"

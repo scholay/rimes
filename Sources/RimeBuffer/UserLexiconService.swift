@@ -21,6 +21,25 @@ enum UserLexiconKind: String, CaseIterable, Codable, Sendable {
         }
     }
 
+    var personalRecordsTitle: String {
+        switch self {
+        case .chinese: return "拼音学习记录"
+        case .wubi86: return "五笔学习记录"
+        case .english: return "英文学习记录"
+        }
+    }
+
+    var personalRecordsDescription: String {
+        switch self {
+        case .chinese:
+            return "雾凇全拼、自然码双拼和小鹤双拼共享这份个人学习记录。"
+        case .wubi86:
+            return "五笔 86 的个人学习记录单独保存，与拼音学习记录分开。"
+        case .english:
+            return "用于内置“英文”输入方案的个人学习记录。"
+        }
+    }
+
     var suggestedFileName: String {
         "\(ProductIdentity.displayName)-\(rawValue)-learning.tsv"
     }
@@ -61,6 +80,10 @@ enum UserLexiconServiceError: LocalizedError, Equatable {
     case destinationIsSymbolicLink
     case destinationIsNotRegularFile
     case fileOperationFailed(String)
+    case invalidEntry
+    case duplicateEntry
+    case staleEntries
+    case editFailed
 
     var errorDescription: String? {
         switch self {
@@ -96,6 +119,14 @@ enum UserLexiconServiceError: LocalizedError, Equatable {
             return "导出目标必须是普通文件。"
         case .fileOperationFailed(let detail):
             return "学习词库文件操作失败：\(detail)"
+        case .invalidEntry:
+            return "请填写词条和拼音或编码；不能包含换行、制表符或其他控制字符，词条不能以 # 开头。"
+        case .duplicateEntry:
+            return "相同词条和编码已在个人词库中，请直接编辑已有记录。"
+        case .staleEntries:
+            return "相关词条已发生变化，请刷新列表后重试。"
+        case .editFailed:
+            return "未能完整确认修改结果。请刷新列表；修改前的学习记录已保存在本机备份中。"
         }
     }
 }
@@ -123,6 +154,7 @@ final class UserLexiconService {
     private let engine: UserLexiconEngine
     private let fileManager: FileManager
     private let temporaryDirectory: URL
+    private(set) var lastPersonalChange: PersonalLexiconChange?
 
     init(engine: UserLexiconEngine,
          fileManager: FileManager = .default,
@@ -141,6 +173,112 @@ final class UserLexiconService {
         UserLexiconStatus(kind: kind,
                           hasLearningDatabase: engine.isHealthy
                             && engine.hasUserDictionary(named: kind.dictionaryName))
+    }
+
+    // MARK: Personal dictionary editor
+
+    /// Read on explicit page load/refresh, never on a timer or each search key.
+    func personalEntries(_ kind: UserLexiconKind) throws -> [PersonalLexiconEntry] {
+        guard engine.isHealthy else { throw UserLexiconServiceError.engineUnavailable }
+        guard engine.hasUserDictionary(named: kind.dictionaryName) else { return [] }
+        let temporary = try makeTemporaryFileURL()
+        defer { try? fileManager.removeItem(at: temporary) }
+        let count = engine.exportUserDictionary(named: kind.dictionaryName, to: temporary)
+        guard count >= 0 else { throw UserLexiconServiceError.exportFailed }
+        let contents = try validatedContents(of: temporary, expectedKind: kind, allowEmpty: true)
+        let entries = try PersonalLexiconEntry.parseExport(contents.text)
+        guard entries.count == count else { throw UserLexiconServiceError.exportFailed }
+        return entries
+    }
+
+    @discardableResult
+    func savePersonalEntry(_ entry: PersonalLexiconEntry,
+                           replacing original: PersonalLexiconEntry?,
+                           kind: UserLexiconKind) throws -> [PersonalLexiconEntry] {
+        try entry.validate()
+        if let original { try original.validate() }
+        let current = try personalEntries(kind)
+        if current.contains(where: { $0.id == entry.id && $0.id != original?.id }) {
+            throw UserLexiconServiceError.duplicateEntry
+        }
+        // Editing text/code preserves the previous learned weight. The UI
+        // deliberately does not offer arbitrary downward frequency editing:
+        // librime's importer merges by max and cannot implement that promise.
+        let saved = PersonalLexiconEntry(text: entry.text, code: entry.code,
+                                         weight: max(1, original?.weight ?? 1))
+        let change = PersonalLexiconChange(kind: kind,
+                                           before: original.map { [$0] } ?? [],
+                                           after: [saved])
+        return try applyPersonalChange(change, current: current)
+    }
+
+    @discardableResult
+    func deletePersonalEntries(_ entries: [PersonalLexiconEntry],
+                               kind: UserLexiconKind) throws -> [PersonalLexiconEntry] {
+        guard !entries.isEmpty, Set(entries.map(\.id)).count == entries.count else {
+            throw UserLexiconServiceError.invalidEntry
+        }
+        try entries.forEach { try $0.validate() }
+        let current = try personalEntries(kind)
+        return try applyPersonalChange(.init(kind: kind, before: entries, after: []), current: current)
+    }
+
+    @discardableResult
+    func undoPersonalChange() throws -> [PersonalLexiconEntry] {
+        guard let change = lastPersonalChange else { throw UserLexiconServiceError.staleEntries }
+        let current = try personalEntries(change.kind)
+        try change.validateCurrent(current, undo: true)
+        let inverse = PersonalLexiconChange(kind: change.kind, before: change.after,
+            after: change.before.map { .init(text: $0.text, code: $0.code, weight: max(1, $0.weight)) })
+        let result = try applyPersonalChange(inverse, current: current)
+        lastPersonalChange = nil
+        return result
+    }
+
+    var personalBackupDirectory: URL {
+        temporaryDirectory.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("lexicon-backups", isDirectory: true)
+    }
+
+    private func applyPersonalChange(_ change: PersonalLexiconChange,
+                                     current: [PersonalLexiconEntry]) throws -> [PersonalLexiconEntry] {
+        try change.validateCurrent(current)
+        let backupDirectory = personalBackupDirectory
+        try fileManager.createDirectory(at: backupDirectory, withIntermediateDirectories: true,
+                                         attributes: [.posixPermissions: 0o700])
+        let backupValues = try backupDirectory.resourceValues(forKeys: [.isSymbolicLinkKey])
+        guard backupValues.isSymbolicLink != true else {
+            throw UserLexiconServiceError.destinationIsSymbolicLink
+        }
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: backupDirectory.path)
+        let backup = backupDirectory.appendingPathComponent("\(change.kind.dictionaryName)-before-edit.tsv")
+        try validateDestination(backup)
+        let backupText = Self.annotate(current.map {
+            "\($0.text)\t\($0.code)\t\($0.weight)"
+        }.joined(separator: "\n") + "\n", kind: change.kind)
+        try writeAtomically(Data(backupText.utf8), to: backup)
+
+        let deltaFile = try makeTemporaryFileURL()
+        defer { try? fileManager.removeItem(at: deltaFile) }
+        try writeAtomically(Data(change.delta().utf8), to: deltaFile)
+        lastPersonalChange = nil
+        // -1 is librime's documented-in-source UserDbImporter deletion marker.
+        // It removes the learned entry, not the same word from a base lexicon.
+        // This path is intentionally separate from bulk file import validation.
+        let imported = engine.importUserDictionary(named: change.kind.dictionaryName, from: deltaFile)
+        guard let after = try? personalEntries(change.kind) else {
+            throw UserLexiconServiceError.editFailed
+        }
+        let affectedIDs = change.affectedIDs
+        let actualChange = PersonalLexiconChange(kind: change.kind, before: change.before,
+            after: after.filter { affectedIDs.contains($0.id) })
+        // Retain recovery even if librime reports a partial import. Undo uses
+        // the observed result and refuses to replace later learning.
+        if actualChange.before != actualChange.after { lastPersonalChange = actualChange }
+        guard imported >= 0, (try? change.validateCurrent(after, undo: true)) != nil else {
+            throw UserLexiconServiceError.editFailed
+        }
+        return after
     }
 
     /// Produces a self-describing, portable TSV containing only learned
@@ -229,7 +367,8 @@ final class UserLexiconService {
     }
 
     private func validatedContents(of url: URL,
-                                   expectedKind: UserLexiconKind?) throws -> ValidatedContents {
+                                   expectedKind: UserLexiconKind?,
+                                   allowEmpty: Bool = false) throws -> ValidatedContents {
         guard fileManager.fileExists(atPath: url.path) else {
             throw UserLexiconServiceError.sourceMissing
         }
@@ -303,8 +442,7 @@ final class UserLexiconService {
             detectedFormat = lineFormat
             entryCount += 1
         }
-        guard entryCount > 0 else { throw UserLexiconServiceError.noLearningEntries }
-        guard let detectedFormat else { throw UserLexiconServiceError.noLearningEntries }
+        if entryCount == 0 && !allowEmpty { throw UserLexiconServiceError.noLearningEntries }
         if let expectedKind,
            let declaredDictionary,
            declaredDictionary != expectedKind.dictionaryName {
@@ -316,7 +454,7 @@ final class UserLexiconService {
         return ValidatedContents(text: text,
                                  entryCount: entryCount,
                                  declaredDictionary: declaredDictionary,
-                                 format: detectedFormat)
+                                 format: detectedFormat ?? .portableExport)
     }
 
     private static func isPackedUserDbValue(_ value: String) -> Bool {

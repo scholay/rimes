@@ -33,6 +33,7 @@ Nothing auto-posts, and nothing silently edits the web page. Built for writing, 
 | Mailbox | A peer of Buffer; toggle with `⌘⇧M` to retain conversations and reviews independently. “New Conversation” selects from configured connectors/models: each CLI exposes only its default model, while OpenAI uses the locally configured model. The selection is frozen per conversation without changing the global setting; the process-local draft creates no empty thread, and the first Return creates the conversation and starts generation |
 | Capsule | A peer of Buffer; toggle with `⌘⇧C`, manage eight local record kinds, and preview images/PDFs; an optional chosen iCloud Drive folder syncs six portable kinds and media assets while passwords, Skill paths, and the master key stay local |
 | Settings | Open Settings anywhere with `⌘⇧S` |
+| Personal dictionary | Settings → Input Method → Personal Dictionary: local search, add/edit, deletion, undo, and learning-data import/export; see the [management guide](PERSONAL-LEXICON.md) |
 | Live translation | Apple on-device translation by default (macOS 15+); AI connector optional |
 | AI generate | Codex CLI / Claude Code CLI / OpenAI-compatible API; results stay in Buffer with Plain / Markdown / JSON output and are delivered only by the user |
 | Stream input | Pinyin/chords → low-latency local Rime + Octagram, with AI fallback for complex input → up to 5 mutually exclusive guesses → deliver the chosen one |

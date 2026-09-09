@@ -44,6 +44,7 @@ private enum StandaloneRimeCommandRules {
     private static let engineHostingCommands: Set<String> = [
         "settings-preview",
         "settings-render",
+        "personal-lexicon-preview",
     ]
 
     static func requiresIsolatedUserDir(arguments: [String]) -> Bool {
@@ -665,6 +666,16 @@ if CommandLine.arguments.contains("input-telemetry-smoke") {
 }
 if CommandLine.arguments.contains("user-lexicon-smoke") {
     exit(runUserLexiconServiceSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("personal-lexicon-smoke") {
+    exit(runPersonalLexiconSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("personal-lexicon-bridge-smoke") {
+    exit(runPersonalLexiconBridgeSmokeTest() ? 0 : 1)
+}
+if let previewIndex = CommandLine.arguments.firstIndex(of: "personal-lexicon-preview"),
+   CommandLine.arguments.indices.contains(previewIndex + 1) {
+    exit(renderPersonalLexiconPreview(to: CommandLine.arguments[previewIndex + 1]) ? 0 : 1)
 }
 if CommandLine.arguments.contains("user-lexicon-bridge-smoke") {
     exit(runRimeUserLexiconBridgeSmokeTest() ? 0 : 1)

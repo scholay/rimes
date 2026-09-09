@@ -291,6 +291,7 @@ jobs:
             fly-chord-learning-smoke
             input-telemetry-smoke
             user-lexicon-smoke
+            personal-lexicon-smoke
           )
           for smoke in "${SMOKES[@]}"; do
             echo "::group::$smoke"
@@ -329,11 +330,11 @@ jobs:
             dimensions="$(sips -g pixelWidth -g pixelHeight "$OUTPUT"/*.png | \
               awk '/pixelWidth:/{w=$2}/pixelHeight:/{print w"x"$2}' | sort -u)"
             echo "mode=$MODE pngs=$png_count routes=$route_count dimensions=$dimensions"
-            # A clean profile renders the 19 always-available routes. The
+            # A clean profile renders the 20 always-available routes. The
             # optional Chording extension adds four more only after enablement.
             test "$png_count" = "$route_count"
-            test "$png_count" = '19'
-            test "$route_count" = '19'
+            test "$png_count" = '20'
+            test "$route_count" = '20'
             test "$translation_route_count" = '0'
             # bitmapImageRepForCachingDisplay follows the hosted runner's
             # backing scale. A headless 1x runner and a Retina 2x runner both
