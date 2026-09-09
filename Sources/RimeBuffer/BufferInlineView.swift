@@ -795,8 +795,12 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private let chipScroll = NSScrollView()
     private let chipRow = NSStackView()
     private let normalRailContainer = NSStackView()
-    private let standardColumn = NSStackView()
     private let liveMetricsLabel = NSTextField(labelWithString: "")
+    /// The rail's bottom edge: normally the view's own, and the readout's top
+    /// while the readout is showing. Swapping one constraint keeps every other
+    /// edge exactly where it was.
+    private var railBottomToSelf: NSLayoutConstraint?
+    private var railBottomToMetrics: NSLayoutConstraint?
     private let translationContainer = NSStackView()
     private let translationSourceScroll = NSScrollView()
     private let translationSourceRow = NSStackView()
@@ -910,6 +914,11 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         showsLiveMetrics = next
         liveMetricsLabel.stringValue = text ?? ""
         liveMetricsLabel.isHidden = !next
+        if heightChanged {
+            railBottomToSelf?.isActive = !next
+            railBottomToMetrics?.isActive = next
+            needsLayout = true
+        }
         return heightChanged
     }
 
@@ -1365,13 +1374,15 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         liveMetricsLabel.setContentCompressionResistancePriority(.defaultLow,
                                                                   for: .horizontal)
 
-        standardColumn.orientation = .vertical
-        standardColumn.alignment = .leading
-        standardColumn.spacing = 0
-        standardColumn.translatesAutoresizingMaskIntoConstraints = false
-        standardColumn.addArrangedSubview(normalRailContainer)
-        standardColumn.addArrangedSubview(liveMetricsLabel)
-        addSubview(standardColumn)
+        addSubview(normalRailContainer)
+        addSubview(liveMetricsLabel)
+        railBottomToSelf = normalRailContainer.bottomAnchor.constraint(
+            equalTo: bottomAnchor
+        )
+        railBottomToMetrics = normalRailContainer.bottomAnchor.constraint(
+            equalTo: liveMetricsLabel.topAnchor
+        )
+        railBottomToSelf?.isActive = true
 
         configureHorizontalRail(translationSourceScroll, row: translationSourceRow)
         let initialTargetRail = makeTranslationTargetRail(key: 0)
@@ -1387,21 +1398,18 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         translationContainer.isHidden = true
         addSubview(translationContainer)
         NSLayoutConstraint.activate([
-            standardColumn.leadingAnchor.constraint(equalTo: leadingAnchor),
-            standardColumn.trailingAnchor.constraint(equalTo: trailingAnchor),
-            standardColumn.topAnchor.constraint(equalTo: topAnchor),
-            standardColumn.bottomAnchor.constraint(equalTo: bottomAnchor),
-            normalRailContainer.widthAnchor.constraint(
-                equalTo: standardColumn.widthAnchor
-            ),
+            normalRailContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
+            normalRailContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
+            normalRailContainer.topAnchor.constraint(equalTo: topAnchor),
             liveMetricsLabel.leadingAnchor.constraint(
-                equalTo: standardColumn.leadingAnchor,
+                equalTo: leadingAnchor,
                 constant: BufferInlineMetrics.railHorizontalInset + 4
             ),
             liveMetricsLabel.trailingAnchor.constraint(
-                lessThanOrEqualTo: standardColumn.trailingAnchor,
+                lessThanOrEqualTo: trailingAnchor,
                 constant: -BufferInlineMetrics.railHorizontalInset
             ),
+            liveMetricsLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
             liveMetricsLabel.heightAnchor.constraint(
                 equalToConstant: Self.standardMetricsRowHeight
             ),

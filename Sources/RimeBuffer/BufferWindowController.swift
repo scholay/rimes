@@ -2035,6 +2035,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var railActionCenterYConstraint: NSLayoutConstraint?
     private var pendingCaptureRequest: BufferPendingCaptureRequest?
     private var appliedLiveMetricsHeight = false
+    private var liveMetricsPreviewLine: String?
     private var liveMetricsTimer: Timer?
     private var autoSendTimer: Timer?
     private var autoSendClock = BufferAutoSendClock()
@@ -2777,7 +2778,13 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                           hoveredControl: BufferWorkbenchControl? = nil,
                           candidatePreview: Bool = false,
                           targetAssociationPreviewAppName: String? = nil,
-                          toolbarExpanded previewToolbarExpanded: Bool = false) -> Bool {
+                          toolbarExpanded previewToolbarExpanded: Bool = false,
+                          liveMetricsPreview: String? = nil) -> Bool {
+        liveMetricsPreviewLine = liveMetricsPreview
+        defer { liveMetricsPreviewLine = nil }
+        if bufferRail.setLiveMetricsLine(liveMetricsPreview) {
+            syncLayoutMode(layoutMode)
+        }
         let selectedWorkspace = DerivedBufferWorkspaceRouter.selectedWorkspace
         let previewStyle = translationSnapshot == nil
             ? BufferDerivedPresentationRules.style(
@@ -2804,7 +2811,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         panel.setFrame(NSRect(x: 0, y: 0, width: panelWidth,
                               height: BufferWindowGeometry.height(
                                   expanded: toolbarExpanded,
-                                  mode: previewMode
+                                  mode: previewMode,
+                                  showsLiveMetrics: bufferRail.showsLiveMetrics
                               )),
                        display: false)
         adjustingFrame = false
@@ -5508,6 +5516,15 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func refreshLiveTypingMetrics() {
         dispatchPrecondition(condition: .onQueue(.main))
+        // A rendered preview has no live session and is never "visible", so
+        // the override stands in for one rather than being cleared by the
+        // ordinary refresh that follows it.
+        if let liveMetricsPreviewLine {
+            if bufferRail.setLiveMetricsLine(liveMetricsPreviewLine) {
+                syncLayoutMode(layoutMode)
+            }
+            return
+        }
         guard liveMetricsAvailable, isVisible, !sessionProtectionActive,
               !hiddenForSession, !IsSecureEventInputEnabled() else {
             if bufferRail.setLiveMetricsLine(nil) { syncLayoutMode(layoutMode) }

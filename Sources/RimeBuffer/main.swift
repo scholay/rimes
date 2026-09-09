@@ -1134,7 +1134,10 @@ if let i = CommandLine.arguments.firstIndex(of: "panel-render"),
         hoveredControl: hoveredControl,
         candidatePreview: candidatePreview,
         targetAssociationPreviewAppName: linkedPreview ? "Safari" : nil,
-        toolbarExpanded: toolbarExpanded
+        toolbarExpanded: toolbarExpanded,
+        liveMetricsPreview: options.contains("metrics")
+            ? "42 字/分  ·  码长 1.83  ·  击键 3.2/秒  ·  回删 2"
+            : nil
     )
     print(rendered
         ? "rendered \(candidatePreview ? "candidate " : (marine ? "marine " : (translation ? "translation " : "")))expanded workbench @\(scale)x"
