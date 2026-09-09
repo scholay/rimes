@@ -771,6 +771,25 @@ if CommandLine.arguments.contains("codex-doctor") {
 if CommandLine.arguments.contains("codex-session-smoke") {
     exit(runCodexSessionSmokeTest() ? 0 : 1)
 }
+// Runs the real migration against explicit paths, so it can be proven on the
+// actual data directory before a rename depends on it.
+if let i = CommandLine.arguments.firstIndex(of: "rimes-migrate-probe"),
+   i + 2 < CommandLine.arguments.count {
+    let legacy = URL(fileURLWithPath: CommandLine.arguments[i + 1],
+                     isDirectory: true)
+    let destination = URL(fileURLWithPath: CommandLine.arguments[i + 2],
+                          isDirectory: true)
+    let outcome = RimesDataMigration.migrateIfNeeded(from: legacy,
+                                                     to: destination)
+    print("migration: \(outcome)")
+    switch outcome {
+    case .copied, .alreadyMigrated, .notNeeded: exit(0)
+    case .failed: exit(1)
+    }
+}
+if CommandLine.arguments.contains("rimes-migration-smoke") {
+    exit(runRimesMigrationSmokeTest() ? 0 : 1)
+}
 if CommandLine.arguments.contains("clipboard-policy-smoke") {
     exit(runClipboardActivationPolicySmokeTest() ? 0 : 1)
 }
