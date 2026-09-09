@@ -7334,6 +7334,10 @@ final class RimeBufferController: IMKInputController {
         StatusMenu.shared.openCapsule()
     }
 
+    @objc func openCodexSessionFromInputMenu(_ sender: Any?) {
+        StatusMenu.shared.openCodexSession()
+    }
+
     @objc func checkUpdateFromInputMenu(_ sender: Any?) {
         StatusMenu.shared.checkUpdate()
     }

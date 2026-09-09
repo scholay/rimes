@@ -29,6 +29,10 @@ private final class StatusMenuActionSpy: NSObject {
     @objc func openCapsuleFromInputMenu(_ sender: Any?) {
         record("openCapsuleFromInputMenu:", sender: sender)
     }
+
+    @objc func openCodexSessionFromInputMenu(_ sender: Any?) {
+        record("openCodexSessionFromInputMenu:", sender: sender)
+    }
     @objc func openMaintenanceFromInputMenu(_ sender: Any?) {
         record("openMaintenanceFromInputMenu:", sender: sender)
     }
@@ -73,13 +77,13 @@ func runStatusMenuSmokeTest() -> Bool {
     let sourceMenu = StatusMenu.makeInputSourceMenu(target: spy, state: state)
     let sourceTitles = [
         "设置…", state.bufferTitle, state.clipboardTitle,
-        state.mailboxTitle, state.capsuleTitle, "", "维护…"
+        state.mailboxTitle, state.capsuleTitle, "Codex 会话…", "", "维护…"
     ]
     guard sourceMenu.items.map(\.title) == sourceTitles,
           sourceMenu.items.filter(\.isSeparatorItem).count == 1,
-          sourceMenu.items[5].isSeparatorItem,
+          sourceMenu.items[6].isSeparatorItem,
           sourceMenu.items.allSatisfy({ $0.submenu == nil }) else {
-        return fail("main menu must contain five modules and one maintenance entry, without remote submenus")
+        return fail("main menu must contain six modules and one maintenance entry, without remote submenus")
     }
     let removedTitles = ["常显于所有桌面与全屏空间", "把缓冲工作台移到当前屏幕"]
     guard sourceMenu.items.allSatisfy({ !removedTitles.contains($0.title) }) else {
@@ -165,18 +169,19 @@ func runStatusMenuSmokeTest() -> Bool {
     guard verifyDispatch(sourceMenu, selectors: [
         "openSettingsFromInputMenu:", "toggleBufferWindowFromInputMenu:",
         "toggleClipboardHistoryFromInputMenu:", "openMailboxFromInputMenu:",
-        "openCapsuleFromInputMenu:", "openMaintenanceFromInputMenu:"
+        "openCapsuleFromInputMenu:", "openCodexSessionFromInputMenu:",
+        "openMaintenanceFromInputMenu:"
     ]), verifyDispatch(maintenanceMenu, selectors: [
         "checkUpdateFromInputMenu:", "openLogFromInputMenu:",
         "deployAndRestartFromInputMenu:", "reinstallFromInputMenu:",
         "restartFromInputMenu:"
-    ]), spy.invocations.count == 11 else { return false }
+    ]), spy.invocations.count == 12 else { return false }
     let completedCount = spy.invocations.count
     maintenanceMenu.cancelTracking()
     sourceMenu.cancelTracking()
     guard spy.invocations.count == completedCount else { return fail("cancellation replayed a prior command") }
 
-    print("status-menu-smoke: PASS compact main menu, health and dynamic titles, five maintenance commands, 11 isolated AppKit actions, inert construction/cancellation")
+    print("status-menu-smoke: PASS compact main menu, health and dynamic titles, five maintenance commands, 12 isolated AppKit actions, inert construction/cancellation")
     return true
 }
 

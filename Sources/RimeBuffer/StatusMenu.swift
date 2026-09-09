@@ -96,6 +96,13 @@ final class StatusMenu {
         capsule.target = target
         menu.addItem(capsule)
 
+        let codexSession = NSMenuItem(
+            title: "Codex 会话…",
+            action: #selector(RimeBufferController.openCodexSessionFromInputMenu(_:)),
+            keyEquivalent: "")
+        codexSession.target = target
+        menu.addItem(codexSession)
+
         // Keep one top-level IMK action. Nested items previously appeared in
         // TextInputMenuAgent but did not dispatch; the controller opens the
         // five-command AppKit menu inside this process instead.
@@ -213,6 +220,26 @@ final class StatusMenu {
 
     func openCapsule() {
         CapsuleWindowController.shared.show()
+    }
+
+    /// Opens the split session pane on the frontmost Finder-visible working
+    /// directory, falling back to the home directory. Codex is launched in
+    /// that workspace and writes its rollout there for the right pane to read.
+    func openCodexSession() {
+        // Codex is workspace-bound: its sandbox, its edits and the `cwd` the
+        // right pane matches on all come from the launch directory, so the
+        // directory is asked for rather than assumed.
+        let picker = NSOpenPanel()
+        picker.canChooseDirectories = true
+        picker.canChooseFiles = false
+        picker.allowsMultipleSelection = false
+        picker.directoryURL = CodexSessionWorkspaceRules.preferredWorkspace()
+        picker.prompt = "在此启动 Codex"
+        picker.message = "选择 Codex 会话的工作目录"
+        NSApp.activate(ignoringOtherApps: true)
+        guard picker.runModal() == .OK, let workspace = picker.url else { return }
+        CodexSessionWorkspaceRules.remember(workspace)
+        CodexSessionWindowController.shared.present(workspace: workspace)
     }
 
     func checkUpdate() {

@@ -685,6 +685,40 @@ if CommandLine.arguments.contains("aggregator-catalog"),
     if !stranded.isEmpty { print("unroutable sample: \(stranded.joined(separator: ", "))") }
     exit(0)
 }
+// Replays a real rollout through the same parser the pane uses, so the item
+// vocabulary can be checked against sessions codex actually wrote.
+if CommandLine.arguments.contains("codex-rollout"),
+   let index = CommandLine.arguments.firstIndex(of: "codex-rollout"),
+   CommandLine.arguments.count > index + 1 {
+    let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+    guard var payload = try? Data(contentsOf: url) else {
+        print("could not read rollout at \(url.path)")
+        exit(1)
+    }
+    if let newline = payload.firstIndex(of: 0x0a),
+       let header = CodexRolloutParser.header(
+        from: payload[payload.startIndex..<newline]
+       ) {
+        print("session \(header.sessionID)  cwd=\(header.cwd ?? "?")  "
+            + "cli=\(header.cliVersion ?? "?")")
+    }
+    let events = CodexRolloutWatcher.drain(&payload)
+    var counts: [String: Int] = [:]
+    var translatable = 0
+    for event in events {
+        counts[event.item.kindLabel, default: 0] += 1
+        if CodexEventTranslationRules.isTranslatable(event.item) { translatable += 1 }
+    }
+    print("events: \(events.count)   translatable: \(translatable)   "
+        + "verbatim: \(events.count - translatable)")
+    for (kind, count) in counts.sorted(by: { $0.value > $1.value }) {
+        print("  \(kind): \(count)")
+    }
+    exit(0)
+}
+if CommandLine.arguments.contains("codex-session-smoke") {
+    exit(runCodexSessionSmokeTest() ? 0 : 1)
+}
 if CommandLine.arguments.contains("aggregator-smoke") {
     exit(runAggregatorSmokeTest() ? 0 : 1)
 }
