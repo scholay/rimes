@@ -969,9 +969,33 @@ if let i = CommandLine.arguments.firstIndex(of: "popup-menu-render"),
                            isSeparator: false, isEnabled: false,
                            isSelected: false),
     ]
+    // `menu-preview <path> autosend` renders the auto-send pull-down instead,
+    // where a duration choice and an independent switch share one tick column.
+    let autoSendRows = [
+        BufferPopUpMenuRow(itemIndex: 0, title: "关闭自动上屏",
+                           isSeparator: false, isEnabled: true,
+                           isSelected: false),
+        .separator(itemIndex: 1),
+        BufferPopUpMenuRow(itemIndex: 2, title: "1 秒后自动上屏",
+                           isSeparator: false, isEnabled: true,
+                           isSelected: false),
+        BufferPopUpMenuRow(itemIndex: 3, title: "2 秒后自动上屏",
+                           isSeparator: false, isEnabled: true,
+                           isSelected: true),
+        BufferPopUpMenuRow(itemIndex: 4, title: "3 秒后自动上屏",
+                           isSeparator: false, isEnabled: true,
+                           isSelected: false),
+        BufferPopUpMenuRow(itemIndex: 5, title: "5 秒后自动上屏",
+                           isSeparator: false, isEnabled: true,
+                           isSelected: false),
+        .separator(itemIndex: 6),
+        BufferPopUpMenuRow(itemIndex: 7, title: "最后一块上屏后关闭工作台",
+                           isSeparator: false, isEnabled: true,
+                           isSelected: false, isChecked: true),
+    ]
     let ok = renderBufferPopUpMenuPreview(
         to: CommandLine.arguments[i + 1],
-        rows: rows
+        rows: CommandLine.arguments.contains("autosend") ? autoSendRows : rows
     )
     print(ok ? "rendered pull-down menu preview" : "FAILED: menu preview")
     exit(ok ? 0 : 1)

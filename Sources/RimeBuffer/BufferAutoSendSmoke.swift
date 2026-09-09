@@ -335,6 +335,26 @@ private func runAutoSendLifetimeChoiceSmoke() -> Bool {
         return false
     }
 
+    // The pull-down carries a mutually exclusive choice and an independent
+    // switch. A switch borrowing `isSelected` would blank the tick on the
+    // duration above it whenever the switch was on, so it ticks separately.
+    let choice = BufferPopUpMenuRow(itemIndex: 3, title: "2 秒后自动上屏",
+                                    isSeparator: false, isEnabled: true,
+                                    isSelected: true)
+    let toggleOn = BufferPopUpMenuRow(itemIndex: 6,
+                                      title: "最后一块上屏后关闭工作台",
+                                      isSeparator: false, isEnabled: true,
+                                      isSelected: false, isChecked: true)
+    let toggleOff = BufferPopUpMenuRow(itemIndex: 6,
+                                       title: "最后一块上屏后关闭工作台",
+                                       isSeparator: false, isEnabled: true,
+                                       isSelected: false, isChecked: false)
+    guard choice.showsTick, toggleOn.showsTick, !toggleOff.showsTick,
+          !choice.isChecked, !toggleOn.isSelected else {
+        print("FAILED: menu tick must distinguish a choice from a switch")
+        return false
+    }
+
     // Every value the toolbar offers is a real countdown; none may read as
     // "never age", which is what a zero or unset preference would mean.
     guard BufferWindowController.autoSendLifetimeChoices.allSatisfy({ $0 > 0 }),

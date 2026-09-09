@@ -54,6 +54,27 @@ struct BufferPopUpMenuRow: Equatable {
     let isSeparator: Bool
     let isEnabled: Bool
     let isSelected: Bool
+    /// A tick that does not mean "this is the current choice". One pull-down
+    /// can hold a mutually exclusive choice and an independent switch, and a
+    /// switch cannot borrow the selection model without making the choice
+    /// above it look unselected whenever the switch is on.
+    let isChecked: Bool
+
+    init(itemIndex: Int,
+         title: String,
+         isSeparator: Bool,
+         isEnabled: Bool,
+         isSelected: Bool,
+         isChecked: Bool = false) {
+        self.itemIndex = itemIndex
+        self.title = title
+        self.isSeparator = isSeparator
+        self.isEnabled = isEnabled
+        self.isSelected = isSelected
+        self.isChecked = isChecked
+    }
+
+    var showsTick: Bool { isSelected || isChecked }
 
     static func separator(itemIndex: Int) -> BufferPopUpMenuRow {
         BufferPopUpMenuRow(itemIndex: itemIndex,
@@ -128,7 +149,10 @@ enum BufferPopUpMenuMetrics {
                 title: item.title,
                 isSeparator: false,
                 isEnabled: item.isEnabled,
-                isSelected: index == popup.indexOfSelectedItem
+                isSelected: index == popup.indexOfSelectedItem,
+                // NSMenuItem.state carries a toggle the popup's own selection
+                // cannot express.
+                isChecked: item.state == .on
             )
         }
     }
@@ -256,7 +280,7 @@ private final class BufferPopUpMenuContentView: NSView {
             )
             (row.title as NSString).draw(at: titleOrigin, withAttributes: attributes)
 
-            guard row.isSelected,
+            guard row.showsTick,
                   let checkmark = RimeUI.symbol("checkmark", pointSize: 11,
                                                 weight: .semibold) else { continue }
             let checkSize = checkmark.size

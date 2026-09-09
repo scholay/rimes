@@ -4129,8 +4129,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         exchangeEditSlot.setControlVisible(false)
         configureIconButton(
             autoSendButton,
-            "timer",
-            "自动上屏：选择时长或关闭",
+            "arrow.up.to.line.circle",
+            "自动上屏与上屏后关闭",
             #selector(autoSendOptionsTapped)
         )
         configureAutoSendOptionPopup()
@@ -5298,14 +5298,23 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// Splitting them into two icons would widen a toolbar that was
     /// deliberately compressed.
     @objc private func autoSendOptionsTapped() {
-        guard autoSendAvailable, autoSendButton.isEnabled else { return }
+        guard !musicSelected, autoSendButton.isEnabled else { return }
         rebuildAutoSendMenuItems()
         BufferPopUpMenuController.shared.toggle(for: autoSendOptionPopup)
     }
 
     @objc private func autoSendOptionSelected() {
-        guard let selection = autoSendOptionPopup.selectedItem?
-            .representedObject as? TimeInterval else { return }
+        let chosen = autoSendOptionPopup.selectedItem?.representedObject
+        if chosen as? String == Self.autoSendCloseAfterLastMarker {
+            closeAfterLastDeliveryEnabled.toggle()
+            // A switch is not a choice: restore the timing selection the
+            // pull-down still represents, or the next open would show the
+            // toggle row ticked as if it were the current duration.
+            rebuildAutoSendMenuItems()
+            refreshAutoSendButton()
+            return
+        }
+        guard let selection = chosen as? TimeInterval else { return }
         if selection <= 0 {
             autoSendEnabled = false
         } else {
@@ -5340,20 +5349,42 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         rebuildAutoSendMenuItems()
     }
 
+    /// Two settings share this pull-down because they answer the same
+    /// question — what happens to a block without the user acting. The timing
+    /// rows are a mutually exclusive choice; the closing row is an
+    /// independent switch, so it carries its own tick.
+    private static let autoSendCloseAfterLastMarker = "close-after-last"
+
     private func rebuildAutoSendMenuItems() {
         let menu = NSMenu()
-        let off = NSMenuItem(title: "关闭自动上屏", action: nil, keyEquivalent: "")
-        off.representedObject = TimeInterval(0)
-        menu.addItem(off)
-        menu.addItem(.separator())
-        for choice in Self.autoSendLifetimeChoices {
-            let item = NSMenuItem(title: "\(Int(choice)) 秒后自动上屏",
-                                  action: nil,
-                                  keyEquivalent: "")
-            item.representedObject = choice
-            menu.addItem(item)
+        if autoSendAvailable {
+            let off = NSMenuItem(title: "关闭自动上屏", action: nil, keyEquivalent: "")
+            off.representedObject = TimeInterval(0)
+            menu.addItem(off)
+            menu.addItem(.separator())
+            for choice in Self.autoSendLifetimeChoices {
+                let item = NSMenuItem(title: "\(Int(choice)) 秒后自动上屏",
+                                      action: nil,
+                                      keyEquivalent: "")
+                item.representedObject = choice
+                menu.addItem(item)
+            }
+            menu.addItem(.separator())
         }
+        // Applies to Default and every buffer plugin, so it stays reachable
+        // even where the countdown itself does not run.
+        let close = NSMenuItem(title: "最后一块上屏后关闭工作台",
+                               action: nil,
+                               keyEquivalent: "")
+        close.representedObject = Self.autoSendCloseAfterLastMarker
+        close.state = closeAfterLastDeliveryEnabled ? .on : .off
+        menu.addItem(close)
         autoSendOptionPopup.menu = menu
+
+        guard autoSendAvailable else {
+            autoSendOptionPopup.selectItem(at: -1)
+            return
+        }
         let lifetime = autoSendLifetime
         let selected = autoSendEnabled
             ? (Self.autoSendLifetimeChoices.firstIndex(of: lifetime).map { $0 + 2 } ?? 2)
@@ -5365,11 +5396,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// tint, and a filled pill — a tint change alone reads as noise next to
     /// the app icon.
     private func refreshAutoSendButton() {
-        let on = autoSendEnabled
+        let on = autoSendAvailable && autoSendEnabled
         let accent = RimeUI.isRasta ? RimeUI.brandGreen : RimeUI.accentBlue
         autoSendButton.image = RimeUI.symbol(
-            on ? "timer.circle.fill" : "timer",
-            pointSize: on ? 13 : 11,
+            on ? "arrow.up.to.line.circle.fill" : "arrow.up.to.line.circle",
+            pointSize: on ? 13 : 12,
             weight: .semibold
         )
         autoSendButton.image?.isTemplate = true
@@ -5385,16 +5416,28 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             ? accent.withAlphaComponent(0.6).cgColor
             : NSColor.clear.cgColor
         autoSendButton.contentTintColor = on ? accent : RimeUI.textMuted
-        autoSendButton.toolTip = on
-            ? "自动上屏已开启：块会在 \(Int(autoSendLifetime)) 秒后自行上屏，点击可改时长或关闭"
-            : "自动上屏已关闭：点击可选择时长开启"
+        let closesAfterLast = closeAfterLastDeliveryEnabled
+        let timing: String
+        if !autoSendAvailable {
+            timing = "自动上屏仅在 Default 模式可用"
+        } else if on {
+            timing = "自动上屏：块会在 \(Int(autoSendLifetime)) 秒后自行上屏"
+        } else {
+            timing = "自动上屏：已关闭"
+        }
+        autoSendButton.toolTip = timing + "；"
+            + (closesAfterLast ? "最后一块上屏后关闭工作台" : "上屏后保持工作台打开")
+            + "。点击可修改"
         autoSendButton.setAccessibilityLabel(
-            on ? "自动上屏：\(Int(autoSendLifetime)) 秒" : "自动上屏：已关闭"
+            (autoSendAvailable && on
+                ? "自动上屏：\(Int(autoSendLifetime)) 秒"
+                : "自动上屏：已关闭")
+                + (closesAfterLast ? "，最后一块上屏后关闭" : "")
         )
         // Only the Default buffer runs a countdown, so the control disappears
         // rather than sitting inert under the other plugins.
-        autoSendButton.isHidden = !autoSendAvailable
-        if !autoSendAvailable,
+        autoSendButton.isHidden = musicSelected
+        if musicSelected,
            BufferPopUpMenuController.shared.isPresenting(for: autoSendOptionPopup) {
             BufferPopUpMenuController.shared.dismiss()
         }
