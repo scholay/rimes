@@ -116,7 +116,7 @@ tmp_root=$(mktemp -d)
 ```
 
 输出包括 `.tar.gz` 和对应的 `.sha256`。打包脚本必须先调用统一的
-`scripts/platform-preview/preview.py stage`，只收录 policy 审核通过的 52 文件最小
+`scripts/platform-preview/preview.py stage`，只收录 policy 审核通过的 55 文件最小
 依赖闭包；`rime_ai.example.json` 和旧 AI Lua 明确排除。归档内另有覆盖每个 payload
 文件的 `data/PAYLOAD-MANIFEST.tsv`，安装前会自动校验。找不到 Python、统一 staging
 工具或 policy 校验失败时，构建会 fail-closed，不会退回复制整个 `rime-data`。

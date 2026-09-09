@@ -6,6 +6,7 @@
 - EboneA
 - cuihaiyang
 - pengjiebo
+- [Qilin You (@asmoyou)](https://github.com/asmoyou)
 
 ## AI coding assistants
 

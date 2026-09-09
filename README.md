@@ -33,6 +33,7 @@
 | Mailbox | 与 Buffer 同级；`⌘⇧M` 打开/关闭，独立保存 AI 会话、备注与待审核外部推送。窗口内可“新建对话”并选择已配置的连接器/模型；CLI 只使用各自默认模型，OpenAI 使用本机配置模型，选择只绑定新会话且不改全局设置。草稿不创建空会话，首次 Return 才创建会话并发起生成 |
 | Capsule | 与 Buffer 同级；`⌘⇧C` 打开/关闭，逐条维护八类内容并预览图片/PDF；可选择 iCloud Drive 文件夹自动双向同步六类普通条目与媒体资产，Password、Skill 路径及主密钥保持本机 |
 | 设置 | `⌘⇧S` 随时打开设置页面 |
+| 个人词库 | 设置 → 输入法 → 个人词库；本地搜索、新增、编辑、删除、撤销及导入导出，详见 [个人词库管理](PERSONAL-LEXICON.md) |
 | 实时翻译 | 默认 Apple 本地翻译（macOS 15+），也可走 AI 渠道 |
 | AI 生成 | Codex CLI / Claude Code CLI / OpenAI 兼容 API；结果只留在 Buffer 内，可选 Plain / Markdown / JSON，再由用户上屏 |
 | 意识流输入 | 拼音/并击 → 本地 Rime + Octagram 低延迟解码，复杂输入回退 AI → 最多 5 个互斥猜测 → 选定后投递 |

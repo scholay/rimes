@@ -89,6 +89,7 @@ enum CoreSettingsSubpages {
             values = [
                 ("encoding", "输入方案"),
                 ("dictionaries", "词库"),
+                ("personal-lexicon", "个人词库"),
             ]
         case .appearance:
             values = [("theme", "主题"), ("size", "尺寸")]
@@ -541,6 +542,7 @@ func runSettingsRoutingSmokeTest() -> Bool {
                 == [
                     SettingsSubpageID(rawValue: "encoding"),
                     SettingsSubpageID(rawValue: "dictionaries"),
+                    SettingsSubpageID(rawValue: "personal-lexicon"),
                 ],
               catalog.route(
                 for: SettingsRouteID(rawValue: "extension.feiyao-learning")
