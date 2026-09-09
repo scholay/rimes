@@ -3686,6 +3686,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         installNote.font = .systemFont(ofSize: 11)
         installNote.textColor = RimeUI.textMuted
 
+        if subpageID == "permissions" {
+            return permissionsPage()
+        }
         if subpageID == "logs-data" {
             let openConfigBtn = SettingsPointingButton(
                 title: "打开 \(ProductIdentity.displayName) 数据目录",
@@ -3723,6 +3726,80 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             installStatus,
             installNote,
         ])
+    }
+
+    /// One row per permission RIMES actually uses, each stating what it
+    /// enables and what happens without it. A grant that fails silently is
+    /// indistinguishable from a broken feature, which is the whole reason
+    /// this page exists.
+    private func permissionsPage() -> NSView {
+        var rows: [NSView] = [
+            title("系统权限"),
+            caption("逐项查看 RIMES 需要的系统权限、对应功能，以及未授权时的表现。"),
+            spacer(8),
+        ]
+        for report in SystemPermissionAudit.reportAll() {
+            let status: String
+            let symbol: String
+            switch report.status {
+            case .granted:
+                status = "已授权"
+                symbol = "checkmark.seal"
+            case .denied:
+                status = "未授权"
+                symbol = "exclamationmark.triangle"
+            case .undeterminable:
+                status = "系统未提供查询接口"
+                symbol = "questionmark.circle"
+            }
+            let button = SettingsPointingButton(
+                title: report.actionTitle,
+                target: self,
+                action: #selector(permissionActionTapped(_:))
+            )
+            button.tag = SystemPermission.allCases
+                .firstIndex(of: report.permission) ?? 0
+            rows.append(settingsRow(
+                title: "\(report.permission.title) · \(status)",
+                detail: "用于：\(report.permission.enables)\n"
+                    + "未授权时：\(report.permission.whenMissing)",
+                symbolName: symbol,
+                control: button
+            ))
+        }
+        if SystemPermissionAudit.isAdHocSigned() {
+            // The single most useful sentence on this page for this build.
+            let note = NSTextField(wrappingLabelWithString:
+                "当前为临时签名（ad-hoc）构建：每次重新构建都会更换代码签名，"
+                + "系统会因此作废已授予的权限，而「系统设置」里的勾选仍然显示为开启，"
+                + "并且不会再次弹出授权对话框。恢复方法是在对应面板中移除 RIMES 后重新添加。"
+                + "改用固定的签名证书可以一劳永逸。")
+            note.font = .systemFont(ofSize: 11)
+            note.textColor = RimeUI.textMuted
+            rows.append(spacer(12))
+            rows.append(note)
+        }
+        rows.append(spacer(12))
+        let refresh = SettingsPointingButton(
+            title: "重新检测",
+            target: self,
+            action: #selector(refreshPermissionsPage)
+        )
+        rows.append(refresh)
+        return contentColumn(rows)
+    }
+
+    @objc private func permissionActionTapped(_ sender: NSButton) {
+        let permissions = SystemPermission.allCases
+        guard sender.tag >= 0, sender.tag < permissions.count else { return }
+        let permission = permissions[sender.tag]
+        let prompted = SystemPermissionAudit.requestOrReveal(permission)
+        IMELog.write("permissions: \(permission.rawValue) action prompted=\(prompted)")
+        refreshPermissionsPage()
+    }
+
+    @objc private func refreshPermissionsPage() {
+        reload()
     }
 
     private func contentColumn(_ views: [NSView]) -> NSView {
@@ -5179,7 +5256,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         let enabled = alignToInputBoxCheck.state == .on
         FocusedInputBoxProbe.alignmentEnabled = enabled
         if enabled, !FocusedInputBoxProbe.isPermitted {
-            FocusedInputBoxProbe.requestPermission()
+            SystemPermissionAudit.requestOrReveal(.accessibility)
         }
         reload()
         IMELog.write(
@@ -5189,7 +5266,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     @objc private func requestAccessibilityGrant() {
-        FocusedInputBoxProbe.requestPermission()
+        // Falls back to opening the pane when no dialog can appear, instead
+        // of asking for a grant and showing the user nothing.
+        SystemPermissionAudit.requestOrReveal(.accessibility)
         reload()
         IMELog.write(
             "setting accessibility grant requested permitted="
@@ -5201,7 +5280,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         let enabled = clipboardAutoPasteCheck.state == .on
         ClipboardAutoPaste.enabled = enabled
         if enabled, !ClipboardAutoPaste.isPermitted {
-            ClipboardAutoPaste.requestPermission()
+            SystemPermissionAudit.requestOrReveal(.accessibility)
         }
         reload()
         IMELog.write(

@@ -110,7 +110,9 @@ enum CoreSettingsSubpages {
                 SettingsSubpageDescriptor(id: $0.id, title: $0.title)
             }
         case .maintenance:
-            values = [("update-restart", "更新与重启"), ("logs-data", "日志与数据")]
+            values = [("update-restart", "更新与重启"),
+                      ("permissions", "系统权限"),
+                      ("logs-data", "日志与数据")]
         }
         return values.map {
             SettingsSubpageDescriptor(id: SettingsSubpageID(rawValue: $0.0), title: $0.1)

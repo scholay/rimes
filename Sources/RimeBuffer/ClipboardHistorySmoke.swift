@@ -1891,6 +1891,53 @@ func runClipboardActivationPolicySmokeTest() -> Bool {
         }
     }
 
+    // The permission inventory. Anything listed must name a real feature and
+    // a real consequence, and must reach a settings pane — a row that cannot
+    // be acted on is worse than no row.
+    guard SystemPermission.allCases.count == 2,
+          SystemPermission.allCases.allSatisfy({
+              !$0.title.isEmpty && !$0.enables.isEmpty
+                  && !$0.whenMissing.isEmpty && $0.settingsURL != nil
+          }) else {
+        return clipboardPermissionFail("permission inventory completeness")
+    }
+    // Input Monitoring is deliberately absent: the global monitors watch
+    // mouse buttons only and the hotkeys are Carbon registrations. Listing a
+    // permission that is never used teaches the user to grant things blindly.
+    guard !SystemPermission.allCases.contains(where: {
+        $0.rawValue.lowercased().contains("input")
+    }) else {
+        return clipboardPermissionFail("unused permissions must not be listed")
+    }
+
+    let reports = SystemPermissionAudit.reportAll()
+    guard reports.count == SystemPermission.allCases.count,
+          reports.allSatisfy({ !$0.actionTitle.isEmpty }) else {
+        return clipboardPermissionFail("every permission needs a live report")
+    }
+    // Local network has no read API; claiming to know its state would be a
+    // lie, and a lie here sends the user to check the wrong thing.
+    guard SystemPermissionAudit.status(for: .localNetwork) == .undeterminable else {
+        return clipboardPermissionFail("local network cannot be queried")
+    }
+    // A denied grant that will not prompt must offer the pane, not a request
+    // that produces no dialog — the failure the user actually hit.
+    let silentDenied = SystemPermissionReport(permission: .accessibility,
+                                              status: .denied,
+                                              promptWouldBeSilent: true)
+    let promptableDenied = SystemPermissionReport(permission: .accessibility,
+                                                  status: .denied,
+                                                  promptWouldBeSilent: false)
+    guard silentDenied.actionTitle == "前往系统设置",
+          promptableDenied.actionTitle == "请求权限" else {
+        return clipboardPermissionFail("denied grants must offer the right action")
+    }
+
     print("clipboard activation policy smoke: OK")
     return true
+}
+
+private func clipboardPermissionFail(_ message: String) -> Bool {
+    print("FAILED: \(message)")
+    return false
 }
