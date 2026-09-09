@@ -89,7 +89,7 @@ enum FlyChordSchemaLocator {
             userRoot = URL(fileURLWithPath: userOverride, isDirectory: true)
         } else {
             userRoot = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
         }
         // Rime applies `my_combo.custom.yaml` during deployment. The effective
         // algebra therefore lives in build/, while the root schema remains the
@@ -745,7 +745,7 @@ final class FlyChordProgressStore {
         let root = storageRoot
             ?? environmentRoot.map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-                .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
         storageURL = root.appendingPathComponent("learning/\(schemaID)_progress.json")
         self.schemaID = schemaID
         self.fileManager = fileManager

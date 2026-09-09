@@ -8,12 +8,12 @@ set -u
 MODE="${1:-}"
 SYSTEM_LABEL="com.scholay.rimes.companion-start"
 USER_LABEL="com.scholay.rimes.dev-companion-start"
-SYSTEM_APP="/Library/Input Methods/ETInput.app"
-USER_APP="$HOME/Library/Input Methods/ETInput.app"
+SYSTEM_APP="/Library/Input Methods/RIMES.app"
+USER_APP="$HOME/Library/Input Methods/RIMES.app"
 SYSTEM_AGENT_DIR="/Library/LaunchAgents"
 USER_AGENT_DIR="$HOME/Library/LaunchAgents"
 TEST_ROOT="${RIMES_COMPANION_TEST_ROOT:-}"
-SYSTEM_GUARD='if [ -e "$HOME/Library/Input Methods/ETInput.app" ] || [ -L "$HOME/Library/Input Methods/ETInput.app" ] || [ -e "$HOME/Library/LaunchAgents/com.scholay.rimes.dev-companion-start.plist" ] || [ -L "$HOME/Library/LaunchAgents/com.scholay.rimes.dev-companion-start.plist" ]; then exit 0; fi; exec /usr/bin/open -g "/Library/Input Methods/ETInput.app"'
+SYSTEM_GUARD='if [ -e "$HOME/Library/Input Methods/RIMES.app" ] || [ -L "$HOME/Library/Input Methods/RIMES.app" ] || [ -e "$HOME/Library/LaunchAgents/com.scholay.rimes.dev-companion-start.plist" ] || [ -L "$HOME/Library/LaunchAgents/com.scholay.rimes.dev-companion-start.plist" ]; then exit 0; fi; exec /usr/bin/open -g "/Library/Input Methods/RIMES.app"'
 temporary=""
 backup=""
 audit_list=""
@@ -61,7 +61,7 @@ write_agent() {
     local owner_kind="$6"
 
     [ -d "$physical_app" ] && [ ! -L "$physical_app" ] \
-        && [ -x "$physical_app/Contents/MacOS/ETInput" ] || {
+        && [ -x "$physical_app/Contents/MacOS/RIMES" ] || {
         echo "RIMES companion: canonical app is unavailable: $physical_app" >&2
         return 1
     }
@@ -296,7 +296,7 @@ wait_for_user_processes_to_stop() {
 
     while [ "$attempt" -lt 30 ]; do
         pids=""
-        for process_name in ETInput RimeBuffer; do
+        for process_name in RIMES ETInput RimeBuffer; do
             process_probe="$(
                 /usr/bin/pgrep -U "$uid" -x "$process_name" 2>/dev/null
             )"
@@ -331,7 +331,7 @@ audit_running_process_owners() {
             return 1
             ;;
     esac
-    for process_name in ETInput RimeBuffer; do
+    for process_name in RIMES ETInput RimeBuffer; do
         process_probe="$(
             /usr/bin/pgrep -x "$process_name" 2>/dev/null
         )"
@@ -381,7 +381,7 @@ verify_managed_user_app() {
             "$app/Contents/Info.plist" 2>/dev/null
     )" || return 1
     case "$identifier" in
-        com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
+        com.scholay.isaac|com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
             return 0
             ;;
         *)

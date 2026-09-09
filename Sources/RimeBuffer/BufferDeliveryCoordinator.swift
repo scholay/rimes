@@ -325,7 +325,7 @@ final class BufferDeliveryCoordinator {
                         completion: completion
                     )
                 },
-                refreshUI: { RimeBufferController.refreshActiveUI() },
+                refreshUI: { RIMESController.refreshActiveUI() },
                 workbenchSessionEpoch: {
                     BufferWindowController.shared.workbenchSessionEpoch
                 },

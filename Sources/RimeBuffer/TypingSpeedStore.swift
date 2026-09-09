@@ -110,7 +110,7 @@ final class TypingSpeedStore {
         let root = storageRoot
             ?? environmentRoot.map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/RimeBuffer")
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)")
         url = root.appendingPathComponent("stats/typing_speed.json")
         self.autosaveDelay = autosaveDelay
         self.inactivityThreshold = max(1, inactivityThreshold)

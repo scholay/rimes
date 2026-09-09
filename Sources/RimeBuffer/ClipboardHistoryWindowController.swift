@@ -195,7 +195,7 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
     private var hiddenForSession = false
     private var presentationIntent = false
     private var presentationTargetToken: FocusToken?
-    private weak var presentationTargetController: RimeBufferController?
+    private weak var presentationTargetController: RIMESController?
     private var presentationMode: ClipboardHistoryPresentationMode = .borrowedRime
     private var standaloneFocusRegistered = false
     private var explicitCaptureGeneration: UInt64 = 0
@@ -361,7 +361,7 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
         }
         syncCaptureState()
         scheduleExplicitCapture()
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
         let targetDescription = presentationTargetToken?.description ?? "none"
         IMELog.write(
             "clipboard window shown mode=\(mode) target=\(targetDescription)"
@@ -473,7 +473,7 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
                   target.isExternalTarget else { return }
             self.presentationTargetToken = target.token
             presentationTargetController = target.controller
-            RimeBufferController.refreshActiveUI()
+            RIMESController.refreshActiveUI()
             IMELog.write("clipboard window rebound target=\(target.token)")
             return
         }
@@ -656,7 +656,7 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
     /// failed image delivery never leaks a newline into the host field.
     func consumeActivationCommandIfVisible(
         client: IMKTextInput?,
-        controller: RimeBufferController
+        controller: RIMESController
     ) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
         guard RimeInputSourceAuthority.currentSourceIsOwn(),

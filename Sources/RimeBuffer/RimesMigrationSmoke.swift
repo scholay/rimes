@@ -76,14 +76,28 @@ func runRimesMigrationSmokeTest() -> Bool {
     try? Data("pre-existing".utf8).write(
         to: occupied.appendingPathComponent("keep.txt")
     )
+    // Reported, never marked: recording an occupied destination as migrated
+    // is what turned an ordering mistake into a permanent one, leaving the
+    // real data behind with nothing left to notice it.
     guard RimesDataMigration.migrateIfNeeded(from: legacy,
                                              to: occupied,
                                              fileManager: fileManager)
-            == .alreadyMigrated,
-          let kept = try? Data(contentsOf: occupied
-            .appendingPathComponent("keep.txt")),
-          String(decoding: kept, as: UTF8.self) == "pre-existing" else {
-        return migrationFail("an occupied destination must be left alone")
+            == .destinationOccupied,
+          !fileManager.fileExists(
+            atPath: occupied
+                .appendingPathComponent(".rimes-migrated-from-rimebuffer").path
+          ),
+          // Still retryable once the destination is cleared.
+          {
+              try? fileManager.removeItem(at: occupied)
+              if case .copied = RimesDataMigration.migrateIfNeeded(
+                  from: legacy, to: occupied, fileManager: fileManager
+              ) { return true }
+              return false
+          }(),
+          fileManager.fileExists(atPath: occupied
+            .appendingPathComponent("capsule/passwords/entry.md").path) else {
+        return migrationFail("an occupied destination must be reported, not marked")
     }
 
     // Preferences follow the bundle identifier, so a rename presents factory

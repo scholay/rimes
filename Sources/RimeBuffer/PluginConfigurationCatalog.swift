@@ -607,7 +607,7 @@ enum PluginConfigurationCatalog {
         return (root.map {
             URL(fileURLWithPath: $0, isDirectory: true)
         } ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/RimeBuffer", isDirectory: true))
+            .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true))
             .appendingPathComponent("my-prompt", isDirectory: true)
     }
 
@@ -671,7 +671,7 @@ enum PluginConfigurationCatalog {
             "id", "pl", "ru", "th", "tr", "uk", "vi",
         ]
         let standardDictionaryKey =
-            "RimeBuffer.PluginConfiguration.\(BuiltInPluginID.appleTranslation)"
+            "\(RimesIdentity.preferenceKeyPrefix)PluginConfiguration.\(BuiltInPluginID.appleTranslation)"
         let standardValues = defaults.dictionary(
             forKey: standardDictionaryKey
         )
@@ -752,7 +752,7 @@ private final class StreamInputConfigurationStore:
             defaults: defaults
         )
         storageKey =
-            "RimeBuffer.PluginConfiguration.\(BuiltInPluginID.streamInput)"
+            "\(RimesIdentity.preferenceKeyPrefix)PluginConfiguration.\(BuiltInPluginID.streamInput)"
     }
 
     func validate(schema: PluginConfigurationSchema) throws {

@@ -11,7 +11,7 @@ enum GatewayToken {
         let dir = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DIR"].map {
             URL(fileURLWithPath: $0, isDirectory: true)
         } ?? URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+            .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("gateway-token")
     }

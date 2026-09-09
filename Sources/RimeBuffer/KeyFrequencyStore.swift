@@ -237,7 +237,7 @@ final class KeyFrequencyStore {
         let root = storageRoot
             ?? environmentRoot.map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent("Library/RimeBuffer")
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)")
         self.url = root.appendingPathComponent("stats/key_frequency.json")
         self.autosaveDelay = autosaveDelay
         self.dateProvider = dateProvider

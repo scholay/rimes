@@ -8,6 +8,20 @@ import Foundation
 /// opportunity to read from the old location and write to the new — which for
 /// a directory holding Rime user dictionaries, learned phrases and the Capsule
 /// store means silently losing work rather than failing loudly.
+enum RimesIdentity {
+    /// The identifier macOS records grants and input-source registration
+    /// against. Spelled once so a rename cannot leave half the app answering
+    /// to the old name.
+    static let bundleIdentifier = "com.scholay.isaac"
+    static let legacyBundleIdentifier = "com.isaac.inputmethod.RimeBuffer"
+    static let inputSourceID = bundleIdentifier + ".Hans"
+    static let productName = "RIMES"
+    /// Prefix for persisted preference keys. Renamed with a migration rather
+    /// than left behind, since a key is only invisible until someone reads it.
+    static let preferenceKeyPrefix = "RIMES."
+    static let legacyPreferenceKeyPrefix = "RimeBuffer."
+}
+
 enum RimesPaths {
     static let directoryName = "RIMES"
     static let legacyDirectoryName = "RimeBuffer"
@@ -65,6 +79,9 @@ enum RimesDataMigrationOutcome: Equatable {
     case notNeeded
     case alreadyMigrated
     case copied(fileCount: Int)
+    /// Something other than this migration created the destination. Reported
+    /// rather than marked, so it can be repaired and retried.
+    case destinationOccupied
     case failed(String)
 }
 
@@ -102,8 +119,16 @@ enum RimesDataMigration {
                 atPath: destination.path
             )) ?? []
             guard existing.isEmpty else {
-                try? Data().write(to: marker)
-                return .alreadyMigrated
+                // Deliberately unmarked. Something else created this directory
+                // first, and recording it as migrated would make a fixable
+                // ordering mistake permanent — the user's real data would stay
+                // in the old location with nothing left to notice it.
+                IMELog.write(
+                    "data migration blocked: \(destination.path) already holds "
+                        + "\(existing.count) entries; the user's data remains in "
+                        + "\(legacy.path)"
+                )
+                return .destinationOccupied
             }
             try? fileManager.removeItem(at: destination)
         }

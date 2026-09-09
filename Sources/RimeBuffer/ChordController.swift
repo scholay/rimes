@@ -47,7 +47,7 @@ enum ChordSettings {
             ].map {
                 URL(fileURLWithPath: $0, isDirectory: true)
             } ?? home.appendingPathComponent(
-                "Library/RimeBuffer",
+                "Library/\(RimesPaths.directoryName)",
                 isDirectory: true
             )
             return resolvedDuration(

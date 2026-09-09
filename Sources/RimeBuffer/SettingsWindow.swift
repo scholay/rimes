@@ -669,7 +669,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             return URL(fileURLWithPath: override, isDirectory: true)
         }
         return URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+            .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
     }
 
     private var installLogURL: URL {
@@ -4857,7 +4857,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             : storedPreviousIDs
         let previousSchemaID = InputConfigurationStore.shared.selectedSchemaID
 
-        RimeBufferController.active?.forceCommit()
+        RIMESController.active?.forceCommit()
         do {
             if enabled {
                 try ChordKeymapRuntimeFiles(root: userDir).writeSchema(
@@ -4872,7 +4872,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         } catch {
             _ = store.setEnabled(previousEnabled, source: .rollback)
             _ = InputConfigurationStore.shared.select(schemaID: previousSchemaID)
-            RimeBufferController.applyStoredInputConfiguration()
+            RIMESController.applyStoredInputConfiguration()
             try? SchemaListStore.writeEnabledIDs(previousIDs, to: schemaListURL)
             sender.state = previousEnabled ? .on : .off
             setPluginStatus(
@@ -4920,7 +4920,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 _ = InputConfigurationStore.shared.select(
                     schemaID: previousSchemaID
                 )
-                RimeBufferController.applyStoredInputConfiguration()
+                RIMESController.applyStoredInputConfiguration()
                 let restoredList: Bool
                 do {
                     try SchemaListStore.writeEnabledIDs(
@@ -5026,7 +5026,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         _ = InputConfigurationStore.shared.select(
             encoding: InputEncoding.allCases[sender.tag]
         )
-        RimeBufferController.applyStoredInputConfiguration()
+        RIMESController.applyStoredInputConfiguration()
         reload()
     }
 
@@ -5040,7 +5040,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             settingsStatusLabel.textColor = RimeUI.textMuted
         }
         BufferWindowController.shared.refresh()
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
     }
 
     @objc private func codexLoginButtonPressed() {
@@ -5107,7 +5107,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 if authorizationChanged {
                     AITextPluginRuntimeRegistry.shared.workspace.configurationDidChange()
                     BufferWindowController.shared.refresh()
-                    RimeBufferController.refreshActiveUI()
+                    RIMESController.refreshActiveUI()
                 }
                 DispatchQueue.main.async { [weak self] in
                     guard let self,
@@ -5180,7 +5180,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 }
                 self.refreshClaudeLoginControls()
                 BufferWindowController.shared.refresh()
-                RimeBufferController.refreshActiveUI()
+                RIMESController.refreshActiveUI()
                 DispatchQueue.main.async { [weak self] in
                     guard let self,
                           self.window?.isVisible == true,
@@ -5218,7 +5218,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             info("无法应用方案：\(error.localizedDescription)")
             return
         }
-        RimeBufferController.active?.forceCommit()
+        RIMESController.active?.forceCommit()
         guard info("开始部署…完成后输入法会自动重启。") else {
             return
         }
@@ -5257,7 +5257,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             return
         }
 
-        RimeBufferController.active?.forceCommit()
+        RIMESController.active?.forceCommit()
         InputMetricsPersistence.saveNow()
 
         let command = [
@@ -5540,7 +5540,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     @objc private func restartInputMethod() {
-        RimeBufferController.active?.forceCommit()
+        RIMESController.active?.forceCommit()
         InputMetricsPersistence.saveNow()
         IMELog.write("settings: restart requested")
         exit(0)

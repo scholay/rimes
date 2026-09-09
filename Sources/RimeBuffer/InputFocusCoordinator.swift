@@ -640,7 +640,7 @@ enum FocusActivationRules {
 /// keep an old controller/client alive forever.
 final class FocusLease {
     let token: FocusToken
-    weak var controller: RimeBufferController?
+    weak var controller: RIMESController?
     weak var client: IMKTextInput?
     let clientIdentity: ObjectIdentifier
     let bundleID: String
@@ -670,7 +670,7 @@ final class FocusLease {
     var markedRangeWasObservable = false
 
     init(token: FocusToken,
-         controller: RimeBufferController,
+         controller: RIMESController,
          client: IMKTextInput,
          bundleID: String,
          processIdentifier: pid_t,
@@ -903,7 +903,7 @@ final class InputFocusCoordinator {
 
     /// A server activation denotes a new field focus even when IMK reuses the
     /// same application-level client proxy for multiple text controls.
-    func beginActivation(controller: RimeBufferController,
+    func beginActivation(controller: RIMESController,
                          client: IMKTextInput,
                          eventFloor: TimeInterval?) -> Activation? {
         activate(controller: controller,
@@ -918,7 +918,7 @@ final class InputFocusCoordinator {
     /// event reuses the exact current lease, or establishes a new one when the
     /// client really changed. Its monotonic event timestamp rejects callbacks
     /// queued before the current activation.
-    func noteEvent(controller: RimeBufferController,
+    func noteEvent(controller: RIMESController,
                    client: IMKTextInput,
                    eventTimestamp: TimeInterval,
                    eventType: NSEvent.EventType) -> Activation? {
@@ -930,7 +930,7 @@ final class InputFocusCoordinator {
                  eventFloor: nil)
     }
 
-    private func activate(controller: RimeBufferController,
+    private func activate(controller: RIMESController,
                           client: IMKTextInput,
                           forceNewEpoch: Bool,
                           eventTimestamp: TimeInterval?,
@@ -1470,7 +1470,7 @@ final class InputFocusCoordinator {
         guard RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
         let displaced = owner
         let ownBundleID = Bundle.main.bundleIdentifier
-            ?? "com.isaac.inputmethod.RimeBuffer"
+            ?? RimesIdentity.bundleIdentifier
         let ownProcessIdentifier = ProcessInfo.processInfo.processIdentifier
         let targetProcessIdentifier = hostResolution.clientProcessIdentifier
         let isExternalTarget = FocusTargetRules.identifiesExternalTarget(
@@ -1560,7 +1560,7 @@ final class InputFocusCoordinator {
     }
 
     @discardableResult
-    func deactivate(controller: RimeBufferController, token: FocusToken) -> FocusLease? {
+    func deactivate(controller: RIMESController, token: FocusToken) -> FocusLease? {
         dispatchPrecondition(condition: .onQueue(.main))
         guard let owner,
               owner.controller === controller,
@@ -1621,7 +1621,7 @@ final class InputFocusCoordinator {
         onChange?()
     }
 
-    func isCurrent(_ token: FocusToken, controller: RimeBufferController? = nil) -> Bool {
+    func isCurrent(_ token: FocusToken, controller: RIMESController? = nil) -> Bool {
         if Thread.isMainThread { _ = pruneExpiredOwner() }
         guard let owner,
               owner.token == token,
@@ -1632,7 +1632,7 @@ final class InputFocusCoordinator {
         return true
     }
 
-    func controller(for token: FocusToken) -> RimeBufferController? {
+    func controller(for token: FocusToken) -> RIMESController? {
         guard isCurrent(token) else { return nil }
         return owner?.controller
     }
@@ -1650,7 +1650,7 @@ final class InputFocusCoordinator {
     /// to survive that pending state without treating it as a source switch.
     func exactCurrentLease(
         expected token: FocusToken,
-        controller: RimeBufferController,
+        controller: RIMESController,
         clientIdentity: ObjectIdentifier
     ) -> FocusLease? {
         dispatchPrecondition(condition: .onQueue(.main))
@@ -1668,7 +1668,7 @@ final class InputFocusCoordinator {
     }
 
     func maySynchronizePendingOverlayModifierBaseline(
-        controller: RimeBufferController,
+        controller: RIMESController,
         client: IMKTextInput,
         eventTimestamp: TimeInterval
     ) -> Bool {

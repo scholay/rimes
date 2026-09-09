@@ -619,7 +619,7 @@ func installInputSource() -> Bool {
 
 func runInputSourceInstallSmokeTest() -> Bool {
     print("== RIMES input-source installer smoke test ==")
-    let bundleID = "com.isaac.inputmethod.RimeBuffer"
+    let bundleID = RimesIdentity.bundleIdentifier
     let modeID = bundleID + ".Hans"
     let parent = InputSourceInstallMetadata(
         sourceID: bundleID,
@@ -1124,7 +1124,8 @@ private func scanForPhysicalInputSourceDuplicates()
     let fileManager = FileManager.default
     let canonicalPath = "/Library/Input Methods/ETInput.app"
     let managedIdentifiers: Set<String> = [
-        "com.isaac.inputmethod.RimeBuffer",
+        RimesIdentity.bundleIdentifier,
+        RimesIdentity.legacyBundleIdentifier,
         "com.isaac.inputmethod.ETInput",
     ]
     let roots = [

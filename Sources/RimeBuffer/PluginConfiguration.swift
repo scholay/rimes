@@ -10,7 +10,7 @@ extension Notification.Name {
     /// changed field identifiers. Configuration values (including ordinary
     /// text values) never cross the notification boundary.
     static let pluginConfigurationDidChange = Notification.Name(
-        "RimeBuffer.PluginConfiguration.didChange"
+        "\(RimesIdentity.preferenceKeyPrefix)PluginConfiguration.didChange"
     )
 }
 
@@ -526,7 +526,7 @@ final class PluginConfigurationUserDefaultsStore: PluginConfigurationStoring {
          defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.namespace = namespace
-        storageKey = "RimeBuffer.PluginConfiguration.\(namespace)"
+        storageKey = "\(RimesIdentity.preferenceKeyPrefix)PluginConfiguration.\(namespace)"
     }
 
     func validate(schema: PluginConfigurationSchema) throws {
@@ -643,7 +643,7 @@ final class PluginConfigurationPrivateJSONStore: PluginConfigurationStoring {
             ).standardizedFileURL
         } else {
             self.rootDirectory = fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/RimeBuffer",
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)",
                                         isDirectory: true)
                 .standardizedFileURL
         }

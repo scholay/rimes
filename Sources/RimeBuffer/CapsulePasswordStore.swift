@@ -209,7 +209,7 @@ final class CapsulePasswordStore {
             userRoot = URL(fileURLWithPath: override, isDirectory: true)
         } else {
             userRoot = homeDirectory.appendingPathComponent(
-                "Library/RimeBuffer",
+                "Library/\(RimesPaths.directoryName)",
                 isDirectory: true
             )
         }

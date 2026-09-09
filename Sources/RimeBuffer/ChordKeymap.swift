@@ -258,7 +258,7 @@ final class ChordKeymapStore {
                     URL(fileURLWithPath: $0, isDirectory: true)
                 }
             ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/RimeBuffer", isDirectory: true))
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true))
             .standardizedFileURL
         directoryURL = self.rootURL.appendingPathComponent("chord-keymaps", isDirectory: true)
         self.defaults = defaults

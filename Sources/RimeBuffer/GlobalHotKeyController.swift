@@ -446,7 +446,7 @@ final class GlobalHotKeyController {
             if eventKind == UInt32(kEventHotKeyReleased) {
                 if hadAuthorityBeforeMainHop,
                    hasAuthorityAtMainBoundary {
-                    _ = RimeBufferController.globalHotKeyDidRelease(
+                    _ = RIMESController.globalHotKeyDidRelease(
                         action,
                         eventTimestamp: carbonTimestamp,
                         primaryKeyEventIdentity: primaryKeyEventIdentity
@@ -477,7 +477,7 @@ final class GlobalHotKeyController {
             let shortcutUsesShift = registeredDefinition.modifiers
                 & UInt32(shiftKey) != 0
             if hadAuthorityBeforeMainHop, hasAuthorityAtMainBoundary {
-                RimeBufferController.globalHotKeyWillPerform(
+                RIMESController.globalHotKeyWillPerform(
                     action,
                     route,
                     eventTimestamp: routingTimestamp,

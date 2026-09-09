@@ -1945,7 +1945,7 @@ func runClipboardActivationPolicySmokeTest() -> Bool {
         isAdHocSigned: false
     )
     let mismatched = SystemPermissionAudit.Identity(
-        bundleIdentifier: "com.isaac.inputmethod.RimeBuffer",
+        bundleIdentifier: RimesIdentity.bundleIdentifier,
         bundleName: "RIMES",
         executableName: "ETInput",
         bundlePath: "/Users/x/Library/Input Methods/ETInput.app",

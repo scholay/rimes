@@ -195,7 +195,7 @@ final class FlyChordConfigurationPageView: NSView, NSTextFieldDelegate {
                 guard ChordExtensionStore.shared.isEnabled,
                       InputConfigurationStore.shared.select(schemaID: ChordExtensionStore.schemaID)
                 else { return false }
-                RimeBufferController.applyStoredInputConfiguration()
+                RIMESController.applyStoredInputConfiguration()
                 return true
             }
         )

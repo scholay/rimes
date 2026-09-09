@@ -7,13 +7,13 @@
 	<key>CFBundleDisplayName</key>
 	<string>RIMES</string>
 	<key>CFBundleExecutable</key>
-	<string>ETInput</string>
+	<string>RIMES</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.isaac.inputmethod.RimeBuffer</string>
+	<string>com.scholay.isaac</string>
 	<key>CFBundleName</key>
 	<string>RIMES</string>
 	<key>CFBundlePackageType</key>
@@ -28,10 +28,10 @@
 	<dict>
 		<key>tsInputModeListKey</key>
 		<dict>
-			<key>com.isaac.inputmethod.RimeBuffer.Hans</key>
+			<key>com.scholay.isaac.Hans</key>
 			<dict>
 				<key>TISInputSourceID</key>
-				<string>com.isaac.inputmethod.RimeBuffer.Hans</string>
+				<string>com.scholay.isaac.Hans</string>
 				<key>TISIntendedLanguage</key>
 				<string>zh-Hans</string>
 				<key>tsInputModeAlternateMenuIconFileKey</key>
@@ -61,15 +61,15 @@
 		</dict>
 		<key>tsVisibleInputModeOrderedArrayKey</key>
 		<array>
-			<string>com.isaac.inputmethod.RimeBuffer.Hans</string>
+			<string>com.scholay.isaac.Hans</string>
 		</array>
 	</dict>
 	<key>InputMethodConnectionName</key>
-	<string>RimeBuffer_1_Connection</string>
+	<string>RIMES_1_Connection</string>
 	<key>InputMethodServerControllerClass</key>
-	<string>RimeBufferController</string>
+	<string>RIMESController</string>
 	<key>InputMethodServerDelegateClass</key>
-	<string>RimeBufferController</string>
+	<string>RIMESController</string>
 	<key>LSBackgroundOnly</key>
 	<false/>
 	<key>LSMinimumSystemVersion</key>
@@ -87,7 +87,7 @@
 	<key>TICapsLockLanguageSwitchCapable</key>
 	<true/>
 	<key>TISInputSourceID</key>
-	<string>com.isaac.inputmethod.RimeBuffer</string>
+	<string>com.scholay.isaac</string>
 	<key>tsInputMethodIconFileKey</key>
 	<string>etinput.pdf</string>
 </dict>

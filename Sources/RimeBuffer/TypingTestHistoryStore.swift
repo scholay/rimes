@@ -25,7 +25,7 @@ final class TypingTestHistoryStore {
         let environmentRoot = environment["RIMEBUFFER_LOCAL_DATA_ROOT"] ?? environment["RIMEBUFFER_USER_DIR"]
         let root = storageRoot
             ?? environmentRoot.map { URL(fileURLWithPath: $0, isDirectory: true) }
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/RimeBuffer")
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/\(RimesPaths.directoryName)")
         url = root.appendingPathComponent("stats/typing_tests.json")
         do {
             if let data = try LocalMetricsFileSecurity.readIfPresent(

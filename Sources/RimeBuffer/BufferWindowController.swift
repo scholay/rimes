@@ -2307,7 +2307,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         if musicSelected {
             if repositionOnOpen { focusMusicSurface() }
         } else if rimeOwnsInput {
-            RimeBufferController.refreshActiveUI()
+            RIMESController.refreshActiveUI()
         }
     }
 
@@ -2356,7 +2356,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             case .relocated:
                 self.lastFocusFollowToken = token
                 self.activeSpaceFocusFollowPending = false
-                RimeBufferController.refreshActiveUI()
+                RIMESController.refreshActiveUI()
             }
         }
     }
@@ -2495,7 +2495,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         clearInlineComposition()
         UserDefaults.standard.set(false, forKey: Key.visible)
         panel.orderOut(nil)
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
     }
 
     /// The optional external-app privacy purge clears staged plaintext and all
@@ -3967,7 +3967,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// Every ETInput-owned text field is an internal UI surface, not a draft
     /// source or a remote-mirroring target.
     func isOwnClient(bundleID: String) -> Bool {
-        let own = Bundle.main.bundleIdentifier ?? "com.isaac.inputmethod.RimeBuffer"
+        let own = Bundle.main.bundleIdentifier ?? RimesIdentity.bundleIdentifier
         return bundleID == own
     }
 
@@ -5583,7 +5583,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             queue: .main
         ) { [weak self] _ in
             self?.refresh()
-            RimeBufferController.refreshActiveUI()
+            RIMESController.refreshActiveUI()
         })
         observers.append(center.addObserver(
             forName: .pluginConfigurationDidChange,
@@ -5603,7 +5603,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             queue: .main
         ) { [weak self] _ in
             self?.refresh()
-            RimeBufferController.refreshActiveUI()
+            RIMESController.refreshActiveUI()
         })
         observers.append(center.addObserver(
             forName: .aiTextGenerationPreferencesDidChange,
@@ -5611,7 +5611,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             queue: .main
         ) { [weak self] _ in
             self?.refresh()
-            RimeBufferController.refreshActiveUI()
+            RIMESController.refreshActiveUI()
         })
         observers.append(center.addObserver(
             forName: .activeBufferPluginDidChange,
@@ -5643,7 +5643,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             if let self, !self.isVisible { self.deactivateMusicSurface() }
             self?.clearTargetAssociationCue()
             self?.refresh()
-            RimeBufferController.refreshActiveUI()
+            RIMESController.refreshActiveUI()
         })
         observers.append(workspace.addObserver(forName: NSWorkspace.sessionDidResignActiveNotification,
                                                object: nil,
@@ -5714,7 +5714,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             if self.panel.isVisible {
                 self.refresh()
             }
-            RimeBufferController.refreshActiveUI()
+            RIMESController.refreshActiveUI()
         }
         if let secureInputPollTimer {
             RunLoop.main.add(secureInputPollTimer, forMode: .common)
@@ -5773,7 +5773,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         hiddenForSession = false
         refresh()
         panel.orderFrontRegardless()
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
     }
 
     private func restoreFrame() {
@@ -6032,7 +6032,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             guard controls.selectResult(blockID: blockID) else { return }
         }
         refresh()
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
     }
 
     private func moveDerivedTargetSelection(delta: Int) {
@@ -6078,7 +6078,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             return
         }
         refresh()
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
     }
 
     private func saveFrame() {
@@ -6134,7 +6134,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             expected: lease.token,
             requiresCapture: true
         )
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
         return true
     }
 
@@ -6235,7 +6235,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             reason: "pointer activated external host"
         )
         refresh()
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
     }
 
     private func schedulePluginSelectorRefresh() {
@@ -6304,7 +6304,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         _ = AITextConnectorRegistry.shared.select(kind)
         refresh()
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
     }
 
     @objc private func aiModeChanged() {
@@ -6361,12 +6361,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                 switch result {
                 case .inlineStarted:
                     refresh()
-                    RimeBufferController.refreshActiveUI()
+                    RIMESController.refreshActiveUI()
                 case .rejected:
                     NSSound.beep()
                     IMELog.write("AI generation request rejected")
                     refresh()
-                    RimeBufferController.refreshActiveUI()
+                    RIMESController.refreshActiveUI()
                 }
                 return
             case .generating, .disabled:
@@ -6382,13 +6382,13 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             NSSound.beep()
             IMELog.write("buffer send rejected after input source changed")
             refresh()
-            RimeBufferController.refreshActiveUI()
+            RIMESController.refreshActiveUI()
             return
         }
         _ = BufferDeliveryCoordinator.shared.sendNext(resolveCompositionIfNeeded: true)
         // Delivery.insert atomically replaces the idle marked guard. Restore it
         // for the still-current external lease before the next Return.
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
     }
 
     @objc private func copyResultTapped() {
@@ -6427,7 +6427,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         IMELog.write("buffer single-exchange returned to source")
         refresh()
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
     }
 
     @objc private func pluginActionTapped(_ sender: NSButton) {
@@ -6443,7 +6443,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         if !workspace.invoke() { NSSound.beep() }
         refresh()
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
     }
 
     @objc private func builtInActionOptionChanged() {
@@ -6459,7 +6459,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             NSSound.beep()
         }
         refresh()
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
     }
 
     @objc private func translationSourceChanged() {
@@ -6484,7 +6484,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             NSSound.beep()
         }
         refresh()
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
     }
 
     @objc private func translationTargetChanged() {

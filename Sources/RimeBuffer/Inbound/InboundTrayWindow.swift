@@ -135,7 +135,7 @@ final class MailboxWindowController: NSObject, NSWindowDelegate {
 
 func runMailboxWindowSmokeTest() -> Bool {
     let own = StandaloneWindowFocusIdentity(
-        bundleID: "com.isaac.inputmethod.RimeBuffer",
+        bundleID: RimesIdentity.legacyBundleIdentifier,
         processIdentifier: 900
     )
     let external = StandaloneWindowFocusIdentity(

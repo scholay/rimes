@@ -38,7 +38,7 @@ func runPluginConfigurationSmokeTest() -> Bool {
         return false
     }
 
-    let suiteName = "RimeBuffer.PluginConfigurationSmoke.\(UUID().uuidString)"
+    let suiteName = "\(RimesIdentity.preferenceKeyPrefix)PluginConfigurationSmoke.\(UUID().uuidString)"
     guard let defaults = UserDefaults(suiteName: suiteName) else {
         return fail("defaults suite")
     }
@@ -59,7 +59,7 @@ func runPluginConfigurationSmokeTest() -> Bool {
 
     let privateRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(
-            "RimeBuffer.PluginConfigurationSmoke.\(UUID().uuidString)",
+            "\(RimesIdentity.preferenceKeyPrefix)PluginConfigurationSmoke.\(UUID().uuidString)",
             isDirectory: true
         )
     do {
@@ -113,7 +113,7 @@ func runPluginConfigurationSmokeTest() -> Bool {
         // custom numeric timing onto the nearest v1.2 preset while retaining
         // the independently selected connector.
         let streamStorageKey =
-            "RimeBuffer.PluginConfiguration.\(BuiltInPluginID.streamInput)"
+            "\(RimesIdentity.preferenceKeyPrefix)PluginConfiguration.\(BuiltInPluginID.streamInput)"
         defaults.set([
             StreamInputPluginConfigurationFieldID.connector:
                 AITextProviderKind.claudeCodeCLI.rawValue,
@@ -213,7 +213,7 @@ func runPluginConfigurationSmokeTest() -> Bool {
               translationSettings.targetLanguageID == "en",
               defaults.dictionary(
                 forKey:
-                    "RimeBuffer.PluginConfiguration.\(BuiltInPluginID.appleTranslation)"
+                    "\(RimesIdentity.preferenceKeyPrefix)PluginConfiguration.\(BuiltInPluginID.appleTranslation)"
               ) != nil else {
             return fail("translation runtime bridge")
         }

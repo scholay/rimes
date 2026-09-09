@@ -1,14 +1,13 @@
 #!/bin/bash
-# Builds RIMES as a SELF-CONTAINED IMK input method. ETInput.app remains the
-# frozen internal compatibility path used by existing installs and updates:
-# librime + the Rime shared data are packaged inside, so no separate Squirrel
-# install is needed. Installs into the per-user Input Methods folder and
+# Builds RIMES as a SELF-CONTAINED IMK input method: librime + the Rime shared
+# data are packaged inside, so no separate Squirrel install is needed. Installs into the per-user Input Methods folder and
 # registers + enables + selects it so it shows in System Settings / the input menu.
 #
 # IMPORTANT invariants (learned the hard way — see RELEASE.md):
-#   * The .app directory remains ETInput.app. The RIMES product name lives in
-#     CFBundleName/CFBundleDisplayName + InfoPlist.strings. Renaming the path
-#     would strand old updaters and duplicate the same TIS identity.
+#   * Bundle, executable, identifier and display name are all RIMES. Older
+#     installs under ETInput.app / RimeBuffer.app advertise the same input
+#     source, so they are deregistered and removed here rather than left to
+#     compete for the same TIS identity.
 #   * There must be EXACTLY ONE bundle with this id on disk. A stray copy (e.g.
 #     left in the repo working tree) registers the same input-source id at a
 #     second path and poisons TIS/LaunchServices → blank/greyed picker row. So
@@ -21,8 +20,9 @@ cd "$(dirname "$0")"
 source scripts/lib/rime-user-state.sh
 
 CONFIG="${1:-release}"
-APP="ETInput.app"                   # Frozen compatibility path; display name is RIMES.
-EXE="ETInput"
+APP="RIMES.app"                     # One name everywhere: bundle, executable, display.
+EXE="RIMES"
+LEGACY_APPS=("ETInput.app" "RimeBuffer.app")
 STAGE=".build/stage"                # assemble here, not in the repo root
 APP_PATH="$STAGE/$APP"
 DEST="$HOME/Library/Input Methods/$APP"
@@ -43,14 +43,15 @@ fi
 # A system-wide release copy and this per-user dev copy would advertise the
 # same bundle/input-source IDs. Stop before creating that poisoned duplicate;
 # remove the pkg-installed copy explicitly before returning to dev installs.
-for system_copy in "/Library/Input Methods/ETInput.app" \
+for system_copy in "/Library/Input Methods/RIMES.app" \
+                   "/Library/Input Methods/ETInput.app" \
                    "/Library/Input Methods/RimeBuffer.app" \
                    "/Library/Input Methods/Enter输入法.app" \
                    "/Library/Input Methods/恩特输入法.app"; do
     [ -e "$system_copy" ] || continue
     system_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$system_copy/Contents/Info.plist" 2>/dev/null || true)"
     case "$system_id" in
-        com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
+        com.scholay.isaac|com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
             echo "!! found system-wide duplicate: $system_copy"
             echo "   remove it first: sudo rm -rf '$system_copy'"
             exit 1
@@ -229,9 +230,16 @@ sleep 0.5
 echo "==> purging stray/duplicate registrations (same id at other paths poisons the picker)"
 pkill -x "$EXE" 2>/dev/null || true
 pkill -x RimeBuffer 2>/dev/null || true
-sleep 0.5
+# The previous install runs under its old executable name and is respawned by
+# the text-input system while its input source is still selected, so it has to
+# be stopped here too rather than only detected.
+for legacy_exe in "${LEGACY_APPS[@]}"; do
+    pkill -x "${legacy_exe%.app}" 2>/dev/null || true
+done
+sleep 1
 if /usr/bin/pgrep -U "$(id -u)" -x "$EXE" >/dev/null 2>&1 \
-    || /usr/bin/pgrep -U "$(id -u)" -x RimeBuffer >/dev/null 2>&1; then
+    || /usr/bin/pgrep -U "$(id -u)" -x RimeBuffer >/dev/null 2>&1 \
+    || /usr/bin/pgrep -U "$(id -u)" -x ETInput >/dev/null 2>&1; then
     echo "!! existing RIMES process did not stop; refusing a live bundle replacement"
     exit 1
 fi
@@ -240,6 +248,7 @@ for stray in "Enter输入法.app" "恩特输入法.app" "ETInput.app" "RimeBuffe
              "$HOME/Library/Input Methods/Enter输入法.app" \
              "$HOME/Library/Input Methods/恩特输入法.app" \
              "$HOME/Library/Input Methods/RimeBuffer.app" \
+             "$HOME/Library/Input Methods/ETInput.app" \
              "$HOME/Documents/05-dev/apps/rime-buffer/RimeBuffer.app"; do
     if [ -e "$stray" ]; then
         "$LSREGISTER" -u "$stray" 2>/dev/null || true

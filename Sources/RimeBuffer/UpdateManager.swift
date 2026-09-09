@@ -101,7 +101,7 @@ private enum UpdateNetworkRules {
 /// older package signed by the same team could otherwise be renamed to match a
 /// newer GitHub tag and pass both macOS trust checks.
 enum UpdatePackageMetadataRules {
-    static let packageIdentifier = "com.isaac.inputmethod.RimeBuffer"
+    static let packageIdentifier = RimesIdentity.bundleIdentifier
     static let componentPackageName = "component.pkg"
 
     static func validationFailure(distributionData: Data,
@@ -173,7 +173,7 @@ enum UpdatePackageMetadataRules {
                   payloadBundle.attribute(forName: "id")?.stringValue
                     == packageIdentifier,
                   payloadBundle.attribute(forName: "path")?.stringValue
-                    == "./ETInput.app",
+                    == "./\(RimesIdentity.productName).app",
                   payloadBundle.attribute(
                     forName: "CFBundleShortVersionString"
                   )?.stringValue == expectedVersion else {
@@ -1069,23 +1069,23 @@ func runUpdatePackageMetadataSmokeTest() -> Bool {
     <?xml version="1.0"?>
     <installer-gui-script>
       <choice id="default">
-        <pkg-ref id="com.isaac.inputmethod.RimeBuffer"/>
+        <pkg-ref id="\(RimesIdentity.bundleIdentifier)"/>
       </choice>
-      <pkg-ref id="com.isaac.inputmethod.RimeBuffer" version="1.2.3">#component.pkg</pkg-ref>
-      <pkg-ref id="com.isaac.inputmethod.RimeBuffer"><bundle-version/></pkg-ref>
+      <pkg-ref id="\(RimesIdentity.bundleIdentifier)" version="1.2.3">#component.pkg</pkg-ref>
+      <pkg-ref id="\(RimesIdentity.bundleIdentifier)"><bundle-version/></pkg-ref>
     </installer-gui-script>
     """.utf8)
     let packageInfo = Data("""
     <?xml version="1.0"?>
-    <pkg-info identifier="com.isaac.inputmethod.RimeBuffer" version="1.2.3">
-      <bundle path="./ETInput.app" id="com.isaac.inputmethod.RimeBuffer"
+    <pkg-info identifier="\(RimesIdentity.bundleIdentifier)" version="1.2.3">
+      <bundle path="./\(RimesIdentity.productName).app" id="\(RimesIdentity.bundleIdentifier)"
               CFBundleShortVersionString="1.2.3" CFBundleVersion="42"/>
     </pkg-info>
     """.utf8)
     let wrongProductID = Data(
         String(decoding: distribution, as: UTF8.self)
             .replacingOccurrences(
-                of: "id=\"com.isaac.inputmethod.RimeBuffer\" version=\"1.2.3\"",
+                of: "id=\"\(RimesIdentity.bundleIdentifier)\" version=\"1.2.3\"",
                 with: "id=\"example.attacker\" version=\"1.2.3\""
             ).utf8
     )
@@ -1099,7 +1099,7 @@ func runUpdatePackageMetadataSmokeTest() -> Bool {
     let wrongComponentID = Data(
         String(decoding: packageInfo, as: UTF8.self)
             .replacingOccurrences(
-                of: "com.isaac.inputmethod.RimeBuffer",
+                of: RimesIdentity.bundleIdentifier,
                 with: "example.attacker"
             ).utf8
     )

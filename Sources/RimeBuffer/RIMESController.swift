@@ -1039,12 +1039,12 @@ enum InputCaretGeometryRules {
     }
 }
 
-@objc(RimeBufferController)
-final class RimeBufferController: IMKInputController {
+@objc(RIMESController)
+final class RIMESController: IMKInputController {
 
     /// The controller currently owning focus — menu commands and F4 preference
     /// persistence route through the live session here.
-    static var active: RimeBufferController? {
+    static var active: RIMESController? {
         InputFocusCoordinator.shared.interactionTarget()?.controller
     }
 
@@ -2098,7 +2098,7 @@ final class RimeBufferController: IMKInputController {
         let environment = ProcessInfo.processInfo.environment
         let userDirectory = environment["RIMEBUFFER_USER_DIR"].map {
             URL(fileURLWithPath: $0, isDirectory: true)
-        } ?? home.appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+        } ?? home.appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
         let squirrelDirectory = home.appendingPathComponent("Library/Rime", isDirectory: true)
         let candidates = [
             userDirectory.appendingPathComponent("build/squirrel.yaml"),
@@ -2447,7 +2447,7 @@ final class RimeBufferController: IMKInputController {
         // Let the host finish the current command/blur first. If the exact
         // external lease survives, restore its idle guard before another key.
         DispatchQueue.main.async {
-            RimeBufferController.refreshActiveUI()
+            RIMESController.refreshActiveUI()
         }
     }
 
@@ -6838,7 +6838,7 @@ final class RimeBufferController: IMKInputController {
             return
         }
 
-        if RimeBufferController.active === self,
+        if RIMESController.active === self,
            currentLease() != nil {
             applyStoredInputConfigurationToLiveSession()
             IMELog.write("chord_extension disabled active_session fallback=\(currentSchemaId)")

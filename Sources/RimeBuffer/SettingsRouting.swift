@@ -452,7 +452,7 @@ func runSettingsRoutingSmokeTest() -> Bool {
 
     do {
         let own = StandaloneWindowFocusIdentity(
-            bundleID: "com.isaac.inputmethod.RimeBuffer",
+            bundleID: RimesIdentity.bundleIdentifier,
             processIdentifier: 900
         )
         let external = StandaloneWindowFocusIdentity(

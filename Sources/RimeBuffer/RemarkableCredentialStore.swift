@@ -126,7 +126,7 @@ final class RemarkableCredentialStore {
             selectedRoot = URL(fileURLWithPath: override, isDirectory: true)
         } else {
             selectedRoot = fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
         }
         self.rootDirectory = selectedRoot.standardizedFileURL
         configurationDirectoryURL = self.rootDirectory

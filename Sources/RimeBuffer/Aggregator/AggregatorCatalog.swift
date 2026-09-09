@@ -138,7 +138,7 @@ final class AggregatorCatalogStore {
             ?? (ProcessInfo.processInfo.environment["RIMEBUFFER_LOCAL_DATA_ROOT"]
                 .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) })
             ?? fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
         cacheURL = root.standardizedFileURL
             .appendingPathComponent("ai", isDirectory: true)
             .appendingPathComponent("aggregator-models.json", isDirectory: false)

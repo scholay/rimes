@@ -24,7 +24,7 @@ struct ChordKeymapRuntimeFiles {
         ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DIR"]
             .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
             ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-                .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
     }
 
     struct Snapshot {

@@ -393,7 +393,7 @@ final class RimeEngine {
     // silently kills candidates. First run deploys into it from sharedDataDir.
     // RIMEBUFFER_USER_DIR overrides it (used by the CLI smoke harness).
     private static let defaultUserDir = URL(fileURLWithPath: NSHomeDirectory())
-        .appendingPathComponent("Library/RimeBuffer").path
+        .appendingPathComponent("Library/\(RimesPaths.directoryName)").path
     private let userDataDir = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DIR"]
         ?? RimeEngine.defaultUserDir
     private let logDir = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DIR"]

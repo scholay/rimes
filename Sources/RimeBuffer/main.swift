@@ -8,6 +8,20 @@ import CRimeBridge
 // helper. Handle that request before any smoke, installer, AppKit, or IMK
 // startup so the helper can return the saved password and terminate without
 // creating a second input-method process.
+// The very first statement, deliberately. The data directory and the
+// preference domain both changed with the rename, and anything that resolves
+// either one first — the Rime engine bootstrap, a store, even a log file —
+// creates the new directory before the migration can fill it, after which the
+// migration sees an occupied destination and correctly refuses to merge two
+// histories. Ordering is the whole guarantee here; nothing else can supply it.
+RimesDataMigration.migrateIfNeeded(
+    from: RimesPaths.legacyUserDirectory(),
+    to: RimesPaths.userDirectory()
+)
+RimesPreferenceMigration.migrateIfNeeded(
+    from: RimesIdentity.legacyBundleIdentifier
+)
+
 if let status = RemarkableSSHAskPassHandler.handleIfRequested() {
     exit(status)
 }
@@ -60,10 +74,22 @@ private enum StandaloneRimeCommandRules {
         let candidateURL = URL(fileURLWithPath: path)
             .standardizedFileURL
             .resolvingSymlinksInPath()
-        let liveURL = URL(fileURLWithPath: homeDirectory, isDirectory: true)
-            .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
+        // Both names are live during and after the rename: the migration
+        // copies rather than moves, so the old directory still holds the
+        // user's dictionaries and Capsule records. A standalone process must
+        // be kept out of either one.
+        let liveURLs = [RimesPaths.directoryName, RimesPaths.legacyDirectoryName]
+            .map { name in
+                URL(fileURLWithPath: homeDirectory, isDirectory: true)
+                    .appendingPathComponent("Library/\(name)", isDirectory: true)
+                    .standardizedFileURL
+                    .resolvingSymlinksInPath()
+            }
+        return liveURLs.contains { matchesLiveDirectory(candidateURL, live: $0) }
+    }
+
+    private static func matchesLiveDirectory(_ candidateURL: URL,
+                                             live liveURL: URL) -> Bool {
 
         // macOS user volumes are commonly case-insensitive, and firmlinks or
         // symlinks can spell the same directory with a different path. Compare
@@ -327,7 +353,7 @@ private func standaloneIsolationAliasProbe(isolatedUserDir: String) -> Bool {
     defer { try? fileManager.removeItem(at: fixture) }
     let fakeHome = fixture.appendingPathComponent("home", isDirectory: true)
     let live = fakeHome.appendingPathComponent(
-        "Library/RimeBuffer",
+        "Library/\(RimesPaths.directoryName)",
         isDirectory: true
     )
     let alias = fixture.appendingPathComponent("profile-alias", isDirectory: true)
@@ -784,7 +810,7 @@ if let i = CommandLine.arguments.firstIndex(of: "rimes-migrate-probe"),
     print("migration: \(outcome)")
     switch outcome {
     case .copied, .alreadyMigrated, .notNeeded: exit(0)
-    case .failed: exit(1)
+    case .destinationOccupied, .failed: exit(1)
     }
 }
 if CommandLine.arguments.contains("rimes-migration-smoke") {
@@ -1124,7 +1150,7 @@ if CommandLine.arguments.contains("gateway-serve") {
 retryPendingInputSourceActivationIfNeeded()
 
 // IMK bootstrap. The connection name MUST match Info.plist; IMK finds our
-// controller via InputMethodServerControllerClass = RimeBufferController.
+// controller via InputMethodServerControllerClass = RIMESController.
 // Start enabled built-in observers before the first controller can receive a
 // key. The registry is discovery/enablement only; external Action Plugin
 // execution and revocation remain owned by ActionPluginHost/Manager.
@@ -1165,7 +1191,7 @@ let startupRimeUserDir = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DI
     .flatMap { $0.isEmpty ? nil : $0 }
     .map { URL(fileURLWithPath: $0, isDirectory: true) }
     ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-        .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+        .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
 let startupSchemaListURL = startupRimeUserDir.appendingPathComponent(
     "default.custom.yaml"
 )
@@ -1212,7 +1238,7 @@ if SchemaListStore.enabledIDs(at: startupSchemaListURL)
     }
 }
 let connectionName = (Bundle.main.infoDictionary?["InputMethodConnectionName"] as? String)
-    ?? "RimeBuffer_1_Connection"
+    ?? "\(RimesIdentity.productName)_1_Connection"
 
 NSApplication.shared.setActivationPolicy(.accessory)   // background app; panels can float above others
 CapsuleCloudSyncController.shared.start()
@@ -1270,7 +1296,7 @@ BufferModel.shared.onChange = {
         // Model mutations can occur inside a commit/drain callback. Defer the
         // host-guard refresh to avoid re-entering getContext/setMarkedText.
         DispatchQueue.main.async {
-            RimeBufferController.refreshActiveUI()
+            RIMESController.refreshActiveUI()
         }
     }
 }
@@ -1305,7 +1331,7 @@ InboundBus.shared.onChange = {
 LocalGateway.shared.startIfEnabled()
 
 // No standalone NSStatusItem: ETInput's commands are supplied by
-// RimeBufferController.menu() under the system input-source icon.
+// RIMESController.menu() under the system input-source icon.
 StatusMenu.shared.setHealthy(rimeEngine.isHealthy)
 
 // Auto-update: silently check GitHub Releases on launch + hourly, download in the
@@ -1405,7 +1431,7 @@ let inputSourceChangedObserver = DistributedNotificationCenter.default().addObse
     }
     let frontmostID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
     IMELog.write("TIS source changed: previous=\(previousID) current=\(currentID) deltaMs=\(elapsed) controlDown=\(controlDown) modifiers=\(modifierFlags.rawValue) frontmost=\(frontmostID)")
-    let ownID = Bundle.main.bundleIdentifier ?? "com.isaac.inputmethod.RimeBuffer"
+    let ownID = Bundle.main.bundleIdentifier ?? RimesIdentity.bundleIdentifier
     let currentIsOwn = RimeInputSourceAuthority.isOwnInputSourceID(
         currentID,
         ownBundleID: ownID
@@ -1423,7 +1449,7 @@ let inputSourceChangedObserver = DistributedNotificationCenter.default().addObse
     }
 }
 
-let privacyOwnBundleID = Bundle.main.bundleIdentifier ?? "com.isaac.inputmethod.RimeBuffer"
+let privacyOwnBundleID = Bundle.main.bundleIdentifier ?? RimesIdentity.bundleIdentifier
 let privacyOwnProcessIdentifier = ProcessInfo.processInfo.processIdentifier
 let initialFrontmostApplication = NSWorkspace.shared.frontmostApplication
 var lastExternalForegroundIdentity = BufferPrivacyTransitionRules.externalIdentity(
@@ -1513,7 +1539,8 @@ private func tisBoolProperty(_ source: TISInputSource, _ key: CFString) -> Bool 
 func selectFallbackInputSourceForUpdate() -> Bool {
     let ownBundleIDs = Set([
         Bundle.main.bundleIdentifier ?? "",
-        "com.isaac.inputmethod.RimeBuffer",
+        RimesIdentity.bundleIdentifier,
+        RimesIdentity.legacyBundleIdentifier,
         "com.isaac.inputmethod.ETInput",
     ].filter { !$0.isEmpty })
 
@@ -1596,6 +1623,8 @@ func runEngineSmokeTest() -> Bool {
           !StandaloneRimeCommandRules.requiresIsolatedUserDir(
             arguments: ["ETInput", "--install"]
           ),
+          // The retired directory stays live: the migration copies rather
+          // than moves, so it still holds dictionaries and Capsule records.
           StandaloneRimeCommandRules.isLiveUserDir(
             "/Users/smoke/Library/RimeBuffer/../RimeBuffer",
             homeDirectory: "/Users/smoke"
@@ -1606,6 +1635,18 @@ func runEngineSmokeTest() -> Bool {
           ),
           StandaloneRimeCommandRules.isLiveUserDir(
             "/users/smoke/library/rimebuffer",
+            homeDirectory: "/Users/smoke"
+          ),
+          StandaloneRimeCommandRules.isLiveUserDir(
+            "/Users/smoke/Library/RIMES",
+            homeDirectory: "/Users/smoke"
+          ),
+          StandaloneRimeCommandRules.isLiveUserDir(
+            "/Users/smoke/Library/RIMES/smoke-child",
+            homeDirectory: "/Users/smoke"
+          ),
+          StandaloneRimeCommandRules.isLiveUserDir(
+            "/users/smoke/library/rimes",
             homeDirectory: "/Users/smoke"
           ),
           standaloneIsolationAliasProbe(
@@ -5727,16 +5768,16 @@ func runBufferSmokeTest() -> Bool {
     print("== \(ProductIdentity.displayName) buffer smoke test ==")
     guard RimeKey.fromVirtualKeyCode(22) == 0x36,
           RimeKey.fromVirtualKeyCode(27) == 0x2d,
-          RimeBufferController.shouldConsumeCodexBufferControlText(
+          RIMESController.shouldConsumeCodexBufferControlText(
               [0x1e, 0x1f], bundleId: "com.openai.codex", bufferActive: true
           ),
-          !RimeBufferController.shouldConsumeCodexBufferControlText(
+          !RIMESController.shouldConsumeCodexBufferControlText(
               [0x1e], bundleId: "com.apple.Terminal", bufferActive: true
           ),
-          !RimeBufferController.shouldConsumeCodexBufferControlText(
+          !RIMESController.shouldConsumeCodexBufferControlText(
               [0x1f], bundleId: "com.openai.codex", bufferActive: false
           ),
-          !RimeBufferController.shouldConsumeCodexBufferControlText(
+          !RIMESController.shouldConsumeCodexBufferControlText(
               [0x01], bundleId: "com.openai.codex", bufferActive: true
           ),
           BufferClipboardShortcutRules.shortcut(
@@ -6700,20 +6741,26 @@ func runBufferWindowSmokeTest() -> Bool {
           InputSourceChangeDiagnosticRules.controlIsDown([.control, .shift]),
           !InputSourceChangeDiagnosticRules.controlIsDown([.option]),
           RimeInputSourceAuthority.isOwnInputSourceID(
-            "com.isaac.inputmethod.RimeBuffer",
-            ownBundleID: "com.isaac.inputmethod.RimeBuffer"
+            RimesIdentity.bundleIdentifier,
+            ownBundleID: RimesIdentity.bundleIdentifier
           ),
           RimeInputSourceAuthority.isOwnInputSourceID(
-            "com.isaac.inputmethod.RimeBuffer.Hans",
-            ownBundleID: "com.isaac.inputmethod.RimeBuffer"
+            RimesIdentity.inputSourceID,
+            ownBundleID: RimesIdentity.bundleIdentifier
+          ),
+          // The retired identifier must still be recognised as ours: an
+          // installation left under the old name is still this app.
+          RimeInputSourceAuthority.isOwnInputSourceID(
+            RimesIdentity.legacyBundleIdentifier + ".Hans",
+            ownBundleID: RimesIdentity.legacyBundleIdentifier
           ),
           !RimeInputSourceAuthority.isOwnInputSourceID(
             "im.rime.inputmethod.Squirrel.Hans",
-            ownBundleID: "com.isaac.inputmethod.RimeBuffer"
+            ownBundleID: RimesIdentity.bundleIdentifier
           ),
           !RimeInputSourceAuthority.isOwnInputSourceID(
             "com.apple.keylayout.ABC",
-            ownBundleID: "com.isaac.inputmethod.RimeBuffer"
+            ownBundleID: RimesIdentity.bundleIdentifier
           ) else {
         print("FAILED: input-source transition diagnostics")
         return false
