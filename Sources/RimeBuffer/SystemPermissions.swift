@@ -131,6 +131,75 @@ enum SystemPermissionAudit {
         SystemPermission.allCases.map(report)
     }
 
+    /// The identity macOS actually records a grant against, which is not the
+    /// name on the bundle. This app carries three: the folder and executable
+    /// say ETInput, the display name says RIMES, and the identifier — the only
+    /// one TCC uses — says RimeBuffer. Anyone hunting for the right row in
+    /// System Settings needs the third one, so it is shown rather than
+    /// assumed.
+    struct Identity: Equatable {
+        let bundleIdentifier: String
+        let bundleName: String
+        let executableName: String
+        let bundlePath: String
+        let isAdHocSigned: Bool
+
+        var namesAgree: Bool {
+            let tail = bundleIdentifier.split(separator: ".").last.map(String.init)
+            return tail == executableName && executableName == bundleName
+        }
+    }
+
+    static func identity(bundle: Bundle = .main) -> Identity {
+        Identity(
+            bundleIdentifier: bundle.bundleIdentifier ?? "unknown",
+            bundleName: (bundle.object(forInfoDictionaryKey: "CFBundleName")
+                as? String) ?? "unknown",
+            executableName: (bundle.object(
+                forInfoDictionaryKey: "CFBundleExecutable"
+            ) as? String) ?? "unknown",
+            bundlePath: bundle.bundleURL.path,
+            isAdHocSigned: isAdHocSigned(bundleURL: bundle.bundleURL)
+        )
+    }
+
+    /// Clears this app's recorded decision so the system will ask again.
+    ///
+    /// `AXIsProcessTrustedWithOptions` prompts only for an app macOS has no
+    /// record of, and an ad-hoc rebuild leaves a record that no longer matches
+    /// the binary — granted in appearance, denied in effect, and unable to ask
+    /// again. Removing the record is the only way back to a working prompt
+    /// without the user hand-editing a list.
+    @discardableResult
+    static func resetAccessibilityRecord(
+        bundleIdentifier: String = Bundle.main.bundleIdentifier ?? ""
+    ) -> Bool {
+        guard !bundleIdentifier.isEmpty else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        process.arguments = ["reset", "Accessibility", bundleIdentifier]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+        } catch {
+            IMELog.write("permissions: tccutil unavailable: \(error.localizedDescription)")
+            return false
+        }
+        process.waitUntilExit()
+        let output = String(
+            decoding: pipe.fileHandleForReading.readDataToEndOfFile(),
+            as: UTF8.self
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        let ok = process.terminationStatus == 0 && !output.contains("No such bundle")
+        IMELog.write(
+            "permissions: reset Accessibility for \(bundleIdentifier) ok=\(ok) "
+                + "output=\(output.isEmpty ? "none" : output)"
+        )
+        return ok
+    }
+
     /// Requests or reveals, whichever can actually help. Returns whether a
     /// system prompt was attempted.
     @discardableResult

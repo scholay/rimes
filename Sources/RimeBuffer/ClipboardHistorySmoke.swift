@@ -1933,6 +1933,45 @@ func runClipboardActivationPolicySmokeTest() -> Bool {
         return clipboardPermissionFail("denied grants must offer the right action")
     }
 
+    // Identity. The grant is recorded against the identifier, and this bundle
+    // carries three different names — folder/executable ETInput, display
+    // RIMES, identifier RimeBuffer — so the mismatch must be detectable
+    // rather than left for the user to notice in a system list.
+    let agreeing = SystemPermissionAudit.Identity(
+        bundleIdentifier: "com.example.Widget",
+        bundleName: "Widget",
+        executableName: "Widget",
+        bundlePath: "/Applications/Widget.app",
+        isAdHocSigned: false
+    )
+    let mismatched = SystemPermissionAudit.Identity(
+        bundleIdentifier: "com.isaac.inputmethod.RimeBuffer",
+        bundleName: "RIMES",
+        executableName: "ETInput",
+        bundlePath: "/Users/x/Library/Input Methods/ETInput.app",
+        isAdHocSigned: true
+    )
+    guard agreeing.namesAgree, !mismatched.namesAgree else {
+        return clipboardPermissionFail("identity name agreement")
+    }
+    // Reading the live identity must never produce an empty field, including
+    // from this bare test executable, which has no bundle at all — a blank
+    // line in the settings page would be worse than an honest "unknown".
+    let live = SystemPermissionAudit.identity()
+    guard !live.bundleIdentifier.isEmpty,
+          !live.bundleName.isEmpty,
+          !live.executableName.isEmpty,
+          !live.bundlePath.isEmpty else {
+        return clipboardPermissionFail("live identity must have no blank fields")
+    }
+    // Resetting a record needs a real identifier; an empty one must not
+    // shell out at all.
+    guard !SystemPermissionAudit.resetAccessibilityRecord(
+        bundleIdentifier: ""
+    ) else {
+        return clipboardPermissionFail("empty identifier must not be reset")
+    }
+
     print("clipboard activation policy smoke: OK")
     return true
 }

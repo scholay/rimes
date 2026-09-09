@@ -3767,6 +3767,29 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 control: button
             ))
         }
+        // The identity TCC records against, spelled out. Three different
+        // names appear on this bundle and only one of them is the one to look
+        // for in System Settings.
+        let identity = SystemPermissionAudit.identity()
+        let identityNote = NSTextField(wrappingLabelWithString:
+            "系统按「标识符」记录授权，而不是按显示名：\n"
+            + "标识符：\(identity.bundleIdentifier)\n"
+            + "显示名：\(identity.bundleName)　可执行文件：\(identity.executableName)\n"
+            + "位置：\(identity.bundlePath)")
+        identityNote.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        identityNote.textColor = RimeUI.textSecondary
+        rows.append(spacer(12))
+        rows.append(sectionLabel("应用标识"))
+        rows.append(identityNote)
+        if !identity.namesAgree {
+            let mismatch = NSTextField(wrappingLabelWithString:
+                "这三个名称目前并不一致，历史授权记录可能同时留有旧标识符的条目。"
+                + "在系统设置里请以上面的标识符为准，删除对不上的旧条目。")
+            mismatch.font = .systemFont(ofSize: 11)
+            mismatch.textColor = RimeUI.textMuted
+            rows.append(mismatch)
+        }
+
         if SystemPermissionAudit.isAdHocSigned() {
             // The single most useful sentence on this page for this build.
             let note = NSTextField(wrappingLabelWithString:
@@ -3785,7 +3808,22 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             target: self,
             action: #selector(refreshPermissionsPage)
         )
-        rows.append(refresh)
+        let reset = SettingsPointingButton(
+            title: "清除授权记录并重新申请",
+            target: self,
+            action: #selector(resetAccessibilityRecordTapped)
+        )
+        let actions = NSStackView(views: [refresh, reset])
+        actions.orientation = .horizontal
+        actions.spacing = 8
+        rows.append(actions)
+        let resetNote = NSTextField(wrappingLabelWithString:
+            "系统只对「从未记录过」的应用弹出授权对话框。一旦记录存在（临时签名每次"
+            + "重新构建都会让记录与新二进制对不上），再申请也不会有任何反应。"
+            + "清除记录后系统才会重新询问。")
+        resetNote.font = .systemFont(ofSize: 11)
+        resetNote.textColor = RimeUI.textMuted
+        rows.append(resetNote)
         return contentColumn(rows)
     }
 
@@ -3796,6 +3834,18 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         let prompted = SystemPermissionAudit.requestOrReveal(permission)
         IMELog.write("permissions: \(permission.rawValue) action prompted=\(prompted)")
         refreshPermissionsPage()
+    }
+
+    @objc private func resetAccessibilityRecordTapped() {
+        let cleared = SystemPermissionAudit.resetAccessibilityRecord()
+        // Only ask after the record is gone; asking first is what produced
+        // nothing at all.
+        if cleared {
+            ClipboardAutoPaste.requestPermission()
+        } else {
+            SystemPermissionAudit.requestOrReveal(.accessibility)
+        }
+        reload()
     }
 
     @objc private func refreshPermissionsPage() {
