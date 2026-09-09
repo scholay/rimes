@@ -1943,12 +1943,14 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         static let legacyFrame = "bufferWindow.frame.v1"
         static let pinned = "bufferWindow.pinned.v1"
         static let autoSend = "bufferWindow.autoSend.v1"
+        static let autoSendLifetime = "bufferWindow.autoSendLifetime.v1"
     }
 
     /// Seconds a block sits in the rail before it is delivered on its own.
     /// The chip dims across this window so the countdown is visible rather
     /// than a surprise.
-    static let autoSendLifetime: TimeInterval = 1
+    static let defaultAutoSendLifetime: TimeInterval = 1
+    static let autoSendLifetimeChoices: [TimeInterval] = [1, 2, 3, 5]
 
     private let panel: BufferPanel
     private let outerContainer = NSView()
@@ -2004,6 +2006,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private let sendButtonProgressIndicator = NSProgressIndicator()
     private let exchangeEditButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let autoSendButton = FirstMouseButton(title: "", target: nil, action: nil)
+    /// Never drawn. The custom menu anchors to a real `NSPopUpButton` frame,
+    /// and a hidden view still reports one, which keeps the menu under the
+    /// icon without giving the toolbar a second visible control.
+    private let autoSendOptionPopup = FirstMousePopUpButton(frame: .zero,
+                                                            pullsDown: false)
     private let closeButton = FirstMouseButton(title: "", target: nil, action: nil)
     private lazy var railActionCluster = BufferRailActionClusterView(
         controls: [clipboardImportButton, copyResultButton, sendButton]
@@ -4117,9 +4124,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         configureIconButton(
             autoSendButton,
             "timer",
-            "自动发送：块在 \(Int(Self.autoSendLifetime)) 秒后自行上屏",
-            #selector(toggleAutoSend)
+            "自动上屏：选择时长或关闭",
+            #selector(autoSendOptionsTapped)
         )
+        configureAutoSendOptionPopup()
         configureIconButton(
             closeButton,
             "xmark",
@@ -5235,6 +5243,37 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// Shared by all three plugin modes: turning it on in one turns it on
     /// everywhere, because it describes how the user wants delivery to work
     /// rather than anything about a particular plugin.
+    /// Chosen in the toolbar next to the switch. An unset or unrecognised
+    /// stored value falls back to the default rather than to zero, which the
+    /// clock would read as "never age".
+    var autoSendLifetime: TimeInterval {
+        get {
+            let stored = UserDefaults.standard.double(forKey: Key.autoSendLifetime)
+            return Self.autoSendLifetimeChoices.contains(stored)
+                ? stored
+                : Self.defaultAutoSendLifetime
+        }
+        set {
+            guard Self.autoSendLifetimeChoices.contains(newValue),
+                  newValue != autoSendLifetime else { return }
+            UserDefaults.standard.set(newValue, forKey: Key.autoSendLifetime)
+            autoSendClock.reset()
+            bufferRail.setAutoSendFade([:])
+            syncAutoSendTimer()
+        }
+    }
+
+    /// Auto-send belongs to the Default buffer alone. Every other plugin owns
+    /// its own delivery rhythm — translation emits units as they finish,
+    /// stream input delivers on the boundaries it decides — and a countdown
+    /// running underneath that took control away rather than adding any.
+    private var autoSendAvailable: Bool {
+        BufferAutoSendAvailabilityRules.isAvailable(
+            pluginSelected: BufferPluginSelectionStore.shared.activeKey != nil,
+            musicSelected: musicSelected
+        )
+    }
+
     var autoSendEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: Key.autoSend) }
         set {
@@ -5248,9 +5287,72 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    @objc private func toggleAutoSend() {
-        autoSendEnabled.toggle()
+    /// One toolbar control carries both settings the user has over automatic
+    /// delivery: whether it happens at all, and how long a block gets first.
+    /// Splitting them into two icons would widen a toolbar that was
+    /// deliberately compressed.
+    @objc private func autoSendOptionsTapped() {
+        guard autoSendAvailable, autoSendButton.isEnabled else { return }
+        rebuildAutoSendMenuItems()
+        BufferPopUpMenuController.shared.toggle(for: autoSendOptionPopup)
+    }
+
+    @objc private func autoSendOptionSelected() {
+        guard let selection = autoSendOptionPopup.selectedItem?
+            .representedObject as? TimeInterval else { return }
+        if selection <= 0 {
+            autoSendEnabled = false
+        } else {
+            autoSendLifetime = selection
+            autoSendEnabled = true
+        }
         refreshAutoSendButton()
+    }
+
+    /// Pinned to the icon's own bounds so the menu opens under it, hidden so
+    /// it neither draws nor takes the click that opens it.
+    private func configureAutoSendOptionPopup() {
+        autoSendOptionPopup.isHidden = true
+        autoSendOptionPopup.target = self
+        autoSendOptionPopup.action = #selector(autoSendOptionSelected)
+        autoSendOptionPopup.translatesAutoresizingMaskIntoConstraints = false
+        autoSendButton.addSubview(autoSendOptionPopup)
+        NSLayoutConstraint.activate([
+            autoSendOptionPopup.leadingAnchor.constraint(
+                equalTo: autoSendButton.leadingAnchor
+            ),
+            autoSendOptionPopup.trailingAnchor.constraint(
+                equalTo: autoSendButton.trailingAnchor
+            ),
+            autoSendOptionPopup.topAnchor.constraint(
+                equalTo: autoSendButton.topAnchor
+            ),
+            autoSendOptionPopup.bottomAnchor.constraint(
+                equalTo: autoSendButton.bottomAnchor
+            ),
+        ])
+        rebuildAutoSendMenuItems()
+    }
+
+    private func rebuildAutoSendMenuItems() {
+        let menu = NSMenu()
+        let off = NSMenuItem(title: "关闭自动上屏", action: nil, keyEquivalent: "")
+        off.representedObject = TimeInterval(0)
+        menu.addItem(off)
+        menu.addItem(.separator())
+        for choice in Self.autoSendLifetimeChoices {
+            let item = NSMenuItem(title: "\(Int(choice)) 秒后自动上屏",
+                                  action: nil,
+                                  keyEquivalent: "")
+            item.representedObject = choice
+            menu.addItem(item)
+        }
+        autoSendOptionPopup.menu = menu
+        let lifetime = autoSendLifetime
+        let selected = autoSendEnabled
+            ? (Self.autoSendLifetimeChoices.firstIndex(of: lifetime).map { $0 + 2 } ?? 2)
+            : 0
+        autoSendOptionPopup.selectItem(at: selected)
     }
 
     /// Off and on have to be legible at a glance, so they differ in glyph,
@@ -5278,18 +5380,25 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             : NSColor.clear.cgColor
         autoSendButton.contentTintColor = on ? accent : RimeUI.textMuted
         autoSendButton.toolTip = on
-            ? "自动发送已开启：块会在 \(Int(Self.autoSendLifetime)) 秒后自行上屏，点击可关闭"
-            : "自动发送已关闭：点击后块会在 \(Int(Self.autoSendLifetime)) 秒后自行上屏"
+            ? "自动上屏已开启：块会在 \(Int(autoSendLifetime)) 秒后自行上屏，点击可改时长或关闭"
+            : "自动上屏已关闭：点击可选择时长开启"
         autoSendButton.setAccessibilityLabel(
-            on ? "关闭自动发送" : "开启自动发送"
+            on ? "自动上屏：\(Int(autoSendLifetime)) 秒" : "自动上屏：已关闭"
         )
+        // Only the Default buffer runs a countdown, so the control disappears
+        // rather than sitting inert under the other plugins.
+        autoSendButton.isHidden = !autoSendAvailable
+        if !autoSendAvailable,
+           BufferPopUpMenuController.shared.isPresenting(for: autoSendOptionPopup) {
+            BufferPopUpMenuController.shared.dismiss()
+        }
         autoSendButton.refreshInteractionAppearance()
     }
 
     private func syncAutoSendTimer() {
         autoSendTimer?.invalidate()
         autoSendTimer = nil
-        guard autoSendEnabled else {
+        guard autoSendAvailable, autoSendEnabled else {
             autoSendClock.reset()
             bufferRail.setAutoSendFade([:])
             return
@@ -5305,11 +5414,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// drain and refill entirely between ticks still creates a fresh lifetime.
     private func reconcileAutoSendClock()
         -> BufferDeliveryCoordinator.AutomaticDeliverySnapshot? {
-        guard !musicSelected, autoSendEnabled else {
+        guard autoSendAvailable, autoSendEnabled else {
             autoSendClock.reset()
             bufferRail.setAutoSendFade([:])
             return nil
         }
+        let lifetime = autoSendLifetime
         guard !sessionProtectionActive, !hiddenForSession,
               !IsSecureEventInputEnabled() else {
             autoSendClock.reset()
@@ -5337,7 +5447,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             blocks: snapshot.blocks
         )
         bufferRail.setAutoSendFade(autoSendClock.ages.mapValues {
-            min(max($0 / Self.autoSendLifetime, 0), 1)
+            min(max($0 / lifetime, 0), 1)
         })
         return snapshot
     }
@@ -5345,13 +5455,14 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private func tickAutoSend() {
         dispatchPrecondition(condition: .onQueue(.main))
         guard let snapshot = reconcileAutoSendClock() else { return }
+        let lifetime = autoSendLifetime
         let head = autoSendClock.tick(
             uptime: ProcessInfo.processInfo.systemUptime,
             canAge: true,
-            lifetime: Self.autoSendLifetime
+            lifetime: lifetime
         )
         bufferRail.setAutoSendFade(autoSendClock.ages.mapValues {
-            min(max($0 / Self.autoSendLifetime, 0), 1)
+            min(max($0 / lifetime, 0), 1)
         })
         guard head != nil, snapshot.canSendWithoutResolvingComposition else { return }
         // The timer never settles composition. A ready prefix may finish its

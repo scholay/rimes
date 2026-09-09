@@ -62,3 +62,14 @@ struct BufferAutoSendClock {
         return head
     }
 }
+
+/// Automatic delivery is a Default-buffer behaviour. A plugin workspace
+/// decides for itself when its output is finished — translation emits a unit
+/// once it resolves, stream input delivers on the boundaries it chose — and a
+/// countdown layered on top of that competed with the plugin instead of
+/// serving the user. Music has no delivery rail at all.
+enum BufferAutoSendAvailabilityRules {
+    static func isAvailable(pluginSelected: Bool, musicSelected: Bool) -> Bool {
+        !pluginSelected && !musicSelected
+    }
+}

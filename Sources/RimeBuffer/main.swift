@@ -659,6 +659,35 @@ if CommandLine.arguments.contains("mailbox-toast-smoke") {
 if CommandLine.arguments.contains("stream-input-smoke") {
     exit(runStreamInputPluginSmokeTest() ? 0 : 1)
 }
+// Reports how much of a real aggregator catalog this build can actually
+// route. Point it at a saved /api/models response to see recovery coverage
+// before trusting the request pane against a live account.
+if CommandLine.arguments.contains("aggregator-catalog"),
+   let pathIndex = CommandLine.arguments.firstIndex(of: "aggregator-catalog"),
+   CommandLine.arguments.count > pathIndex + 1 {
+    let path = CommandLine.arguments[pathIndex + 1]
+    guard let payload = try? Data(contentsOf: URL(fileURLWithPath: path)),
+          let models = try? AggregatorCatalogParser.models(from: payload) else {
+        print("could not read catalog at \(path)")
+        exit(1)
+    }
+    let usable = models.filter(\.isUsable)
+    var byAdapter: [AggregatorAdapter: Int] = [:]
+    for model in usable {
+        byAdapter[model.primaryAdapter, default: 0] += 1
+    }
+    print("models: \(models.count)  routable: \(usable.count)  "
+        + "unroutable: \(models.count - usable.count)")
+    for (adapter, count) in byAdapter.sorted(by: { $0.value > $1.value }) {
+        print(String(format: "  %-22s %d", (adapter.rawValue as NSString).utf8String!, count))
+    }
+    let stranded = models.filter { !$0.isUsable }.map(\.id).prefix(8)
+    if !stranded.isEmpty { print("unroutable sample: \(stranded.joined(separator: ", "))") }
+    exit(0)
+}
+if CommandLine.arguments.contains("aggregator-smoke") {
+    exit(runAggregatorSmokeTest() ? 0 : 1)
+}
 if CommandLine.arguments.contains("my-prompt-smoke") {
     exit(runMyPromptPluginSmokeTest() ? 0 : 1)
 }
@@ -7186,7 +7215,22 @@ func runBufferWindowSmokeTest() -> Bool {
           ) == .interactWithControl,
           runBufferWorkbenchToolbarHitTestProbe(),
           runBufferPopUpMenuGeometryProbe(),
-          BufferWindowController.autoSendLifetime == 1,
+          BufferWindowController.defaultAutoSendLifetime == 1,
+          BufferWindowController.autoSendLifetimeChoices == [1, 2, 3, 5],
+          // Automatic delivery is the Default buffer's alone: any selected
+          // plugin, and the music surface, own their own delivery rhythm.
+          BufferAutoSendAvailabilityRules.isAvailable(
+            pluginSelected: false, musicSelected: false
+          ),
+          !BufferAutoSendAvailabilityRules.isAvailable(
+            pluginSelected: true, musicSelected: false
+          ),
+          !BufferAutoSendAvailabilityRules.isAvailable(
+            pluginSelected: false, musicSelected: true
+          ),
+          !BufferAutoSendAvailabilityRules.isAvailable(
+            pluginSelected: true, musicSelected: true
+          ),
           runBufferAutoSendLifecycleProbe(),
           runBufferInlineNoLeadingControlProbe(),
           runBufferInlineTrailingActionExclusionProbe(),

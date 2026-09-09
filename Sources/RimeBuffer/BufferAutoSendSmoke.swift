@@ -300,7 +300,50 @@ func runBufferAutoSendClockSmoke() -> Bool {
         print("FAILED: deferred auto-send survived explicit source pause")
         return false
     }
-    return runIncrementalTranslationChipAppearanceSmoke()
+    return runAutoSendLifetimeChoiceSmoke()
+        && runIncrementalTranslationChipAppearanceSmoke()
+}
+
+/// The lifetime is now the user's to pick in the toolbar, so the clock has to
+/// hold a block for exactly the chosen window rather than a built-in one, and
+/// a longer choice must not let an already-aged block leave early.
+private func runAutoSendLifetimeChoiceSmoke() -> Bool {
+    let source = AutoSendProbeSource()
+    let block = BufferModel.Block(text: "held")
+    var clock = BufferAutoSendClock()
+    clock.synchronize(sourceIdentity: ObjectIdentifier(source),
+                      workspaceID: source.deliveryWorkspaceID,
+                      blocks: [block])
+    _ = clock.tick(uptime: 10, canAge: true, lifetime: 3)
+    guard clock.tick(uptime: 11, canAge: true, lifetime: 3) == nil,
+          clock.tick(uptime: 12.9, canAge: true, lifetime: 3) == nil,
+          clock.tick(uptime: 13, canAge: true, lifetime: 3) == block.id else {
+        print("FAILED: a three-second choice must deliver at three seconds")
+        return false
+    }
+
+    // Raising the choice mid-countdown extends the wait rather than firing on
+    // the age the shorter window had already accumulated.
+    var raised = BufferAutoSendClock()
+    raised.synchronize(sourceIdentity: ObjectIdentifier(source),
+                       workspaceID: source.deliveryWorkspaceID,
+                       blocks: [block])
+    _ = raised.tick(uptime: 20, canAge: true, lifetime: 1)
+    guard raised.tick(uptime: 21, canAge: true, lifetime: 5) == nil,
+          raised.tick(uptime: 25, canAge: true, lifetime: 5) == block.id else {
+        print("FAILED: raising the lifetime must extend the remaining wait")
+        return false
+    }
+
+    // Every value the toolbar offers is a real countdown; none may read as
+    // "never age", which is what a zero or unset preference would mean.
+    guard BufferWindowController.autoSendLifetimeChoices.allSatisfy({ $0 > 0 }),
+          BufferWindowController.autoSendLifetimeChoices
+            .contains(BufferWindowController.defaultAutoSendLifetime) else {
+        print("FAILED: toolbar lifetime choices must all be real countdowns")
+        return false
+    }
+    return true
 }
 
 private func runIncrementalTranslationChipAppearanceSmoke() -> Bool {

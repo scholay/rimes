@@ -328,7 +328,6 @@ final class AppleTranslationWorkspace {
     private var consumingSource = false
     private var lastReconciledSourceChangeCount = -1
     private var sourceChangesNeedScheduling = false
-    private var translationSessionActive = false
     private var lastPrivacyDiscardChangeCount = -1
     private var contentRevocationEpoch: UInt64 = 0
     private var conflictedSourceBlockIDs: Set<UUID> = []
@@ -496,7 +495,6 @@ final class AppleTranslationWorkspace {
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
         configurationRefreshScheduled = false
-        translationSessionActive = false
         contentRevocationEpoch &+= 1
         units.removeAll()
         preparedDelivery = nil
@@ -532,7 +530,6 @@ final class AppleTranslationWorkspace {
         guard protectedSession != protected else { return }
         protectedSession = protected
         if protected {
-            translationSessionActive = false
             invalidateTranslation(clearOutput: true,
                                   phase: .idle)
         } else {
@@ -583,7 +580,6 @@ final class AppleTranslationWorkspace {
 
     private func activePluginDidChange() {
         guard isSelected else {
-            translationSessionActive = false
             invalidateTranslation(clearOutput: true, phase: .idle)
             notifyChange()
             return
@@ -637,11 +633,6 @@ final class AppleTranslationWorkspace {
     private func sourceOrLanguageDidChange() {
         dispatchPrecondition(condition: .onQueue(.main))
         guard !consumingSource else { return }
-        if sourceModel.lastMutationReason == .pause {
-            translationSessionActive = false
-        } else if sourceModel.processingActive && started && isSelected && !protectedSession {
-            translationSessionActive = true
-        }
         synchronizeSourceUnitsIfNeeded()
         let changed = sourceChangesNeedScheduling
         sourceChangesNeedScheduling = false
@@ -817,7 +808,6 @@ final class AppleTranslationWorkspace {
               lastPrivacyDiscardChangeCount != sourceModel.changeCount else { return }
         lastPrivacyDiscardChangeCount = sourceModel.changeCount
         contentRevocationEpoch &+= 1
-        translationSessionActive = false
         units.removeAll()
         preparedDelivery = nil
         conflictedSourceBlockIDs.removeAll()
@@ -837,7 +827,6 @@ final class AppleTranslationWorkspace {
     }
 
     func workbenchWillPause() {
-        translationSessionActive = false
         invalidateTranslation(clearOutput: false, phase: .idle)
     }
 
@@ -1207,10 +1196,6 @@ extension AppleTranslationWorkspace: BufferDeliveryContentSource {
         return generation
     }
     var supportsIncrementalDelivery: Bool { true }
-    var automaticDeliverySessionActive: Bool {
-        started && isSelected && !protectedSession && translationSessionActive
-            && sourceModel.lastMutationReason != .pause
-    }
     var hasIncompleteDeliveryBlocks: Bool {
         guard isSelected else { return false }
         synchronizeSourceUnitsIfNeeded()
@@ -1354,7 +1339,7 @@ extension AppleTranslationWorkspace: BufferDeliveryContentSource {
         synchronizeSourceUnitsIfNeeded()
         self.generation &+= 1
         let terminal = units.isEmpty && sourceModel.blocks.isEmpty
-        if terminal { phase = .idle; translationSessionActive = false }
+        if terminal { phase = .idle }
         else if !conflictedSourceBlockIDs.isEmpty {
             invalidateTranslation(clearOutput: true,
                                   phase: .failed("发送时原文发生变化；请删除或重新粘贴受影响原文"))
