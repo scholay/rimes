@@ -63,8 +63,8 @@ try {
         throw "The reviewed platform-preview staging policy failed with exit code $LASTEXITCODE."
     }
     $stagedInventory = @(Get-SafePayloadInventory -PayloadRoot $stagedPayloadRoot)
-    if ($stagedInventory.Count -ne 52) {
-        throw "The reviewed preview closure must currently contain exactly 52 files; found $($stagedInventory.Count)."
+    if ($stagedInventory.Count -ne 55) {
+        throw "The reviewed preview closure must currently contain exactly 55 files; found $($stagedInventory.Count)."
     }
 
     foreach ($scriptName in @(
