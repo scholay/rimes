@@ -12,7 +12,8 @@ enum RimesIdentity {
     /// The identifier macOS records grants and input-source registration
     /// against. Spelled once so a rename cannot leave half the app answering
     /// to the old name.
-    static let bundleIdentifier = "com.scholay.isaac"
+    static let bundleIdentifier = "com.scholay.inputmethod.isaac"
+    static let unregistrableBundleIdentifier = "com.scholay.isaac"
     static let legacyBundleIdentifier = "com.isaac.inputmethod.RimeBuffer"
     static let inputSourceID = bundleIdentifier + ".Hans"
     static let productName = "RIMES"
@@ -168,9 +169,10 @@ enum RimesPreferenceMigration {
 
     @discardableResult
     static func migrateIfNeeded(from legacyDomain: String,
+                                marker: String = markerKey,
                                 into defaults: UserDefaults = .standard) -> Int {
-        guard !defaults.bool(forKey: markerKey) else { return 0 }
-        defer { defaults.set(true, forKey: markerKey) }
+        guard !defaults.bool(forKey: marker) else { return 0 }
+        defer { defaults.set(true, forKey: marker) }
         guard let legacy = defaults.persistentDomain(forName: legacyDomain),
               !legacy.isEmpty else { return 0 }
         var copied = 0

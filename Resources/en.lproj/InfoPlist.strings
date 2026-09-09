@@ -1,5 +1,5 @@
-/* Input-source display name. The key intentionally keeps the legacy RimeBuffer TIS id. */
+/* Display names keyed by the current bundle and input-mode identities. */
 "CFBundleDisplayName" = "RIMES";
 "CFBundleName" = "RIMES";
-"com.isaac.inputmethod.RimeBuffer" = "RIMES";
-"com.isaac.inputmethod.RimeBuffer.Hans" = "RIMES";
+"com.scholay.inputmethod.isaac" = "RIMES";
+"com.scholay.inputmethod.isaac.Hans" = "RIMES";

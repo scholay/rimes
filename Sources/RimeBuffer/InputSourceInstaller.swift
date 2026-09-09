@@ -99,6 +99,7 @@ private struct InputSourceInstallIdentity {
     static func load() -> InputSourceInstallIdentity? {
         guard let info = Bundle.main.infoDictionary,
               let bundleID = Bundle.main.bundleIdentifier,
+              bundleID.contains(".inputmethod."),
               info["TISInputSourceID"] as? String == bundleID,
               let component = info["ComponentInputModeDict"]
                 as? [String: Any],

@@ -20,7 +20,7 @@ static bool bool_property(TISInputSourceRef source, CFStringRef key) {
 }
 
 static bool is_rimes_source(TISInputSourceRef source) {
-    const CFStringRef current_id = CFSTR("com.scholay.isaac");
+    const CFStringRef current_id = CFSTR("com.scholay.inputmethod.isaac");
     const CFStringRef legacy_id = CFSTR("com.isaac.inputmethod.RimeBuffer");
     const CFStringRef older_id = CFSTR("com.isaac.inputmethod.ETInput");
     CFStringRef bundle_id = string_property(source, kTISPropertyBundleID);
@@ -36,7 +36,7 @@ static bool is_rimes_source(TISInputSourceRef source) {
     return CFEqual(source_id, current_id)
         || CFEqual(source_id, legacy_id)
         || CFEqual(source_id, older_id)
-        || CFStringHasPrefix(source_id, CFSTR("com.scholay.isaac."))
+        || CFStringHasPrefix(source_id, CFSTR("com.scholay.inputmethod.isaac."))
         || CFStringHasPrefix(source_id, CFSTR("com.isaac.inputmethod.RimeBuffer."))
         || CFStringHasPrefix(source_id, CFSTR("com.isaac.inputmethod.ETInput."));
 }

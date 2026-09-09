@@ -753,6 +753,14 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     var onCaptureRequested: ((Int) -> Void)?
 
     static let standardPreferredHeight: CGFloat = 32
+    /// The live-metrics line. Deliberately short: it is a readout, not a
+    /// second rail, and the workbench was compressed on purpose.
+    static let standardMetricsRowHeight: CGFloat = 14
+
+    static func standardPreferredHeight(showsLiveMetrics: Bool) -> CGFloat {
+        standardPreferredHeight
+            + (showsLiveMetrics ? standardMetricsRowHeight : 0)
+    }
     static let translationPreferredHeight: CGFloat = 64
     static let additionalTranslationTargetRowHeight: CGFloat = 32
 
@@ -787,6 +795,8 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private let chipScroll = NSScrollView()
     private let chipRow = NSStackView()
     private let normalRailContainer = NSStackView()
+    private let standardColumn = NSStackView()
+    private let liveMetricsLabel = NSTextField(labelWithString: "")
     private let translationContainer = NSStackView()
     private let translationSourceScroll = NSScrollView()
     private let translationSourceRow = NSStackView()
@@ -886,6 +896,25 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             },
             leadingClearance: frame.minX
         )
+    }
+
+    private(set) var showsLiveMetrics = false
+
+    /// The second line in Default mode. Passing nil hides it entirely rather
+    /// than leaving an empty row, so an idle workbench is the same height it
+    /// has always been.
+    @discardableResult
+    func setLiveMetricsLine(_ text: String?) -> Bool {
+        let next = text?.isEmpty == false
+        let heightChanged = next != showsLiveMetrics
+        showsLiveMetrics = next
+        liveMetricsLabel.stringValue = text ?? ""
+        liveMetricsLabel.isHidden = !next
+        return heightChanged
+    }
+
+    var renderedLiveMetricsLine: String? {
+        liveMetricsLabel.isHidden ? nil : liveMetricsLabel.stringValue
     }
 
     var isEnterHoldProgressVisible: Bool { enterHoldProgress != nil }
@@ -1325,7 +1354,24 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             right: BufferInlineMetrics.railHorizontalInset
         )
         normalRailContainer.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(normalRailContainer)
+
+        liveMetricsLabel.font = .monospacedDigitSystemFont(ofSize: 10,
+                                                           weight: .regular)
+        liveMetricsLabel.textColor = RimeUI.textMuted
+        liveMetricsLabel.lineBreakMode = .byTruncatingTail
+        liveMetricsLabel.maximumNumberOfLines = 1
+        liveMetricsLabel.isHidden = true
+        liveMetricsLabel.translatesAutoresizingMaskIntoConstraints = false
+        liveMetricsLabel.setContentCompressionResistancePriority(.defaultLow,
+                                                                  for: .horizontal)
+
+        standardColumn.orientation = .vertical
+        standardColumn.alignment = .leading
+        standardColumn.spacing = 0
+        standardColumn.translatesAutoresizingMaskIntoConstraints = false
+        standardColumn.addArrangedSubview(normalRailContainer)
+        standardColumn.addArrangedSubview(liveMetricsLabel)
+        addSubview(standardColumn)
 
         configureHorizontalRail(translationSourceScroll, row: translationSourceRow)
         let initialTargetRail = makeTranslationTargetRail(key: 0)
@@ -1341,10 +1387,24 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         translationContainer.isHidden = true
         addSubview(translationContainer)
         NSLayoutConstraint.activate([
-            normalRailContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
-            normalRailContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
-            normalRailContainer.topAnchor.constraint(equalTo: topAnchor),
-            normalRailContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
+            standardColumn.leadingAnchor.constraint(equalTo: leadingAnchor),
+            standardColumn.trailingAnchor.constraint(equalTo: trailingAnchor),
+            standardColumn.topAnchor.constraint(equalTo: topAnchor),
+            standardColumn.bottomAnchor.constraint(equalTo: bottomAnchor),
+            normalRailContainer.widthAnchor.constraint(
+                equalTo: standardColumn.widthAnchor
+            ),
+            liveMetricsLabel.leadingAnchor.constraint(
+                equalTo: standardColumn.leadingAnchor,
+                constant: BufferInlineMetrics.railHorizontalInset + 4
+            ),
+            liveMetricsLabel.trailingAnchor.constraint(
+                lessThanOrEqualTo: standardColumn.trailingAnchor,
+                constant: -BufferInlineMetrics.railHorizontalInset
+            ),
+            liveMetricsLabel.heightAnchor.constraint(
+                equalToConstant: Self.standardMetricsRowHeight
+            ),
             translationContainer.leadingAnchor.constraint(
                 equalTo: leadingAnchor,
                 constant: BufferInlineMetrics.railHorizontalInset

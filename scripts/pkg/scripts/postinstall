@@ -93,7 +93,7 @@ if ! rimes_run_bounded 5 /bin/test -x "$EXE"; then
     echo "RIMES postinstall: canonical payload executable is missing"
     exit 1
 fi
-if [ "$(rimes_bundle_identifier "$APP")" != "com.scholay.isaac" ]; then
+if [ "$(rimes_bundle_identifier "$APP")" != "com.scholay.inputmethod.isaac" ]; then
     echo "RIMES postinstall: canonical payload has the wrong bundle identity"
     exit 1
 fi

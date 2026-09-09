@@ -27,7 +27,7 @@ parse_boolean() {
 VERSION="${1:?用法: make-pkg.sh <version> <RIMES.app> [out.pkg]}"
 APP="${2:?缺少 RIMES.app 路径}"
 OUT="${3:-RIMES-${VERSION}.pkg}"
-IDENT="com.scholay.isaac"
+IDENT="com.scholay.inputmethod.isaac"
 MAX_PACKAGE_BYTES=$((512 * 1024 * 1024))
 
 [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] \
@@ -176,7 +176,7 @@ pkgbuild \
 
 # 产品包：套上欢迎/说明/完成三页向导。
 distribution="$TMP/distribution.xml"
-[[ "$(/usr/bin/grep -Fc '<pkg-ref id="com.scholay.isaac" version="0"' \
+[[ "$(/usr/bin/grep -Fc '<pkg-ref id="com.scholay.inputmethod.isaac" version="0"' \
     scripts/pkg/distribution.xml)" == "1" ]] \
     || die "distribution template must contain one version placeholder"
 /usr/bin/sed "s/version=\"0\"/version=\"$VERSION\"/" \

@@ -207,8 +207,11 @@ bootstrap；TIS 激活留到 GUI 会话建立后处理。任何路径都不结�
 都先验证当前凭据，自定义原码不落盘或同步，只保留一个加盐摘要凭据，验证成功后的明文最多
 显示 15 秒。
 
-输入法 bundle id 刻意保留 `com.isaac.inputmethod.RimeBuffer`，即使对外产品名已经是 RIMES；
-可选择的输入模式使用独立 id `com.isaac.inputmethod.RimeBuffer.Hans`。父输入法与
+输入法 bundle id 为 `com.scholay.inputmethod.isaac`，可选择的输入模式使用独立 id
+`com.scholay.inputmethod.isaac.Hans`。必须保留 `.inputmethod.` 段：改名期间的
+`com.scholay.isaac` 虽然签名校验及注册调用成功，却无法进入 TIS 输入源列表。
+签名证书与 Bundle ID 是两个独立设置；更换证书不要求更换 Bundle ID。旧标识的
+偏好按独立迁移标记复制，现有 `~/Library/RIMES` 数据目录保持不变。父输入法与
 子 mode 不能共用同一个 TIS id，否则父项无法启用、`TISSelectInputSource` 会返回 `paramErr`。
 macOS 会把这些 id 写入受保护的 TIS 偏好，因此后续不要随意改动。
 

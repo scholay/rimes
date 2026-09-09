@@ -298,11 +298,15 @@ enum BufferWindowGeometry {
     }
 
     static func height(expanded: Bool,
-                       mode: BufferWorkbenchLayoutMode = .standard) -> CGFloat {
+                       mode: BufferWorkbenchLayoutMode = .standard,
+                       showsLiveMetrics: Bool = false) -> CGFloat {
         let baseHeight: CGFloat
         switch mode {
         case .standard, .singleDerived:
-            baseHeight = expanded ? expandedHeight : collapsedHeight
+            baseHeight = (expanded ? expandedHeight : collapsedHeight)
+                + (showsLiveMetrics && mode == .standard
+                    ? BufferInlineView.standardMetricsRowHeight
+                    : 0)
         case .derived:
             // Alternatives page inside one target rail. Candidate count no
             // longer changes the panel height or moves the host-side anchor.
@@ -868,10 +872,15 @@ enum BufferWorkbenchMetrics {
     static let translationVerticalInset: CGFloat = 5
     static let translationRailSpacing: CGFloat = 4
 
-    static func railHeight(for mode: BufferWorkbenchLayoutMode) -> CGFloat {
+    static func railHeight(for mode: BufferWorkbenchLayoutMode,
+                           showsLiveMetrics: Bool = false) -> CGFloat {
         switch mode {
         case .standard, .singleDerived:
-            return BufferInlineView.standardPreferredHeight
+            // Only the Default rail carries the metrics line; a derived
+            // workspace already owns both of its rows.
+            return BufferInlineView.standardPreferredHeight(
+                showsLiveMetrics: showsLiveMetrics && mode == .standard
+            )
         case let .derived(targetRows):
             return BufferInlineView.translationPreferredHeight(targetRows: targetRows)
         case let .music(tracks):
@@ -879,9 +888,13 @@ enum BufferWorkbenchMetrics {
         }
     }
 
-    static func mainBarHeight(for mode: BufferWorkbenchLayoutMode) -> CGFloat {
+    static func mainBarHeight(for mode: BufferWorkbenchLayoutMode,
+                              showsLiveMetrics: Bool = false) -> CGFloat {
         if case let .music(tracks) = mode { return BufferMusicView.bodyHeight(tracks: tracks) }
-        return mode.targetRows == nil ? 38 : railHeight(for: mode) + 6
+        guard mode.targetRows == nil else { return railHeight(for: mode) + 6 }
+        return 38 + (showsLiveMetrics && mode == .standard
+            ? BufferInlineView.standardMetricsRowHeight
+            : 0)
     }
 
     /// Live-expand renders two equal rails inside a 5pt vertical inset with a
@@ -2021,6 +2034,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private lazy var exchangeEditSlot = BufferToolbarControlSlot(control: exchangeEditButton)
     private var railActionCenterYConstraint: NSLayoutConstraint?
     private var pendingCaptureRequest: BufferPendingCaptureRequest?
+    private var appliedLiveMetricsHeight = false
+    private var liveMetricsTimer: Timer?
     private var autoSendTimer: Timer?
     private var autoSendClock = BufferAutoSendClock()
     private var sourceActionCenterYConstraint: NSLayoutConstraint?
@@ -2486,6 +2501,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     func hideWithoutPausing() {
         deactivateMusicSurface()
+        liveMetricsTimer?.invalidate()
+        liveMetricsTimer = nil
+        BufferLiveTypingMetricsRecorder.shared.stop()
+        _ = bufferRail.setLiveMetricsLine(nil)
         autoSendClock.pause()
         bufferRail.setAutoSendFade([:])
         BufferPopUpMenuController.shared.dismiss()
@@ -3442,6 +3461,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         if !secureInputEnabled, rimeOwnsInput {
             completePendingCaptureIfPossible()
         }
+        refreshLiveTypingMetrics()
         let contentProtected = secureInputEnabled || sessionProtectionActive
         if contentProtected {
             BufferPopUpMenuController.shared.dismiss()
@@ -3630,6 +3650,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             candidateWindow.syncWorkbenchLayout()
         }
         _ = reconcileAutoSendClock()
+        if liveMetricsAvailable, isVisible {
+            BufferLiveTypingMetricsRecorder.shared.start()
+        }
+        syncLiveMetricsTimer()
     }
 
     private func refreshTargetAssociation(rimeOwnsInput: Bool,
@@ -5160,19 +5184,24 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func syncLayoutMode(_ nextMode: BufferWorkbenchLayoutMode) {
         updateMainControlAlignment(for: nextMode)
+        let showsMetrics = bufferRail.showsLiveMetrics
         let modeChanged = layoutMode != nextMode
-        if modeChanged {
+        if modeChanged || showsMetrics != appliedLiveMetricsHeight {
             layoutMode = nextMode
+            appliedLiveMetricsHeight = showsMetrics
             mainBarHeightConstraint?.constant = BufferWorkbenchMetrics.mainBarHeight(
-                for: nextMode
+                for: nextMode,
+                showsLiveMetrics: showsMetrics
             )
             bufferRailHeightConstraint?.constant = BufferWorkbenchMetrics.railHeight(
-                for: nextMode
+                for: nextMode,
+                showsLiveMetrics: showsMetrics
             )
         }
         let desiredHeight = BufferWindowGeometry.height(
             expanded: toolbarExpanded,
-            mode: nextMode
+            mode: nextMode,
+            showsLiveMetrics: showsMetrics
         )
         let fallback = panel.screen?.visibleFrame
             ?? NSScreen.main?.visibleFrame
@@ -5451,6 +5480,47 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             BufferPopUpMenuController.shared.dismiss()
         }
         autoSendButton.refreshInteractionAppearance()
+    }
+
+    /// The second line belongs to the Default buffer only. Every plugin owns
+    /// its own second row — translation shows the target, stream input shows
+    /// the raw line — and a metrics readout would be competing for it.
+    private var liveMetricsAvailable: Bool {
+        BufferAutoSendAvailabilityRules.isAvailable(
+            pluginSelected: BufferPluginSelectionStore.shared.activeKey != nil,
+            musicSelected: musicSelected
+        )
+    }
+
+    /// Ticks while the workbench is visible so a burst's figures keep moving
+    /// between keystrokes, and so an idle burst rolls over rather than
+    /// freezing on its last value.
+    private func syncLiveMetricsTimer() {
+        liveMetricsTimer?.invalidate()
+        liveMetricsTimer = nil
+        guard isVisible, liveMetricsAvailable else { return }
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.refreshLiveTypingMetrics()
+        }
+        liveMetricsTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func refreshLiveTypingMetrics() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard liveMetricsAvailable, isVisible, !sessionProtectionActive,
+              !hiddenForSession, !IsSecureEventInputEnabled() else {
+            if bufferRail.setLiveMetricsLine(nil) { syncLayoutMode(layoutMode) }
+            return
+        }
+        let line = BufferLiveTypingMetricsFormatter.line(
+            for: BufferLiveTypingMetricsRecorder.shared.metrics
+        )
+        if bufferRail.setLiveMetricsLine(line) {
+            // Showing or hiding the row changes the panel height, so it takes
+            // the same path a layout-mode change does.
+            syncLayoutMode(layoutMode)
+        }
     }
 
     private func syncAutoSendTimer() {

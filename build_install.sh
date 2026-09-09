@@ -51,7 +51,7 @@ for system_copy in "/Library/Input Methods/RIMES.app" \
     [ -e "$system_copy" ] || continue
     system_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$system_copy/Contents/Info.plist" 2>/dev/null || true)"
     case "$system_id" in
-        com.scholay.isaac|com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
+        com.scholay.inputmethod.isaac|com.scholay.isaac|com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
             echo "!! found system-wide duplicate: $system_copy"
             echo "   remove it first: sudo rm -rf '$system_copy'"
             exit 1
@@ -64,6 +64,13 @@ if [ -e "$SYSTEM_COMPANION_AGENT" ] || [ -L "$SYSTEM_COMPANION_AGENT" ]; then
     echo "   sudo /bin/bash '$COMPANION_AGENT_HELPER' remove-system"
     exit 1
 fi
+
+# IMK discovery requires an inputmethod segment even when code signing succeeds.
+BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' Info.plist)"
+case "$BUNDLE_ID" in
+    *.inputmethod.*) ;;
+    *) echo "!! input-method bundle identifier must contain .inputmethod.: $BUNDLE_ID"; exit 1 ;;
+esac
 
 # Fetch the bundled librime runtime (cached in Vendor/, not committed to git).
 ./scripts/fetch-rime.sh

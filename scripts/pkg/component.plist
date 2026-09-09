@@ -7,7 +7,7 @@
         <string>RIMES.app</string>
         <key>BundleHasStrictIdentifier</key>
         <!-- The frozen path also contains pre-0.4.2 builds whose legacy
-             bundle id is com.scholay.isaac. preinstall rejects
+             bundle id is com.scholay.inputmethod.isaac. preinstall rejects
              every unrelated occupant before this deliberate one-time
              identifier migration; relocatability remains disabled. -->
         <false/>

@@ -19,6 +19,10 @@ RimesDataMigration.migrateIfNeeded(
     to: RimesPaths.userDirectory()
 )
 RimesPreferenceMigration.migrateIfNeeded(
+    from: RimesIdentity.unregistrableBundleIdentifier,
+    marker: "rimes.preferencesMigratedFromScholayIsaac.v1"
+)
+RimesPreferenceMigration.migrateIfNeeded(
     from: RimesIdentity.legacyBundleIdentifier
 )
 
@@ -821,6 +825,9 @@ if let i = CommandLine.arguments.firstIndex(of: "rimes-migrate-probe"),
     case .copied, .alreadyMigrated, .notNeeded: exit(0)
     case .destinationOccupied, .failed: exit(1)
     }
+}
+if CommandLine.arguments.contains("live-metrics-smoke") {
+    exit(runBufferLiveTypingMetricsSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("rimes-migration-smoke") {
     exit(runRimesMigrationSmokeTest() ? 0 : 1)

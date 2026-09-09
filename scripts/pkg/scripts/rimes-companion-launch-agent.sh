@@ -37,7 +37,7 @@ verify_agent() {
         && [ "$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$agent" 2>/dev/null)" = "true" ] \
         && [ "$(/usr/libexec/PlistBuddy -c 'Print :LimitLoadToSessionType' "$agent" 2>/dev/null)" = "Aqua" ] \
         && [ "$(/usr/libexec/PlistBuddy -c 'Print :ProcessType' "$agent" 2>/dev/null)" = "Background" ] \
-        && [ "$(/usr/libexec/PlistBuddy -c 'Print :AssociatedBundleIdentifiers:0' "$agent" 2>/dev/null)" = "com.scholay.isaac" ] \
+        && [ "$(/usr/libexec/PlistBuddy -c 'Print :AssociatedBundleIdentifiers:0' "$agent" 2>/dev/null)" = "com.scholay.inputmethod.isaac" ] \
         && ! /usr/libexec/PlistBuddy -c 'Print :KeepAlive' "$agent" >/dev/null 2>&1 \
         || return 1
 
@@ -113,7 +113,7 @@ write_agent() {
     /usr/libexec/PlistBuddy -c 'Add :AssociatedBundleIdentifiers array' "$temporary" \
         || return 1
     /usr/libexec/PlistBuddy \
-        -c 'Add :AssociatedBundleIdentifiers:0 string com.scholay.isaac' \
+        -c 'Add :AssociatedBundleIdentifiers:0 string com.scholay.inputmethod.isaac' \
         "$temporary" || return 1
     /bin/chmod 644 "$temporary" || return 1
     if [ "$owner_kind" = "system" ] && [ -z "$TEST_ROOT" ]; then
@@ -381,7 +381,7 @@ verify_managed_user_app() {
             "$app/Contents/Info.plist" 2>/dev/null
     )" || return 1
     case "$identifier" in
-        com.scholay.isaac|com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
+        com.scholay.inputmethod.isaac|com.scholay.isaac|com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
             return 0
             ;;
         *)

@@ -134,6 +134,24 @@ func runRimesMigrationSmokeTest() -> Bool {
         return migrationFail("preference migration must run once")
     }
 
+    // A second identity change needs its own marker; the old marker must not
+    // prevent recovery of settings, and newer destination choices still win.
+    defaults.setPersistentDomain([
+        "recoveryOnly": "preserved",
+        "clipboard.activationPolicy.v1": "oldValue",
+    ], forName: legacyDomain)
+    let recoveryMarker = "rimes.test.identityRecovery.v1"
+    guard RimesPreferenceMigration.migrateIfNeeded(
+        from: legacyDomain, marker: recoveryMarker, into: defaults
+    ) == 1,
+          defaults.string(forKey: "recoveryOnly") == "preserved",
+          defaults.string(forKey: "clipboard.activationPolicy.v1") == "pasteIntoApp",
+          RimesPreferenceMigration.migrateIfNeeded(
+            from: legacyDomain, marker: recoveryMarker, into: defaults
+          ) == 0 else {
+        return migrationFail("successive identity migration must preserve settings")
+    }
+
     // The old environment variable names keep working: the smoke suites and
     // any of the user's scripts set them, and breaking those as a side effect
     // of a rename would be its own bug.
