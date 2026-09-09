@@ -1839,3 +1839,58 @@ private enum ClipboardHistorySmokeMain {
     }
 }
 #endif
+
+/// Activation policy and its feedback. A silent fallback to the pasteboard is
+/// what made this feel unreliable next to a dedicated paste utility: the
+/// gesture looked like it had failed when the content was ready and only the
+/// synthetic key press was blocked.
+func runClipboardActivationPolicySmokeTest() -> Bool {
+    print("== RIMES clipboard activation policy smoke ==")
+    let suite = "clipboard-policy-smoke-\(UUID().uuidString)"
+    guard let defaults = UserDefaults(suiteName: suite) else {
+        print("FAILED: could not create a defaults suite")
+        return false
+    }
+    defer { defaults.removeSuite(named: suite) }
+
+    guard ClipboardActivationPolicy(rawValue: "pasteIntoApp") == .pasteIntoApp,
+          ClipboardActivationPolicy(rawValue: "clipboardOnly") == .clipboardOnly,
+          ClipboardActivationPolicy(rawValue: "nonsense") == nil,
+          ClipboardActivationPolicy.allCases.count == 2 else {
+        print("FAILED: activation policy cases")
+        return false
+    }
+
+    // Every outcome says what happened. A blocked paste must never be
+    // reported the same way as a successful one, and must name its cause:
+    // the grant is the one thing the user can act on.
+    let outcomes: [ClipboardAutoPasteOutcome] = [
+        .pasted, .clipboardOnlyByChoice, .blockedWithoutAccessibility,
+        .blockedBySecureInput, .targetUnavailable,
+    ]
+    let messages = outcomes.map(ClipboardActivationFeedback.message)
+    guard Set(messages).count == messages.count,
+          messages.allSatisfy({ !$0.isEmpty }) else {
+        print("FAILED: every outcome needs its own message")
+        return false
+    }
+    guard ClipboardActivationFeedback.message(for: .pasted) == "已粘贴到目标应用",
+          ClipboardActivationFeedback.message(for: .clipboardOnlyByChoice)
+            == "已复制到剪贴板",
+          ClipboardActivationFeedback.message(for: .blockedWithoutAccessibility)
+            .contains("辅助功能") else {
+        print("FAILED: outcome wording")
+        return false
+    }
+    // A paste that did not happen must not claim it did.
+    for outcome in outcomes where outcome != .pasted {
+        guard !ClipboardActivationFeedback.message(for: outcome)
+            .contains("已粘贴") else {
+            print("FAILED: \(outcome) reported itself as a paste")
+            return false
+        }
+    }
+
+    print("clipboard activation policy smoke: OK")
+    return true
+}

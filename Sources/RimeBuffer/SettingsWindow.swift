@@ -3959,7 +3959,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         clipboardAutoPasteCheck.state = ClipboardAutoPaste.enabled ? .on : .off
         clipboardAutoPasteStatusLabel.stringValue = ClipboardAutoPaste.isPermitted
             ? "已授权辅助功能：图片、文件等内容会在窗口关闭后自动粘贴到目标输入框。"
-            : "未授权辅助功能：打开开关会请求权限。未授权时内容仍会写入剪贴板，需要自己按 ⌘V。"
+            : "未授权辅助功能：打开开关会请求权限。注意本应用为临时签名（ad-hoc），"
+                + "每次重新构建都会更换代码签名，系统会因此作废已授予的权限——"
+                + "在「系统设置 → 隐私与安全性 → 辅助功能」中移除本应用后重新添加即可恢复。"
         closeAfterLastDeliveryCheck.state = BufferWindowController.shared
             .closeAfterLastDeliveryEnabled ? .on : .off
         resetOnAppSwitchCheck.state = BufferModel.shared.resetOnAppSwitch ? .on : .off

@@ -771,6 +771,9 @@ if CommandLine.arguments.contains("codex-doctor") {
 if CommandLine.arguments.contains("codex-session-smoke") {
     exit(runCodexSessionSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("clipboard-policy-smoke") {
+    exit(runClipboardActivationPolicySmokeTest() ? 0 : 1)
+}
 if CommandLine.arguments.contains("buffer-capture-smoke") {
     exit(runBufferCaptureRequestSmokeTest() ? 0 : 1)
 }

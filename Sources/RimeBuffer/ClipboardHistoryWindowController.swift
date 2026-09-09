@@ -856,15 +856,28 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
     /// A successful archive write puts the selected cards first in both the
     /// system pasteboard and history. Close silently so the user can paste the
     /// exact rich value with an ordinary Command-V in the target application.
-    private func closePreparedArchiveActivation() {
+    private func closePreparedArchiveActivation(announcing: Bool = true) {
         dispatchPrecondition(condition: .onQueue(.main))
         richActivationInFlight = false
         IMELog.write("clipboard archive activation settled pasteboard-ready=true")
         hideImmediately()
         // The window vanishing is the only feedback this path had. Say where
-        // the content went, since it is on the pasteboard rather than in the
-        // user's field.
-        ClipboardCopyToast.show()
+        // the content went. When a paste is being attempted the message waits
+        // for its outcome, so it can report the paste rather than the copy.
+        if announcing { ClipboardCopyToast.show() }
+    }
+
+    /// The application that was front when the clipboard was opened. It is
+    /// the one a paste belongs to, and it cannot be recovered after the panel
+    /// closes.
+    private var presentationTargetApplication: NSRunningApplication? {
+        guard let token = presentationTargetToken,
+              let lease = InputFocusCoordinator.shared.liveTarget(expected: token)
+                ?? InputFocusCoordinator.shared.interactionTarget(expected: token)
+        else { return NSWorkspace.shared.frontmostApplication }
+        return NSRunningApplication(
+            processIdentifier: lease.processIdentifier
+        ) ?? NSWorkspace.shared.frontmostApplication
     }
 
     private func activateArchives(
@@ -1015,11 +1028,22 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
                     }
                     self.syncCaptureState()
                     if closesAfterWrite {
-                        self.closePreparedArchiveActivation()
+                        // Recorded before the window closes: afterwards the
+                        // front application is whatever macOS restored, which
+                        // is the thing being waited for rather than a fact to
+                        // read back.
+                        let target = self.presentationTargetApplication
+                        self.closePreparedArchiveActivation(announcing: false)
                         // IMKit could not insert this content directly, so the
                         // value is on the pasteboard. Finish the gesture the
                         // user already made instead of asking them to paste.
-                        ClipboardAutoPaste.pasteAfterWindowClose()
+                        ClipboardAutoPaste.pasteAfterWindowClose(
+                            target: target
+                        ) { outcome in
+                            ClipboardCopyToast.show(
+                                ClipboardActivationFeedback.message(for: outcome)
+                            )
+                        }
                     }
                 } catch {
                     IMELog.write(
