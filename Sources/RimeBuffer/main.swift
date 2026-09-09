@@ -792,6 +792,15 @@ if CommandLine.arguments.contains("codex-doctor") {
     } else {
         print("translation: unavailable below macOS 15")
     }
+    // Run from inside the bundle this reports on the app's own identity, which
+    // is the only way to see whether a recorded grant is actually in effect —
+    // System Settings shows the checkbox either way.
+    let identity = SystemPermissionAudit.identity()
+    print("identity: \(identity.bundleIdentifier)")
+    print("signing: \(SystemPermissionAudit.signingAuthority() ?? "ad-hoc (grants die on rebuild)")")
+    for report in SystemPermissionAudit.reportAll() {
+        print("permission \(report.permission.rawValue): \(report.status)")
+    }
     exit(0)
 }
 if CommandLine.arguments.contains("codex-session-smoke") {
