@@ -510,9 +510,7 @@ final class AppleTranslationWorkspace {
         if #available(macOS 15.0, *) {
             let bridge = AppleTranslationBridgeModel(workspace: self)
             bridgeObject = bridge
-            let host = NSHostingView(rootView: AppleTranslationBridgeView(model: bridge))
-            host.translatesAutoresizingMaskIntoConstraints = false
-            host.alphaValue = 0.001
+            let host = bridge.makeHostView()
             // `start()` can observe existing source text before the workbench
             // has created this host. Retry once the bridge exists so a draft
             // that was already present cannot stay stuck at "session not ready".
@@ -1366,71 +1364,56 @@ extension AppleTranslationWorkspace: BufferDeliveryContentSource {
     }
 }
 
+/// Job semantics on top of the shared session bridge. What is workspace-
+/// specific stays here — generation identity, unit ownership, the phase and
+/// delivery callbacks — while session lifetime and the SwiftUI attachment
+/// requirement live in `AppleTranslationSessionBridge`, shared with every
+/// other caller that needs a translation.
 @available(macOS 15.0, *)
-private final class AppleTranslationBridgeModel: ObservableObject {
-    struct Request: Equatable, Identifiable {
-        let id: UInt64
-        let configuration: TranslationSession.Configuration
-        let job: AppleTranslationWorkspace.Job
-    }
-
-    @Published private(set) var request: Request?
+private final class AppleTranslationBridgeModel {
+    private let bridge = AppleTranslationSessionBridge()
     private weak var workspace: AppleTranslationWorkspace?
-    private var configuration: TranslationSession.Configuration?
-    private var pair: (String, String)?
+    private var activeJob: AppleTranslationWorkspace.Job?
 
     init(workspace: AppleTranslationWorkspace) {
         self.workspace = workspace
     }
 
+    func makeHostView() -> NSView { bridge.makeHostView() }
+
     func submit(_ job: AppleTranslationWorkspace.Job) {
         dispatchPrecondition(condition: .onQueue(.main))
-        let nextPair = (job.sourceLanguageID, job.targetLanguageID)
-        let nextConfiguration: TranslationSession.Configuration
-        if pair?.0 == nextPair.0, pair?.1 == nextPair.1,
-           var current = configuration {
-            current.invalidate()
-            nextConfiguration = current
-        } else {
-            pair = nextPair
-            nextConfiguration = TranslationSession.Configuration(
-                source: Locale.Language(identifier: job.sourceLanguageID),
-                target: Locale.Language(identifier: job.targetLanguageID)
-            )
+        activeJob = job
+        bridge.submit(sourceLanguageID: job.sourceLanguageID,
+                      targetLanguageID: job.targetLanguageID) { [weak self] session in
+            await self?.run(session: session, job: job)
         }
-        configuration = nextConfiguration
-        request = Request(id: job.generation,
-                          configuration: nextConfiguration,
-                          job: job)
     }
 
     func cancel() {
         dispatchPrecondition(condition: .onQueue(.main))
-        request = nil
-        pair = nil
-        configuration = nil
+        activeJob = nil
+        bridge.cancel()
     }
 
-    func run(session: TranslationSession, request: Request) async {
-        guard await isCurrent(request.id) else { return }
-        guard Self.session(session, matches: request.job) else {
-            await abortCurrent(request,
-                               message: "本地翻译会话的语言与请求不一致")
+    private func run(session: TranslationSession,
+                     job: AppleTranslationWorkspace.Job) async {
+        guard await isCurrent(job) else { return }
+        guard await sessionMatches(session) else {
+            await abort(job, message: "本地翻译会话的语言与请求不一致")
             return
         }
-        let job = request.job
         do {
             try await session.prepareTranslation()
             try Task.checkCancellation()
-            guard await isCurrent(request.id) else { return }
-            guard Self.session(session, matches: job) else {
-                await abortCurrent(request,
-                                   message: "本地翻译会话的语言已变化")
+            guard await isCurrent(job) else { return }
+            guard await sessionMatches(session) else {
+                await abort(job, message: "本地翻译会话的语言已变化")
                 return
             }
             let response = try await session.translate(job.sourceText)
             try Task.checkCancellation()
-            guard await isCurrent(request.id) else { return }
+            guard await isCurrent(job) else { return }
             await MainActor.run { [weak workspace] in
                 workspace?.translationCompleted(
                     response.targetText,
@@ -1441,8 +1424,8 @@ private final class AppleTranslationBridgeModel: ObservableObject {
                 )
             }
         } catch is CancellationError {
-            guard await isCurrent(request.id) else { return }
-            await abortCurrent(request, message: "本地翻译会话被系统取消")
+            guard await isCurrent(job) else { return }
+            await abort(job, message: "本地翻译会话被系统取消")
         } catch {
             await MainActor.run { [weak workspace] in
                 workspace?.translationFailed(error.localizedDescription, job: job)
@@ -1450,63 +1433,23 @@ private final class AppleTranslationBridgeModel: ObservableObject {
         }
     }
 
-    private func abortCurrent(_ request: Request, message: String) async {
-        guard await isCurrent(request.id) else { return }
+    private func abort(_ job: AppleTranslationWorkspace.Job,
+                       message: String) async {
+        guard await isCurrent(job) else { return }
         await MainActor.run { [weak workspace] in
-            workspace?.translationBridgeAborted(message, job: request.job)
+            workspace?.translationBridgeAborted(message, job: job)
         }
     }
 
-    private func isCurrent(_ requestID: UInt64) async -> Bool {
+    private func isCurrent(_ job: AppleTranslationWorkspace.Job) async -> Bool {
+        await MainActor.run { [weak self] in self?.activeJob == job }
+    }
+
+    private func sessionMatches(_ session: TranslationSession) async -> Bool {
         await MainActor.run { [weak self] in
-            self?.request?.id == requestID
+            guard let self, let work = self.bridge.work else { return false }
+            return self.bridge.session(session, matches: work)
         }
-    }
-
-    private static func session(_ session: TranslationSession,
-                                matches job: AppleTranslationWorkspace.Job) -> Bool {
-        guard let actualTarget = session.targetLanguage?.minimalIdentifier,
-              TranslationLanguageIdentity.matches(actualTarget,
-                                                  expected: job.targetLanguageID) else {
-            return false
-        }
-        guard let actualSource = session.sourceLanguage?.minimalIdentifier else {
-            return false
-        }
-        return TranslationLanguageIdentity.matches(actualSource,
-                                                   expected: job.sourceLanguageID)
-    }
-}
-
-@available(macOS 15.0, *)
-private struct AppleTranslationBridgeView: View {
-    @ObservedObject var model: AppleTranslationBridgeModel
-
-    var body: some View {
-        Group {
-            if let request = model.request {
-                AppleTranslationTaskView(model: model, request: request)
-                    .id(request.id)
-            } else {
-                Color.clear
-            }
-        }
-        .frame(width: 1, height: 1)
-        .opacity(0.001)
-        .allowsHitTesting(false)
-    }
-}
-
-@available(macOS 15.0, *)
-private struct AppleTranslationTaskView: View {
-    @ObservedObject var model: AppleTranslationBridgeModel
-    let request: AppleTranslationBridgeModel.Request
-
-    var body: some View {
-        Color.clear
-            .translationTask(request.configuration) { session in
-                await model.run(session: session, request: request)
-            }
     }
 }
 

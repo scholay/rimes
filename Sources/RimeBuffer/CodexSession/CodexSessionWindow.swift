@@ -34,7 +34,8 @@ final class CodexSessionWindowController: NSWindowController {
     private var rows: [CodexSessionRow] = []
     private var workspace: URL = FileManager.default
         .homeDirectoryForCurrentUser
-    weak var translator: (any CodexEventTranslating)?
+    private var translationHost: NSView?
+    var translator: (any CodexEventTranslating)?
 
     struct CodexSessionRow {
         let item: CodexRolloutItem
@@ -97,6 +98,28 @@ final class CodexSessionWindowController: NSWindowController {
         split.frame = window?.contentView?.bounds ?? .zero
         window?.contentView?.addSubview(split)
         split.setPosition(700, ofDividerAt: 0)
+        installTranslator(in: split)
+    }
+
+    /// Apple hands a `TranslationSession` only to a SwiftUI view attached to a
+    /// live window, so the service's host is mounted here rather than kept
+    /// off-screen. It draws nothing.
+    private func installTranslator(in container: NSView) {
+        guard #available(macOS 15.0, *) else {
+            statusLabel.stringValue = "本机 macOS 版本不支持本地翻译"
+            return
+        }
+        let service = AppleTranslationStringService()
+        let host = service.makeHostView()
+        container.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.widthAnchor.constraint(equalToConstant: 1),
+            host.heightAnchor.constraint(equalToConstant: 1),
+            host.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            host.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        translationHost = host
+        translator = CodexAppleTranslator(service: service)
     }
 
     /// Launches codex in `workspace` and begins following the rollout it
@@ -117,11 +140,19 @@ final class CodexSessionWindowController: NSWindowController {
             return
         }
         statusLabel.stringValue = "启动中：\(executable.path)"
+        let environment = ProcessInfo.processInfo.environment
         terminal.startProcess(
             executable: executable.path,
             args: [],
-            environment: Terminal.getEnvironmentVariables(
-                termName: "xterm-256color"
+            environment: CodexProcessEnvironment.variables(
+                base: Terminal.getEnvironmentVariables(
+                    termName: "xterm-256color"
+                ),
+                inheritedPath: environment["PATH"],
+                executable: executable,
+                workspace: workspace,
+                homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
+                shell: environment["SHELL"]
             ),
             execName: nil,
             currentDirectory: workspace.path
@@ -224,6 +255,26 @@ enum CodexSessionRowFormatter {
             let origin = server.map { "\($0)/" } ?? ""
             return "⚙ \(origin)\(tool)\(status.map { " · \($0)" } ?? "")"
         case let .other(kind): return "· \(kind)"
+        }
+    }
+}
+
+/// Adapts the shared string translator to the pane's contract. Failures
+/// resolve to nil so the row keeps its original text: an untranslated line is
+/// readable, an error message in its place is not.
+@available(macOS 15.0, *)
+private final class CodexAppleTranslator: CodexEventTranslating {
+    private let service: AppleTranslationStringService
+
+    init(service: AppleTranslationStringService) { self.service = service }
+
+    func translate(_ text: String,
+                   completion: @escaping (String?) -> Void) {
+        service.translate(text) { result in
+            switch result {
+            case let .success(translated): completion(translated)
+            case .failure: completion(nil)
+            }
         }
     }
 }

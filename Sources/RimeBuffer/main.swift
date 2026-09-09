@@ -716,6 +716,58 @@ if CommandLine.arguments.contains("codex-rollout"),
     }
     exit(0)
 }
+// Reports what the session pane would launch and where it would read from,
+// without opening a window. A GUI-launched agent does not inherit a shell
+// PATH, so "it works in my terminal" proves nothing about what the pane sees.
+if CommandLine.arguments.contains("codex-doctor") {
+    if let executable = CodexExecutableLocator.resolve() {
+        print("codex: \(executable.path)")
+        let probe = Process()
+        probe.executableURL = executable
+        probe.arguments = ["--version"]
+        // Probe through the same environment the pane spawns with, or this
+        // reports the bug the environment exists to fix.
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        var childEnvironment: [String: String] = [:]
+        for entry in CodexProcessEnvironment.variables(
+            base: [],
+            inheritedPath: ProcessInfo.processInfo.environment["PATH"],
+            executable: executable,
+            workspace: home,
+            homeDirectory: home,
+            shell: ProcessInfo.processInfo.environment["SHELL"]
+        ) {
+            guard let separator = entry.firstIndex(of: "=") else { continue }
+            childEnvironment[String(entry[entry.startIndex..<separator])] =
+                String(entry[entry.index(after: separator)...])
+        }
+        probe.environment = childEnvironment
+        let pipe = Pipe()
+        probe.standardOutput = pipe
+        probe.standardError = pipe
+        if (try? probe.run()) != nil {
+            probe.waitUntilExit()
+            let output = String(
+                decoding: pipe.fileHandleForReading.readDataToEndOfFile(),
+                as: UTF8.self
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            print("version: \(output)  exit=\(probe.terminationStatus)")
+        }
+    } else {
+        print("codex: NOT FOUND (checked ~/.codex/bin, /opt/homebrew/bin, "
+            + "/usr/local/bin, then PATH)")
+    }
+    let root = CodexRolloutWatcher.sessionsRoot
+    let exists = FileManager.default.fileExists(atPath: root.path)
+    print("sessions root: \(root.path) \(exists ? "(present)" : "(missing)")")
+    print("workspace default: \(CodexSessionWorkspaceRules.preferredWorkspace().path)")
+    if #available(macOS 15.0, *) {
+        print("translation: AppleTranslationStringService available")
+    } else {
+        print("translation: unavailable below macOS 15")
+    }
+    exit(0)
+}
 if CommandLine.arguments.contains("codex-session-smoke") {
     exit(runCodexSessionSmokeTest() ? 0 : 1)
 }

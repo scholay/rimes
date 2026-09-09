@@ -200,6 +200,54 @@ func runCodexSessionSmokeTest() -> Bool {
         return codexFail("workspace round trip")
     }
 
+    // The spawned environment is the difference between a working pane and a
+    // terminal that prints `env: node: No such file or directory` and exits.
+    // A login-launched input method inherits only the system directories.
+    let home = URL(fileURLWithPath: "/Users/fixture", isDirectory: true)
+    let loginPath = CodexProcessEnvironment.searchPath(
+        inherited: "/usr/bin:/bin:/usr/sbin:/sbin",
+        executable: URL(fileURLWithPath: "/opt/homebrew/bin/codex"),
+        homeDirectory: home
+    )
+    guard loginPath.contains("/opt/homebrew/bin"),
+          loginPath.hasPrefix("/opt/homebrew/bin"),
+          loginPath.contains("/Users/fixture/.local/bin") else {
+        return codexFail("login PATH must reach the interpreter: \(loginPath)")
+    }
+    // A user's own PATH entries survive, and nothing is listed twice.
+    let richPath = CodexProcessEnvironment.searchPath(
+        inherited: "/opt/homebrew/bin:/Users/fixture/.bun/bin:/usr/bin",
+        executable: URL(fileURLWithPath: "/opt/homebrew/bin/codex"),
+        homeDirectory: home
+    )
+    let entries = richPath.split(separator: ":").map(String.init)
+    guard entries.contains("/Users/fixture/.bun/bin"),
+          Set(entries).count == entries.count else {
+        return codexFail("PATH must preserve user entries without duplicates")
+    }
+    // Overrides replace SwiftTerm's own entries rather than appearing twice:
+    // a child seeing PATH set two ways takes whichever libc finds first.
+    let variables = CodexProcessEnvironment.variables(
+        base: ["TERM=xterm-256color", "PATH=/usr/bin", "LANG=en_US.UTF-8"],
+        inheritedPath: "/usr/bin:/bin",
+        executable: URL(fileURLWithPath: "/opt/homebrew/bin/codex"),
+        workspace: URL(fileURLWithPath: "/Users/fixture/project", isDirectory: true),
+        homeDirectory: home,
+        shell: "/bin/zsh"
+    )
+    let keys = variables.compactMap { entry -> String? in
+        guard let separator = entry.firstIndex(of: "=") else { return nil }
+        return String(entry[entry.startIndex..<separator])
+    }
+    guard Set(keys).count == keys.count,
+          variables.contains("TERM=xterm-256color"),
+          variables.contains("SHELL=/bin/zsh"),
+          variables.contains("HOME=/Users/fixture"),
+          variables.contains("PWD=/Users/fixture/project"),
+          variables.contains(where: { $0.hasPrefix("PATH=/opt/homebrew/bin:") }) else {
+        return codexFail("spawn environment: \(variables)")
+    }
+
     print("codex session smoke: OK")
     return true
 }
