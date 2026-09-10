@@ -1141,6 +1141,10 @@ private final class BufferPanel: NSPanel {
     /// own editing session, so it happens only where there is no other way to
     /// receive a keystroke.
     var acceptsComposingKeyInput = false
+    /// Shortcuts that reach RIMES through IMK when it owns the keyboard have
+    /// no route at all when another input method does. While the panel is
+    /// key, they arrive here instead.
+    var composingKeyHandler: ((NSEvent) -> Bool)?
     override var canBecomeKey: Bool {
         musicKeyboardEnabled || acceptsComposingKeyInput
     }
@@ -1150,6 +1154,11 @@ private final class BufferPanel: NSPanel {
         if musicKeyboardEnabled, isKeyWindow,
            event.type == .keyDown || event.type == .keyUp,
            musicKeyHandler?(event) == true { return }
+        // Ahead of the responder chain on purpose: the composing field would
+        // otherwise swallow the chord as ordinary editing.
+        if acceptsComposingKeyInput, isKeyWindow,
+           event.type == .keyDown || event.type == .keyUp,
+           composingKeyHandler?(event) == true { return }
         super.sendEvent(event)
     }
 }
@@ -2274,6 +2283,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         bufferRail.onComposingFieldCommit = { [weak self] text in
             self?.appendComposedText(text)
+        }
+        panel.composingKeyHandler = { [weak self] event in
+            self?.handlePluginNavigationKey(event) ?? false
         }
         buildWindow()
         restoreFrame()

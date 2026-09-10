@@ -938,6 +938,25 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         composingFieldEnabled = enabled
         composingField.isHidden = !enabled
         if !enabled { composingField.stringValue = "" }
+        placeComposingField()
+    }
+
+    /// Keeps the field parented to whichever rail is currently showing the
+    /// user's own text. Rendering a plugin layout re-runs this, because the
+    /// rail it belongs to changes with the mode.
+    private func placeComposingField() {
+        guard composingFieldEnabled else {
+            (composingField.superview as? NSStackView)?
+                .removeArrangedSubview(composingField)
+            composingField.removeFromSuperview()
+            return
+        }
+        let host = translationContainer.isHidden ? chipRow : translationSourceRow
+        guard composingField.superview !== host else { return }
+        (composingField.superview as? NSStackView)?
+            .removeArrangedSubview(composingField)
+        composingField.removeFromSuperview()
+        host.addArrangedSubview(composingField)
     }
 
     @discardableResult
@@ -948,10 +967,16 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         return window.makeFirstResponder(composingField)
     }
 
+    fileprivate var composingFieldControl: NSControl { composingField }
+
+    fileprivate func clearComposingField() {
+        composingField.stringValue = ""
+    }
+
     var renderedComposingFieldVisible: Bool { !composingField.isHidden }
     var renderedComposingText: String { composingField.stringValue }
 
-    @objc private func composingFieldCommitted() {
+    fileprivate func composingFieldCommitted() {
         let text = composingField.stringValue
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return
@@ -1392,7 +1417,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         chipScroll.heightAnchor.constraint(equalToConstant: 24).isActive = true
 
         normalRailContainer.addArrangedSubview(chipScroll)
-        normalRailContainer.addArrangedSubview(composingField)
         normalRailContainer.orientation = .horizontal
         normalRailContainer.alignment = .centerY
         normalRailContainer.edgeInsets = NSEdgeInsets(
@@ -1421,8 +1445,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         composingField.focusRingType = .none
         composingField.lineBreakMode = .byTruncatingTail
         composingField.usesSingleLineMode = true
-        composingField.target = self
-        composingField.action = #selector(composingFieldCommitted)
+        composingField.delegate = self
         composingField.isHidden = true
         composingField.translatesAutoresizingMaskIntoConstraints = false
 
@@ -1592,6 +1615,11 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
 
     override func layout() {
         super.layout()
+        // Rebuilding a rail clears its arranged subviews, which orphans the
+        // field. Re-placing here is idempotent — it no-ops once the field is
+        // already in the right rail — so the field survives every rebuild
+        // without the render paths having to remember it.
+        placeComposingField()
         updateHairlineWidth()
         updateEnterHoldProgressLayer()
         if !translationContainer.isHidden {
@@ -2043,6 +2071,9 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             } else if !snapshot.sourceSelected {
                 sourceViews.append(caretView)
             }
+        }
+        if composingFieldEnabled, renderedShowsSourceRail {
+            sourceViews.append(composingField)
         }
         sourceViews.append(translationSourceSpacer)
         reconcileArrangedSubviews(sourceViews, in: translationSourceRow)
@@ -3006,5 +3037,27 @@ final class HoldProgressButton: FirstMouseButton {
         image.unlockFocus()
         image.isTemplate = false
         return image
+    }
+}
+
+
+extension BufferInlineView: NSTextFieldDelegate {
+    /// Return commits the phrase; Escape abandons it. Both are handled here
+    /// rather than through the field's action, which does not fire for Return
+    /// inside a nonactivating panel.
+    func control(_ control: NSControl,
+                 textView: NSTextView,
+                 doCommandBy commandSelector: Selector) -> Bool {
+        guard control === composingFieldControl else { return false }
+        switch commandSelector {
+        case #selector(NSResponder.insertNewline(_:)):
+            composingFieldCommitted()
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            clearComposingField()
+            return true
+        default:
+            return false
+        }
     }
 }

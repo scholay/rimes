@@ -358,6 +358,27 @@ enum BufferUnhandledPrintableRules {
 /// tap/hold decision and delivered nothing, which is why a pasted message
 /// could not be sent. A gesture with no work to do is not a gesture; the key
 /// belongs to the application.
+/// Whether a focus activation should reset the Buffer to direct input.
+///
+/// A newly focused field starts in direct mode: capture authority never
+/// survives a focus change, and that is deliberate. But the controller's own
+/// `focusToken` is updated *after* the coordinator publishes the lease, so a
+/// click that grants capture to the incoming field lands in the window
+/// between them — and the activation that follows then reads its own token as
+/// a change and revokes the grant the user just asked for.
+///
+/// Capturing the token being activated is not a change away from it. That one
+/// exception is the difference between a click that works and a Buffer that
+/// has to be closed and reopened.
+enum BufferFocusActivationRules {
+    static func resetsCaptureRoute(previousToken: FocusToken?,
+                                   activatedToken: FocusToken,
+                                   captureBoundToActivatedToken: Bool) -> Bool {
+        guard previousToken != activatedToken else { return false }
+        return !captureBoundToActivatedToken
+    }
+}
+
 enum BufferEnterOwnershipRules {
     static func ownsReturn(pendingBlockCount: Int,
                            hasIncompleteBlocks: Bool) -> Bool {
@@ -2243,7 +2264,13 @@ final class RIMESController: IMKInputController {
                 stage: "after displaced cleanup"
             ) else { return }
         }
-        if focusChanged {
+        if BufferFocusActivationRules.resetsCaptureRoute(
+            previousToken: focusToken,
+            activatedToken: activation.token,
+            captureBoundToActivatedToken: BufferModel.shared.capturesInput(
+                for: activation.token
+            )
+        ) {
             // Visibility and staged content survive focus changes, but capture
             // authority never does. The newly focused field therefore starts
             // in ordinary direct-input mode until the user explicitly chooses

@@ -65,6 +65,50 @@ func runBufferCaptureRequestSmokeTest() -> Bool {
         return captureFail("pending capture lifetime")
     }
 
+    // Focus activation versus a capture the user just asked for. The
+    // controller's own token is updated after the coordinator publishes the
+    // lease, so a rail click lands between the two; the activation that
+    // follows must not read its own token as a change and undo the grant.
+    // Nineteen deferred clicks and two completions came from exactly that.
+    var epochs = FocusEpochState()
+    let first = epochs.activate()
+    let second = epochs.activate()
+    guard BufferFocusActivationRules.resetsCaptureRoute(
+        previousToken: first,
+        activatedToken: second,
+        captureBoundToActivatedToken: false
+    ) else {
+        return captureFail("a genuinely new field must start in direct mode")
+    }
+    guard !BufferFocusActivationRules.resetsCaptureRoute(
+        previousToken: first,
+        activatedToken: second,
+        captureBoundToActivatedToken: true
+    ) else {
+        return captureFail("capture bound to the incoming token must survive")
+    }
+    // Re-activating the same field changes nothing either way.
+    guard !BufferFocusActivationRules.resetsCaptureRoute(
+        previousToken: second,
+        activatedToken: second,
+        captureBoundToActivatedToken: false
+    ),
+    !BufferFocusActivationRules.resetsCaptureRoute(
+        previousToken: nil,
+        activatedToken: second,
+        captureBoundToActivatedToken: true
+    ) else {
+        return captureFail("same-token activation must not reset")
+    }
+    // A first focus with no capture anywhere still starts direct.
+    guard BufferFocusActivationRules.resetsCaptureRoute(
+        previousToken: nil,
+        activatedToken: first,
+        captureBoundToActivatedToken: false
+    ) else {
+        return captureFail("a first focus must start in direct mode")
+    }
+
     // Return ownership. A paste never passes through the input method, so a
     // captured field can hold a paragraph the Buffer knows nothing about with
     // nothing of its own staged. Claiming Return there ate the keystroke for
