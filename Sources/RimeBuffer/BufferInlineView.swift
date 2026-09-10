@@ -960,6 +960,26 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         composingField.stringValue = ""
     }
 
+    /// True while the field owns first responder. A field editor stands in
+    /// for the field once editing starts, so the responder is not the field
+    /// itself and a naive comparison would report focus lost on every
+    /// keystroke.
+    var composingFieldHasFocus: Bool {
+        guard composingFieldEnabled, let window else { return false }
+        guard let responder = window.firstResponder else { return false }
+        if responder === composingField { return true }
+        return (responder as? NSTextView)?.delegate === composingField
+    }
+
+    /// Places the field without a full model render, so focus behaviour can
+    /// be asserted on its own.
+    func renderStandaloneFieldForPreview() {
+        guard composingFieldEnabled,
+              composingField.superview !== chipRow else { return }
+        chipRow.addArrangedSubview(composingField)
+        layoutSubtreeIfNeeded()
+    }
+
     var renderedComposingFieldVisible: Bool { !composingField.isHidden }
     var renderedComposingText: String { composingField.stringValue }
 

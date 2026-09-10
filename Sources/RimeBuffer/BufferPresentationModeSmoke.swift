@@ -106,6 +106,109 @@ func runBufferPresentationModeSmokeTest() -> Bool {
         return presentationModeFail("leaving the mode must clear the field")
     }
 
+    // Folding. Without focus a standalone workbench looks ready and takes
+    // nothing; folding says so and makes the toolbar the way back in.
+    guard BufferRailFoldRules.foldsToToolbar(mode: .standaloneField,
+                                             panelHoldsFocus: false,
+                                             musicSelected: false) else {
+        return presentationModeFail("an unfocused standalone rail must fold")
+    }
+    guard !BufferRailFoldRules.foldsToToolbar(mode: .standaloneField,
+                                              panelHoldsFocus: true,
+                                              musicSelected: false) else {
+        return presentationModeFail("a focused rail must stay open")
+    }
+    // Under RIMES the host keeps focus by design. Folding there would hide
+    // staged blocks the user opened the workbench to read.
+    guard !BufferRailFoldRules.foldsToToolbar(mode: .integratedRime,
+                                              panelHoldsFocus: false,
+                                              musicSelected: false) else {
+        return presentationModeFail("the integrated rail must never fold")
+    }
+    guard !BufferRailFoldRules.foldsToToolbar(mode: .standaloneField,
+                                              panelHoldsFocus: false,
+                                              musicSelected: true) else {
+        return presentationModeFail("the music surface must not fold")
+    }
+    guard BufferWindowGeometry.height(expanded: true, railFolded: true)
+            == BufferWindowGeometry.toolbarOnlyHeight,
+          BufferWindowGeometry.height(expanded: true, railFolded: true)
+            < BufferWindowGeometry.height(expanded: true) else {
+        return presentationModeFail("a folded panel must be toolbar-height")
+    }
+
+    // The question that was not being asked. Opening the workbench when the
+    // input method was already third-party involves no mode transition, and
+    // focus used to be claimed only on one — so the panel came up
+    // ordered-front but never key.
+    func claims(_ mode: BufferPresentationMode,
+                visible: Bool = true,
+                alreadyFocused: Bool = false,
+                music: Bool = false,
+                protected: Bool = false,
+                hidden: Bool = false,
+                secure: Bool = false) -> Bool {
+        BufferComposingFocusRules.shouldClaimFocus(
+            mode: mode, isVisible: visible, musicSelected: music,
+            sessionProtected: protected, hiddenForSession: hidden,
+            secureInput: secure, alreadyFocused: alreadyFocused
+        )
+    }
+    guard claims(.standaloneField) else {
+        return presentationModeFail("a visible standalone workbench must claim focus")
+    }
+    guard !claims(.integratedRime) else {
+        return presentationModeFail("the integrated mode must never take focus")
+    }
+    // Repeated refreshes must not fight the user's caret once it is theirs.
+    guard !claims(.standaloneField, alreadyFocused: true) else {
+        return presentationModeFail("focus must not be reclaimed once held")
+    }
+    for (label, blocked) in [
+        ("hidden", claims(.standaloneField, visible: false)),
+        ("music", claims(.standaloneField, music: true)),
+        ("protected", claims(.standaloneField, protected: true)),
+        ("session-hidden", claims(.standaloneField, hidden: true)),
+        ("secure input", claims(.standaloneField, secure: true)),
+    ] where blocked {
+        return presentationModeFail("focus claimed while \(label)")
+    }
+
+    // Focus, for real, in a key window. Every assertion above passes on a
+    // panel that is never made key — which is exactly the state that shipped:
+    // a visible field that could take nothing, because show() orders the
+    // panel front regardless and never makes it key.
+    let host = FocusProbePanel(
+        contentRect: NSRect(x: 0, y: 0, width: 520, height: 40),
+        styleMask: [.borderless, .nonactivatingPanel],
+        backing: .buffered,
+        defer: false
+    )
+    let railInWindow = BufferInlineView(
+        frame: NSRect(x: 0, y: 0, width: 520, height: 32)
+    )
+    host.contentView?.addSubview(railInWindow)
+    railInWindow.setComposingFieldEnabled(true)
+    railInWindow.renderStandaloneFieldForPreview()
+    host.makeKeyAndOrderFront(nil)
+    defer { host.orderOut(nil) }
+    guard host.isKeyWindow else {
+        return presentationModeFail(
+            "a borderless nonactivating panel must be able to become key"
+        )
+    }
+    guard railInWindow.focusComposingField(),
+          railInWindow.composingFieldHasFocus else {
+        return presentationModeFail(
+            "the composing field must take first responder in a key window"
+        )
+    }
+    // And must not claim focus once the mode is left.
+    railInWindow.setComposingFieldEnabled(false)
+    guard !railInWindow.composingFieldHasFocus else {
+        return presentationModeFail("a disabled field must not hold focus")
+    }
+
     // Locally typed text is still local typing: it mirrors to a paired Mac
     // like a Rime commit, and stays unbadged because it is ordinary use.
     let local = Origin.localInput(inputSourceID: "com.apple.inputmethod.SCIM")
@@ -137,4 +240,12 @@ private func presentationModeSourceRoot() -> URL? {
 private func presentationModeFail(_ message: String) -> Bool {
     print("FAILED: \(message)")
     return false
+}
+
+
+/// A panel that may become key, standing in for the workbench's own. The
+/// default for a borderless window is to refuse, which is the behaviour the
+/// real panel overrides.
+private final class FocusProbePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
 }

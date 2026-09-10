@@ -41,6 +41,47 @@ enum BufferPresentationMode: String, Equatable, CaseIterable {
     var showsComposingField: Bool { self == .standaloneField }
 }
 
+/// When the workbench must take the caret for itself.
+///
+/// The bug this exists to prevent was not a wrong answer but an unasked
+/// question: focus was claimed only on a mode *transition*, and the ordinary
+/// case has no transition — the user switches input method while the
+/// workbench is closed, then opens it. The panel came up ordered-front but
+/// never key, so the field was visible and could accept nothing.
+enum BufferComposingFocusRules {
+    static func shouldClaimFocus(mode: BufferPresentationMode,
+                                 isVisible: Bool,
+                                 musicSelected: Bool,
+                                 sessionProtected: Bool,
+                                 hiddenForSession: Bool,
+                                 secureInput: Bool,
+                                 alreadyFocused: Bool) -> Bool {
+        guard mode.panelAcceptsKeyInput else { return false }
+        guard isVisible, !musicSelected, !sessionProtected,
+              !hiddenForSession, !secureInput else { return false }
+        return !alreadyFocused
+    }
+}
+
+/// Whether the rails should be folded away, leaving only the toolbar.
+///
+/// Without focus a standalone workbench is a text surface that cannot take
+/// text — it looks ready and swallows everything. Folding to the toolbar
+/// says so honestly and turns the toolbar into the way back in: clicking it
+/// makes the panel key, which restores the rails.
+///
+/// It applies only where focus is a thing the workbench can hold. Under RIMES
+/// the host keeps focus by design and the rails must stay visible, or opening
+/// the workbench to read staged blocks would fold them away.
+enum BufferRailFoldRules {
+    static func foldsToToolbar(mode: BufferPresentationMode,
+                               panelHoldsFocus: Bool,
+                               musicSelected: Bool) -> Bool {
+        guard mode == .standaloneField, !musicSelected else { return false }
+        return !panelHoldsFocus
+    }
+}
+
 /// Guards the boundary the modes are supposed to respect.
 ///
 /// The failure this exists to prevent is gradual: a `if mode == .standalone`

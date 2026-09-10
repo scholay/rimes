@@ -297,9 +297,14 @@ enum BufferWindowGeometry {
         min(max(width, standardMinimumWidth), standardMaximumWidth)
     }
 
+    /// What is left when the rails fold away: the toolbar and its divider.
+    static let toolbarOnlyHeight: CGFloat = 35
+
     static func height(expanded: Bool,
                        mode: BufferWorkbenchLayoutMode = .standard,
-                       showsLiveMetrics: Bool = false) -> CGFloat {
+                       showsLiveMetrics: Bool = false,
+                       railFolded: Bool = false) -> CGFloat {
+        if railFolded { return toolbarOnlyHeight }
         let baseHeight: CGFloat
         switch mode {
         case .standard, .singleDerived:
@@ -2051,6 +2056,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var pendingCaptureRequest: BufferPendingCaptureRequest?
     private var appliedLiveMetricsHeight = false
     private var presentationMode = BufferPresentationMode.integratedRime
+    private var railFoldedForFocus = false
     private var liveMetricsPreviewLine: String?
     private var liveMetricsTimer: Timer?
     private var autoSendTimer: Timer?
@@ -3492,6 +3498,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             completePendingCaptureIfPossible()
         }
         syncPresentationMode()
+        syncRailFold()
         refreshLiveTypingMetrics()
         let contentProtected = secureInputEnabled || sessionProtectionActive
         if contentProtected {
@@ -5232,7 +5239,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         let desiredHeight = BufferWindowGeometry.height(
             expanded: toolbarExpanded,
             mode: nextMode,
-            showsLiveMetrics: showsMetrics
+            showsLiveMetrics: showsMetrics,
+            railFolded: railFoldedForFocus
         )
         let fallback = panel.screen?.visibleFrame
             ?? NSScreen.main?.visibleFrame
@@ -5570,15 +5578,64 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         bufferRail.setComposingFieldEnabled(
             next.showsComposingField && !musicSelected
         )
-        guard changed else { return }
-        IMELog.write("buffer presentation mode -> \(next.rawValue)")
-        if next.panelAcceptsKeyInput, isVisible, !musicSelected {
-            // Nothing else can deliver a keystroke here, so the panel has to
-            // ask for focus rather than wait to be given it.
+        if changed {
+            IMELog.write("buffer presentation mode -> \(next.rawValue)")
+        }
+        claimComposingFocusIfNeeded()
+    }
+
+    /// Every show path orders the panel front *regardless* — deliberately, so
+    /// the host keeps its focus in the integrated mode. In standalone mode
+    /// that is precisely wrong: a panel that is never key can never give its
+    /// field first responder, so the field looks present and takes nothing.
+    ///
+    /// Called on every refresh rather than only on a mode change, because the
+    /// common case is switching input method while the workbench is closed
+    /// and opening it afterwards — no transition happens at that point.
+    /// Folds the rails away while the workbench cannot receive text, and
+    /// brings them back the moment it can. Driven by the panel's own key
+    /// state, so clicking the toolbar is all it takes — no separate gesture,
+    /// because becoming key is exactly what a click already does.
+    private func syncRailFold() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        let folded = BufferRailFoldRules.foldsToToolbar(
+            mode: presentationMode,
+            panelHoldsFocus: panel.isKeyWindow,
+            musicSelected: musicSelected
+        )
+        guard folded != railFoldedForFocus else { return }
+        railFoldedForFocus = folded
+        mainBar.isHidden = folded
+        IMELog.write("buffer rails \(folded ? "folded to toolbar" : "restored")")
+        syncLayoutMode(layoutMode)
+        if !folded { claimComposingFocusIfNeeded() }
+    }
+
+    private func claimComposingFocusIfNeeded() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard BufferComposingFocusRules.shouldClaimFocus(
+            mode: presentationMode,
+            isVisible: isVisible,
+            musicSelected: musicSelected,
+            sessionProtected: sessionProtectionActive,
+            hiddenForSession: hiddenForSession,
+            secureInput: IsSecureEventInputEnabled(),
+            alreadyFocused: bufferRail.composingFieldHasFocus
+        ) else { return }
+        if !panel.isKeyWindow {
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKeyAndOrderFront(nil)
-            DispatchQueue.main.async { [weak self] in
-                _ = self?.bufferRail.focusComposingField()
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.presentationMode.panelAcceptsKeyInput,
+                  self.isVisible else { return }
+            let took = self.bufferRail.focusComposingField()
+            if !took {
+                IMELog.write(
+                    "composing field could not take focus; panelKey="
+                        + "\(self.panel.isKeyWindow) appActive="
+                        + "\(NSApp.isActive)"
+                )
             }
         }
     }
@@ -5734,6 +5791,16 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             self?.clampFrameToScreens()
             candidateWindow.syncWorkbenchLayout()
         })
+        for name in [NSWindow.didBecomeKeyNotification,
+                     NSWindow.didResignKeyNotification] {
+            observers.append(center.addObserver(forName: name,
+                                                object: panel,
+                                                queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.syncRailFold()
+                }
+            })
+        }
         observers.append(center.addObserver(forName: .rimeAppearanceDidChange,
                                             object: nil,
                                             queue: .main) { [weak self] _ in
