@@ -1140,7 +1140,8 @@ if let i = CommandLine.arguments.firstIndex(of: "panel-render"),
         toolbarExpanded: toolbarExpanded,
         liveMetricsPreview: options.contains("metrics")
             ? "42 字/分  ·  码长 1.83  ·  击键 3.2/秒  ·  回删 2"
-            : nil
+            : nil,
+        railFoldedPreview: options.contains("folded")
     )
     print(rendered
         ? "rendered \(candidatePreview ? "candidate " : (marine ? "marine " : (translation ? "translation " : "")))expanded workbench @\(scale)x"

@@ -108,12 +108,9 @@ func runBufferPresentationModeSmokeTest() -> Bool {
 
     // Folding. Without focus a standalone workbench looks ready and takes
     // nothing; folding says so and makes the toolbar the way back in.
-    func folds(acceptsInput: Bool,
-               music: Bool = false,
-               staged: Bool = false) -> Bool {
+    func folds(acceptsInput: Bool, music: Bool = false) -> Bool {
         BufferRailFoldRules.foldsToToolbar(acceptsInput: acceptsInput,
-                                           musicSelected: music,
-                                           hasStagedContent: staged)
+                                           musicSelected: music)
     }
     // A workbench that cannot receive a keystroke says so, in either mode:
     // the question "will this take my typing" has one answer and one look.
@@ -123,10 +120,11 @@ func runBufferPresentationModeSmokeTest() -> Bool {
     guard !folds(acceptsInput: true) else {
         return presentationModeFail("a rail that can take input must stay open")
     }
-    // Staged blocks are the reason to keep looking at an unfocused
-    // workbench, and a folded toolbar cannot show them.
-    guard !folds(acceptsInput: false, staged: true) else {
-        return presentationModeFail("staged blocks must survive losing focus")
+    // Staged blocks must not hold the rails open. As an exception it sounded
+    // reasonable and meant the fold never happened, because blocks are
+    // present nearly always.
+    guard folds(acceptsInput: false) else {
+        return presentationModeFail("staged blocks must not prevent folding")
     }
     guard !folds(acceptsInput: false, music: true) else {
         return presentationModeFail("the music surface must not fold")

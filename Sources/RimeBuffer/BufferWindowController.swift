@@ -2070,6 +2070,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var appliedLiveMetricsHeight = false
     private var presentationMode = BufferPresentationMode.integratedRime
     private var railFoldedForFocus = false
+    private var railFoldPending: Timer?
+    /// Long enough to outlast the focus churn of another application coming
+    /// forward briefly, short enough to feel like a response.
+    private static let railFoldDelay: TimeInterval = 0.6
     private var liveMetricsPreviewLine: String?
     private var liveMetricsTimer: Timer?
     private var autoSendTimer: Timer?
@@ -2823,9 +2827,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                           candidatePreview: Bool = false,
                           targetAssociationPreviewAppName: String? = nil,
                           toolbarExpanded previewToolbarExpanded: Bool = false,
-                          liveMetricsPreview: String? = nil) -> Bool {
+                          liveMetricsPreview: String? = nil,
+                          railFoldedPreview: Bool = false) -> Bool {
         liveMetricsPreviewLine = liveMetricsPreview
         defer { liveMetricsPreviewLine = nil }
+        if railFoldedPreview { applyRailFold(true) }
+        defer { if railFoldedPreview { applyRailFold(false) } }
         if bufferRail.setLiveMetricsLine(liveMetricsPreview) {
             syncLayoutMode(layoutMode)
         }
@@ -2856,7 +2863,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                               height: BufferWindowGeometry.height(
                                   expanded: toolbarExpanded,
                                   mode: previewMode,
-                                  showsLiveMetrics: bufferRail.showsLiveMetrics
+                                  showsLiveMetrics: bufferRail.showsLiveMetrics,
+                                  railFolded: railFoldedForFocus
                               )),
                        display: false)
         adjustingFrame = false
@@ -5616,10 +5624,42 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         dispatchPrecondition(condition: .onQueue(.main))
         let folded = BufferRailFoldRules.foldsToToolbar(
             acceptsInput: acceptsUserInput,
-            musicSelected: musicSelected,
-            hasStagedContent: !BufferDeliveryContentRouter.current()
-                .deliveryPendingBlocks.isEmpty
+            musicSelected: musicSelected
         )
+        guard folded != railFoldedForFocus else {
+            railFoldPending?.invalidate()
+            railFoldPending = nil
+            return
+        }
+        // Restoring is immediate; folding waits. Capture is dropped and
+        // regranted by ordinary focus churn — an application coming forward
+        // for half a second is enough — and folding on every flicker made the
+        // workbench blink between two shapes while the user was mid-phrase.
+        guard folded else {
+            railFoldPending?.invalidate()
+            railFoldPending = nil
+            applyRailFold(false)
+            return
+        }
+        guard railFoldPending == nil else { return }
+        let timer = Timer(timeInterval: Self.railFoldDelay,
+                          repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.railFoldPending = nil
+                // Re-ask rather than trust the answer from half a second ago.
+                let stillFolded = BufferRailFoldRules.foldsToToolbar(
+                    acceptsInput: self.acceptsUserInput,
+                    musicSelected: self.musicSelected
+                )
+                if stillFolded { self.applyRailFold(true) }
+            }
+        }
+        railFoldPending = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func applyRailFold(_ folded: Bool) {
         guard folded != railFoldedForFocus else { return }
         railFoldedForFocus = folded
         mainBar.isHidden = folded
@@ -5641,7 +5681,19 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             panel.makeKeyAndOrderFront(nil)
             claimComposingFocusIfNeeded()
         case .integratedRime:
-            _ = activateCaptureForCurrentFocus(showWorkbench: false)
+            if activateCaptureForCurrentFocus(showWorkbench: false) {
+                break
+            }
+            // No live target: the field that had one belongs to an
+            // application that is no longer forward. Bring it back and let
+            // its own IMK activation supply the lease, which the deferred
+            // request then binds.
+            switch BufferTargetRecallStore.shared.restore() {
+            case .restored:
+                armPendingCapture(at: BufferModel.shared.blocks.count)
+            case .alreadyFrontmost, .expired, .unavailable, .none:
+                break
+            }
         }
         syncRailFold()
         refresh()
@@ -6406,6 +6458,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             refresh()
             return false
         }
+        BufferTargetRecallStore.shared.remember(
+            bundleID: lease.bundleID,
+            processIdentifier: lease.processIdentifier
+        )
         BufferModel.shared.activateCapture(for: lease.token)
         if showWorkbench { show() }
         refresh()

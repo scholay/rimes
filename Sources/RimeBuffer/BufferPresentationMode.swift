@@ -78,15 +78,15 @@ enum BufferRailFoldRules {
     /// holding the capture lease under RIMES, holding the caret without it.
     /// Both answer the same question — will a keystroke land here — and the
     /// rails are folded whenever the answer is no.
+    /// Staged blocks do not keep the rails open. Keeping them visible was a
+    /// reasonable-sounding exception that in practice never let the fold
+    /// happen at all — blocks are present almost always — so the workbench
+    /// looked unchanged. Everything below the toolbar folds; the toolbar is
+    /// how it comes back.
     static func foldsToToolbar(acceptsInput: Bool,
-                               musicSelected: Bool,
-                               hasStagedContent: Bool) -> Bool {
+                               musicSelected: Bool) -> Bool {
         guard !musicSelected else { return false }
-        guard !acceptsInput else { return false }
-        // Staged blocks are the one thing worth keeping on screen without
-        // focus: they are why the workbench was opened to look at, and they
-        // cannot be recovered from a folded toolbar.
-        return !hasStagedContent
+        return !acceptsInput
     }
 }
 
