@@ -2450,6 +2450,12 @@ final class RIMESController: IMKInputController {
             BufferModel.shared.routeDirectPreservingContent(
                 reason: "input focus deactivated"
             )
+            // The route cannot outlive the token, but the user's intent can:
+            // if that application is still in front, this is a handover, not
+            // a departure. See rearmCaptureAfterHostSessionLoss.
+            BufferWindowController.shared.rearmCaptureAfterHostSessionLoss(
+                bundleID: lease.bundleID
+            )
         }
         _ = InputFocusCoordinator.shared.deactivate(controller: self, token: lease.token)
         if focusToken == lease.token { focusToken = nil }

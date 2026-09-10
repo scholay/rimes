@@ -83,9 +83,17 @@ enum BufferRailFoldRules {
     /// happen at all — blocks are present almost always — so the workbench
     /// looked unchanged. Everything below the toolbar folds; the toolbar is
     /// how it comes back.
+    /// `captureRebindPending` is the handover window. Clicking the toolbar
+    /// under RIMES gives this process an input session, and macOS tears the
+    /// host's down to hand it over — so capture drops a quarter-second after
+    /// the very click that asked for it. Folding on that reading collapsed
+    /// the workbench again right after the user opened it. The route is
+    /// coming back; wait for it rather than reporting the gap.
     static func foldsToToolbar(acceptsInput: Bool,
-                               musicSelected: Bool) -> Bool {
+                               musicSelected: Bool,
+                               captureRebindPending: Bool = false) -> Bool {
         guard !musicSelected else { return false }
+        guard !captureRebindPending else { return false }
         return !acceptsInput
     }
 }

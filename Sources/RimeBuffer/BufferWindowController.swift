@@ -2079,6 +2079,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var railFoldedForFocus = false
     private var railFoldPending: Timer?
     private var appliedRailFold = false
+    private var captureRebindExpiry: Timer?
     /// Long enough to outlast the focus churn of another application coming
     /// forward briefly, short enough to feel like a response.
     private static let railFoldDelay: TimeInterval = 0.6
@@ -5632,7 +5633,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         dispatchPrecondition(condition: .onQueue(.main))
         let folded = BufferRailFoldRules.foldsToToolbar(
             acceptsInput: acceptsUserInput,
-            musicSelected: musicSelected
+            musicSelected: musicSelected,
+            captureRebindPending: captureRebindPending
         )
         guard folded != railFoldedForFocus else {
             railFoldPending?.invalidate()
@@ -5658,7 +5660,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                 // Re-ask rather than trust the answer from half a second ago.
                 let stillFolded = BufferRailFoldRules.foldsToToolbar(
                     acceptsInput: self.acceptsUserInput,
-                    musicSelected: self.musicSelected
+                    musicSelected: self.musicSelected,
+                    captureRebindPending: self.captureRebindPending
                 )
                 if stillFolded { self.applyRailFold(true) }
             }
@@ -5685,6 +5688,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     @objc private func foldedToolbarClicked() {
         dispatchPrecondition(condition: .onQueue(.main))
         guard railFoldedForFocus else { return }
+        logFocusOwnership("toolbar click")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            self?.logFocusOwnership("toolbar click +350ms")
+        }
         switch presentationMode {
         case .standaloneField:
             NSApp.activate(ignoringOtherApps: true)
@@ -5707,6 +5714,21 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         syncRailFold()
         refresh()
+    }
+
+    /// Diagnostic for the one question the focus log cannot answer: whether
+    /// clicking our own panel is what hands this process an input session,
+    /// which is what tears the host's session down underneath the capture.
+    private func logFocusOwnership(_ stage: String) {
+        let keyWindow = NSApp.keyWindow.map { String(describing: type(of: $0)) }
+            ?? "none"
+        IMELog.write(
+            "focus ownership [\(stage)] mode=\(presentationMode.rawValue) "
+                + "panelKey=\(panel.isKeyWindow) panelCanKey=\(panel.canBecomeKey) "
+                + "appActive=\(NSApp.isActive) appKeyWindow=\(keyWindow) "
+                + "frontmost="
+                + "\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none")"
+        )
     }
 
     private func claimComposingFocusIfNeeded() {
@@ -6547,13 +6569,60 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// Keeps the click rather than discarding it. Switching applications and
     /// immediately reaching for the Buffer is the ordinary case, and IMK has
     /// usually not activated the new field yet at that instant.
-    private func armPendingCapture(at insertionIndex: Int) {
+    private func armPendingCapture(at insertionIndex: Int,
+                                   expectedBundleID: String? = nil) {
         pendingCaptureRequest = BufferPendingCaptureRequest(
             insertionIndex: insertionIndex,
-            requestedAt: Date()
+            requestedAt: Date(),
+            expectedBundleID: expectedBundleID
         )
-        IMELog.write("buffer capture deferred; waiting for a trusted field")
+        IMELog.write("buffer capture deferred; waiting for a trusted field"
+            + (expectedBundleID.map { " in \($0)" } ?? ""))
         refresh()
+    }
+
+    /// A host can lose its IMK session without the user going anywhere.
+    /// Clicking the workbench's own toolbar does exactly that: the click
+    /// hands this process an input session, so macOS tears the host's down —
+    /// roughly 250ms after the click granted capture. The token dies with the
+    /// session and the route has to go with it, but the user's intent did
+    /// not. Re-arm the deferred request, bound to that same application, so
+    /// the route rebinds the moment the host's session returns instead of
+    /// stranding the workbench folded until the target field is clicked
+    /// again.
+    func rearmCaptureAfterHostSessionLoss(bundleID: String) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard isVisible, !musicSelected, !hiddenForSession,
+              !sessionProtectionActive else { return }
+        // Only for a host that is still in front. A session lost because the
+        // user switched applications is a real departure, and the workbench
+        // should fold for it as it does today.
+        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+                == bundleID else { return }
+        armPendingCapture(at: BufferModel.shared.blocks.count,
+                          expectedBundleID: bundleID)
+        // Nothing else is guaranteed to run when the request simply expires,
+        // and the rails must not stay open on a rebind that never arrived.
+        captureRebindExpiry?.invalidate()
+        let expiry = Timer(
+            timeInterval: BufferPendingCaptureRequest.lifetime + 0.1,
+            repeats: false
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.captureRebindExpiry = nil
+                self.syncRailFold()
+            }
+        }
+        captureRebindExpiry = expiry
+        RunLoop.main.add(expiry, forMode: .common)
+    }
+
+    /// True while a re-armed request is still waiting for its host's session.
+    private var captureRebindPending: Bool {
+        guard let pending = pendingCaptureRequest,
+              pending.expectedBundleID != nil else { return false }
+        return pending.isLive(at: Date())
     }
 
     /// Called from `refresh()`, which already runs on every focus transition,
@@ -6564,9 +6633,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             pendingCaptureRequest = nil
             return
         }
-        guard InputFocusCoordinator.shared.liveTarget(
+        guard let target = InputFocusCoordinator.shared.liveTarget(
             forceOverlayVisibilityRefresh: false
-        ) != nil else { return }
+        ) else { return }
+        guard pending.accepts(bundleID: target.bundleID) else { return }
         pendingCaptureRequest = nil
         guard activateCaptureForCurrentFocus(showWorkbench: false) else { return }
         _ = BufferModel.shared.setInsertionPoint(pending.insertionIndex)

@@ -129,6 +129,43 @@ func runBufferPresentationModeSmokeTest() -> Bool {
     guard !folds(acceptsInput: false, music: true) else {
         return presentationModeFail("the music surface must not fold")
     }
+
+    // Clicking the toolbar under RIMES grants capture and then loses it
+    // ~250ms later, because the click hands this process an input session
+    // and macOS tears the host's down. Folding on that gap collapsed the
+    // workbench again immediately after the user opened it.
+    guard !BufferRailFoldRules.foldsToToolbar(acceptsInput: false,
+                                              musicSelected: false,
+                                              captureRebindPending: true) else {
+        return presentationModeFail("a pending rebind must hold the rails open")
+    }
+    guard BufferRailFoldRules.foldsToToolbar(acceptsInput: false,
+                                             musicSelected: false,
+                                             captureRebindPending: false) else {
+        return presentationModeFail("an expired rebind must let the rails fold")
+    }
+
+    // A re-armed request exists to restore a route that already existed, so
+    // it must not bind to a different application; a plain deferred click
+    // still binds to whatever field arrives.
+    let rearmed = BufferPendingCaptureRequest(
+        insertionIndex: 0,
+        requestedAt: Date(),
+        expectedBundleID: "com.electron.lark"
+    )
+    guard rearmed.accepts(bundleID: "com.electron.lark"),
+          !rearmed.accepts(bundleID: "com.tencent.xinWeChat"),
+          !rearmed.accepts(bundleID: nil) else {
+        return presentationModeFail("a re-armed request bound to the wrong host")
+    }
+    let deferredClick = BufferPendingCaptureRequest(
+        insertionIndex: 0,
+        requestedAt: Date()
+    )
+    guard deferredClick.accepts(bundleID: "com.tencent.xinWeChat"),
+          deferredClick.accepts(bundleID: nil) else {
+        return presentationModeFail("a deferred click must accept any host")
+    }
     guard BufferWindowGeometry.height(expanded: true, railFolded: true)
             == BufferWindowGeometry.toolbarOnlyHeight,
           BufferWindowGeometry.height(expanded: true, railFolded: true)

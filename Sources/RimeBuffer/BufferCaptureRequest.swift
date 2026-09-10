@@ -50,10 +50,23 @@ struct BufferPendingCaptureRequest: Equatable {
 
     let insertionIndex: Int
     let requestedAt: Date
+    /// Which application this request is allowed to bind to, when it was
+    /// armed to survive one specific host losing its input session. A plain
+    /// deferred click leaves it nil and binds to whatever field arrives —
+    /// that is the point of it, the user clicked the Buffer before the new
+    /// field was ready. A re-arm is different: it exists to restore a route
+    /// that already existed, so binding it to a *different* application would
+    /// silently capture typing the user never pointed at the Buffer.
+    var expectedBundleID: String?
 
     func isLive(at moment: Date,
                 lifetime: TimeInterval = lifetime) -> Bool {
         let elapsed = moment.timeIntervalSince(requestedAt)
         return elapsed >= 0 && elapsed < lifetime
+    }
+
+    func accepts(bundleID: String?) -> Bool {
+        guard let expectedBundleID else { return true }
+        return expectedBundleID == bundleID
     }
 }
