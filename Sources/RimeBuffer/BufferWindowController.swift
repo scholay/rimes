@@ -1137,7 +1137,13 @@ enum BufferWorkbenchPreferences {
 private final class BufferPanel: NSPanel {
     var musicKeyboardEnabled = false
     var musicKeyHandler: ((NSEvent) -> Bool)?
-    override var canBecomeKey: Bool { musicKeyboardEnabled }
+    /// Set from the resolved presentation mode. Taking focus ends the host's
+    /// own editing session, so it happens only where there is no other way to
+    /// receive a keystroke.
+    var acceptsComposingKeyInput = false
+    override var canBecomeKey: Bool {
+        musicKeyboardEnabled || acceptsComposingKeyInput
+    }
     override var canBecomeMain: Bool { false }
 
     override func sendEvent(_ event: NSEvent) {
@@ -2035,6 +2041,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var railActionCenterYConstraint: NSLayoutConstraint?
     private var pendingCaptureRequest: BufferPendingCaptureRequest?
     private var appliedLiveMetricsHeight = false
+    private var presentationMode = BufferPresentationMode.integratedRime
     private var liveMetricsPreviewLine: String?
     private var liveMetricsTimer: Timer?
     private var autoSendTimer: Timer?
@@ -2264,6 +2271,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         bufferRail.onCaptureRequested = { [weak self] insertionIndex in
             self?.activateLogicalInput(at: insertionIndex)
+        }
+        bufferRail.onComposingFieldCommit = { [weak self] text in
+            self?.appendComposedText(text)
         }
         buildWindow()
         restoreFrame()
@@ -3469,6 +3479,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         if !secureInputEnabled, rimeOwnsInput {
             completePendingCaptureIfPossible()
         }
+        syncPresentationMode()
         refreshLiveTypingMetrics()
         let contentProtected = secureInputEnabled || sessionProtectionActive
         if contentProtected {
@@ -5512,6 +5523,54 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         liveMetricsTimer = timer
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// Decided once, here, and never consulted below this line. Everything
+    /// downstream — the model, the rail, the plugins — behaves identically in
+    /// both modes, which is what keeps this one workbench rather than two.
+    private func syncPresentationMode() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        let next = BufferPresentationMode.resolve(
+            currentSourceIsOwn: RimeInputSourceAuthority.currentSourceIsOwn()
+        )
+        let changed = next != presentationMode
+        presentationMode = next
+        panel.acceptsComposingKeyInput = next.panelAcceptsKeyInput
+            && !musicSelected
+        bufferRail.setComposingFieldEnabled(
+            next.showsComposingField && !musicSelected
+        )
+        guard changed else { return }
+        IMELog.write("buffer presentation mode -> \(next.rawValue)")
+        if next.panelAcceptsKeyInput, isVisible, !musicSelected {
+            // Nothing else can deliver a keystroke here, so the panel has to
+            // ask for focus rather than wait to be given it.
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
+            DispatchQueue.main.async { [weak self] in
+                _ = self?.bufferRail.focusComposingField()
+            }
+        }
+    }
+
+    /// A phrase finished in the composing field becomes a block by the same
+    /// route a Rime commit does. Only the origin differs, and it differs
+    /// truthfully: another input method composed this, and a log read weeks
+    /// from now should say so.
+    private func appendComposedText(_ text: String) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !IsSecureEventInputEnabled() else { return }
+        let sourceID = RimeInputSourceAuthority.currentInputSourceID()
+            ?? "unknown"
+        BufferModel.shared.append(
+            trimmed,
+            origin: .localInput(inputSourceID: sourceID)
+        )
+        IMELog.write(
+            "buffer composed \(IMELog.redact(trimmed)) via \(sourceID)"
+        )
+        refresh()
     }
 
     private func refreshLiveTypingMetrics() {

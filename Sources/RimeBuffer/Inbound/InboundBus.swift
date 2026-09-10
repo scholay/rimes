@@ -112,7 +112,8 @@ final class InboundBus {
         case .marine: return .trusted           // preserve current Marine flow
         case .plugin: return .ask               // stale/cancelled action results need review
         case .mcp, .http, .sse, .ssh: return .ask
-        case .rime, .clipboard, .processor, .remotePeer: return .ask // shouldn't arrive here; be safe
+        case .rime, .localInput, .clipboard, .processor, .remotePeer:
+            return .ask // shouldn't arrive here; be safe
         }
     }
 
@@ -492,6 +493,14 @@ final class InboundBus {
                 identifier: "rime",
                 replyCapability: .localNotesOnly
             )
+        case let .localInput(inputSourceID):
+            return MailboxSource(
+                kind: .other,
+                displayName: "本机输入",
+                identifier: normalizedMailboxName(inputSourceID,
+                                                  fallback: "local-input"),
+                replyCapability: .localNotesOnly
+            )
         case .clipboard:
             return MailboxSource(
                 kind: .other,
@@ -513,6 +522,7 @@ final class InboundBus {
         case .processor: return "处理器"
         case .remotePeer: return "配对设备"
         case .rime: return "RIMES"
+        case .localInput: return "本机输入"
         case .clipboard: return "剪贴板"
         }
     }

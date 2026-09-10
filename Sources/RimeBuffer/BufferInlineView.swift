@@ -796,6 +796,15 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private let chipRow = NSStackView()
     private let normalRailContainer = NSStackView()
     private let liveMetricsLabel = NSTextField(labelWithString: "")
+    /// Where another input method composes. An ordinary text field in a key
+    /// window is a normal text client, so whichever IME the user has active
+    /// composes into it with no interception on our side — which is the whole
+    /// reason this mode can exist at all.
+    private let composingField = NSTextField()
+    private var composingFieldEnabled = false
+    /// Fires when the user finishes a phrase in the field. The text becomes a
+    /// block through the same path a Rime commit takes.
+    var onComposingFieldCommit: ((String) -> Void)?
     /// The rail's bottom edge: normally the view's own, and the readout's top
     /// while the readout is showing. Swapping one constraint keeps every other
     /// edge exactly where it was.
@@ -920,6 +929,35 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             needsLayout = true
         }
         return heightChanged
+    }
+
+    /// Shows or hides the composing field. Focus is the caller's to move: the
+    /// panel has to be key first, and only the controller knows whether it is.
+    func setComposingFieldEnabled(_ enabled: Bool) {
+        guard composingFieldEnabled != enabled else { return }
+        composingFieldEnabled = enabled
+        composingField.isHidden = !enabled
+        if !enabled { composingField.stringValue = "" }
+    }
+
+    @discardableResult
+    func focusComposingField() -> Bool {
+        guard composingFieldEnabled, let window, window.isKeyWindow else {
+            return false
+        }
+        return window.makeFirstResponder(composingField)
+    }
+
+    var renderedComposingFieldVisible: Bool { !composingField.isHidden }
+    var renderedComposingText: String { composingField.stringValue }
+
+    @objc private func composingFieldCommitted() {
+        let text = composingField.stringValue
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        composingField.stringValue = ""
+        onComposingFieldCommit?(text)
     }
 
     var renderedLiveMetricsLine: String? {
@@ -1354,6 +1392,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         chipScroll.heightAnchor.constraint(equalToConstant: 24).isActive = true
 
         normalRailContainer.addArrangedSubview(chipScroll)
+        normalRailContainer.addArrangedSubview(composingField)
         normalRailContainer.orientation = .horizontal
         normalRailContainer.alignment = .centerY
         normalRailContainer.edgeInsets = NSEdgeInsets(
@@ -1373,6 +1412,19 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         liveMetricsLabel.translatesAutoresizingMaskIntoConstraints = false
         liveMetricsLabel.setContentCompressionResistancePriority(.defaultLow,
                                                                   for: .horizontal)
+
+        composingField.font = .systemFont(ofSize: 13)
+        composingField.placeholderString = "在此输入，回车加入缓冲"
+        composingField.isBordered = false
+        composingField.isBezeled = false
+        composingField.drawsBackground = false
+        composingField.focusRingType = .none
+        composingField.lineBreakMode = .byTruncatingTail
+        composingField.usesSingleLineMode = true
+        composingField.target = self
+        composingField.action = #selector(composingFieldCommitted)
+        composingField.isHidden = true
+        composingField.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(normalRailContainer)
         addSubview(liveMetricsLabel)
@@ -2210,7 +2262,9 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private func originBadge(for origin: Origin) -> NSView? {
         let color: NSColor
         switch origin {
-        case .rime: return nil
+        // Local typing is ordinary use however it was composed, so it stays
+        // unbadged; the dots mark text that came from somewhere else.
+        case .rime, .localInput: return nil
         case .clipboard: color = RimeUI.color(0x10B981)          // local pasteboard — green
         case .remotePeer: color = RimeUI.color(0x9B8CFF)        // paired Mac — violet
         case .marine, .plugin, .processor, .mcp:

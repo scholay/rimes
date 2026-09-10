@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// The mode split is only worth having if it stays at the boundary. These
@@ -71,6 +72,47 @@ func runBufferPresentationModeSmokeTest() -> Bool {
             "the mode must stay at the boundary; consulted in "
                 + offenders.sorted().joined(separator: ", ")
         )
+    }
+
+    // The composing field is the one visible difference, and it must not be
+    // reachable in the integrated mode where the host owns the preedit.
+    let view = BufferInlineView(frame: NSRect(x: 0, y: 0, width: 520, height: 32))
+    guard !view.renderedComposingFieldVisible else {
+        return presentationModeFail("the field must start hidden")
+    }
+    view.setComposingFieldEnabled(
+        BufferPresentationMode.integratedRime.showsComposingField
+    )
+    guard !view.renderedComposingFieldVisible else {
+        return presentationModeFail("integrated mode must show no field")
+    }
+    view.setComposingFieldEnabled(
+        BufferPresentationMode.standaloneField.showsComposingField
+    )
+    guard view.renderedComposingFieldVisible else {
+        return presentationModeFail("standalone mode must show the field")
+    }
+    // Focus is refused while the panel is not key: asking for it anyway would
+    // silently do nothing and look like a dead field.
+    guard view.focusComposingField() == false else {
+        return presentationModeFail("focus must require a key window")
+    }
+    // Leaving the mode clears anything half-typed rather than keeping it for
+    // a session the user has already left.
+    var committed: [String] = []
+    view.onComposingFieldCommit = { committed.append($0) }
+    view.setComposingFieldEnabled(false)
+    guard view.renderedComposingText.isEmpty, committed.isEmpty else {
+        return presentationModeFail("leaving the mode must clear the field")
+    }
+
+    // Locally typed text is still local typing: it mirrors to a paired Mac
+    // like a Rime commit, and stays unbadged because it is ordinary use.
+    let local = Origin.localInput(inputSourceID: "com.apple.inputmethod.SCIM")
+    guard local.allowsRemoteMirror,
+          local.tag == "local:com.apple.inputmethod.SCIM",
+          Origin.rime.allowsRemoteMirror else {
+        return presentationModeFail("local input provenance")
     }
 
     print("presentation mode smoke: OK")
