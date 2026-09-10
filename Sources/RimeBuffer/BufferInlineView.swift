@@ -937,26 +937,13 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         guard composingFieldEnabled != enabled else { return }
         composingFieldEnabled = enabled
         composingField.isHidden = !enabled
-        if !enabled { composingField.stringValue = "" }
-        placeComposingField()
-    }
-
-    /// Keeps the field parented to whichever rail is currently showing the
-    /// user's own text. Rendering a plugin layout re-runs this, because the
-    /// rail it belongs to changes with the mode.
-    private func placeComposingField() {
-        guard composingFieldEnabled else {
+        if !enabled {
+            composingField.stringValue = ""
             (composingField.superview as? NSStackView)?
                 .removeArrangedSubview(composingField)
             composingField.removeFromSuperview()
-            return
         }
-        let host = translationContainer.isHidden ? chipRow : translationSourceRow
-        guard composingField.superview !== host else { return }
-        (composingField.superview as? NSStackView)?
-            .removeArrangedSubview(composingField)
-        composingField.removeFromSuperview()
-        host.addArrangedSubview(composingField)
+        needsLayout = true
     }
 
     @discardableResult
@@ -1615,11 +1602,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
 
     override func layout() {
         super.layout()
-        // Rebuilding a rail clears its arranged subviews, which orphans the
-        // field. Re-placing here is idempotent — it no-ops once the field is
-        // already in the right rail — so the field survives every rebuild
-        // without the render paths having to remember it.
-        placeComposingField()
         updateHairlineWidth()
         updateEnterHoldProgressLayer()
         if !translationContainer.isHidden {

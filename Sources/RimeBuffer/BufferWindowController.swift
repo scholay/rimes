@@ -5540,6 +5540,24 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// Decided once, here, and never consulted below this line. Everything
     /// downstream — the model, the rail, the plugins — behaves identically in
     /// both modes, which is what keeps this one workbench rather than two.
+    /// Whether the workbench should present itself as accepting input. With
+    /// RIMES that means holding a capture lease; without it, it means the
+    /// panel holds the caret. Both are "the user is typing into the Buffer".
+    var acceptsUserInput: Bool {
+        switch presentationMode {
+        case .integratedRime:
+            return focusTokenForCapture.map {
+                BufferModel.shared.capturesInput(for: $0)
+            } ?? false
+        case .standaloneField:
+            return isVisible && !musicSelected
+        }
+    }
+
+    private var focusTokenForCapture: FocusToken? {
+        BufferModel.shared.captureFocusToken
+    }
+
     private func syncPresentationMode() {
         dispatchPrecondition(condition: .onQueue(.main))
         let next = BufferPresentationMode.resolve(
@@ -6297,6 +6315,19 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func activateLogicalInput(at insertionIndex: Int) {
+        // There is no IMK lease to capture when another input method owns the
+        // keyboard, and there never will be. Asking for one deferred the click
+        // forever; the equivalent gesture here is simply to take the caret.
+        if presentationMode == .standaloneField {
+            _ = BufferModel.shared.setInsertionPoint(insertionIndex)
+            if !panel.isKeyWindow {
+                NSApp.activate(ignoringOtherApps: true)
+                panel.makeKeyAndOrderFront(nil)
+            }
+            _ = bufferRail.focusComposingField()
+            refresh()
+            return
+        }
         let decision = BufferCaptureRequestRules.decision(
             hasTrustedLease: InputFocusCoordinator.shared.liveTarget(
                 forceOverlayVisibilityRefresh: true
