@@ -108,26 +108,27 @@ func runBufferPresentationModeSmokeTest() -> Bool {
 
     // Folding. Without focus a standalone workbench looks ready and takes
     // nothing; folding says so and makes the toolbar the way back in.
-    guard BufferRailFoldRules.foldsToToolbar(mode: .standaloneField,
-                                             panelHoldsFocus: false,
-                                             musicSelected: false) else {
-        return presentationModeFail("an unfocused standalone rail must fold")
+    func folds(acceptsInput: Bool,
+               music: Bool = false,
+               staged: Bool = false) -> Bool {
+        BufferRailFoldRules.foldsToToolbar(acceptsInput: acceptsInput,
+                                           musicSelected: music,
+                                           hasStagedContent: staged)
     }
-    guard !BufferRailFoldRules.foldsToToolbar(mode: .standaloneField,
-                                              panelHoldsFocus: true,
-                                              musicSelected: false) else {
-        return presentationModeFail("a focused rail must stay open")
+    // A workbench that cannot receive a keystroke says so, in either mode:
+    // the question "will this take my typing" has one answer and one look.
+    guard folds(acceptsInput: false) else {
+        return presentationModeFail("a rail that cannot take input must fold")
     }
-    // Under RIMES the host keeps focus by design. Folding there would hide
-    // staged blocks the user opened the workbench to read.
-    guard !BufferRailFoldRules.foldsToToolbar(mode: .integratedRime,
-                                              panelHoldsFocus: false,
-                                              musicSelected: false) else {
-        return presentationModeFail("the integrated rail must never fold")
+    guard !folds(acceptsInput: true) else {
+        return presentationModeFail("a rail that can take input must stay open")
     }
-    guard !BufferRailFoldRules.foldsToToolbar(mode: .standaloneField,
-                                              panelHoldsFocus: false,
-                                              musicSelected: true) else {
+    // Staged blocks are the reason to keep looking at an unfocused
+    // workbench, and a folded toolbar cannot show them.
+    guard !folds(acceptsInput: false, staged: true) else {
+        return presentationModeFail("staged blocks must survive losing focus")
+    }
+    guard !folds(acceptsInput: false, music: true) else {
         return presentationModeFail("the music surface must not fold")
     }
     guard BufferWindowGeometry.height(expanded: true, railFolded: true)

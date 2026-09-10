@@ -74,11 +74,19 @@ enum BufferComposingFocusRules {
 /// the host keeps focus by design and the rails must stay visible, or opening
 /// the workbench to read staged blocks would fold them away.
 enum BufferRailFoldRules {
-    static func foldsToToolbar(mode: BufferPresentationMode,
-                               panelHoldsFocus: Bool,
-                               musicSelected: Bool) -> Bool {
-        guard mode == .standaloneField, !musicSelected else { return false }
-        return !panelHoldsFocus
+    /// `acceptsInput` is what "focus is on the Buffer" means in each mode:
+    /// holding the capture lease under RIMES, holding the caret without it.
+    /// Both answer the same question — will a keystroke land here — and the
+    /// rails are folded whenever the answer is no.
+    static func foldsToToolbar(acceptsInput: Bool,
+                               musicSelected: Bool,
+                               hasStagedContent: Bool) -> Bool {
+        guard !musicSelected else { return false }
+        guard !acceptsInput else { return false }
+        // Staged blocks are the one thing worth keeping on screen without
+        // focus: they are why the workbench was opened to look at, and they
+        // cannot be recovered from a folded toolbar.
+        return !hasStagedContent
     }
 }
 

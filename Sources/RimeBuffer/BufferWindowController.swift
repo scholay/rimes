@@ -1169,6 +1169,14 @@ private final class BufferPanel: NSPanel {
 }
 
 private final class BufferWorkbenchToolbarView: NSStackView {
+    /// Fired for a press on empty toolbar space that did not become a drag.
+    /// The toolbar stays draggable; a click is simply a drag that went
+    /// nowhere, which is the only way to have both on one surface.
+    var onBackgroundClick: (() -> Void)?
+    /// Below this, a press is a click rather than a move. Large enough to
+    /// forgive a hand that shifts a pixel while pressing.
+    private static let dragThreshold: CGFloat = 3
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -1185,7 +1193,12 @@ private final class BufferWorkbenchToolbarView: NSStackView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let start = NSEvent.mouseLocation
+        // Returns when the gesture ends, whether or not anything moved.
         window?.performDrag(with: event)
+        let end = NSEvent.mouseLocation
+        let travelled = hypot(end.x - start.x, end.y - start.y)
+        if travelled < Self.dragThreshold { onBackgroundClick?() }
     }
 
     private func interactiveControl(containing hit: NSView) -> NSControl? {
@@ -2292,6 +2305,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         panel.composingKeyHandler = { [weak self] event in
             self?.handlePluginNavigationKey(event) ?? false
+        }
+        utilityShelf.onBackgroundClick = { [weak self] in
+            self?.foldedToolbarClicked()
         }
         buildWindow()
         restoreFrame()
@@ -5558,7 +5574,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                 BufferModel.shared.capturesInput(for: $0)
             } ?? false
         case .standaloneField:
-            return isVisible && !musicSelected
+            return panel.isKeyWindow && isVisible && !musicSelected
         }
     }
 
@@ -5599,9 +5615,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private func syncRailFold() {
         dispatchPrecondition(condition: .onQueue(.main))
         let folded = BufferRailFoldRules.foldsToToolbar(
-            mode: presentationMode,
-            panelHoldsFocus: panel.isKeyWindow,
-            musicSelected: musicSelected
+            acceptsInput: acceptsUserInput,
+            musicSelected: musicSelected,
+            hasStagedContent: !BufferDeliveryContentRouter.current()
+                .deliveryPendingBlocks.isEmpty
         )
         guard folded != railFoldedForFocus else { return }
         railFoldedForFocus = folded
@@ -5609,6 +5626,25 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         IMELog.write("buffer rails \(folded ? "folded to toolbar" : "restored")")
         syncLayoutMode(layoutMode)
         if !folded { claimComposingFocusIfNeeded() }
+    }
+
+    /// The toolbar is the way back in once the rails are folded. What that
+    /// takes differs by mode — the panel becomes key without RIMES, a capture
+    /// lease is requested with it — and the caller should not have to know
+    /// which.
+    @objc private func foldedToolbarClicked() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard railFoldedForFocus else { return }
+        switch presentationMode {
+        case .standaloneField:
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
+            claimComposingFocusIfNeeded()
+        case .integratedRime:
+            _ = activateCaptureForCurrentFocus(showWorkbench: false)
+        }
+        syncRailFold()
+        refresh()
     }
 
     private func claimComposingFocusIfNeeded() {
