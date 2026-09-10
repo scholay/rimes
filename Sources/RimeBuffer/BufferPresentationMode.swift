@@ -1,0 +1,63 @@
+import Foundation
+
+/// How the workbench receives keystrokes.
+///
+/// macOS delivers a keystroke to the active input method or to the key window,
+/// and to nothing else. RIMES is the active input method only when the user
+/// has selected it, so a workbench that never takes focus can only be typed
+/// into while RIMES is running the keyboard. That single OS rule — not a
+/// design choice — is why a second mode has to exist at all.
+///
+/// The modes differ at exactly two boundaries: where text comes from, and
+/// where it goes. Everything between them — the model, the blocks, the rail,
+/// the plugins, delivery scheduling — is one implementation. Keeping it that
+/// way is the point: two rails drawn from two code paths would drift the
+/// moment either is restyled, and the drift would be invisible until someone
+/// switched modes.
+enum BufferPresentationMode: String, Equatable, CaseIterable {
+    /// RIMES owns the keyboard. Keys arrive through IMK, the panel never takes
+    /// focus, and finished text is inserted straight into the host field.
+    case integratedRime
+    /// Another input method owns the keyboard. The panel takes focus and a
+    /// text field receives whatever that input method composes; finished text
+    /// reaches the host through the pasteboard instead.
+    case standaloneField
+
+    static func resolve(currentSourceIsOwn: Bool) -> Self {
+        currentSourceIsOwn ? .integratedRime : .standaloneField
+    }
+
+    /// The panel may take focus only in the mode that needs it. In borrowed
+    /// mode taking focus would end the host's own editing session, which is
+    /// the behaviour the integrated experience exists to avoid.
+    var panelAcceptsKeyInput: Bool { self == .standaloneField }
+
+    /// Whether finished text can be handed to the host through IMK. Only the
+    /// active input method holds a client to insert into.
+    var deliversThroughInputMethod: Bool { self == .integratedRime }
+
+    /// The composing field is shown only where there is no host preedit to
+    /// mirror — it is the one visible difference between the two modes.
+    var showsComposingField: Bool { self == .standaloneField }
+}
+
+/// Guards the boundary the modes are supposed to respect.
+///
+/// The failure this exists to prevent is gradual: a `if mode == .standalone`
+/// appearing inside block handling, then inside a plugin, until the two modes
+/// are two products sharing a window. The mode is resolved once when the
+/// panel opens and must not be readable below that line.
+enum BufferPresentationModeBoundary {
+    /// Files permitted to mention the mode at all. Everything else — the
+    /// model, the rail, the plugins, delivery — must behave identically in
+    /// both, because their behaviour is not what differs.
+    static let owningFiles: Set<String> = [
+        "BufferPresentationMode.swift",
+        "BufferPresentationModeSmoke.swift",
+        "BufferWindowController.swift",
+    ]
+
+    static func isPermitted(file: String) -> Bool {
+        owningFiles.contains(file)
+    }
+}

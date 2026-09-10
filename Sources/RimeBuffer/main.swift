@@ -826,6 +826,9 @@ if let i = CommandLine.arguments.firstIndex(of: "rimes-migrate-probe"),
     case .destinationOccupied, .failed: exit(1)
     }
 }
+if CommandLine.arguments.contains("presentation-mode-smoke") {
+    exit(runBufferPresentationModeSmokeTest() ? 0 : 1)
+}
 if CommandLine.arguments.contains("live-metrics-smoke") {
     exit(runBufferLiveTypingMetricsSmokeTest() ? 0 : 1)
 }
