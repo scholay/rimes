@@ -325,6 +325,8 @@ enum BufferWindowGeometry {
     static func clampedFrame(_ proposed: NSRect,
                              expanded: Bool = false,
                              mode: BufferWorkbenchLayoutMode = .standard,
+                             showsLiveMetrics: Bool = false,
+                             railFolded: Bool = false,
                              visibleFrames: [NSRect],
                              fallback: NSRect) -> NSRect {
         let screens = visibleFrames.isEmpty ? [fallback] : visibleFrames
@@ -339,7 +341,12 @@ enum BufferWindowGeometry {
         let maximumWidth = min(standardMaximumWidth, safeTarget.width)
         let width = min(max(proposed.width, minimumWidth), maximumWidth)
         let height = min(
-            height(expanded: expanded, mode: mode),
+            height(
+                expanded: expanded,
+                mode: mode,
+                showsLiveMetrics: showsLiveMetrics,
+                railFolded: railFolded
+            ),
             safeTarget.height
         )
         var x = proposed.width == width ? proposed.minX : proposed.midX - width / 2
@@ -2071,6 +2078,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var presentationMode = BufferPresentationMode.integratedRime
     private var railFoldedForFocus = false
     private var railFoldPending: Timer?
+    private var appliedRailFold = false
     /// Long enough to outlast the focus churn of another application coming
     /// forward briefly, short enough to feel like a response.
     private static let railFoldDelay: TimeInterval = 0.6
@@ -4121,15 +4129,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = BufferWorkbenchLayout.windowBackgroundDraggable
         panel.minSize = NSSize(width: BufferWindowGeometry.standardMinimumWidth,
-                               height: BufferWindowGeometry.height(
-                                   expanded: toolbarExpanded,
-                                   mode: layoutMode
-                               ))
+                               height: canonicalPanelHeight)
         panel.maxSize = NSSize(width: BufferWindowGeometry.standardMaximumWidth,
-                               height: BufferWindowGeometry.height(
-                                   expanded: toolbarExpanded,
-                                   mode: layoutMode
-                               ))
+                               height: canonicalPanelHeight)
         panel.delegate = self
         applyCollectionBehavior()
 
@@ -5217,10 +5219,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     private func resizeForCurrentPresentation() {
-        let desiredHeight = BufferWindowGeometry.height(
-            expanded: toolbarExpanded,
-            mode: layoutMode
-        )
+        let desiredHeight = canonicalPanelHeight
         var proposed = panel.frame
         if transientOpeningOrigin, openingSide != .bottomFallback {
             proposed = BufferWindowGeometry.resizedOutward(
@@ -5248,17 +5247,26 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         updateMainControlAlignment(for: nextMode)
         let showsMetrics = bufferRail.showsLiveMetrics
         let modeChanged = layoutMode != nextMode
-        if modeChanged || showsMetrics != appliedLiveMetricsHeight {
+        let foldChanged = railFoldedForFocus != appliedRailFold
+        if modeChanged || showsMetrics != appliedLiveMetricsHeight || foldChanged {
             layoutMode = nextMode
             appliedLiveMetricsHeight = showsMetrics
-            mainBarHeightConstraint?.constant = BufferWorkbenchMetrics.mainBarHeight(
-                for: nextMode,
-                showsLiveMetrics: showsMetrics
-            )
-            bufferRailHeightConstraint?.constant = BufferWorkbenchMetrics.railHeight(
-                for: nextMode,
-                showsLiveMetrics: showsMetrics
-            )
+            appliedRailFold = railFoldedForFocus
+            // Hiding the rail is not enough: its height constraint still
+            // demands the same space, and Auto Layout pushes the window back
+            // up to satisfy it — the rail disappears and its gap stays.
+            mainBarHeightConstraint?.constant = railFoldedForFocus
+                ? 0
+                : BufferWorkbenchMetrics.mainBarHeight(
+                    for: nextMode,
+                    showsLiveMetrics: showsMetrics
+                )
+            bufferRailHeightConstraint?.constant = railFoldedForFocus
+                ? 0
+                : BufferWorkbenchMetrics.railHeight(
+                    for: nextMode,
+                    showsLiveMetrics: showsMetrics
+                )
         }
         let desiredHeight = BufferWindowGeometry.height(
             expanded: toolbarExpanded,
@@ -5278,7 +5286,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             max(1, fallback.height - verticalMargin * 2)
         )
         let needsHeightRepair = abs(panel.frame.height - expectedHeight) >= 0.5
-        guard modeChanged || needsHeightRepair else { return }
+        guard modeChanged || foldChanged || needsHeightRepair else { return }
 
         // `layoutMode` can already be correct while AppKit still holds the
         // previous derived frame (for example after constraints settle on the
@@ -5663,8 +5671,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         guard folded != railFoldedForFocus else { return }
         railFoldedForFocus = folded
         mainBar.isHidden = folded
-        IMELog.write("buffer rails \(folded ? "folded to toolbar" : "restored")")
         syncLayoutMode(layoutMode)
+        IMELog.write("buffer rails \(folded ? "folded to toolbar" : "restored") "
+            + "height=\(panel.frame.height) want=\(canonicalPanelHeight) "
+            + "min=\(panel.minSize.height) max=\(panel.maxSize.height)")
         if !folded { claimComposingFocusIfNeeded() }
     }
 
@@ -6291,6 +6301,19 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         saveFrame()
     }
 
+    /// The height the panel should currently have. Every clamp in the resize
+    /// path has to agree on this: `clampedFrame` overwrites the proposed
+    /// height with it, and `syncMinimumSize` pins min == max to it, so a
+    /// folded height missing from either one is silently snapped back.
+    private var canonicalPanelHeight: CGFloat {
+        BufferWindowGeometry.height(
+            expanded: toolbarExpanded,
+            mode: layoutMode,
+            showsLiveMetrics: bufferRail.showsLiveMetrics,
+            railFolded: railFoldedForFocus
+        )
+    }
+
     private func applyClampedFrame(_ proposed: NSRect,
                                    visibleFrames: [NSRect],
                                    fallback: NSRect,
@@ -6299,6 +6322,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             proposed,
             expanded: toolbarExpanded,
             mode: layoutMode,
+            showsLiveMetrics: bufferRail.showsLiveMetrics,
+            railFolded: railFoldedForFocus,
             visibleFrames: visibleFrames,
             fallback: fallback
         )
@@ -6318,11 +6343,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func syncMinimumSize(to visibleFrame: NSRect) {
         let usableWidth = max(1, visibleFrame.width - BufferWindowGeometry.screenSafetyMargin * 2)
-        let targetHeight = min(BufferWindowGeometry.height(
-            expanded: toolbarExpanded,
-            mode: layoutMode
-        ),
-                               visibleFrame.height)
+        let targetHeight = min(canonicalPanelHeight, visibleFrame.height)
         panel.minSize = NSSize(
             width: min(BufferWindowGeometry.standardMinimumWidth, usableWidth),
             height: targetHeight

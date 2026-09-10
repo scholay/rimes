@@ -136,6 +136,42 @@ func runBufferPresentationModeSmokeTest() -> Bool {
         return presentationModeFail("a folded panel must be toolbar-height")
     }
 
+    // `height` being right proved nothing: the runtime resize goes through
+    // `clampedFrame`, which used to recompute the height from (expanded,
+    // mode) alone and throw the folded value away. That is why the rail
+    // vanished on screen and its space did not — assert the clamp itself.
+    let screen = NSRect(x: 0, y: 0, width: 1440, height: 900)
+    let tall = NSRect(x: 100, y: 400, width: 700,
+                      height: BufferWindowGeometry.height(expanded: true))
+    let foldedFrame = BufferWindowGeometry.clampedFrame(
+        tall,
+        expanded: true,
+        railFolded: true,
+        visibleFrames: [screen],
+        fallback: screen
+    )
+    guard foldedFrame.height == BufferWindowGeometry.toolbarOnlyHeight else {
+        return presentationModeFail(
+            "clampedFrame discarded the fold: \(foldedFrame.height)")
+    }
+    // Folding keeps the bottom edge, so the toolbar does not jump away from
+    // the caret it is anchored under.
+    guard abs(foldedFrame.minY - tall.minY) < 0.5 else {
+        return presentationModeFail(
+            "folding moved the bottom edge to \(foldedFrame.minY)")
+    }
+    let restoredFrame = BufferWindowGeometry.clampedFrame(
+        foldedFrame,
+        expanded: true,
+        railFolded: false,
+        visibleFrames: [screen],
+        fallback: screen
+    )
+    guard restoredFrame.height == BufferWindowGeometry.height(expanded: true) else {
+        return presentationModeFail(
+            "restoring left the panel at \(restoredFrame.height)")
+    }
+
     // The question that was not being asked. Opening the workbench when the
     // input method was already third-party involves no mode transition, and
     // focus used to be claimed only on one — so the panel came up
