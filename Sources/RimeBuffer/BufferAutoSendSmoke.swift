@@ -300,6 +300,31 @@ func runBufferAutoSendClockSmoke() -> Bool {
         print("FAILED: deferred auto-send survived explicit source pause")
         return false
     }
+    // A live client whose box cannot be named is not a target: nothing is
+    // offered for sending and the countdown never starts.
+    let boxSource = AutoSendProbeSource()
+    boxSource.deliveryPendingBlocks = [BufferModel.Block(text: "box")]
+    let unlocked = BufferDeliveryCoordinator(
+        model: BufferModel(),
+        dependencies: .init(
+            resolveTarget: { _ in
+                .init(token: token,
+                      compositionActive: false,
+                      resolveComposition: {},
+                      deliver: { _ in true })
+            },
+            secureInputEnabled: { false },
+            validatePlugin: { _, _, completion in completion(.allowed) },
+            refreshUI: {},
+            targetBoxPermitsDelivery: { _ in false }
+        ),
+        contentSourceResolver: { boxSource }
+    )
+    guard unlocked.availability() == .blocked(.targetBoxUnverified),
+          unlocked.automaticDeliverySnapshot() == nil else {
+        print("FAILED: an unidentified box must block sending and auto-send")
+        return false
+    }
     return runAutoSendLifetimeChoiceSmoke()
         && runIncrementalTranslationChipAppearanceSmoke()
 }
@@ -332,26 +357,6 @@ private func runAutoSendLifetimeChoiceSmoke() -> Bool {
     guard raised.tick(uptime: 21, canAge: true, lifetime: 5) == nil,
           raised.tick(uptime: 25, canAge: true, lifetime: 5) == block.id else {
         print("FAILED: raising the lifetime must extend the remaining wait")
-        return false
-    }
-
-    // The pull-down carries a mutually exclusive choice and an independent
-    // switch. A switch borrowing `isSelected` would blank the tick on the
-    // duration above it whenever the switch was on, so it ticks separately.
-    let choice = BufferPopUpMenuRow(itemIndex: 3, title: "2 秒后自动上屏",
-                                    isSeparator: false, isEnabled: true,
-                                    isSelected: true)
-    let toggleOn = BufferPopUpMenuRow(itemIndex: 6,
-                                      title: "最后一块上屏后关闭工作台",
-                                      isSeparator: false, isEnabled: true,
-                                      isSelected: false, isChecked: true)
-    let toggleOff = BufferPopUpMenuRow(itemIndex: 6,
-                                       title: "最后一块上屏后关闭工作台",
-                                       isSeparator: false, isEnabled: true,
-                                       isSelected: false, isChecked: false)
-    guard choice.showsTick, toggleOn.showsTick, !toggleOff.showsTick,
-          !choice.isChecked, !toggleOn.isSelected else {
-        print("FAILED: menu tick must distinguish a choice from a switch")
         return false
     }
 

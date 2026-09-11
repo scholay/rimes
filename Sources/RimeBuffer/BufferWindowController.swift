@@ -310,7 +310,7 @@ enum BufferWindowGeometry {
         case .standard, .singleDerived:
             baseHeight = (expanded ? expandedHeight : collapsedHeight)
                 + (showsLiveMetrics && mode == .standard
-                    ? BufferInlineView.standardMetricsRowHeight
+                    ? BufferWorkbenchMetrics.liveMetricsRowHeight
                     : 0)
         case .derived:
             // Alternatives page inside one target rail. Candidate count no
@@ -652,6 +652,10 @@ enum BufferTextPasteboardWriter {
 enum BufferTargetAssociationState: Equatable {
     case capturing
     case ready
+    /// Keys go to the Buffer, but no box is locked, so nothing will be sent.
+    case capturingWithoutBox
+    /// The application is known; which of its boxes is not.
+    case boxUnidentified
     case targetChanged
     case unavailable
     case detached
@@ -660,19 +664,27 @@ enum BufferTargetAssociationState: Equatable {
 
 /// Pure state resolution for the passive target-application icon in the
 /// toolbar. The visual never invents an association: capture is shown only
-/// when the model's exact token is also the coordinator's current live target.
+/// when the model's exact token is also the coordinator's current live target,
+/// and a target counts only once its input box is identified as well.
 enum BufferTargetAssociationRules {
     static func state(rimeOwnsInput: Bool,
                       contentProtected: Bool,
                       captureActive: Bool,
                       capturedTargetIsLive: Bool,
-                      hasLiveTarget: Bool) -> BufferTargetAssociationState {
+                      hasLiveTarget: Bool,
+                      targetBox: BufferTargetBoxState) -> BufferTargetAssociationState {
         if contentProtected { return .protected }
         if !rimeOwnsInput { return .detached }
         if captureActive {
-            return capturedTargetIsLive ? .capturing : .targetChanged
+            guard capturedTargetIsLive else { return .targetChanged }
+            switch targetBox {
+            case .locked: return .capturing
+            case .changed: return .targetChanged
+            case .unidentified: return .capturingWithoutBox
+            }
         }
-        return hasLiveTarget ? .ready : .unavailable
+        guard hasLiveTarget else { return .unavailable }
+        return targetBox == .locked ? .ready : .boxUnidentified
     }
 
     static func shouldClearCue(state: BufferTargetAssociationState,
@@ -681,7 +693,8 @@ enum BufferTargetAssociationRules {
         switch state {
         case .capturing, .ready:
             return hasPresentedCue && !cueMatchesLiveTarget
-        case .targetChanged, .unavailable, .detached, .protected:
+        case .capturingWithoutBox, .boxUnidentified, .targetChanged,
+             .unavailable, .detached, .protected:
             return true
         }
     }
@@ -777,6 +790,7 @@ enum BufferWorkbenchControl: String, Equatable {
     case pluginActions
     case exchangeEdit
     case autoSend
+    case autoSendCloseAfterLast
     case close
 }
 
@@ -883,16 +897,17 @@ enum BufferWorkbenchMetrics {
     static let shelfStatusWidth: CGFloat = 88
     static let translationVerticalInset: CGFloat = 5
     static let translationRailSpacing: CGFloat = 4
+    /// The live-metrics readout's own row, under the input box.
+    static let liveMetricsRowHeight: CGFloat = 16
+    /// Lines the readout up with the first block inside the box above it.
+    static var liveMetricsLeadingInset: CGFloat {
+        mainHorizontalInset + BufferInlineMetrics.railHorizontalInset + 4
+    }
 
-    static func railHeight(for mode: BufferWorkbenchLayoutMode,
-                           showsLiveMetrics: Bool = false) -> CGFloat {
+    static func railHeight(for mode: BufferWorkbenchLayoutMode) -> CGFloat {
         switch mode {
         case .standard, .singleDerived:
-            // Only the Default rail carries the metrics line; a derived
-            // workspace already owns both of its rows.
-            return BufferInlineView.standardPreferredHeight(
-                showsLiveMetrics: showsLiveMetrics && mode == .standard
-            )
+            return BufferInlineView.standardPreferredHeight
         case let .derived(targetRows):
             return BufferInlineView.translationPreferredHeight(targetRows: targetRows)
         case let .music(tracks):
@@ -900,13 +915,10 @@ enum BufferWorkbenchMetrics {
         }
     }
 
-    static func mainBarHeight(for mode: BufferWorkbenchLayoutMode,
-                              showsLiveMetrics: Bool = false) -> CGFloat {
+    static func mainBarHeight(for mode: BufferWorkbenchLayoutMode) -> CGFloat {
         if case let .music(tracks) = mode { return BufferMusicView.bodyHeight(tracks: tracks) }
         guard mode.targetRows == nil else { return railHeight(for: mode) + 6 }
-        return 38 + (showsLiveMetrics && mode == .standard
-            ? BufferInlineView.standardMetricsRowHeight
-            : 0)
+        return 38
     }
 
     /// Live-expand renders two equal rails inside a 5pt vertical inset with a
@@ -938,6 +950,7 @@ enum BufferWorkbenchShelfLayout {
                           statusIndicators: NSView,
                           exchangeEdit: NSView,
                           autoSend: NSView,
+                          autoSendCloseAfterLast: NSView,
                           targetAssociation: NSView,
                           close: NSView) {
         shelf.orientation = .horizontal
@@ -967,7 +980,8 @@ enum BufferWorkbenchShelfLayout {
                                                               for: .horizontal)
 
         [functionMenu, pluginActions, status, flexibleSpace, statusIndicators,
-         exchangeEdit, autoSend, targetAssociation, close].forEach {
+         exchangeEdit, autoSend, autoSendCloseAfterLast, targetAssociation,
+         close].forEach {
             shelf.addArrangedSubview($0)
         }
     }
@@ -981,7 +995,7 @@ enum BufferWorkbenchLayout {
     ]
     static let toolbar: [BufferWorkbenchControl] = [
         .functionMenu, .pluginActions, .status, .exchangeEdit,
-        .autoSend, .targetAssociation, .close,
+        .autoSend, .autoSendCloseAfterLast, .targetAssociation, .close,
     ]
     static let hoverControls: Set<BufferWorkbenchControl> = [
         .copyResult, .send, .clipboardImport, .functionMenu,
@@ -1007,6 +1021,7 @@ enum BufferWorkbenchStatusText {
             return "可发送"
         case let .blocked(reason):
             switch reason {
+            case .targetBoxUnverified: return "未锁定输入框"
             case .noFocusedField:
                 return canGenerateWithoutFocus
                     ? "可生成 · 发送前点选输入框"
@@ -1646,6 +1661,22 @@ private final class BufferTargetApplicationIndicatorView: NSView {
             fallbackTint = RimeUI.textSecondary
             dotColor = .systemGreen
             statusDot.isHidden = false
+        case .capturingWithoutBox, .boxUnidentified:
+            // The application is known and shown; the orange dot says its
+            // box is not, so nothing will be sent there.
+            if let appIcon,
+               let image = Self.materializedApplicationIcon(appIcon) {
+                imageView.image = image
+                renderedUsesRealApplicationIcon = true
+                renderedAppName = appName
+            } else {
+                imageView.image = RimeUI.symbol("app.dashed", pointSize: 13,
+                                                weight: .semibold)
+                imageView.image?.isTemplate = true
+            }
+            fallbackTint = RimeUI.textSecondary
+            dotColor = .systemOrange
+            statusDot.isHidden = false
         case .targetChanged:
             imageView.image = RimeUI.symbol("exclamationmark.triangle.fill",
                                             pointSize: 12, weight: .semibold)
@@ -2059,11 +2090,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private let sendButtonProgressIndicator = NSProgressIndicator()
     private let exchangeEditButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let autoSendButton = FirstMouseButton(title: "", target: nil, action: nil)
-    /// Never drawn. The custom menu anchors to a real `NSPopUpButton` frame,
-    /// and a hidden view still reports one, which keeps the menu under the
-    /// icon without giving the toolbar a second visible control.
-    private let autoSendOptionPopup = FirstMousePopUpButton(frame: .zero,
-                                                            pullsDown: false)
+    /// A second, independent setting rather than a row inside the cycle: it
+    /// answers a different question (what happens after delivery, not how
+    /// long a block waits first), so it gets its own always-visible switch
+    /// beside the cycle button instead of hiding inside a menu.
+    private let closeAfterLastDeliverySwitch = RimeFixedAccentSwitch(frame: .zero)
     private let closeButton = FirstMouseButton(title: "", target: nil, action: nil)
     private lazy var railActionCluster = BufferRailActionClusterView(
         controls: [clipboardImportButton, copyResultButton, sendButton]
@@ -2085,6 +2116,19 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private static let railFoldDelay: TimeInterval = 0.6
     private var liveMetricsPreviewLine: String?
     private var liveMetricsTimer: Timer?
+    /// The readout is its own row under the input box rather than a line
+    /// inside it, so the box keeps one shape whether or not it is showing.
+    private let liveMetricsRow = NSView()
+    private let liveMetricsLabel = NSTextField(labelWithString: "")
+    private var liveMetricsRowAvailable = false
+    private var renderedTargetBoxState: BufferTargetBoxState = .unidentified
+    private var renderedTargetBoxToken: FocusToken?
+    private var rebindTargetBox: BufferTargetBox?
+    private var targetBoxTimer: Timer?
+    /// A folded workbench is toolbar-only; the row folds away with the rail.
+    private var liveMetricsRowShown: Bool {
+        liveMetricsRowAvailable && !railFoldedForFocus
+    }
     private var autoSendTimer: Timer?
     private var autoSendClock = BufferAutoSendClock()
     private var sourceActionCenterYConstraint: NSLayoutConstraint?
@@ -2527,7 +2571,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                 bufferRail.isHidden = false
                 railActionCluster.isHidden = false
                 sourceActionCluster.isHidden = false
-                autoSendButton.isHidden = false
+                autoSendButton.isHidden = !autoSendAvailable
+                closeAfterLastDeliverySwitch.isHidden = !autoSendAvailable
                 targetApplicationIndicator.isHidden = false
                 exchangeEditSlot.isHidden = false
                 resetDerivedControlRendering()
@@ -2547,6 +2592,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         statusLabel.isHidden = true
         contextualStatusControl.isHidden = true
         autoSendButton.isHidden = true
+        closeAfterLastDeliverySwitch.isHidden = true
         targetApplicationIndicator.isHidden = true
         exchangeEditSlot.isHidden = true
         syncLayoutMode(.music(tracks: BufferMusicSession.shared.snapshot.loops.count))
@@ -2561,8 +2607,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         deactivateMusicSurface()
         liveMetricsTimer?.invalidate()
         liveMetricsTimer = nil
+        targetBoxTimer?.invalidate()
+        targetBoxTimer = nil
         BufferLiveTypingMetricsRecorder.shared.stop()
-        _ = bufferRail.setLiveMetricsLine(nil)
+        setLiveMetricsRowAvailable(false)
         autoSendClock.pause()
         bufferRail.setAutoSendFade([:])
         BufferPopUpMenuController.shared.dismiss()
@@ -2610,6 +2658,41 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             return false
         }
         return BufferGeneratedResultCopyRules.freeze(protected: false) != nil
+    }
+
+    /// With no box locked, sending is refused and the staged text leaves by
+    /// the clipboard instead — through the copy button or ⌘C.
+    var canCopyUnlockedStagedText: Bool {
+        guard Thread.isMainThread,
+              isVisible,
+              !hiddenForSession,
+              !sessionProtectionActive,
+              !IsSecureEventInputEnabled(),
+              stagedCopyReplacesSending else { return false }
+        return !BufferModel.shared.stagedText.isEmpty
+    }
+
+    /// Whether ⌘C belongs to the Buffer while it captures: a generated
+    /// result, or staged text that cannot be sent because no box is locked.
+    var canCopyWithCommandC: Bool {
+        canCopyGeneratedResult || canCopyUnlockedStagedText
+    }
+
+    /// ⌘C while capturing. A generated result keeps priority, as it does on
+    /// the copy button; otherwise the unlocked staged text is copied.
+    @discardableResult
+    func copyForCommandC(expectedToken: FocusToken) -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        if canCopyGeneratedResult {
+            return copyGeneratedResultAndClose(expectedToken: expectedToken)
+        }
+        guard canCopyUnlockedStagedText,
+              BufferModel.shared.capturesInput(for: expectedToken),
+              InputFocusCoordinator.shared.liveTarget(
+                expected: expectedToken,
+                forceOverlayVisibilityRefresh: true
+              ) != nil else { return false }
+        return copyStagedBufferAndClose()
     }
 
     @discardableResult
@@ -2693,6 +2776,33 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
               ) else { return false }
         IMELog.write(
             "buffer detached content copied chars=\(text.count) blocks="
+                + "\(BufferModel.shared.blocks.count)"
+        )
+        pauseAndHide(settleCapturedComposition: false)
+        return true
+    }
+
+    /// RIMES mode with no locked box: the Buffer will not send, so its staged
+    /// text leaves by the clipboard and the user pastes it. Like the detached
+    /// copy, it never writes to an IMK client.
+    @discardableResult
+    private func copyStagedBufferAndClose() -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        let text = BufferModel.shared.stagedText
+        guard !text.isEmpty,
+              isVisible,
+              !sessionProtectionActive,
+              !hiddenForSession,
+              !IsSecureEventInputEnabled(),
+              BufferTextPasteboardWriter.write(
+                text,
+                to: NSPasteboard.general
+              ) else {
+            NSSound.beep()
+            return false
+        }
+        IMELog.write(
+            "buffer unlocked content copied chars=\(text.count) blocks="
                 + "\(BufferModel.shared.blocks.count)"
         )
         pauseAndHide(settleCapturedComposition: false)
@@ -2842,9 +2952,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         defer { liveMetricsPreviewLine = nil }
         if railFoldedPreview { applyRailFold(true) }
         defer { if railFoldedPreview { applyRailFold(false) } }
-        if bufferRail.setLiveMetricsLine(liveMetricsPreview) {
-            syncLayoutMode(layoutMode)
-        }
+        setLiveMetricsRowAvailable(liveMetricsPreview?.isEmpty == false)
+        liveMetricsLabel.stringValue = liveMetricsPreview ?? ""
         let selectedWorkspace = DerivedBufferWorkspaceRouter.selectedWorkspace
         let previewStyle = translationSnapshot == nil
             ? BufferDerivedPresentationRules.style(
@@ -2872,7 +2981,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                               height: BufferWindowGeometry.height(
                                   expanded: toolbarExpanded,
                                   mode: previewMode,
-                                  showsLiveMetrics: bufferRail.showsLiveMetrics,
+                                  showsLiveMetrics: liveMetricsRowShown,
                                   railFolded: railFoldedForFocus
                               )),
                        display: false)
@@ -3725,6 +3834,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             BufferLiveTypingMetricsRecorder.shared.start()
         }
         syncLiveMetricsTimer()
+        syncTargetBoxTimer()
     }
 
     private func refreshTargetAssociation(rimeOwnsInput: Bool,
@@ -3735,16 +3845,21 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         let capturedTargetIsLive = capturedToken != nil
             && liveTarget?.token == capturedToken
             && model.capturesInput(for: liveTarget?.token)
+        let targetBox = liveTarget.map { BufferTargetBoxLock.shared.state(for: $0) }
+            ?? .unidentified
+        renderedTargetBoxState = targetBox
+        renderedTargetBoxToken = liveTarget?.token
         let state = BufferTargetAssociationRules.state(
             rimeOwnsInput: rimeOwnsInput,
             contentProtected: contentProtected,
             captureActive: model.active,
             capturedTargetIsLive: capturedTargetIsLive,
-            hasLiveTarget: liveTarget != nil
+            hasLiveTarget: liveTarget != nil,
+            targetBox: targetBox
         )
         let targetForIdentity: FocusLease?
         switch state {
-        case .capturing, .ready:
+        case .capturing, .ready, .capturingWithoutBox, .boxUnidentified:
             targetForIdentity = liveTarget
         case .targetChanged, .unavailable, .detached, .protected:
             targetForIdentity = nil
@@ -3767,13 +3882,22 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         renderedTargetAssociationState = state
         let fullTitle: String
         let help: String
+        let unlockedHelp = FocusedInputBoxProbe.isPermitted
+            ? "没能确认 \(appName ?? "当前应用") 中的具体输入框，Buffer 不会发送。可复制后自行粘贴，或点选输入框后再点 Buffer 锁定它。"
+            : "未授权辅助功能，无法确认具体输入框，Buffer 不会发送。可复制后自行粘贴；授权后点选输入框再点 Buffer 即可锁定。"
         switch state {
         case .capturing:
             fullTitle = "\(appName ?? "当前应用") · 输入到 Buffer"
-            help = "Buffer 正在接收按键；发送会返回到 \(appName ?? "当前应用") 的当前输入框。"
+            help = "Buffer 正在接收按键；发送会返回到 \(appName ?? "当前应用") 中锁定的输入框。"
         case .ready:
             fullTitle = "\(appName ?? "当前应用") · 发送目标"
-            help = "Buffer 可发送到 \(appName ?? "当前应用") 的当前输入框。"
+            help = "Buffer 可发送到 \(appName ?? "当前应用") 当前聚焦的输入框。"
+        case .capturingWithoutBox:
+            fullTitle = "\(appName ?? "当前应用") · 输入到 Buffer · 未锁定输入框"
+            help = unlockedHelp
+        case .boxUnidentified:
+            fullTitle = "\(appName ?? "当前应用") · 未锁定输入框"
+            help = unlockedHelp
         case .targetChanged:
             fullTitle = "焦点已变化"
             help = "原目标已失效；请点选输入框后重新关联。"
@@ -3858,6 +3982,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                 forceOverlayVisibilityRefresh: true
               ),
               target.isExternalTarget,
+              // The cue points at a box; with none locked there is nothing
+              // truthful to point at.
+              BufferTargetBoxLock.shared.state(for: target) == .locked,
               let controller = target.controller,
               let caretRect = controller.workbenchCaretRect(expected: target),
               !panel.frame.contains(
@@ -3983,23 +4110,34 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             : nil
     }
 
+    /// RIMES mode with a live application but no locked box: sending is
+    /// refused, so copy takes its place for staged text.
+    private var stagedCopyReplacesSending: Bool {
+        renderedTargetAssociationState == .capturingWithoutBox
+            || renderedTargetAssociationState == .boxUnidentified
+    }
+
     private func refreshGeneratedResultCopy(contentProtected: Bool,
                                             detachedClipboardMode: Bool) {
         // Preserve the secure-refresh rule: never ask a workspace for a
         // plaintext snapshot merely to decide whether an action is visible.
         let hasGeneratedResult = !contentProtected
             && BufferGeneratedResultCopyRules.freeze(protected: false) != nil
+        let copiesStagedText = detachedClipboardMode || stagedCopyReplacesSending
         let available = !contentProtected && (hasGeneratedResult
-            || (detachedClipboardMode && !BufferModel.shared.stagedText.isEmpty))
+            || (copiesStagedText && !BufferModel.shared.stagedText.isEmpty))
+        let stagedLabel = detachedClipboardMode || !hasGeneratedResult
         copyResultButton.isHidden = !available
         copyResultButton.isEnabled = available
         copyResultButton.toolTip = available
-            ? (detachedClipboardMode
-                ? "复制 Buffer 内容并关闭"
+            ? (stagedLabel
+                ? (detachedClipboardMode
+                    ? "复制 Buffer 内容并关闭"
+                    : "复制 Buffer 内容并关闭（⌘C）")
                 : "复制当前生成结果并关闭 Buffer（⌘C）")
             : nil
         copyResultButton.setAccessibilityLabel(
-            detachedClipboardMode
+            stagedLabel
                 ? "复制 Buffer 内容并关闭"
                 : "复制当前生成结果并关闭 Buffer"
         )
@@ -4219,10 +4357,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         configureIconButton(
             autoSendButton,
             "arrow.up.to.line.circle",
-            "自动上屏与上屏后关闭",
-            #selector(autoSendOptionsTapped)
+            "自动上屏",
+            #selector(autoSendCycleTapped)
         )
-        configureAutoSendOptionPopup()
+        configureAutoSendCloseAfterLastSwitch()
         configureIconButton(
             closeButton,
             "xmark",
@@ -4426,6 +4564,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             statusIndicators: contextualStatusControl,
             exchangeEdit: exchangeEditSlot,
             autoSend: autoSendButton,
+            autoSendCloseAfterLast: closeAfterLastDeliverySwitch,
             targetAssociation: targetApplicationIndicator,
             close: closeButton
         )
@@ -4493,7 +4632,32 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             sourceActionCenterY,
         ])
 
-        let root = NSStackView(views: [utilityShelf, shelfDivider, mainBar])
+        liveMetricsLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        liveMetricsLabel.textColor = RimeUI.textMuted
+        liveMetricsLabel.lineBreakMode = .byTruncatingTail
+        liveMetricsLabel.maximumNumberOfLines = 1
+        liveMetricsLabel.translatesAutoresizingMaskIntoConstraints = false
+        liveMetricsLabel.setContentCompressionResistancePriority(.defaultLow,
+                                                                  for: .horizontal)
+        liveMetricsRow.addSubview(liveMetricsLabel)
+        liveMetricsRow.isHidden = true
+        liveMetricsRow.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            liveMetricsRow.heightAnchor.constraint(
+                equalToConstant: BufferWorkbenchMetrics.liveMetricsRowHeight
+            ),
+            liveMetricsLabel.leadingAnchor.constraint(
+                equalTo: liveMetricsRow.leadingAnchor,
+                constant: BufferWorkbenchMetrics.liveMetricsLeadingInset
+            ),
+            liveMetricsLabel.trailingAnchor.constraint(
+                lessThanOrEqualTo: liveMetricsRow.trailingAnchor,
+                constant: -BufferWorkbenchMetrics.liveMetricsLeadingInset
+            ),
+            liveMetricsLabel.topAnchor.constraint(equalTo: liveMetricsRow.topAnchor),
+        ])
+
+        let root = NSStackView(views: [utilityShelf, shelfDivider, mainBar, liveMetricsRow])
         root.orientation = .vertical
         root.alignment = .width
         root.spacing = 0
@@ -4620,6 +4784,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         case .pluginActions: return pluginActionsControl
         case .exchangeEdit: return exchangeEditSlot
         case .autoSend: return autoSendButton
+        case .autoSendCloseAfterLast: return closeAfterLastDeliverySwitch
         case .close: return closeButton
         }
     }
@@ -4648,6 +4813,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             ? (RimeUI.isRasta ? RimeUI.brandGreen : RimeUI.accentBlue)
             : RimeUI.textSecondary
         targetApplicationIndicator.applyAppearance()
+        liveMetricsLabel.textColor = RimeUI.textMuted
         refreshAutoSendButton()
         railActionCluster.applyAppearance()
         translationSwapButton.contentTintColor = RimeUI.textSecondary
@@ -4706,7 +4872,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             autoSendButton.setPreviewPointerState(.hovered)
         case .close:
             closeButton.setPreviewPointerState(.hovered)
-        case .bufferRail, .status, .targetAssociation, .none:
+        // The switch is a different control family (`RimeFixedAccentSwitch`,
+        // not `FirstMouseButton`) with its own hover treatment, so it has no
+        // preview-pointer state to simulate here.
+        case .bufferRail, .status, .targetAssociation, .autoSendCloseAfterLast,
+             .none:
             break
         }
     }
@@ -5246,7 +5416,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
 
     private func syncLayoutMode(_ nextMode: BufferWorkbenchLayoutMode) {
         updateMainControlAlignment(for: nextMode)
-        let showsMetrics = bufferRail.showsLiveMetrics
+        // The geometry only counts the row in Default, so the row may only
+        // show there too, or the root stack would outgrow the panel.
+        let showsMetrics = liveMetricsRowShown && nextMode == .standard
+        liveMetricsRow.isHidden = !showsMetrics
         let modeChanged = layoutMode != nextMode
         let foldChanged = railFoldedForFocus != appliedRailFold
         if modeChanged || showsMetrics != appliedLiveMetricsHeight || foldChanged {
@@ -5258,16 +5431,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             // up to satisfy it — the rail disappears and its gap stays.
             mainBarHeightConstraint?.constant = railFoldedForFocus
                 ? 0
-                : BufferWorkbenchMetrics.mainBarHeight(
-                    for: nextMode,
-                    showsLiveMetrics: showsMetrics
-                )
+                : BufferWorkbenchMetrics.mainBarHeight(for: nextMode)
             bufferRailHeightConstraint?.constant = railFoldedForFocus
                 ? 0
-                : BufferWorkbenchMetrics.railHeight(
-                    for: nextMode,
-                    showsLiveMetrics: showsMetrics
-                )
+                : BufferWorkbenchMetrics.railHeight(for: nextMode)
         }
         let desiredHeight = BufferWindowGeometry.height(
             expanded: toolbarExpanded,
@@ -5394,164 +5561,79 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// One toolbar control carries both settings the user has over automatic
-    /// delivery: whether it happens at all, and how long a block gets first.
-    /// Splitting them into two icons would widen a toolbar that was
-    /// deliberately compressed.
-    @objc private func autoSendOptionsTapped() {
-        guard !musicSelected, autoSendButton.isEnabled else { return }
-        rebuildAutoSendMenuItems()
-        BufferPopUpMenuController.shared.toggle(for: autoSendOptionPopup)
-    }
-
-    @objc private func autoSendOptionSelected() {
-        let chosen = autoSendOptionPopup.selectedItem?.representedObject
-        if chosen as? String == Self.autoSendCloseAfterLastMarker {
-            closeAfterLastDeliveryEnabled.toggle()
-            // A switch is not a choice: restore the timing selection the
-            // pull-down still represents, or the next open would show the
-            // toggle row ticked as if it were the current duration.
-            rebuildAutoSendMenuItems()
-            refreshAutoSendButton()
-            return
-        }
-        guard let selection = chosen as? TimeInterval else { return }
-        if selection <= 0 {
-            autoSendEnabled = false
-        } else {
-            autoSendLifetime = selection
+    /// A menu hid every choice but the current one; a loop puts all of them
+    /// one click away, and the button's own label shows which step is active.
+    /// Off and every configured duration take one turn each, in order, and
+    /// wrap back to off.
+    @objc private func autoSendCycleTapped() {
+        guard autoSendAvailable, autoSendButton.isEnabled else { return }
+        if !autoSendEnabled {
+            autoSendLifetime = Self.autoSendLifetimeChoices[0]
             autoSendEnabled = true
+        } else if let index = Self.autoSendLifetimeChoices.firstIndex(of: autoSendLifetime),
+                  index + 1 < Self.autoSendLifetimeChoices.count {
+            autoSendLifetime = Self.autoSendLifetimeChoices[index + 1]
+        } else {
+            autoSendEnabled = false
         }
         refreshAutoSendButton()
     }
 
-    /// Pinned to the icon's own bounds so the menu opens under it, hidden so
-    /// it neither draws nor takes the click that opens it.
-    private func configureAutoSendOptionPopup() {
-        autoSendOptionPopup.isHidden = true
-        autoSendOptionPopup.target = self
-        autoSendOptionPopup.action = #selector(autoSendOptionSelected)
-        autoSendOptionPopup.translatesAutoresizingMaskIntoConstraints = false
-        autoSendButton.addSubview(autoSendOptionPopup)
-        NSLayoutConstraint.activate([
-            autoSendOptionPopup.leadingAnchor.constraint(
-                equalTo: autoSendButton.leadingAnchor
-            ),
-            autoSendOptionPopup.trailingAnchor.constraint(
-                equalTo: autoSendButton.trailingAnchor
-            ),
-            autoSendOptionPopup.topAnchor.constraint(
-                equalTo: autoSendButton.topAnchor
-            ),
-            autoSendOptionPopup.bottomAnchor.constraint(
-                equalTo: autoSendButton.bottomAnchor
-            ),
-        ])
-        rebuildAutoSendMenuItems()
+    @objc private func closeAfterLastDeliverySwitchToggled() {
+        closeAfterLastDeliveryEnabled = closeAfterLastDeliverySwitch.state == .on
+        refreshAutoSendButton()
     }
 
-    /// Two settings share this pull-down because they answer the same
-    /// question — what happens to a block without the user acting. The timing
-    /// rows are a mutually exclusive choice; the closing row is an
-    /// independent switch, so it carries its own tick.
-    private static let autoSendCloseAfterLastMarker = "close-after-last"
-
-    private func rebuildAutoSendMenuItems() {
-        let menu = NSMenu()
-        // Every option is always listed. Hiding the timing rows outside
-        // Default left a menu with a single line in it, which reads as a
-        // broken control rather than as a mode restriction — and the choice
-        // is a stored preference that still applies the moment Default
-        // returns, so there is nothing dishonest about setting it here.
-        let off = NSMenuItem(title: "关闭自动上屏", action: nil, keyEquivalent: "")
-        off.representedObject = TimeInterval(0)
-        menu.addItem(off)
-        menu.addItem(.separator())
-        for choice in Self.autoSendLifetimeChoices {
-            let item = NSMenuItem(title: "\(Int(choice)) 秒后自动上屏",
-                                  action: nil,
-                                  keyEquivalent: "")
-            item.representedObject = choice
-            menu.addItem(item)
-        }
-        menu.addItem(.separator())
-        if !autoSendAvailable {
-            // Says why the rows above are inert here instead of leaving the
-            // user to discover it by watching nothing happen.
-            let note = NSMenuItem(title: "自动上屏仅在 Default 模式生效",
-                                  action: nil,
-                                  keyEquivalent: "")
-            note.isEnabled = false
-            menu.addItem(note)
-            menu.addItem(.separator())
-        }
-        // Applies to Default and every buffer plugin, so it stays reachable
-        // even where the countdown itself does not run.
-        let close = NSMenuItem(title: "最后一块上屏后关闭工作台",
-                               action: nil,
-                               keyEquivalent: "")
-        close.representedObject = Self.autoSendCloseAfterLastMarker
-        close.state = closeAfterLastDeliveryEnabled ? .on : .off
-        menu.addItem(close)
-        autoSendOptionPopup.menu = menu
-
-        let lifetime = autoSendLifetime
-        let selected = autoSendEnabled
-            ? (Self.autoSendLifetimeChoices.firstIndex(of: lifetime).map { $0 + 2 } ?? 2)
-            : 0
-        autoSendOptionPopup.selectItem(at: selected)
+    /// A second, independent question from the cycle button — what happens
+    /// after delivery, not how long a block waits first — so it gets its own
+    /// switch beside it instead of a row inside the cycle.
+    private func configureAutoSendCloseAfterLastSwitch() {
+        closeAfterLastDeliverySwitch.isCompact = true
+        closeAfterLastDeliverySwitch.target = self
+        closeAfterLastDeliverySwitch.action = #selector(closeAfterLastDeliverySwitchToggled)
+        closeAfterLastDeliverySwitch.setAccessibilityLabel("最后一块上屏后关闭工作台")
     }
 
-    /// Off and on have to be legible at a glance, so they differ in glyph,
-    /// tint, and a filled pill — a tint change alone reads as noise next to
-    /// the app icon.
+    /// The loop's current step is the button's own label — N, then each
+    /// duration — so what the next click does is visible without a menu.
+    /// A running countdown also gets the filled primary surface.
     private func refreshAutoSendButton() {
         let on = autoSendAvailable && autoSendEnabled
-        let accent = RimeUI.isRasta ? RimeUI.brandGreen : RimeUI.accentBlue
-        autoSendButton.image = RimeUI.symbol(
-            on ? "arrow.up.to.line.circle.fill" : "arrow.up.to.line.circle",
-            pointSize: on ? 13 : 12,
-            weight: .semibold
+        let seconds = Int(autoSendLifetime)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        autoSendButton.image = nil
+        autoSendButton.imagePosition = .noImage
+        autoSendButton.attributedTitle = NSAttributedString(
+            string: autoSendEnabled ? "\(seconds)" : "N",
+            attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold),
+                .foregroundColor: on ? RimeUI.accentForegroundColor : RimeUI.textSecondary,
+                .paragraphStyle: paragraph,
+            ]
         )
-        autoSendButton.image?.isTemplate = true
-        autoSendButton.wantsLayer = true
-        autoSendButton.layer?.cornerRadius = 5
-        autoSendButton.layer?.backgroundColor = on
-            ? accent.withAlphaComponent(0.22).cgColor
-            : NSColor.clear.cgColor
-        autoSendButton.layer?.borderWidth = on
-            ? 1 / max(panel.backingScaleFactor, 1)
-            : 0
-        autoSendButton.layer?.borderColor = on
-            ? accent.withAlphaComponent(0.6).cgColor
-            : NSColor.clear.cgColor
-        autoSendButton.contentTintColor = on ? accent : RimeUI.textMuted
-        let closesAfterLast = closeAfterLastDeliveryEnabled
-        let timing: String
-        if !autoSendAvailable {
-            timing = "自动上屏仅在 Default 模式可用"
-        } else if on {
-            timing = "自动上屏：块会在 \(Int(autoSendLifetime)) 秒后自行上屏"
-        } else {
-            timing = "自动上屏：已关闭"
-        }
-        autoSendButton.toolTip = timing + "；"
-            + (closesAfterLast ? "最后一块上屏后关闭工作台" : "上屏后保持工作台打开")
-            + "。点击可修改"
+        autoSendButton.usesPrimarySurface = on
+        let loop = (["N"] + Self.autoSendLifetimeChoices.map { "\(Int($0))" } + ["N"])
+            .joined(separator: " → ")
+        let state = autoSendEnabled
+            ? "自动上屏：块会在 \(seconds) 秒后自行上屏"
+            : "自动上屏：关闭"
+        autoSendButton.toolTip = "\(state)。点击切换 \(loop)"
         autoSendButton.setAccessibilityLabel(
-            (autoSendAvailable && on
-                ? "自动上屏：\(Int(autoSendLifetime)) 秒"
-                : "自动上屏：已关闭")
-                + (closesAfterLast ? "，最后一块上屏后关闭" : "")
+            autoSendEnabled ? "自动上屏：\(seconds) 秒" : "自动上屏：关闭"
         )
-        // Only the Default buffer runs a countdown, so the control disappears
-        // rather than sitting inert under the other plugins.
-        autoSendButton.isHidden = musicSelected
-        if musicSelected,
-           BufferPopUpMenuController.shared.isPresenting(for: autoSendOptionPopup) {
-            BufferPopUpMenuController.shared.dismiss()
-        }
+        // Both controls belong to the Default buffer. Under a plugin the
+        // countdown never runs, so they leave the toolbar rather than sit
+        // there inert. Close-after-last still applies to plugins; it is set
+        // from Default or from Settings.
+        autoSendButton.isHidden = !autoSendAvailable
         autoSendButton.refreshInteractionAppearance()
+
+        closeAfterLastDeliverySwitch.state = closeAfterLastDeliveryEnabled ? .on : .off
+        closeAfterLastDeliverySwitch.isHidden = !autoSendAvailable
+        closeAfterLastDeliverySwitch.toolTip = closeAfterLastDeliveryEnabled
+            ? "最后一块上屏后关闭工作台：开启"
+            : "最后一块上屏后关闭工作台：关闭"
     }
 
     /// The second line belongs to the Default buffer only. Every plugin owns
@@ -5567,6 +5649,39 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// Ticks while the workbench is visible so a burst's figures keep moving
     /// between keystrokes, and so an idle burst rolls over rather than
     /// freezing on its last value.
+    /// Keeps box samples coming while the workbench is visible: focus can move
+    /// between the boxes of one client with no IMK event at all (Tab inside a
+    /// web page), and a send needs a sample from the last second. The timer
+    /// only asks for a sample; the query itself runs off the main thread.
+    /// Created once and left running — recreating it on every refresh would
+    /// keep a stream of keystrokes from ever letting it fire.
+    private func syncTargetBoxTimer() {
+        guard isVisible else {
+            targetBoxTimer?.invalidate()
+            targetBoxTimer = nil
+            return
+        }
+        guard targetBoxTimer == nil else { return }
+        let timer = Timer(timeInterval: BufferTargetBoxLock.sampleInterval,
+                          repeats: true) { [weak self] _ in
+            self?.recheckTargetBox()
+        }
+        targetBoxTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// Re-reads the box state of the target the toolbar last rendered and
+    /// refreshes only when it changed. Reading never blocks; an old sample
+    /// just prompts a new one.
+    private func recheckTargetBox() {
+        guard isVisible,
+              let token = renderedTargetBoxToken,
+              let lease = InputFocusCoordinator.shared.lease(for: token),
+              BufferTargetBoxLock.shared.state(for: lease) != renderedTargetBoxState
+        else { return }
+        refresh()
+    }
+
     private func syncLiveMetricsTimer() {
         liveMetricsTimer?.invalidate()
         liveMetricsTimer = nil
@@ -5786,24 +5901,26 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         // the override stands in for one rather than being cleared by the
         // ordinary refresh that follows it.
         if let liveMetricsPreviewLine {
-            if bufferRail.setLiveMetricsLine(liveMetricsPreviewLine) {
-                syncLayoutMode(layoutMode)
-            }
+            setLiveMetricsRowAvailable(true)
+            liveMetricsLabel.stringValue = liveMetricsPreviewLine
             return
         }
-        guard liveMetricsAvailable, isVisible, !sessionProtectionActive,
-              !hiddenForSession, !IsSecureEventInputEnabled() else {
-            if bufferRail.setLiveMetricsLine(nil) { syncLayoutMode(layoutMode) }
-            return
-        }
-        let line = BufferLiveTypingMetricsFormatter.line(
+        let available = liveMetricsAvailable && isVisible && !sessionProtectionActive
+            && !hiddenForSession && !IsSecureEventInputEnabled()
+        setLiveMetricsRowAvailable(available)
+        guard available else { return }
+        liveMetricsLabel.stringValue = BufferLiveTypingMetricsFormatter.line(
             for: BufferLiveTypingMetricsRecorder.shared.metrics
-        )
-        if bufferRail.setLiveMetricsLine(line) {
-            // Showing or hiding the row changes the panel height, so it takes
-            // the same path a layout-mode change does.
-            syncLayoutMode(layoutMode)
-        }
+        ) ?? BufferLiveTypingMetricsFormatter.idleLine
+    }
+
+    /// Presence is a mode property, not a content property: the row stays for
+    /// as long as Default can show it, so the figures updating never resize
+    /// the panel. Only a real change of availability goes through layout.
+    private func setLiveMetricsRowAvailable(_ available: Bool) {
+        guard liveMetricsRowAvailable != available else { return }
+        liveMetricsRowAvailable = available
+        syncLayoutMode(layoutMode)
     }
 
     private func syncAutoSendTimer() {
@@ -5898,10 +6015,19 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         // Buffer rail is handled locally and explicitly grants capture.
         externalPointerMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
-        ) { [weak self] _ in
+        ) { [weak self] event in
+            let hostProcessIdentifier = BufferPointerHostRules
+                .ownerProcessIdentifier(of: event)
             DispatchQueue.main.async {
-                self?.externalPointerDidRequestHostInput()
+                self?.externalPointerDidRequestHostInput(
+                    hostProcessIdentifier: hostProcessIdentifier
+                )
             }
+        }
+        // Box samples land off the key-handling path; reflect one on the
+        // toolbar only when it changes the state.
+        BufferTargetBoxLock.shared.onSample = { [weak self] in
+            self?.recheckTargetBox()
         }
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
@@ -6331,7 +6457,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         BufferWindowGeometry.height(
             expanded: toolbarExpanded,
             mode: layoutMode,
-            showsLiveMetrics: bufferRail.showsLiveMetrics,
+            showsLiveMetrics: liveMetricsRowShown,
             railFolded: railFoldedForFocus
         )
     }
@@ -6344,7 +6470,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             proposed,
             expanded: toolbarExpanded,
             mode: layoutMode,
-            showsLiveMetrics: bufferRail.showsLiveMetrics,
+            showsLiveMetrics: liveMetricsRowShown,
             railFolded: railFoldedForFocus,
             visibleFrames: visibleFrames,
             fallback: fallback
@@ -6472,7 +6598,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// Switch the logical input surface without making this nonactivating
     /// panel key. The exact host lease remains the sole later delivery target.
     @discardableResult
-    func activateCaptureForCurrentFocus(showWorkbench: Bool = true) -> Bool {
+    func activateCaptureForCurrentFocus(
+        showWorkbench: Bool = true,
+        box binding: BufferCaptureBoxBinding = .current
+    ) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
         guard RimeInputSourceAuthority.currentSourceIsOwn(),
               !sessionProtectionActive,
@@ -6506,12 +6635,17 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             processIdentifier: lease.processIdentifier
         )
         BufferModel.shared.activateCapture(for: lease.token)
+        // The token names a client and app; the lock also names the box. The
+        // cue points at that box, so it waits for the lock's sample instead of
+        // querying Accessibility on the key-handling thread.
+        BufferTargetBoxLock.shared.bind(to: lease, binding) { [weak self] in
+            _ = self?.presentTargetAssociationCue(
+                expected: lease.token,
+                requiresCapture: true
+            )
+        }
         if showWorkbench { show() }
         refresh()
-        _ = presentTargetAssociationCue(
-            expected: lease.token,
-            requiresCapture: true
-        )
         RIMESController.refreshActiveUI()
         return true
     }
@@ -6599,6 +6733,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         // should fold for it as it does today.
         guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier
                 == bundleID else { return }
+        // The re-armed route may only re-lock the box it had.
+        rebindTargetBox = BufferTargetBoxLock.shared.box
         armPendingCapture(at: BufferModel.shared.blocks.count,
                           expectedBundleID: bundleID)
         // Nothing else is guaranteed to run when the request simply expires,
@@ -6636,15 +6772,32 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         guard let target = InputFocusCoordinator.shared.liveTarget(
             forceOverlayVisibilityRefresh: false
         ) else { return }
-        guard pending.accepts(bundleID: target.bundleID) else { return }
+        guard pending.accepts(bundleID: target.bundleID),
+              pending.mayBind(toProcess: target.processIdentifier) else { return }
         pendingCaptureRequest = nil
-        guard activateCaptureForCurrentFocus(showWorkbench: false) else { return }
+        let binding: BufferCaptureBoxBinding = pending.expectedBundleID == nil
+            ? .current
+            : .sameAs(rebindTargetBox)
+        rebindTargetBox = nil
+        guard activateCaptureForCurrentFocus(showWorkbench: false,
+                                             box: binding) else { return }
         _ = BufferModel.shared.setInsertionPoint(pending.insertionIndex)
         IMELog.write("buffer capture completed from a deferred click")
     }
 
-    private func externalPointerDidRequestHostInput() {
+    private func externalPointerDidRequestHostInput(hostProcessIdentifier: pid_t?) {
         dispatchPrecondition(condition: .onQueue(.main))
+        if pendingCaptureRequest != nil,
+           pendingCaptureRequest?.expectedBundleID == nil,
+           let hostProcessIdentifier {
+            // The click that chooses a box for a deferred Buffer click. Focus
+            // moves inside the host a moment later, so bind once it settles
+            // and the lock names the clicked box, not the one before it.
+            pendingCaptureRequest?.hostPointerProcessIdentifier = hostProcessIdentifier
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.refresh()
+            }
+        }
         if musicPresentationActive {
             deactivateMusicSurface()
             return
@@ -6831,10 +6984,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     @objc private func copyResultTapped() {
-        if RimeInputSourceAuthority.currentSourceIsOwn() {
-            _ = copyGeneratedResultAndClose()
-        } else {
+        if !RimeInputSourceAuthority.currentSourceIsOwn() {
             _ = copyDetachedBufferAndClose()
+        } else if !canCopyGeneratedResult, stagedCopyReplacesSending {
+            _ = copyStagedBufferAndClose()
+        } else {
+            _ = copyGeneratedResultAndClose()
         }
     }
 

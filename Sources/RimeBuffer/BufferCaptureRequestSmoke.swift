@@ -65,6 +65,28 @@ func runBufferCaptureRequestSmokeTest() -> Bool {
         return captureFail("pending capture lifetime")
     }
 
+    // An application switch activates *a* field in the new app — usually the
+    // one focused last. A plain deferred click waits until the user clicks
+    // into that application; a re-arm restores a route and is held to its
+    // application by bundle instead.
+    var plain = BufferPendingCaptureRequest(insertionIndex: 0,
+                                            requestedAt: requestedAt)
+    guard !plain.mayBind(toProcess: 42) else {
+        return captureFail("an application switch alone must not complete a deferred click")
+    }
+    plain.hostPointerProcessIdentifier = 7
+    guard !plain.mayBind(toProcess: 42), plain.mayBind(toProcess: 7) else {
+        return captureFail("a deferred click binds only to the application clicked into")
+    }
+    let rearm = BufferPendingCaptureRequest(insertionIndex: 0,
+                                            requestedAt: requestedAt,
+                                            expectedBundleID: "com.example.host")
+    guard rearm.mayBind(toProcess: 42),
+          rearm.accepts(bundleID: "com.example.host"),
+          !rearm.accepts(bundleID: "com.example.other") else {
+        return captureFail("a re-arm is held to its application by bundle")
+    }
+
     // Focus activation versus a capture the user just asked for. The
     // controller's own token is updated after the coordinator publishes the
     // lease, so a rail click lands between the two; the activation that

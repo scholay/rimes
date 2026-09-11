@@ -1364,9 +1364,11 @@ final class RIMESController: IMKInputController {
         return bufferControlDisposition(client: client)
     }
 
-    private var generatedResultCopyAvailable: Bool {
+    /// ⌘C belongs to the Buffer when it has something to copy out: a
+    /// generated result, or staged text whose box is not locked.
+    private var bufferCommandCopyAvailable: Bool {
         !IsSecureEventInputEnabled()
-            && BufferWindowController.shared.canCopyGeneratedResult
+            && BufferWindowController.shared.canCopyWithCommandC
     }
 
     private func bufferPluginShortcutDisposition(client: IMKTextInput?)
@@ -3087,7 +3089,7 @@ final class RIMESController: IMKInputController {
                     keycode: keysym(for: event),
                     mask: RimeKey.modifierMask(from: event.modifierFlags)
                 ), (shortcut != .copyGeneratedResult
-                    || generatedResultCopyAvailable),
+                    || bufferCommandCopyAvailable),
                    bufferClipboardDisposition(client: client) != .passThrough {
                     if shortcut == .copyGeneratedResult {
                         if event.type == .keyDown {
@@ -3310,7 +3312,7 @@ final class RIMESController: IMKInputController {
             keycode: keycode,
             mask: RimeKey.modifierMask(from: event.modifierFlags)
         ), (shortcut != .copyGeneratedResult
-            || generatedResultCopyAvailable),
+            || bufferCommandCopyAvailable),
            bufferClipboardDisposition(client: client) != .passThrough {
             return true
         }
@@ -3538,7 +3540,7 @@ final class RIMESController: IMKInputController {
                 bufferClipboardShortcutKeysDown.remove(event.keyCode)
             }
             if shortcut == .copyGeneratedResult,
-               !generatedResultCopyAvailable {
+               !bufferCommandCopyAvailable {
                 // A normal source rail has no generated target to copy. Leave
                 // the exact Command+C entirely to the host without settling or
                 // otherwise mutating Buffer composition.
@@ -4361,7 +4363,7 @@ final class RIMESController: IMKInputController {
             physicalShortcut: physicalClipboardShortcut
         ) {
             if shortcut == .copyGeneratedResult,
-               !generatedResultCopyAvailable {
+               !bufferCommandCopyAvailable {
                 return false
             }
             let clipboardClient = callbackClient
@@ -5405,7 +5407,7 @@ final class RIMESController: IMKInputController {
         }
 
         if shortcut == .copyGeneratedResult {
-            return BufferWindowController.shared.copyGeneratedResultAndClose(
+            return BufferWindowController.shared.copyForCommandC(
                 expectedToken: lease.token
             )
         }

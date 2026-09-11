@@ -82,6 +82,10 @@ struct BufferLiveTypingMetrics: Equatable {
 /// extrapolated from a fraction of a second, would be worse than a shorter
 /// line.
 enum BufferLiveTypingMetricsFormatter {
+    /// Shown before the first figure can be stated, so the permanent row reads
+    /// as waiting rather than as empty space.
+    static let idleLine = "— 字/分  ·  码长 —  ·  击键 —/秒"
+
     static func line(for metrics: BufferLiveTypingMetrics) -> String? {
         var parts: [String] = []
         if let cpm = metrics.charactersPerMinute {

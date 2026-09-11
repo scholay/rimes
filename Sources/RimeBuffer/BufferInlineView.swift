@@ -753,14 +753,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     var onCaptureRequested: ((Int) -> Void)?
 
     static let standardPreferredHeight: CGFloat = 32
-    /// The live-metrics line. Deliberately short: it is a readout, not a
-    /// second rail, and the workbench was compressed on purpose.
-    static let standardMetricsRowHeight: CGFloat = 14
-
-    static func standardPreferredHeight(showsLiveMetrics: Bool) -> CGFloat {
-        standardPreferredHeight
-            + (showsLiveMetrics ? standardMetricsRowHeight : 0)
-    }
     static let translationPreferredHeight: CGFloat = 64
     static let additionalTranslationTargetRowHeight: CGFloat = 32
 
@@ -795,7 +787,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private let chipScroll = NSScrollView()
     private let chipRow = NSStackView()
     private let normalRailContainer = NSStackView()
-    private let liveMetricsLabel = NSTextField(labelWithString: "")
     /// Where another input method composes. An ordinary text field in a key
     /// window is a normal text client, so whichever IME the user has active
     /// composes into it with no interception on our side — which is the whole
@@ -805,11 +796,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     /// Fires when the user finishes a phrase in the field. The text becomes a
     /// block through the same path a Rime commit takes.
     var onComposingFieldCommit: ((String) -> Void)?
-    /// The rail's bottom edge: normally the view's own, and the readout's top
-    /// while the readout is showing. Swapping one constraint keeps every other
-    /// edge exactly where it was.
-    private var railBottomToSelf: NSLayoutConstraint?
-    private var railBottomToMetrics: NSLayoutConstraint?
     private let translationContainer = NSStackView()
     private let translationSourceScroll = NSScrollView()
     private let translationSourceRow = NSStackView()
@@ -911,26 +897,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         )
     }
 
-    private(set) var showsLiveMetrics = false
-
-    /// The second line in Default mode. Passing nil hides it entirely rather
-    /// than leaving an empty row, so an idle workbench is the same height it
-    /// has always been.
-    @discardableResult
-    func setLiveMetricsLine(_ text: String?) -> Bool {
-        let next = text?.isEmpty == false
-        let heightChanged = next != showsLiveMetrics
-        showsLiveMetrics = next
-        liveMetricsLabel.stringValue = text ?? ""
-        liveMetricsLabel.isHidden = !next
-        if heightChanged {
-            railBottomToSelf?.isActive = !next
-            railBottomToMetrics?.isActive = next
-            needsLayout = true
-        }
-        return heightChanged
-    }
-
     /// Shows or hides the composing field. Focus is the caller's to move: the
     /// panel has to be key first, and only the controller knows whether it is.
     func setComposingFieldEnabled(_ enabled: Bool) {
@@ -990,10 +956,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         }
         composingField.stringValue = ""
         onComposingFieldCommit?(text)
-    }
-
-    var renderedLiveMetricsLine: String? {
-        liveMetricsLabel.isHidden ? nil : liveMetricsLabel.stringValue
     }
 
     var isEnterHoldProgressVisible: Bool { enterHoldProgress != nil }
@@ -1434,16 +1396,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         )
         normalRailContainer.translatesAutoresizingMaskIntoConstraints = false
 
-        liveMetricsLabel.font = .monospacedDigitSystemFont(ofSize: 10,
-                                                           weight: .regular)
-        liveMetricsLabel.textColor = RimeUI.textMuted
-        liveMetricsLabel.lineBreakMode = .byTruncatingTail
-        liveMetricsLabel.maximumNumberOfLines = 1
-        liveMetricsLabel.isHidden = true
-        liveMetricsLabel.translatesAutoresizingMaskIntoConstraints = false
-        liveMetricsLabel.setContentCompressionResistancePriority(.defaultLow,
-                                                                  for: .horizontal)
-
         composingField.font = .systemFont(ofSize: 13)
         composingField.placeholderString = "在此输入，回车加入缓冲"
         composingField.isBordered = false
@@ -1457,14 +1409,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         composingField.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(normalRailContainer)
-        addSubview(liveMetricsLabel)
-        railBottomToSelf = normalRailContainer.bottomAnchor.constraint(
-            equalTo: bottomAnchor
-        )
-        railBottomToMetrics = normalRailContainer.bottomAnchor.constraint(
-            equalTo: liveMetricsLabel.topAnchor
-        )
-        railBottomToSelf?.isActive = true
 
         configureHorizontalRail(translationSourceScroll, row: translationSourceRow)
         let initialTargetRail = makeTranslationTargetRail(key: 0)
@@ -1483,18 +1427,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             normalRailContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
             normalRailContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
             normalRailContainer.topAnchor.constraint(equalTo: topAnchor),
-            liveMetricsLabel.leadingAnchor.constraint(
-                equalTo: leadingAnchor,
-                constant: BufferInlineMetrics.railHorizontalInset + 4
-            ),
-            liveMetricsLabel.trailingAnchor.constraint(
-                lessThanOrEqualTo: trailingAnchor,
-                constant: -BufferInlineMetrics.railHorizontalInset
-            ),
-            liveMetricsLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
-            liveMetricsLabel.heightAnchor.constraint(
-                equalToConstant: Self.standardMetricsRowHeight
-            ),
+            normalRailContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
             translationContainer.leadingAnchor.constraint(
                 equalTo: leadingAnchor,
                 constant: BufferInlineMetrics.railHorizontalInset

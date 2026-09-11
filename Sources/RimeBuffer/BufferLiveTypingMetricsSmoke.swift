@@ -109,48 +109,33 @@ func runBufferLiveTypingMetricsSmokeTest() -> Bool {
         return liveMetricsFail("backspace key identity")
     }
 
-    // The line is a readout, not a rail: it adds its own height in Default
-    // mode and nothing anywhere else, so a plugin's two rows are untouched.
-    let plain = BufferInlineView.standardPreferredHeight(showsLiveMetrics: false)
-    let withRow = BufferInlineView.standardPreferredHeight(showsLiveMetrics: true)
-    guard plain == BufferInlineView.standardPreferredHeight,
-          withRow == plain + BufferInlineView.standardMetricsRowHeight,
-          BufferWorkbenchMetrics.railHeight(for: .standard,
-                                            showsLiveMetrics: true) == withRow,
-          BufferWorkbenchMetrics.railHeight(for: .standard,
-                                            showsLiveMetrics: false) == plain,
-          BufferWorkbenchMetrics.railHeight(for: .derived(targetRows: 2),
-                                            showsLiveMetrics: true)
-            == BufferWorkbenchMetrics.railHeight(for: .derived(targetRows: 2)),
-          BufferWorkbenchMetrics.railHeight(for: .singleDerived,
-                                            showsLiveMetrics: true)
-            == BufferWorkbenchMetrics.railHeight(for: .singleDerived) else {
-        return liveMetricsFail("only the Default rail may grow")
-    }
-    guard BufferWindowGeometry.height(expanded: false, mode: .standard,
+    // The row sits under the input box, not inside it: the box keeps one
+    // height, and only the panel grows by the row — in Default mode only,
+    // and never while the rail is folded away.
+    guard BufferWorkbenchMetrics.railHeight(for: .standard)
+            == BufferInlineView.standardPreferredHeight,
+          BufferWindowGeometry.height(expanded: false, mode: .standard,
                                       showsLiveMetrics: true)
             == BufferWindowGeometry.height(expanded: false, mode: .standard)
-                + BufferInlineView.standardMetricsRowHeight,
+                + BufferWorkbenchMetrics.liveMetricsRowHeight,
+          BufferWindowGeometry.height(expanded: true, mode: .standard,
+                                      showsLiveMetrics: true)
+            == BufferWindowGeometry.height(expanded: true, mode: .standard)
+                + BufferWorkbenchMetrics.liveMetricsRowHeight,
           BufferWindowGeometry.height(expanded: false,
                                       mode: .derived(targetRows: 1),
                                       showsLiveMetrics: true)
             == BufferWindowGeometry.height(expanded: false,
-                                           mode: .derived(targetRows: 1)) else {
-        return liveMetricsFail("panel height must follow the row")
+                                           mode: .derived(targetRows: 1)),
+          BufferWindowGeometry.height(expanded: true, mode: .standard,
+                                      showsLiveMetrics: true, railFolded: true)
+            == BufferWindowGeometry.toolbarOnlyHeight else {
+        return liveMetricsFail("only the panel grows, only in Default, never when folded")
     }
-
-    // Hiding the row must report the height change, or the panel keeps the
-    // space after the figures are gone.
-    let view = BufferInlineView(frame: NSRect(x: 0, y: 0, width: 520, height: 46))
-    guard view.setLiveMetricsLine("30 字/分"),
-          view.showsLiveMetrics,
-          view.renderedLiveMetricsLine == "30 字/分",
-          !view.setLiveMetricsLine("40 字/分"),
-          view.renderedLiveMetricsLine == "40 字/分",
-          view.setLiveMetricsLine(nil),
-          !view.showsLiveMetrics,
-          view.renderedLiveMetricsLine == nil else {
-        return liveMetricsFail("metrics row visibility reporting")
+    guard BufferLiveTypingMetricsFormatter.idleLine.contains("字/分"),
+          BufferLiveTypingMetricsFormatter.idleLine.contains("码长"),
+          BufferLiveTypingMetricsFormatter.idleLine.contains("击键") else {
+        return liveMetricsFail("the idle row must name the figures it will show")
     }
 
     print("buffer live typing metrics smoke: OK")

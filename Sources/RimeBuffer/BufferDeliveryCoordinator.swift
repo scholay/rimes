@@ -144,9 +144,13 @@ final class BufferDeliveryCoordinator {
         case pluginUnavailable
         case pluginResultIncomplete
         case contentChanged
+        /// The target application is known but its box is not: nothing is
+        /// sent, and the Buffer offers copy instead.
+        case targetBoxUnverified
 
         var message: String {
             switch self {
+            case .targetBoxUnverified: return "未确认目标输入框，不会发送；可复制后自行粘贴"
             case .noFocusedField: return "请先点选要接收文字的外部文本框"
             case .composing: return "正在组字，结束组字后才能发送"
             case .secureInput: return "安全输入已开启，发送被保护性禁用"
@@ -264,6 +268,10 @@ final class BufferDeliveryCoordinator {
         let refreshUI: () -> Void
         let workbenchSessionEpoch: () -> UInt64
         let terminalDrainDelivered: (TerminalDrainContext) -> Void
+        /// Whether the box behind this token is identified — and, while
+        /// capturing, still the box capture was granted for. It answers the
+        /// UI; the live `deliver` re-checks it exactly before every block.
+        let targetBoxPermitsDelivery: (FocusToken) -> Bool
 
         init(resolveTarget: @escaping (FocusToken?) -> DeliveryTarget?,
              secureInputEnabled: @escaping () -> Bool,
@@ -276,13 +284,15 @@ final class BufferDeliveryCoordinator {
              workbenchSessionEpoch: @escaping () -> UInt64 = { 0 },
              terminalDrainDelivered: @escaping (
                 TerminalDrainContext
-             ) -> Void = { _ in }) {
+             ) -> Void = { _ in },
+             targetBoxPermitsDelivery: @escaping (FocusToken) -> Bool = { _ in true }) {
             self.resolveTarget = resolveTarget
             self.secureInputEnabled = secureInputEnabled
             self.validatePlugin = validatePlugin
             self.refreshUI = refreshUI
             self.workbenchSessionEpoch = workbenchSessionEpoch
             self.terminalDrainDelivered = terminalDrainDelivered
+            self.targetBoxPermitsDelivery = targetBoxPermitsDelivery
         }
 
         static var live: Dependencies {
@@ -307,10 +317,14 @@ final class BufferDeliveryCoordinator {
                             controller.resolveCompositionForBufferDelivery(target: lease)
                         },
                         deliver: { block in
+                            // One client can front many boxes: send only into
+                            // the box the lock names, re-read right now.
                             guard RimeInputSourceAuthority.currentSourceIsOwn(),
                                   let current = InputFocusCoordinator.shared.liveTarget(
                                 expected: lease.token
-                            ), current === lease else { return false }
+                            ), current === lease,
+                                  BufferTargetBoxLock.shared.permitsDelivery(to: current)
+                            else { return false }
                             return controller.deliverBufferedBlock(block.text,
                                                                   origin: block.origin,
                                                                   target: current)
@@ -332,6 +346,11 @@ final class BufferDeliveryCoordinator {
                 terminalDrainDelivered: { context in
                     BufferWindowController.shared
                         .closeAfterTerminalDrain(context)
+                },
+                targetBoxPermitsDelivery: { token in
+                    InputFocusCoordinator.shared.lease(for: token).map {
+                        BufferTargetBoxLock.shared.state(for: $0) == .locked
+                    } ?? false
                 }
             )
         }
@@ -387,13 +406,17 @@ final class BufferDeliveryCoordinator {
         if pending.contains(where: { invalidPluginMetadata(in: $0) || $0.pluginMetadata?.stale == true }) {
             return .blocked(.stalePluginResult)
         }
+        guard dependencies.targetBoxPermitsDelivery(target.token) else {
+            return .blocked(.targetBoxUnverified)
+        }
         return .ready
     }
 
     func automaticDeliverySnapshot() -> AutomaticDeliverySnapshot? {
         guard activeOperationID == nil,
               !dependencies.secureInputEnabled(),
-              let target = dependencies.resolveTarget(nil) else { return nil }
+              let target = dependencies.resolveTarget(nil),
+              dependencies.targetBoxPermitsDelivery(target.token) else { return nil }
         let source = contentSourceResolver()
         guard source.automaticDeliverySessionActive,
               !source.blocksDeliveryForIncompleteResult else { return nil }

@@ -1036,33 +1036,12 @@ if let i = CommandLine.arguments.firstIndex(of: "popup-menu-render"),
                            isSeparator: false, isEnabled: false,
                            isSelected: false),
     ]
-    // `menu-preview <path> autosend` renders the auto-send pull-down instead,
-    // where a duration choice and an independent switch share one tick column.
-    let autoSendRows = [
-        BufferPopUpMenuRow(itemIndex: 0, title: "关闭自动上屏",
-                           isSeparator: false, isEnabled: true,
-                           isSelected: false),
-        .separator(itemIndex: 1),
-        BufferPopUpMenuRow(itemIndex: 2, title: "1 秒后自动上屏",
-                           isSeparator: false, isEnabled: true,
-                           isSelected: false),
-        BufferPopUpMenuRow(itemIndex: 3, title: "2 秒后自动上屏",
-                           isSeparator: false, isEnabled: true,
-                           isSelected: true),
-        BufferPopUpMenuRow(itemIndex: 4, title: "3 秒后自动上屏",
-                           isSeparator: false, isEnabled: true,
-                           isSelected: false),
-        BufferPopUpMenuRow(itemIndex: 5, title: "5 秒后自动上屏",
-                           isSeparator: false, isEnabled: true,
-                           isSelected: false),
-        .separator(itemIndex: 6),
-        BufferPopUpMenuRow(itemIndex: 7, title: "最后一块上屏后关闭工作台",
-                           isSeparator: false, isEnabled: true,
-                           isSelected: false, isChecked: true),
-    ]
+    // Auto-send no longer has a pull-down to preview here: the cycle button
+    // and its adjacent switch render through the ordinary `panel-render`
+    // workbench preview instead.
     let ok = renderBufferPopUpMenuPreview(
         to: CommandLine.arguments[i + 1],
-        rows: CommandLine.arguments.contains("autosend") ? autoSendRows : rows
+        rows: rows
     )
     print(ok ? "rendered pull-down menu preview" : "FAILED: menu preview")
     exit(ok ? 0 : 1)
@@ -6415,9 +6394,10 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
     let exchangeEdit = NSView()
     let targetAssociation = NSView()
     let autoSend = NSView()
+    let autoSendCloseAfterLast = NSView()
     let close = NSView()
     for control in [functionMenu, exchangeEdit, autoSend,
-                    targetAssociation, close] {
+                    autoSendCloseAfterLast, targetAssociation, close] {
         control.translatesAutoresizingMaskIntoConstraints = false
         control.widthAnchor.constraint(equalToConstant: 22).isActive = true
         control.heightAnchor.constraint(equalToConstant: 22).isActive = true
@@ -6431,6 +6411,7 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
         statusIndicators: statusIndicators,
         exchangeEdit: exchangeEdit,
         autoSend: autoSend,
+        autoSendCloseAfterLast: autoSendCloseAfterLast,
         targetAssociation: targetAssociation,
         close: close
     )
@@ -6557,43 +6538,107 @@ func runBufferWindowSmokeTest() -> Bool {
             contentProtected: false,
             captureActive: true,
             capturedTargetIsLive: true,
-            hasLiveTarget: true
+            hasLiveTarget: true,
+            targetBox: .locked
           ) == .capturing,
           BufferTargetAssociationRules.state(
             rimeOwnsInput: true,
             contentProtected: false,
             captureActive: true,
             capturedTargetIsLive: false,
-            hasLiveTarget: true
+            hasLiveTarget: true,
+            targetBox: .locked
           ) == .targetChanged,
           BufferTargetAssociationRules.state(
             rimeOwnsInput: true,
             contentProtected: false,
             captureActive: false,
             capturedTargetIsLive: false,
-            hasLiveTarget: true
+            hasLiveTarget: true,
+            targetBox: .locked
           ) == .ready,
           BufferTargetAssociationRules.state(
             rimeOwnsInput: true,
             contentProtected: false,
             captureActive: false,
             capturedTargetIsLive: false,
-            hasLiveTarget: false
+            hasLiveTarget: false,
+            targetBox: .unidentified
           ) == .unavailable,
           BufferTargetAssociationRules.state(
             rimeOwnsInput: false,
             contentProtected: false,
             captureActive: true,
             capturedTargetIsLive: true,
-            hasLiveTarget: true
+            hasLiveTarget: true,
+            targetBox: .locked
           ) == .detached,
           BufferTargetAssociationRules.state(
             rimeOwnsInput: false,
             contentProtected: true,
             captureActive: true,
             capturedTargetIsLive: true,
-            hasLiveTarget: true
+            hasLiveTarget: true,
+            targetBox: .locked
           ) == .protected,
+          // Lock = application + box. A live application whose box cannot be
+          // named is never presented as a send target, and a capture whose
+          // box has lost focus reads as a focus change.
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: true,
+            contentProtected: false,
+            captureActive: true,
+            capturedTargetIsLive: true,
+            hasLiveTarget: true,
+            targetBox: .unidentified
+          ) == .capturingWithoutBox,
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: true,
+            contentProtected: false,
+            captureActive: true,
+            capturedTargetIsLive: true,
+            hasLiveTarget: true,
+            targetBox: .changed
+          ) == .targetChanged,
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: true,
+            contentProtected: false,
+            captureActive: false,
+            capturedTargetIsLive: false,
+            hasLiveTarget: true,
+            targetBox: .unidentified
+          ) == .boxUnidentified,
+          BufferTargetAssociationRules.shouldClearCue(
+            state: .capturingWithoutBox,
+            hasPresentedCue: true,
+            cueMatchesLiveTarget: true
+          ),
+          BufferTargetAssociationRules.shouldClearCue(
+            state: .boxUnidentified,
+            hasPresentedCue: true,
+            cueMatchesLiveTarget: true
+          ),
+          // Capturing: only the box capture was granted for counts. Not
+          // capturing: any identified box, and no box means no target.
+          BufferTargetBoxRules.state(capturing: true, lockedBox: 1,
+                                     currentBox: 1) == .locked,
+          BufferTargetBoxRules.state(capturing: true, lockedBox: 1,
+                                     currentBox: 2) == .changed,
+          BufferTargetBoxRules.state(capturing: true, lockedBox: 1,
+                                     currentBox: nil as Int?) == .changed,
+          BufferTargetBoxRules.state(capturing: true, lockedBox: nil as Int?,
+                                     currentBox: 1) == .unidentified,
+          BufferTargetBoxRules.state(capturing: false, lockedBox: nil as Int?,
+                                     currentBox: 1) == .locked,
+          BufferTargetBoxRules.state(capturing: false, lockedBox: 1,
+                                     currentBox: nil as Int?) == .unidentified,
+          // A send needs a locked box vouched for by a recent sample; a stale
+          // or missing sample refuses rather than assuming nothing moved.
+          BufferTargetBoxRules.deliveryAllowed(state: .locked, sampleAge: 0.2),
+          !BufferTargetBoxRules.deliveryAllowed(state: .locked, sampleAge: 5),
+          !BufferTargetBoxRules.deliveryAllowed(state: .locked, sampleAge: nil),
+          !BufferTargetBoxRules.deliveryAllowed(state: .locked, sampleAge: -1),
+          !BufferTargetBoxRules.deliveryAllowed(state: .unidentified, sampleAge: 0.1),
           !BufferTargetAssociationRules.shouldClearCue(
             state: .capturing,
             hasPresentedCue: true,
@@ -7404,7 +7449,7 @@ func runBufferWindowSmokeTest() -> Bool {
             == [.clipboardImport, .copyResult, .send],
           BufferWorkbenchLayout.toolbar
             == [.functionMenu, .pluginActions, .status, .exchangeEdit,
-                .autoSend, .targetAssociation, .close],
+                .autoSend, .autoSendCloseAfterLast, .targetAssociation, .close],
           BufferWorkbenchLayout.hoverControls
             == [.copyResult, .send, .clipboardImport, .functionMenu,
                 .pluginActions, .exchangeEdit, .autoSend, .close],

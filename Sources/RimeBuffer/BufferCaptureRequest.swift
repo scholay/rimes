@@ -52,12 +52,15 @@ struct BufferPendingCaptureRequest: Equatable {
     let requestedAt: Date
     /// Which application this request is allowed to bind to, when it was
     /// armed to survive one specific host losing its input session. A plain
-    /// deferred click leaves it nil and binds to whatever field arrives —
-    /// that is the point of it, the user clicked the Buffer before the new
-    /// field was ready. A re-arm is different: it exists to restore a route
+    /// deferred click leaves it nil and binds to the application the user
+    /// then clicks into. A re-arm is different: it exists to restore a route
     /// that already existed, so binding it to a *different* application would
     /// silently capture typing the user never pointed at the Buffer.
     var expectedBundleID: String?
+    /// The process whose window the user clicked after the request was armed.
+    /// Switching applications activates *a* field there — usually the one
+    /// focused last — and that is not a box the user chose.
+    var hostPointerProcessIdentifier: pid_t?
 
     func isLive(at moment: Date,
                 lifetime: TimeInterval = lifetime) -> Bool {
@@ -68,5 +71,13 @@ struct BufferPendingCaptureRequest: Equatable {
     func accepts(bundleID: String?) -> Bool {
         guard let expectedBundleID else { return true }
         return expectedBundleID == bundleID
+    }
+
+    /// A plain deferred click binds only after the user has clicked into that
+    /// application; an application switch alone never completes it. A re-arm
+    /// is held to its application by `accepts(bundleID:)` instead.
+    func mayBind(toProcess processIdentifier: pid_t) -> Bool {
+        guard expectedBundleID == nil else { return true }
+        return hostPointerProcessIdentifier == processIdentifier
     }
 }
