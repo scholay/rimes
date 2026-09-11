@@ -70,7 +70,6 @@ final class FlyChordLearningSettingsViewController: NSViewController {
         default: message = "并击学习数据暂不可用"
         }
         return FlyChordPageStyle.column([
-            FlyChordPageStyle.title("并击"),
             FlyChordPageStyle.caption(message, color: .systemRed),
             FlyChordPageStyle.caption("为保护已有进度，损坏的数据文件不会被自动覆盖。"),
         ])
@@ -85,13 +84,6 @@ private enum FlyChordPageStyle {
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 0, left: 24, bottom: 22, right: 24)
         return stack
-    }
-
-    static func title(_ value: String) -> NSTextField {
-        let label = NSTextField(labelWithString: value)
-        label.font = .systemFont(ofSize: 12, weight: .semibold)
-        label.textColor = RimeUI.textSecondary
-        return label
     }
 
     static func section(_ value: String) -> NSTextField {
@@ -250,13 +242,10 @@ final class FlyChordConfigurationPageView: NSView, NSTextFieldDelegate {
         implementationLabel.font = .systemFont(ofSize: 11, weight: .semibold)
         implementationLabel.textColor = RimeUI.textPrimary
         implementationLabel.setAccessibilityIdentifier("chord-settings.implementation")
-        let behavior = FlyChordPageStyle.caption(
+        implementationLabel.toolTip =
             "同一批按键可一起结算，也支持先左后右分开敲。至少一侧为多键时，优先按合并后的整组键位映射为音节。"
-        )
-        behavior.setAccessibilityIdentifier("chord-settings.behavior")
-        let guards = FlyChordPageStyle.caption(
-            "单独字母保留原字符，两次单键不会跨批合并。“按映射类型”方案的合并项须为完整音节。停顿本身不会取消左右配对；分隔符、编辑、焦点或方案变化会结束配对。"
-        )
+            + "单独字母保留原字符，两次单键不会跨批合并。“按映射类型”方案的合并项须为完整音节。"
+            + "停顿本身不会取消左右配对；分隔符、编辑、焦点或方案变化会结束配对。"
 
         let formatter = NumberFormatter()
         formatter.minimumFractionDigits = 2
@@ -296,23 +285,13 @@ final class FlyChordConfigurationPageView: NSView, NSTextFieldDelegate {
         durationRow.alignment = .centerY
         durationRow.spacing = 8
 
-        let introduction = FlyChordPageStyle.caption(
-            "在“键位方案”页复制、新建或导入方案。启用扩展不会自动替换当前普通输入方案。"
-        )
-        introduction.preferredMaxLayoutWidth = 650
-        introduction.widthAnchor.constraint(lessThanOrEqualToConstant: 650).isActive = true
+        let sectionDuration = FlyChordPageStyle.section("组键间隔")
+        sectionDuration.toolTip =
+            "此间隔决定哪些按键属于同一批，不是左右配对的超时。修改后立即作用于普通输入与意识流输入。"
         let column = FlyChordPageStyle.column([
-            FlyChordPageStyle.title("并击设置"),
-            introduction,
             configurationCard([availabilityRow]),
-            configurationCard([implementationLabel, behavior, guards]),
-            configurationCard([
-                FlyChordPageStyle.section("组键间隔"),
-                durationRow,
-                FlyChordPageStyle.caption(
-                    "此间隔决定哪些按键属于同一批，不是左右配对的超时。修改后立即作用于普通输入与意识流输入。"
-                ),
-            ]),
+            configurationCard([implementationLabel]),
+            configurationCard([sectionDuration, durationRow]),
         ])
         addPinned(column)
     }
@@ -400,12 +379,7 @@ private final class FlyChordLessonsPageView: NSView {
     init(curriculum: FlyChordCurriculum, progressStore: FlyChordProgressStore) {
         super.init(frame: .zero)
         let snapshot = progressStore.snapshot
-        var rows: [NSView] = [
-            FlyChordPageStyle.title("课程"),
-            FlyChordPageStyle.caption(
-                "课程从当前键位方案的精确映射自动生成，进度按方案分别保存。"
-            ),
-        ]
+        var rows: [NSView] = []
         for course in curriculum.courses {
             let progress = snapshot.progress(for: course)
             let name = NSTextField(labelWithString: course.title)
@@ -421,9 +395,6 @@ private final class FlyChordLessonsPageView: NSView {
             )
             rows.append(FlyChordPageStyle.card([header, detail]))
         }
-        rows.append(FlyChordPageStyle.caption(
-            "练习进度只保存映射的匿名 ID、正确次数和时间戳，不保存按键文本或输入内容。"
-        ))
         let column = FlyChordPageStyle.column(rows)
         addPinned(column)
     }
@@ -460,7 +431,6 @@ private final class FlyChordProgressPageView: NSView {
         let total = all.reduce(0) { $0 + $1.totalItems }
         let attempted = all.reduce(0) { $0 + $1.attemptedItems }
         let mastered = all.reduce(0) { $0 + $1.masteredItems }
-        rows.addArrangedSubview(FlyChordPageStyle.title("学习进度"))
         rows.addArrangedSubview(FlyChordPageStyle.caption(
             "全部 \(total) 项 · 已练 \(attempted) · 已掌握 \(mastered)"
         ))
@@ -568,18 +538,17 @@ private final class FlyChordPracticePageView: NSView {
             self?.captureButton.title = active ? "停止练习" : "开始练习"
         }
 
+        controls.toolTip = "选择课程后点击“开始练习”。只有下方练习区域获得焦点时才会捕获按键；离开页面即停止。"
         let targetCard = FlyChordPageStyle.card([
             targetLabel,
             chordHint,
             captureView,
             statusLabel,
         ])
+        targetCard.toolTip = "目标显示为方案输出音节。按错后才显示正确键位，连续正确 3 次会标记为已掌握。"
         let column = FlyChordPageStyle.column([
-            FlyChordPageStyle.title("专项练习"),
-            FlyChordPageStyle.caption("选择课程后点击“开始练习”。只有下方练习区域获得焦点时才会捕获按键；离开页面即停止。"),
             controls,
             targetCard,
-            FlyChordPageStyle.caption("目标显示为方案输出音节。按错后才显示正确键位，连续正确 3 次会标记为已掌握。"),
         ])
         addPinned(column)
     }

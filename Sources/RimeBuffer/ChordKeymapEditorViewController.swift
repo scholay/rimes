@@ -90,7 +90,6 @@ final class ChordKeymapEditorViewController: NSViewController,
         root.edgeInsets = NSEdgeInsets(top: 0, left: 24, bottom: 24, right: 24)
         view = root
 
-        root.addArrangedSubview(label("键位方案", size: 12, weight: .semibold))
         root.addArrangedSubview(card([
             row([profilePicker, button("复制方案", #selector(duplicateProfile)),
                  button("新建", #selector(newProfile)), button("导入…", #selector(importProfile)),
@@ -144,11 +143,13 @@ final class ChordKeymapEditorViewController: NSViewController,
             }
             keyboard.addArrangedSubview(row(cells, spacing: 4))
         }
+        let keyZoneSectionLabel = label("键区与和弦", size: 11, weight: .semibold)
+        keyZoneSectionLabel.toolTip =
+            "键帽上的 L / R 表示所属键区。选择和弦可点选多个键；重新分区也可直接编辑上方字母。"
         root.addArrangedSubview(card([
-            label("键区与和弦", size: 11, weight: .semibold),
+            keyZoneSectionLabel,
             row([label("左区"), leftField, label("右区"), rightField]),
             keyboardMode, keyboard,
-            label("键帽上的 L / R 表示所属键区。选择和弦可点选多个键；重新分区也可直接编辑上方字母。", size: 10),
         ]))
         leftField.widthAnchor.constraint(equalTo: rightField.widthAnchor).isActive = true
         leftField.widthAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
@@ -201,23 +202,27 @@ final class ChordKeymapEditorViewController: NSViewController,
         headerOutput.widthAnchor.constraint(equalToConstant: 255).isActive = true
         let columnHeader = row([headerKeys, headerOutput, headerKind, spacer()], spacing: 3)
         columnHeader.edgeInsets = NSEdgeInsets(top: 2, left: 5, bottom: 2, right: 5)
+        let mappingTableSectionLabel = label("映射表", size: 11, weight: .semibold)
+        mappingTableSectionLabel.toolTip =
+            "按映射类型时，完整音节保留边界，片段可继续补全。相同键集合只能对应一条映射，按键顺序不影响结果。"
         root.addArrangedSubview(card([
-            row([label("映射表", size: 11, weight: .semibold), spacer(), searchField]),
+            row([mappingTableSectionLabel, spacer(), searchField]),
             columnHeader, scroll,
             row([label("和弦"), keysField, label("输出"), outputField, kindPicker, spacer()]),
             row([addButton, button("清空编辑", #selector(clearEntry)), removeEntryButton, spacer(),
                  button("试译和弦", #selector(trySelectedKeys))]),
-            label("按映射类型时，完整音节保留边界，片段可继续补全。相同键集合只能对应一条映射，按键顺序不影响结果。", size: 10),
         ]))
         recorder.onChord = { [weak self] keys in
             guard let self, !self.applying else { return }
             self.showPreview(keys: keys)
         }
+        let localTrySectionLabel = label("本地试打", size: 11, weight: .semibold)
+        localTrySectionLabel.toolTip =
+            "试打只在此处显示当前草稿的映射结果；按住一组键后全部松开即结算，Esc 退出。"
         root.addArrangedSubview(card([
-            row([label("本地试打", size: 11, weight: .semibold), spacer(),
+            row([localTrySectionLabel, spacer(),
                  button("开始试打", #selector(startRecording)), button("停止", #selector(stopRecording))]),
             recorder, previewLabel,
-            label("试打只在此处显示当前草稿的映射结果；按住一组键后全部松开即结算，Esc 退出。", size: 10),
         ]))
         configure(saveButton, #selector(saveDraftAction))
         configure(applyButton, #selector(applyDraft))

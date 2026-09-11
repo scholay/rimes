@@ -38,9 +38,7 @@ func runChordSettingsSmokeTest(outputURL: URL? = nil) -> Bool {
     let labels = views.compactMap { $0 as? NSTextField }
     let buttons = views.compactMap { $0 as? NSButton }
     let copy = labels.map(\.stringValue).joined(separator: "\n")
-    guard copy.contains("先左后右"), copy.contains("停顿本身不会取消"),
-          copy.contains("两次单键不会跨批合并"), copy.contains("合并项须为完整音节"),
-          !copy.contains("互击"), !copy.contains("并击结算模式"),
+    guard !copy.contains("互击"), !copy.contains("并击结算模式"),
           !buttons.contains(where: { ["互击", "并击"].contains($0.title) }),
           !views.contains(where: {
               $0 is NSPopUpButton || $0 is NSSegmentedControl || $0 is RimeFixedAccentChoiceButton
@@ -119,15 +117,15 @@ func runChordSettingsSmokeTest(outputURL: URL? = nil) -> Bool {
     defer { window.close() }
     pane.layoutSubtreeIfNeeded()
     let fittingHeight = ceil(pane.fittingSize.height)
-    guard fittingHeight.isFinite, (200...900).contains(fittingHeight) else {
+    // The page carries controls only, no explanatory text, so it is short;
+    // the bound catches a collapsed or runaway layout, not a text budget.
+    guard fittingHeight.isFinite, (120...900).contains(fittingHeight) else {
         return fail("unexpected settings fitting height: \(fittingHeight)")
     }
     window.setContentSize(NSSize(width: 698, height: fittingHeight))
     pane.layoutSubtreeIfNeeded()
-    guard field.frame.width >= 60, makeCurrent.frame.width >= 75,
-          labels.filter({ $0.accessibilityIdentifier() == "chord-settings.behavior" })
-            .allSatisfy({ $0.frame.width >= 600 && $0.frame.height >= 12 }) else {
-        return fail("settings controls or behavior text are collapsed")
+    guard field.frame.width >= 60, makeCurrent.frame.width >= 75 else {
+        return fail("settings controls are collapsed")
     }
     pane.displayIfNeeded()
     guard pane.bounds.width == 698,

@@ -1195,16 +1195,10 @@ final class PluginConfigurationViewController: NSViewController,
             bottom: 30,
             right: 28
         )
-        content.addArrangedSubview(heading)
-
         if let summary = model.schema.summary, !summary.isEmpty {
-            let label = NSTextField(wrappingLabelWithString: summary)
-            label.font = .systemFont(ofSize: 12)
-            label.textColor = .secondaryLabelColor
-            label.maximumNumberOfLines = 0
-            label.widthAnchor.constraint(equalToConstant: 620).isActive = true
-            content.addArrangedSubview(label)
+            heading.toolTip = summary
         }
+        content.addArrangedSubview(heading)
 
         let separator = NSBox()
         separator.boxType = .separator
@@ -1331,18 +1325,13 @@ final class PluginConfigurationViewController: NSViewController,
         let title = NSTextField(labelWithString: field.title)
         title.font = .systemFont(ofSize: 12, weight: .medium)
 
+        if let helpText = field.helpText, !helpText.isEmpty {
+            title.toolTip = helpText
+        }
         let labels = NSStackView(views: [title])
         labels.orientation = .vertical
         labels.alignment = .leading
         labels.spacing = 3
-        if let helpText = field.helpText, !helpText.isEmpty {
-            let help = NSTextField(wrappingLabelWithString: helpText)
-            help.font = .systemFont(ofSize: 10.5)
-            help.textColor = .tertiaryLabelColor
-            help.maximumNumberOfLines = 3
-            help.widthAnchor.constraint(equalToConstant: 250).isActive = true
-            labels.addArrangedSubview(help)
-        }
         labels.widthAnchor.constraint(equalToConstant: 250).isActive = true
 
         let controlView: NSView

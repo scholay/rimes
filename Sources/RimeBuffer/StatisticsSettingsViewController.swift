@@ -123,9 +123,6 @@ final class StatisticsSettingsViewController: NSViewController {
     // MARK: Page construction
 
     private func makeDailyPage() -> NSView {
-        let title = titleLabel("统计 · 每日")
-        let privacy = secondaryLabel("日常输入 · 仅保存本机计数，不保存正文")
-
         dailyDatePicker.datePickerStyle = .textFieldAndStepper
         dailyDatePicker.datePickerMode = .single
         dailyDatePicker.datePickerElements = [.yearMonthDay]
@@ -156,8 +153,6 @@ final class StatisticsSettingsViewController: NSViewController {
         dailyHeatmap.heightAnchor.constraint(equalToConstant: 260).isActive = true
 
         let stack = NSStackView(views: [
-            title,
-            privacy,
             storageWarningBox,
             speedWarningBox,
             dateRow,
@@ -172,7 +167,6 @@ final class StatisticsSettingsViewController: NSViewController {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
-        stack.setCustomSpacing(20, after: privacy)
         stack.setCustomSpacing(22, after: storageWarningBox)
         stack.setCustomSpacing(14, after: dateRow)
         stack.setCustomSpacing(6, after: dailySummaryLabel)
@@ -181,9 +175,6 @@ final class StatisticsSettingsViewController: NSViewController {
     }
 
     private func makeHistoryPage() -> NSView {
-        let title = titleLabel("统计 · 历史")
-        let privacy = secondaryLabel("日常输入趋势与按键日历 · 点击数据点查看当天")
-
         clearHistoryButton.title = "清空键频历史…"
         clearHistoryButton.bezelStyle = .rounded
         clearHistoryButton.target = self
@@ -225,8 +216,6 @@ final class StatisticsSettingsViewController: NSViewController {
         historyDetailStack.isHidden = true
 
         let stack = NSStackView(views: [
-            title,
-            privacy,
             storageWarningBox,
             speedWarningBox,
             makeTrendControls(),
@@ -243,7 +232,6 @@ final class StatisticsSettingsViewController: NSViewController {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
-        stack.setCustomSpacing(20, after: privacy)
         stack.setCustomSpacing(22, after: storageWarningBox)
         stack.setCustomSpacing(14, after: summaryRow)
         stack.setCustomSpacing(24, after: historyScrollView)
@@ -813,26 +801,10 @@ final class StatisticsSettingsViewController: NSViewController {
 
     // MARK: Small UI helpers
 
-    private func titleLabel(_ text: String) -> NSTextField {
-        let label = NSTextField(labelWithString: text)
-        label.font = .systemFont(ofSize: 12, weight: .semibold)
-        label.textColor = RimeUI.textSecondary
-        label.alignment = .left
-        return label
-    }
-
     private func sectionLabel(_ text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: 12, weight: .semibold)
         label.textColor = RimeUI.textSecondary
-        label.alignment = .left
-        return label
-    }
-
-    private func secondaryLabel(_ text: String) -> NSTextField {
-        let label = NSTextField(wrappingLabelWithString: text)
-        label.font = .systemFont(ofSize: 10)
-        label.textColor = RimeUI.textMuted
         label.alignment = .left
         return label
     }

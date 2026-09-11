@@ -277,18 +277,10 @@ private final class SettingsChoiceCardView: NSView {
         titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
         titleLabel.textColor = RimeUI.textPrimary
         titleLabel.lineBreakMode = .byTruncatingTail
-        let detailLabel = NSTextField(labelWithString: detail)
-        detailLabel.font = .systemFont(ofSize: 9)
-        detailLabel.textColor = RimeUI.textMuted
-        detailLabel.lineBreakMode = .byTruncatingTail
-        detailLabel.toolTip = detail
-        let copy = NSStackView(views: [titleLabel, detailLabel])
-        copy.orientation = .vertical
-        copy.alignment = .leading
-        copy.spacing = 3
-        copy.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        titleLabel.toolTip = detail
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let row = NSStackView(views: [icon, copy, NSView(), choice])
+        let row = NSStackView(views: [icon, titleLabel, NSView(), choice])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 9
@@ -444,15 +436,8 @@ private final class SettingsThemeCardButton: SettingsPointingButton {
         let name = NSTextField(labelWithString: mode.title)
         name.font = .systemFont(ofSize: 11, weight: .semibold)
         name.textColor = RimeUI.color(palette.textPrimary)
-        let detail = NSTextField(labelWithString: detailText)
-        detail.font = .systemFont(ofSize: 9)
-        detail.textColor = RimeUI.color(palette.textMuted)
-        detail.lineBreakMode = .byTruncatingTail
-        let copy = NSStackView(views: [name, detail])
-        copy.orientation = .vertical
-        copy.alignment = .leading
-        copy.spacing = 3
-        copy.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        name.toolTip = detailText
+        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let status = NSTextField(labelWithString: selected ? "正在使用" : "可用")
         status.font = .systemFont(ofSize: 9, weight: .semibold)
@@ -461,7 +446,7 @@ private final class SettingsThemeCardButton: SettingsPointingButton {
             : RimeUI.color(palette.textMuted)
         status.setContentHuggingPriority(.required, for: .horizontal)
 
-        let row = NSStackView(views: [icon, copy, NSView(), status])
+        let row = NSStackView(views: [icon, name, NSView(), status])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 11
@@ -656,7 +641,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private let heatmapView = KeyboardHeatmapView()
     private let pluginRowsStack = NSStackView()
     private let pluginStatusLabel = NSTextField(labelWithString: "")
-    private let settingsStatusLabel = NSTextField(labelWithString: "设置会立即应用并保存在本机")
+    private let settingsStatusLabel = NSTextField(labelWithString: "")
     private let settingsRouteLabel = NSTextField(labelWithString: "")
     private var pluginDownloadInProgress = false
     private var pluginRefreshScheduled = false
@@ -1969,10 +1954,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 activePluginSettingsController = controller
                 body = controller.view
             } else {
-                body = contentColumn([
-                    title(route.title),
-                    caption("扩展页面当前不可用，可在“插件”中重新启用。"),
-                ])
+                body = contentColumn([])
             }
         }
 
@@ -2047,26 +2029,15 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         headingTitle.font = .systemFont(ofSize: 20, weight: .bold)
         headingTitle.textColor = RimeUI.textPrimary
         headingTitle.lineBreakMode = .byTruncatingTail
-        let headingDescription = NSTextField(
-            wrappingLabelWithString: routeDescription(route)
-        )
-        headingDescription.font = .systemFont(ofSize: 11)
-        headingDescription.textColor = RimeUI.textSecondary
-        headingDescription.maximumNumberOfLines = 2
-        headingDescription.lineBreakMode = .byWordWrapping
-        let headingCopy = NSStackView(views: [headingTitle, headingDescription])
-        headingCopy.orientation = .vertical
-        headingCopy.alignment = .leading
-        headingCopy.spacing = 7
-        headingCopy.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        headingTitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        var headingViews: [NSView] = [headingCopy, flexSpacer()]
+        var headingViews: [NSView] = [headingTitle, flexSpacer()]
         if let configure = headerConfigurationButton(for: route) {
             headingViews.append(configure)
         }
         let headingRow = NSStackView(views: headingViews)
         headingRow.orientation = .horizontal
-        headingRow.alignment = .top
+        headingRow.alignment = .centerY
         headingRow.spacing = 16
         headingRow.translatesAutoresizingMaskIntoConstraints = false
         let headingBar = SettingsChromeView(fill: .settings, border: .none)
@@ -2077,8 +2048,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             headingBar.heightAnchor.constraint(equalToConstant: 84),
             headingRow.leadingAnchor.constraint(equalTo: headingBar.leadingAnchor, constant: 24),
             headingRow.trailingAnchor.constraint(equalTo: headingBar.trailingAnchor, constant: -24),
-            headingRow.topAnchor.constraint(equalTo: headingBar.topAnchor, constant: 18),
-            headingCopy.widthAnchor.constraint(lessThanOrEqualToConstant: 650),
+            headingRow.centerYAnchor.constraint(equalTo: headingBar.centerYAnchor),
+            headingTitle.widthAnchor.constraint(lessThanOrEqualToConstant: 650),
         ])
 
         let bodyHost: NSView
@@ -2114,18 +2085,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         settingsStatusLabel.removeFromSuperview()
         settingsRouteLabel.removeFromSuperview()
         settingsRouteLabel.stringValue = "\(route.id.rawValue) · \(navigation.selectedSubpage()?.rawValue ?? "")"
-        let statusIcon = NSImageView()
-        statusIcon.image = NSImage(systemSymbolName: "info.circle",
-                                   accessibilityDescription: "设置状态")?
-            .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
-        statusIcon.imageScaling = .scaleProportionallyDown
-        statusIcon.contentTintColor = RimeUI.accentTextColor
-        statusIcon.setAccessibilityElement(false)
-        statusIcon.translatesAutoresizingMaskIntoConstraints = false
-        statusIcon.widthAnchor.constraint(equalToConstant: 15).isActive = true
-        statusIcon.heightAnchor.constraint(equalToConstant: 15).isActive = true
         let statusRow = NSStackView(
-            views: [statusIcon, settingsStatusLabel, flexSpacer(), settingsRouteLabel]
+            views: [settingsStatusLabel, flexSpacer(), settingsRouteLabel]
         )
         statusRow.orientation = .horizontal
         statusRow.alignment = .centerY
@@ -2154,44 +2115,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         bodyHost.setContentHuggingPriority(.defaultLow, for: .vertical)
         bodyHost.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         return root
-    }
-
-    private func routeDescription(_ route: SettingsRouteDescriptor) -> String {
-        switch route.source {
-        case let .core(core):
-            switch core {
-            case .inputMethod:
-                return "管理输入方案、词库与本地学习数据；并击能力由扩展单独提供。"
-            case .appearance:
-                return "主题同时作用于候选框、缓冲工作台与设置页预览。"
-            case .buffer:
-                return "管理缓冲输入工作台。"
-            case .clipboard:
-                return "管理独立、仅在本机持久保存的 Clipboard History。"
-            case .mailbox:
-                return "配置独立 Mailbox 窗口、全局快捷键、本地存储与 AI 入口。"
-            case .capsule:
-                return "配置独立 Capsule 窗口、查看口令、iCloud 同步与全局快捷键。"
-            case .connectors:
-                return "管理 AI 模型与本地网关。"
-            case .plugins:
-                return "管理工作台可用的缓冲插件与随应用提供的内部扩展。"
-            case .maintenance:
-                return "检查更新、重启输入法，以及查看本地日志和数据。"
-            }
-        case let .builtInPlugin(pluginKey):
-            switch pluginKey.rawID {
-            case BuiltInPluginID.typingSpeed:
-                return "查看当前活跃输入速度和本地历史趋势。"
-            case BuiltInPluginID.statistics:
-                return "查看按键分布、每日计数与全部历史。"
-            case BuiltInPluginID.flyChordLearning:
-                return "创建、导入和可视化配置并击键位方案，并进行课程与专项练习。"
-            default:
-                return PluginRegistry.shared.internalPlugin(pluginKey: pluginKey)?
-                    .descriptor.summary ?? "管理这个扩展的本地设置与状态。"
-            }
-        }
     }
 
     private func headerConfigurationButton(
@@ -2235,21 +2158,11 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             target: self,
             action: #selector(openDir)
         )
-        let note = NSTextField(wrappingLabelWithString:
-            "配置目录是 ~/Library/RimeBuffer。未显示的方案文件仅作为词典或反查依赖保留，不会出现在 F4。")
-        note.font = .systemFont(ofSize: 11)
-        note.textColor = RimeUI.textMuted
+        openDirBtn.toolTip = "配置目录是 ~/Library/RimeBuffer。未显示的方案文件仅作为词典或反查依赖保留，不会出现在 F4。"
 
         switch subpageID {
         case "dictionaries":
-            let learning = NSTextField(wrappingLabelWithString:
-                "Rime 会在独立的 ~/Library/RimeBuffer 中学习词频。这里导入、导出的只是可移植学习记录，不会复制或替换正在使用的 LevelDB。")
-            learning.font = .systemFont(ofSize: 11)
-            learning.textColor = RimeUI.textMuted
             return contentColumn([
-                title("词库"),
-                caption("词库负责候选内容；输入方案决定如何检索与组织候选。"),
-                spacer(8),
                 sectionLabel("已安装词库"),
                 lexiconCard(kind: .chinese,
                             title: "雾凇拼音",
@@ -2262,9 +2175,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                             detail: "英文候选、补全、生词兜底与独立学习"),
                 spacer(16),
                 sectionLabel("用户学习"),
-                learning,
                 openDirBtn,
-                note,
             ])
         default:
             let chordStatus = chordSchemaStatusView()
@@ -2272,9 +2183,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             recovery.textColor = .systemRed
             recovery.isHidden = ChordKeymapActivationCoordinator.shared.recoveryMessage == nil
             return contentColumn([
-                title("输入方案"),
-                caption("单独轻点 Shift 切换中英；Shift 与字母/标点组合或持续按住 500 ms 后，会保持按下前的输入模式。"),
-                spacer(8),
                 chordStatus,
                 recovery,
                 inputEncodingSelectionView(),
@@ -2345,15 +2253,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         return badge
     }
 
-    private func connectorNote(_ text: String) -> NSTextField {
-        let note = NSTextField(wrappingLabelWithString: text)
-        note.font = .systemFont(ofSize: 9)
-        note.textColor = RimeUI.textMuted
-        note.translatesAutoresizingMaskIntoConstraints = false
-        note.widthAnchor.constraint(equalToConstant: 626).isActive = true
-        return note
-    }
-
+    /// The row's name is its identifier, not a description, so it stays on
+    /// screen; `detail` is explanatory prose and stays off it, kept reachable
+    /// only as a tooltip so the information isn't lost, just not always-on.
     private func settingsRow(title: String,
                              detail: String,
                              symbolName: String,
@@ -2368,18 +2270,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         name.font = .systemFont(ofSize: 11, weight: .semibold)
         name.textColor = RimeUI.textPrimary
         name.lineBreakMode = .byTruncatingTail
-        let detailLabel = NSTextField(labelWithString: detail)
-        detailLabel.font = .systemFont(ofSize: 9)
-        detailLabel.textColor = RimeUI.textMuted
-        detailLabel.lineBreakMode = .byTruncatingTail
-        detailLabel.toolTip = detail
-        let copy = NSStackView(views: [name, detailLabel])
-        copy.orientation = .vertical
-        copy.alignment = .leading
-        copy.spacing = 3
-        copy.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        name.toolTip = detail
 
-        let row = NSStackView(views: [icon, copy, flexSpacer(), control])
+        let row = NSStackView(views: [icon, name, flexSpacer(), control])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 10
@@ -2393,7 +2286,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         row.layer?.cornerRadius = 8
         row.translatesAutoresizingMaskIntoConstraints = false
         row.widthAnchor.constraint(equalToConstant: width).isActive = true
-        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 58).isActive = true
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 46).isActive = true
         control.setContentHuggingPriority(.required, for: .horizontal)
         return row
     }
@@ -2438,7 +2331,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         recorder.onFeedback = { [weak self] message in
             guard let self else { return }
             self.settingsStatusLabel.stringValue = message
-                ?? "设置会立即应用并保存在本机"
+                ?? ""
             self.settingsStatusLabel.textColor = message?.contains("冲突") == true
                 ? .systemRed
                 : RimeUI.textMuted
@@ -2592,12 +2485,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             status.hasLearningDatabase ? "学习库已建立" : "尚未建立学习库")
         statusLabel.font = .systemFont(ofSize: 9, weight: .semibold)
         statusLabel.textColor = status.hasLearningDatabase ? themeStatusColor : RimeUI.textMuted
-
-        let detailLabel = NSTextField(wrappingLabelWithString: detail)
-        detailLabel.font = .systemFont(ofSize: 9)
-        detailLabel.textColor = RimeUI.textMuted
-        detailLabel.lineBreakMode = .byTruncatingTail
-        detailLabel.toolTip = detail
+        name.toolTip = detail
 
         let importButton = SettingsLexiconButton(title: "导入学习…",
                                                   target: self,
@@ -2616,11 +2504,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         header.orientation = .horizontal
         header.alignment = .firstBaseline
         header.spacing = 6
-        let copy = NSStackView(views: [header, detailLabel])
-        copy.orientation = .vertical
-        copy.alignment = .leading
-        copy.spacing = 3
-        copy.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        header.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let actions = NSStackView(views: [importButton, exportButton])
         actions.orientation = .horizontal
@@ -2631,7 +2515,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             symbolName: "book.closed",
             accessibilityDescription: title
         )
-        let card = NSStackView(views: [icon, copy, flexSpacer(), actions])
+        let card = NSStackView(views: [icon, header, flexSpacer(), actions])
         card.orientation = .horizontal
         card.alignment = .centerY
         card.spacing = 10
@@ -2645,7 +2529,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         card.layer?.cornerRadius = 8
         card.translatesAutoresizingMaskIntoConstraints = false
         card.widthAnchor.constraint(equalToConstant: 650).isActive = true
-        card.heightAnchor.constraint(equalToConstant: 58).isActive = true
+        card.heightAnchor.constraint(greaterThanOrEqualToConstant: 46).isActive = true
         return card
     }
 
@@ -2745,9 +2629,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         if subpageID == "theme" {
             appearancePopUp.removeFromSuperview()
             return contentColumn([
-                title("主题"),
-                caption("经典主题提供三种配色；拉斯塔主题同时使用红、黄、绿建立层级。"),
-                spacer(8),
                 sectionLabel("经典 · 配色"),
                 themePreviewCard(.night),
                 themePreviewCard(.day),
@@ -2761,13 +2642,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         candidatePreview = preview
         refreshBufferWidthControls()
         return contentColumn([
-            title("尺寸"),
-            caption("分别调整候选窗与缓冲工作台。候选窗可即时预览；工作台高度会根据内容自动适配。"),
-            spacer(8),
             sectionLabel("候选窗预览"),
             preview,
             spacer(12),
-            secondaryLabel("滑块灰色区间表示当前不支持（受关联项限制），无法调整。"),
             candidateMetricsView(),
             spacer(20),
             sectionLabel("缓冲工作台"),
@@ -2835,9 +2712,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         refreshMailboxSettingsStatus(snapshot: snapshot)
 
         let page = contentColumn([
-            title("Mailbox 配置"),
-            caption("Mailbox 的会话阅读、回复和审核都在独立窗口完成；这里仅管理入口、快捷键和本地状态。"),
-            spacer(4),
             sectionLabel("运行与存储"),
             settingsRow(
                 title: "本地会话存储",
@@ -2856,7 +2730,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 symbolName: "keyboard",
                 control: shortcutRecorder
             ),
-            secondaryLabel("点击快捷键后录入新组合；Delete 恢复默认，Esc 取消。快捷键只打开独立窗口，不接管其他输入法的组字。"),
         ])
         page.identifier = NSUserInterfaceItemIdentifier(
             "settings.mailbox-configuration"
@@ -2925,9 +2798,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         revealPasscodeSettings.widthAnchor.constraint(equalToConstant: 650).isActive = true
 
         let page = contentColumn([
-            title("Capsule 配置"),
-            caption("Prompt、Memory、Note、URL、Image 与 PDF 使用可读文件；密码密文和主密钥独立保存在本机。内容编辑在独立 Capsule 窗口完成。"),
-            spacer(4),
             sectionLabel("本地资料库"),
             settingsRow(
                 title: "本地 Capsule",
@@ -2945,10 +2815,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 symbolName: "keyboard",
                 control: shortcutRecorder
             ),
-            secondaryLabel("点击快捷键后录入新组合；Delete 恢复默认，Esc 取消。"),
             spacer(12),
-            sectionLabel("密码查看口令"),
-            secondaryLabel("用四组并击验证后才能短时查看密码明文；口令配置只保存在本机。"),
             revealPasscodeSettings,
             spacer(12),
             sectionLabel("iCloud 自动同步"),
@@ -2960,7 +2827,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             ),
             syncDetailLabel,
             syncActions,
-            secondaryLabel("只同步 Prompt、Memory、Note、URL、Image 与 PDF。Password、Skill 路径、查看口令与主密钥不会上传。"),
         ])
         page.identifier = NSUserInterfaceItemIdentifier(
             "settings.capsule-configuration"
@@ -2969,22 +2835,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     private func bufferSettingsPage() -> NSView {
-        let deliveryShortcut = RimeShortcutPreferences
-            .shortcut(for: .deliverBuffer)
-            .displayTitle
-        let note = NSTextField(wrappingLabelWithString:
-            "缓冲区开启后，Rime 提交内容会进入单行缓冲条；轻按 \(deliveryShortcut) 或点击右侧纸飞机发送下一块，按住 \(deliveryShortcut) 约 0.6 秒发送全部。AI 生成插件会复用右侧主按钮和同一投递键请求 AI，结果就绪后再变回逐块发送。成功发送的块会立即消失；失败或未发送的块不会丢失，也不会保存发送历史。")
-        note.font = .systemFont(ofSize: 11)
-        note.textColor = RimeUI.textMuted
-
-        let secureNote = NSTextField(wrappingLabelWithString:
-            "安全：当系统安全输入生效时，工作台会隐藏正文，并禁用发送与插件操作。此保护始终开启。")
-        secureNote.font = .systemFont(ofSize: 11)
-        secureNote.textColor = RimeUI.textMuted
-
         return contentColumn([
-            title("缓冲区"),
-            caption("关闭工作台会暂停捕获并收束瞬态状态，但保留已经形成的块。"),
             settingsRow(
                 title: "最后一块上屏后关闭工作台",
                 detail: "适用于 Default 与所有缓冲插件；部分失败或内容变化时保持打开。",
@@ -3006,19 +2857,14 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 control: resetOnAppSwitchCheck
             ),
             moveBufferWindowButton,
-            note,
             spacer(20),
             sectionLabel("快捷键"),
             shortcutSettingsView(),
-            spacer(8),
-            secureNote,
         ])
     }
 
     private func clipSettingsPage() -> NSView {
         contentColumn([
-            title("Clipboard History"),
-            caption("在本机私有数据库中保存文本、链接、图片、文件与颜色；窗口关闭后历史仍会保留。"),
             settingsRow(
                 title: "允许收录剪贴板内容",
                 detail: "RIMES 运行时后台收录；安全输入、锁屏和休眠期间不会读取。",
@@ -3032,9 +2878,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 control: clipboardAutoPasteCheck
             ),
             clipboardAutoPasteStatusLabel,
-            secondaryLabel(
-                "⌘⇧P 呼出独立窗口。历史与 Buffer、Mailbox、Capsule 隔离，保存在 ~/Library/Application Support/RIMES/clipboard。"
-            ),
         ])
     }
 
@@ -3043,10 +2886,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             return aiModelConnectionsPage()
         }
         guard subpageID == "local-gateway" else {
-            return contentColumn([
-                title("本地网关"),
-                caption("这个连接器页面已经移除。"),
-            ])
+            return contentColumn([])
         }
 
         let gatewayEnabled = LocalGateway.shared.enabled
@@ -3069,25 +2909,13 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         let configurationTitle = NSTextField(labelWithString: "接入配置")
         configurationTitle.font = .systemFont(ofSize: 11, weight: .semibold)
         configurationTitle.textColor = RimeUI.textPrimary
-        let configurationDetail = NSTextField(
-            wrappingLabelWithString:
-                "标准 MCP（Streamable HTTP）。Cursor、Codex、Claude Code 等客户端通用。"
-        )
-        configurationDetail.font = .systemFont(ofSize: 9)
-        configurationDetail.textColor = RimeUI.textMuted
-        let configurationCopy = NSStackView(views: [
-            configurationTitle,
-            configurationDetail,
-        ])
-        configurationCopy.orientation = .vertical
-        configurationCopy.alignment = .leading
-        configurationCopy.spacing = 3
-        configurationCopy.setContentCompressionResistancePriority(
+        configurationTitle.toolTip = "标准 MCP（Streamable HTTP）。Cursor、Codex、Claude Code 等客户端通用。"
+        configurationTitle.setContentCompressionResistancePriority(
             .defaultLow,
             for: .horizontal
         )
         let configurationHeader = NSStackView(views: [
-            configurationCopy,
+            configurationTitle,
             flexSpacer(),
             gatewayCopyConfigButton,
         ])
@@ -3109,17 +2937,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             commandActions.translatesAutoresizingMaskIntoConstraints = false
             commandActions.widthAnchor.constraint(equalToConstant: 626).isActive = true
             configurationViews.append(contentsOf: [
-                connectorNote(
-                    "等价于上方通用配置；仅在已安装 Claude Code CLI 时需要。"
-                ),
                 gatewayCommandField,
                 commandActions,
             ])
         }
 
         return contentColumn([
-            title("本地网关"),
-            caption("仅监听 127.0.0.1，并要求 Token 鉴权；推入内容仍需你在收件箱逐条确认。"),
             settingsRow(
                 title: "启用本地网关",
                 detail: "允许本机智能体通过标准 MCP / HTTP 推送待确认内容。",
@@ -3174,9 +2997,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 ),
                 actions,
                 codexLoginStatusLabel,
-                connectorNote(
-                    "CLI 在本机启动，但不代表本地推理：点击生成后，缓冲全文会经已登录服务发送。\(ProductIdentity.displayName) 不会把环境中的 API Key 透传给 Codex。"
-                ),
             ])
 
         case .claudeCodeCLI:
@@ -3215,9 +3035,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 ),
                 actions,
                 claudeLoginStatusLabel,
-                connectorNote(
-                    "CLI 在本机启动，但不代表本地推理：点击生成后，缓冲全文会经已登录服务发送。\(ProductIdentity.displayName) 不会把环境中的 API Key 透传给 Claude Code。"
-                ),
             ])
 
         case .openAICompatible:
@@ -3248,17 +3065,10 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 labeledSettingsRow("API Key", control: aiAPIKeyField),
                 actions,
                 aiConfigurationStatus,
-                connectorNote(
-                    "Base URL 应包含 API 前缀（例如 /v1），程序会追加 /chat/completions。远程地址必须使用 HTTPS；HTTP 仅允许 localhost、127.0.0.1 或 ::1。密钥保存在权限为 0600 的本地配置文件，不写入偏好设置或日志。"
-                ),
             ])
         }
 
         return contentColumn([
-            title("AI 模型"),
-            caption("“AI 生成”是统一缓冲插件；在这里切换它使用的模型连接器。正文只会在你明确点击生成时发送。"),
-            spacer(8),
-            sectionLabel("AI 模型"),
             aiConnectorSelectionView(),
             detailPanel,
         ])
@@ -3429,7 +3239,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         actions.alignment = .centerY
         actions.spacing = 6
 
-        let heading = NSStackView(views: [title("插件"), flexSpacer(), actions])
+        let heading = NSStackView(views: [flexSpacer(), actions])
         heading.orientation = .horizontal
         heading.alignment = .centerY
         heading.spacing = 12
@@ -3437,16 +3247,11 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         heading.widthAnchor.constraint(equalToConstant: 650).isActive = true
 
         pluginRowsStack.removeFromSuperview()
-        let note = NSTextField(wrappingLabelWithString:
-            "可以同时开启多个缓冲插件；只有已开启的插件会出现在缓冲工作台，当前使用项仍在工作台中切换。")
-        note.font = .systemFont(ofSize: 11)
-        note.textColor = RimeUI.textMuted
 
         let showExternal = subpageID == "all" || subpageID == "buffer-plugins"
         let showBuiltIns = subpageID == "all" || subpageID == "built-in-extensions"
         var views: [NSView] = [
             heading,
-            caption("在这里管理工作台可用的缓冲插件，或管理随应用提供的内部扩展。"),
             spacer(8),
         ]
         if showBuiltIns {
@@ -3466,7 +3271,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         }
         if showExternal {
             views.append(sectionLabel("缓冲插件"))
-            views.append(note)
             views.append(pluginRowsStack)
             views.append(pluginStatusLabel)
         }
@@ -3512,26 +3316,15 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             : themeStatusColor
         installation.setContentHuggingPriority(.required, for: .horizontal)
 
+        name.toolTip = plugin.descriptor.summary
         let titleRow = NSStackView(views: [name, version, installation])
         titleRow.orientation = .horizontal
         titleRow.alignment = .firstBaseline
         titleRow.spacing = 6
+        titleRow.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        titleRow.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let detail = NSTextField(labelWithString: plugin.descriptor.summary)
-        detail.font = .systemFont(ofSize: 9)
-        detail.textColor = RimeUI.textMuted
-        detail.lineBreakMode = .byTruncatingTail
-        detail.toolTip = plugin.descriptor.summary
-        detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        let labels = NSStackView(views: [titleRow, detail])
-        labels.orientation = .vertical
-        labels.alignment = .leading
-        labels.spacing = 2
-        labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        var rowViews: [NSView] = [icon, labels, flexSpacer()]
+        var rowViews: [NSView] = [icon, titleRow, flexSpacer()]
         if plugin.isInstalled,
            PluginRegistry.shared.hasConfiguration(
             for: plugin.descriptor.key
@@ -3599,7 +3392,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         row.layer?.cornerRadius = 8
         row.translatesAutoresizingMaskIntoConstraints = false
         row.widthAnchor.constraint(equalToConstant: 650).isActive = true
-        row.heightAnchor.constraint(equalToConstant: 58).isActive = true
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 46).isActive = true
         return row
     }
 
@@ -3681,10 +3474,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         let installButtons = NSStackView(views: [reinstallBtn, openInstallLogBtn])
         installButtons.orientation = .horizontal
         installButtons.spacing = 8
-        let installNote = NSTextField(wrappingLabelWithString:
-            "重新安装会从当前源码目录运行 build_install.sh，构建完成后替换并重启输入法进程。")
-        installNote.font = .systemFont(ofSize: 11)
-        installNote.textColor = RimeUI.textMuted
 
         if subpageID == "permissions" {
             return permissionsPage()
@@ -3695,36 +3484,28 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 target: self,
                 action: #selector(openDir)
             )
-            let dataNote = NSTextField(wrappingLabelWithString:
-                "配置、词库学习、插件、统计和练习进度保存在 ~/Library/RimeBuffer；Clipboard History 单独保存在 ~/Library/Application Support/RIMES/clipboard。缓冲区正文与发送历史不会持久化。")
-            dataNote.font = .systemFont(ofSize: 11)
-            dataNote.textColor = RimeUI.textMuted
+            openConfigBtn.toolTip =
+                "配置、词库学习、插件、统计和练习进度保存在 ~/Library/RimeBuffer；"
+                + "Clipboard History 单独保存在 ~/Library/Application Support/RIMES/clipboard。"
+                + "缓冲区正文与发送历史不会持久化。"
             let logButtons = NSStackView(views: [openLogBtn, openInstallLogBtn])
             logButtons.orientation = .horizontal
             logButtons.spacing = 8
             return contentColumn([
-                title("日志与数据"),
-                caption("查看本地诊断信息和应用数据位置。"),
-                spacer(8),
                 sectionLabel("日志"),
                 logButtons,
                 spacer(16),
                 sectionLabel("本地数据"),
                 openConfigBtn,
-                dataNote,
             ])
         }
         return contentColumn([
-            title("更新与重启"),
-            caption("检查更新、重启输入法进程或从当前源码重新安装。"),
-            spacer(8),
             sectionLabel("运行状态"),
             runtimeButtons,
             spacer(12),
             sectionLabel("安装"),
             installButtons,
             installStatus,
-            installNote,
         ])
     }
 
@@ -3733,11 +3514,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     /// indistinguishable from a broken feature, which is the whole reason
     /// this page exists.
     private func permissionsPage() -> NSView {
-        var rows: [NSView] = [
-            title("系统权限"),
-            caption("逐项查看 RIMES 需要的系统权限、对应功能，以及未授权时的表现。"),
-            spacer(8),
-        ]
+        var rows: [NSView] = []
         for report in SystemPermissionAudit.reportAll() {
             let status: String
             let symbol: String
@@ -3825,14 +3602,10 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         let actions = NSStackView(views: [refresh, reset])
         actions.orientation = .horizontal
         actions.spacing = 8
-        rows.append(actions)
-        let resetNote = NSTextField(wrappingLabelWithString:
-            "系统只对「从未记录过」的应用弹出授权对话框。一旦记录存在（临时签名每次"
+        actions.toolTip = "系统只对「从未记录过」的应用弹出授权对话框。一旦记录存在（临时签名每次"
             + "重新构建都会让记录与新二进制对不上），再申请也不会有任何反应。"
-            + "清除记录后系统才会重新询问。")
-        resetNote.font = .systemFont(ofSize: 11)
-        resetNote.textColor = RimeUI.textMuted
-        rows.append(resetNote)
+            + "清除记录后系统才会重新询问。"
+        rows.append(actions)
         return contentColumn(rows)
     }
 
@@ -3868,14 +3641,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         column.spacing = 8
         column.edgeInsets = NSEdgeInsets(top: 0, left: 24, bottom: 22, right: 24)
         return column
-    }
-
-    private func title(_ s: String) -> NSTextField {
-        let l = NSTextField(labelWithString: s)
-        l.font = .systemFont(ofSize: 12, weight: .semibold)
-        l.textColor = RimeUI.textSecondary
-        l.alignment = .left
-        return l
     }
 
     private func caption(_ s: String) -> NSTextField {
@@ -3973,13 +3738,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         row.alignment = .centerY
         row.spacing = 8
 
-        let help = secondaryLabel(
-            "工作台高度会随普通、翻译和多结果布局自动变化；这里只调整稳定宽度。也可以直接拖动工作台边缘。"
-        )
-        help.translatesAutoresizingMaskIntoConstraints = false
-        help.widthAnchor.constraint(equalToConstant: 650).isActive = true
-
-        let stack = NSStackView(views: [row, help])
+        let stack = NSStackView(views: [row])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 7
@@ -3995,15 +3754,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             let titleLabel = NSTextField(labelWithString: action.title)
             titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
             titleLabel.textColor = RimeUI.textPrimary
-
-            let detailLabel = NSTextField(labelWithString: action.detail)
-            detailLabel.font = .systemFont(ofSize: 9)
-            detailLabel.textColor = RimeUI.textMuted
-
-            let labels = NSStackView(views: [titleLabel, detailLabel])
-            labels.orientation = .vertical
-            labels.alignment = .leading
-            labels.spacing = 2
+            titleLabel.toolTip = action.detail
+            titleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 390).isActive = true
 
             let recorder = RimeShortcutRecorderButton(action: action)
             recorder.onFeedback = { [weak self] message in
@@ -4012,7 +3764,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 self.shortcutFeedbackLabel.isHidden = message == nil
             }
 
-            let row = NSStackView(views: [labels, flexSpacer(), recorder])
+            let row = NSStackView(views: [titleLabel, flexSpacer(), recorder])
             row.orientation = .horizontal
             row.alignment = .centerY
             row.spacing = 16
@@ -4026,7 +3778,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             row.layer?.cornerRadius = 8
             row.translatesAutoresizingMaskIntoConstraints = false
             row.widthAnchor.constraint(equalToConstant: 650).isActive = true
-            labels.widthAnchor.constraint(lessThanOrEqualToConstant: 390).isActive = true
             return row
         }
 
@@ -4037,14 +3788,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         )
         reset.bezelStyle = .rounded
 
-        let note = secondaryLabel(
-            "这里配置 RIMES 自己定义的快捷键。⌘/⌃A、⌘/⌃V、Backspace 与未配置的方向键继续遵循系统编辑语义，不在此处重映射。"
-        )
-        note.translatesAutoresizingMaskIntoConstraints = false
-        note.widthAnchor.constraint(equalToConstant: 650).isActive = true
-
         let stack = NSStackView(
-            views: rows + [shortcutFeedbackLabel, reset, note]
+            views: rows + [shortcutFeedbackLabel, reset]
         )
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -4185,13 +3930,10 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             codexLoginStatusLabel.textColor = codexLoginFeedbackIsError
                 ? .systemRed
                 : RimeUI.textSecondary
+            codexLoginStatusLabel.isHidden = false
         } else {
-            codexLoginStatusLabel.stringValue = AITextCodexLoginPresentation.idleMessage(
-                hasCredential: authenticated
-            )
-            codexLoginStatusLabel.textColor = authenticated
-                ? themeStatusColor
-                : RimeUI.textMuted
+            codexLoginStatusLabel.stringValue = ""
+            codexLoginStatusLabel.isHidden = true
         }
     }
 
@@ -4231,13 +3973,10 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             claudeLoginStatusLabel.textColor = claudeLoginFeedbackIsError
                 ? .systemRed
                 : RimeUI.textSecondary
+            claudeLoginStatusLabel.isHidden = false
         } else {
-            claudeLoginStatusLabel.stringValue = AITextClaudeLoginPresentation.idleMessage(
-                authenticationStatus: status
-            )
-            claudeLoginStatusLabel.textColor = status == true
-                ? themeStatusColor
-                : RimeUI.textMuted
+            claudeLoginStatusLabel.stringValue = ""
+            claudeLoginStatusLabel.isHidden = true
         }
     }
 

@@ -647,11 +647,7 @@ final class CapsuleRevealPasscodeSettingsView: NSView {
 
         let title = NSTextField(labelWithString: "密码查看口令")
         title.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        let detail = NSTextField(
-            wrappingLabelWithString: "查看 Capsule 密码明文前，必须完成四组原生按键并击。自定义口令只保存加盐摘要。"
-        )
-        detail.font = NSFont.systemFont(ofSize: 11)
-        detail.textColor = RimeUI.textSecondary
+        title.toolTip = "查看 Capsule 密码明文前，必须完成四组原生按键并击。自定义口令只保存加盐摘要。"
         statusLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
 
         let setButton = RimePointingHandButton(
@@ -671,7 +667,7 @@ final class CapsuleRevealPasscodeSettingsView: NSView {
         actions.alignment = .centerY
         actions.spacing = 8
 
-        let column = NSStackView(views: [title, detail, statusLabel, actions])
+        let column = NSStackView(views: [title, statusLabel, actions])
         column.orientation = .vertical
         column.alignment = .leading
         column.spacing = 7
@@ -683,7 +679,6 @@ final class CapsuleRevealPasscodeSettingsView: NSView {
             column.trailingAnchor.constraint(equalTo: trailingAnchor),
             column.topAnchor.constraint(equalTo: topAnchor),
             column.bottomAnchor.constraint(equalTo: bottomAnchor),
-            detail.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -28),
             actions.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -28),
         ])
         applyAppearance()

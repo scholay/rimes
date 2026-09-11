@@ -72,10 +72,6 @@ final class TypingSpeedSettingsViewController: NSViewController, TypingPracticeT
         content.spacing = 14
         content.edgeInsets = NSEdgeInsets(top: 24, left: 26, bottom: 28, right: 26)
         content.translatesAutoresizingMaskIntoConstraints = false
-        content.addArrangedSubview(label(isHistory ? "测速成绩" : "文章跟打", size: 25, weight: .semibold))
-        let subtitle = label(isHistory ? "同一篇文章、同一输入方案，看见每一次进步" : "8 篇中英文短文 · 原生组字 · 一次专注输入", size: 12)
-        subtitle.textColor = RimeUI.textSecondary
-        content.addArrangedSubview(subtitle)
         configureControls()
         if isHistory { buildHistory(in: content) } else { buildPractice(in: content) }
         storageWarning.font = .systemFont(ofSize: 11)
@@ -232,12 +228,13 @@ final class TypingSpeedSettingsViewController: NSViewController, TypingPracticeT
         content.addArrangedSubview(textPanel(title: "输入", detail: "首键计时 · 组字不判错", textView: editor, height: 152))
         content.addArrangedSubview(resultStack)
         resultStack.isHidden = true
-        content.addArrangedSubview(label("速度轨迹", size: 12, weight: .semibold))
+        let speedTrackLabel = label("速度轨迹", size: 12, weight: .semibold)
+        speedTrackLabel.toolTip =
+            "计时含思考与纠错 · 标点逐字对照 · 仅保存成绩，不保存输入正文。"
+            + "中文有效速度 = 正确字符 ÷ 总分钟；英文 WPM = 正确字符 ÷ 5 ÷ 总分钟。"
+            + "过程正确率保留改正前的错误，最终字准单独展示。"
+        content.addArrangedSubview(speedTrackLabel)
         content.addArrangedSubview(speedChart)
-        let rules = label("计时含思考与纠错 · 标点逐字对照 · 仅保存成绩，不保存输入正文", size: 10)
-        rules.textColor = RimeUI.textMuted
-        rules.toolTip = "中文有效速度 = 正确字符 ÷ 总分钟；英文 WPM = 正确字符 ÷ 5 ÷ 总分钟。过程正确率保留改正前的错误，最终字准单独展示。"
-        content.addArrangedSubview(rules)
     }
     private func buildHistory(in content: NSStackView) {
         content.addArrangedSubview(row([articlePicker, flexible(), repairButton, clearButton]))
@@ -248,13 +245,11 @@ final class TypingSpeedSettingsViewController: NSViewController, TypingPracticeT
         content.addArrangedSubview(historySummary)
         speedChart.emptyMessage = "这篇文章还没有成绩，去完成第一次跟打吧"
         speedChart.onSelectSample = { [weak self] id in self?.selectHistoryResult(id: id) }
+        speedChart.toolTip = "只比较同篇、同版、同方案；非正式练习不连入成绩曲线。正文不进入历史。"
         content.addArrangedSubview(speedChart)
         content.addArrangedSubview(resultStack)
         resultStack.isHidden = true
         content.addArrangedSubview(historyRows)
-        let privacy = label("只比较同篇、同版、同方案；非正式练习不连入成绩曲线。正文不进入历史。", size: 10)
-        privacy.textColor = RimeUI.textMuted
-        content.addArrangedSubview(privacy)
     }
     private var now: TimeInterval { clockProvider() }
 
@@ -601,9 +596,9 @@ final class TypingSpeedSettingsViewController: NSViewController, TypingPracticeT
     }
 
     private func textPanel(title: String, detail: String, textView: NSTextView, height: CGFloat) -> NSView {
-        let explanation = label(detail, size: 10)
-        explanation.textColor = RimeUI.textMuted
-        let header = row([label(title, size: 11, weight: .semibold), flexible(), explanation])
+        let titleLabel = label(title, size: 11, weight: .semibold)
+        titleLabel.toolTip = detail
+        let header = row([titleLabel, flexible()])
         header.edgeInsets = NSEdgeInsets(top: 10, left: 14, bottom: 0, right: 14)
         let scroll = NSScrollView()
         scroll.drawsBackground = false
