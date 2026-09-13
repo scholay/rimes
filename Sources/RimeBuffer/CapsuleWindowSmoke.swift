@@ -322,11 +322,11 @@ func runCapsuleWindowSmokeTest() -> Bool {
             }
             guard let reference = layouts.first?.1,
                   layouts.allSatisfy({ kind, layout in
-                    (10...18).contains(layout.subtitleToTabsGap)
+                    (10...18).contains(layout.headerToToolbarGap)
                     && (15...17).contains(layout.formTopGap)
-                    && abs(layout.tabsTop - layout.editorTop) <= 1.5
-                    && layout.kindControlFrame.width > 0
-                    && layout.kindControlFrame.height > 0
+                    && abs(layout.toolbarTop - layout.editorTop) <= 1.5
+                    && layout.tabStripFrame.width > 0
+                    && layout.tabStripFrame.height > 0
                     && layout.listFrame.width >= 199
                     && layout.editorFrame.width > 0
                     && layout.editorFrame.height > 0
@@ -349,7 +349,7 @@ func runCapsuleWindowSmokeTest() -> Bool {
                     && !layout.hasAmbiguousLayout
                   }),
                   layouts.allSatisfy({ _, layout in
-                    abs(layout.tabsTop - reference.tabsTop) <= 0.5
+                    abs(layout.toolbarTop - reference.toolbarTop) <= 0.5
                         && abs(layout.editorTop - reference.editorTop) <= 0.5
                   }) else {
                 return capsuleWindowSmokeFail(
@@ -1125,10 +1125,12 @@ private func capsulePointingHandControlsAreValid(in root: NSView) -> Bool {
     }
     let segmentedControls = controls.compactMap { $0 as? NSSegmentedControl }
     let popUpButtons = controls.compactMap { $0 as? NSPopUpButton }
+    // The kind tabs share the rail's first-mouse button, whose pointing hand
+    // also works in the rail's non-key panel.
     return !buttons.isEmpty
-        && !segmentedControls.isEmpty
         && buttons.allSatisfy {
             $0 is RimePointingHandButton
+                || $0 is ClipboardFirstMouseButton
                 || $0 is RimeFixedAccentPopUpButton
         }
         && segmentedControls.allSatisfy {

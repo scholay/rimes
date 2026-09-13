@@ -115,11 +115,11 @@ private extension NSRect {
 
 struct CapsulePaneLayoutSnapshot {
     let rootFrame: NSRect
-    let subtitleToTabsGap: CGFloat
+    let headerToToolbarGap: CGFloat
     let formTopGap: CGFloat
-    let tabsTop: CGFloat
+    let toolbarTop: CGFloat
     let editorTop: CGFloat
-    let kindControlFrame: NSRect
+    let tabStripFrame: NSRect
     let listFrame: NSRect
     let editorFrame: NSRect
     let actionsFrame: NSRect
@@ -993,10 +993,6 @@ final class CapsuleWindowRepository {
 final class CapsuleWindowController: NSObject, NSWindowDelegate {
     static let shared = CapsuleWindowController()
 
-    // v1 frames may have been enlarged to an image's intrinsic pixel size.
-    // Start from a clean frame once, then keep normal user resizing in v2.
-    private static let frameAutosaveName = "RIMES.CapsuleWindow.v2"
-
     private var window: NSWindow?
     private var contentController: CapsulePaneViewController?
     private var appearanceObserver: NSObjectProtocol?
@@ -1036,7 +1032,11 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
         // Capsule is a standalone AppKit manager. It has no IMK client or
         // delivery authority, so the selected input source must not gate it.
         if window == nil { build() }
-        clampWindowToVisibleScreens(display: false)
+        if window?.isVisible == true {
+            clampWindowToVisibleScreens(display: false)
+        } else {
+            placeAtRail()
+        }
         applyAppearance()
         contentController?.reloadFromStore()
         if let window {
@@ -1046,6 +1046,24 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
         DispatchQueue.main.async { [weak self] in
             self?.contentController?.windowBecameKey()
+        }
+    }
+
+    /// Opens the manager from the rail's gear, on the kind the rail was showing.
+    func show(kind: CapsuleEntryKind?) {
+        show()
+        if let kind { contentController?.selectKind(kind) }
+    }
+
+    /// The gear, Esc or the Recent tab: closes the manager, confirming an
+    /// unsaved draft, and brings the rail back on `tab` once focus has
+    /// returned to the application the user came from.
+    func returnToRail(tab: CapsuleRailTab) {
+        guard let window, window.isVisible else { return }
+        window.performClose(nil)
+        guard !window.isVisible else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            ClipboardHistoryWindowController.shared.show(tab: tab)
         }
     }
 
@@ -1085,24 +1103,35 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
     }
 
     private func build() {
+        // The manager is the rail grown upward: a key window with the rail's
+        // chrome and header, so it has no visible title bar of its own.
         let window = NSWindow(
             contentRect: NSRect(
                 origin: .zero,
                 size: CapsuleWindowGeometry.defaultContentSize
             ),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = "RIMES Capsule"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window.standardWindowButton(button)?.isHidden = true
+        }
         window.isReleasedWhenClosed = false
         window.contentMinSize = CapsuleWindowGeometry.minimumContentSize
         window.appearance = RimeUI.appKitAppearance
+        window.backgroundColor = RimeUI.workbenchChrome
         window.animationBehavior = .documentWindow
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.delegate = self
 
         let contentController = CapsulePaneViewController()
+        contentController.onReturnToRail = { [weak self] tab in
+            self?.returnToRail(tab: tab)
+        }
         // Keep content constraint invalidation from being interpreted as a
         // window resize. NSWindow still resizes this view for explicit user or
         // programmatic frame changes.
@@ -1110,20 +1139,6 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
             contentController: contentController,
             in: window
         )
-
-        let restored = window.setFrameUsingName(Self.frameAutosaveName)
-        if restored {
-            let constrained = CapsuleWindowGeometry.constrainedFrame(
-                window.frame,
-                visibleFrames: NSScreen.screens.map(\.visibleFrame),
-                fallbackVisibleFrame: NSScreen.main?.visibleFrame
-            )
-            if constrained != window.frame {
-                window.setFrame(constrained, display: false)
-            }
-        }
-        _ = window.setFrameAutosaveName(Self.frameAutosaveName)
-        if !restored { window.center() }
 
         self.window = window
         self.contentController = contentController
@@ -1143,6 +1158,27 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Same centre and bottom edge as the rail, on the pointer's screen.
+    private func placeAtRail() {
+        guard let window else { return }
+        let screen = NSScreen.screens.first {
+            $0.frame.contains(NSEvent.mouseLocation)
+        } ?? NSScreen.main
+        let visible = screen?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
+        let minimum = CapsuleWindowGeometry.minimumContentSize
+        let preferred = CapsuleWindowGeometry.defaultContentSize
+        let width = min(preferred.width, max(minimum.width, visible.width - 32))
+        let height = min(preferred.height, max(minimum.height, visible.height - 48))
+        let content = NSRect(
+            x: visible.midX - width / 2,
+            y: visible.minY + min(24, max(0, visible.height - height)),
+            width: width,
+            height: height
+        )
+        window.setFrame(window.frameRect(forContentRect: content), display: false)
+    }
+
     private func clampWindowToVisibleScreens(display: Bool) {
         guard let window else { return }
         let constrained = CapsuleWindowGeometry.constrainedFrame(
@@ -1157,6 +1193,7 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
 
     private func applyAppearance() {
         window?.appearance = RimeUI.appKitAppearance
+        window?.backgroundColor = RimeUI.workbenchChrome
         contentController?.applyAppearance()
     }
 }
@@ -1184,10 +1221,17 @@ final class CapsulePaneViewController: NSViewController,
         qos: .userInitiated
     )
 
-    private let titleLabel = NSTextField(labelWithString: "$ rimes capsule")
-    private let subtitleLabel = NSTextField(
-        labelWithString: "local knowledge manager · Markdown + media + encrypted secrets"
-    )
+    /// Asked to close the manager and show the rail on the given tab.
+    var onReturnToRail: ((CapsuleRailTab) -> Void)?
+
+    private let titleLabel = NSTextField(labelWithString: "Capsule")
+    private let countLabel = NSTextField(labelWithString: "")
+    private let tabStrip = CapsuleRailTabStrip()
+    private let railButton = RimePointingHandButton(title: "", target: nil, action: nil)
+    private let closeButton = RimePointingHandButton(title: "", target: nil, action: nil)
+    private let hintLabel = NSTextField(labelWithString: "⌘S SAVE   ESC BACK TO RAIL")
+    private weak var headerStack: NSStackView?
+    private weak var toolbarStack: NSStackView?
     private let syncStatusLabel = NSTextField(labelWithString: "iCloud 未设置")
     private let syncNowButton = RimePointingHandButton(
         title: "立即同步",
@@ -1198,12 +1242,6 @@ final class CapsulePaneViewController: NSViewController,
         title: "iCloud…",
         target: nil,
         action: nil
-    )
-    private lazy var kindControl = RimePointingHandSegmentedControl(
-        labels: CapsuleEntryKind.allCases.map(\.tabLabel),
-        trackingMode: .selectOne,
-        target: self,
-        action: #selector(kindChanged)
     )
     private let searchField = NSSearchField()
     private let newButton = RimePointingHandButton(
@@ -1305,29 +1343,12 @@ final class CapsulePaneViewController: NSViewController,
         let root = NSView()
         root.wantsLayer = true
 
-        titleLabel.font = MailboxTerminalTypography.font(
-            ofSize: 15,
-            weight: .semibold
-        )
-        titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.setContentCompressionResistancePriority(
-            .defaultLow,
-            for: .horizontal
-        )
-        subtitleLabel.font = MailboxTerminalTypography.font(ofSize: 10)
-        subtitleLabel.lineBreakMode = .byTruncatingTail
-        subtitleLabel.setContentCompressionResistancePriority(
-            .defaultLow,
-            for: .horizontal
-        )
-        let heading = NSStackView(views: [titleLabel, subtitleLabel])
-        heading.orientation = .vertical
-        heading.alignment = .leading
-        heading.spacing = 2
-        heading.setContentCompressionResistancePriority(
-            .defaultLow,
-            for: .horizontal
-        )
+        titleLabel.font = .monospacedSystemFont(ofSize: 15, weight: .bold)
+        titleLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        countLabel.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
+        countLabel.lineBreakMode = .byTruncatingTail
+        countLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        tabStrip.onSelect = { [weak self] tab in self?.tabSelected(tab) }
 
         syncStatusLabel.font = MailboxTerminalTypography.font(ofSize: 9)
         syncStatusLabel.lineBreakMode = .byTruncatingTail
@@ -1352,32 +1373,42 @@ final class CapsulePaneViewController: NSViewController,
         syncManageButton.target = self
         syncManageButton.action = #selector(manageCloudSync)
         syncManageButton.setAccessibilityLabel("管理 Capsule iCloud 同步")
+
+        // The manager is the rail grown upward: the rail's header, with the
+        // gear lit to show this is the manage view.
+        railButton.image = RimeUI.symbol("gearshape", pointSize: 12, weight: .semibold)
+        railButton.image?.isTemplate = true
+        railButton.imagePosition = .imageOnly
+        railButton.isBordered = false
+        railButton.wantsLayer = true
+        railButton.layer?.cornerRadius = 6
+        railButton.target = self
+        railButton.action = #selector(returnToRailPressed)
+        railButton.toolTip = "返回 Capsule 底栏"
+        railButton.setAccessibilityLabel("返回 Capsule 底栏")
+        closeButton.image = RimeUI.symbol("xmark", pointSize: 11, weight: .bold)
+        closeButton.image?.isTemplate = true
+        closeButton.imagePosition = .imageOnly
+        closeButton.isBordered = false
+        closeButton.target = self
+        closeButton.action = #selector(closePressed)
+        closeButton.setAccessibilityLabel("关闭 Capsule")
+        NSLayoutConstraint.activate([
+            railButton.widthAnchor.constraint(equalToConstant: 22),
+            railButton.heightAnchor.constraint(equalToConstant: 22),
+            closeButton.widthAnchor.constraint(equalToConstant: 16),
+            closeButton.heightAnchor.constraint(equalToConstant: 16),
+        ])
         let header = NSStackView(views: [
-            heading,
-            NSView(),
-            syncStatusLabel,
-            syncNowButton,
-            syncManageButton,
+            titleLabel, countLabel, tabStrip, NSView(),
+            syncStatusLabel, syncNowButton, syncManageButton,
+            railButton, closeButton,
         ])
         header.orientation = .horizontal
         header.alignment = .centerY
-        header.spacing = 8
-
-        kindControl.selectedSegment = CapsuleEntryKind.allCases.firstIndex(
-            of: selectedKind
-        ) ?? 0
-        kindControl.font = MailboxTerminalTypography.font(
-            ofSize: 10,
-            weight: .semibold
-        )
-        // The segmented control may compress inside the narrower Settings
-        // host. Keeping its default 750 resistance competes with the preferred
-        // list width and makes the entire Capsule root grow past its container.
-        kindControl.setContentCompressionResistancePriority(
-            .defaultLow,
-            for: .horizontal
-        )
-        kindControl.setAccessibilityLabel("Capsule 类型")
+        header.spacing = 9
+        headerStack = header
+        tabStrip.select(.saved(selectedKind))
 
         searchField.placeholderString = "搜索标题或内容"
         searchField.sendsSearchStringImmediately = true
@@ -1396,15 +1427,14 @@ final class CapsulePaneViewController: NSViewController,
         )
         newButton.setContentHuggingPriority(.required, for: .horizontal)
 
-        let searchRow = NSStackView(views: [searchField, newButton])
-        searchRow.orientation = .horizontal
-        searchRow.alignment = .centerY
-        searchRow.spacing = 8
+        let toolbar = NSStackView(views: [searchField, newButton])
+        toolbar.orientation = .horizontal
+        toolbar.alignment = .centerY
+        toolbar.spacing = 8
+        toolbarStack = toolbar
 
-        let toolbar = NSStackView(views: [kindControl, searchRow])
-        toolbar.orientation = .vertical
-        toolbar.alignment = .leading
-        toolbar.spacing = 10
+        hintLabel.font = .monospacedSystemFont(ofSize: 9, weight: .medium)
+        hintLabel.lineBreakMode = .byTruncatingTail
 
         let column = NSTableColumn(
             identifier: NSUserInterfaceItemIdentifier("capsule-entry")
@@ -1448,30 +1478,26 @@ final class CapsulePaneViewController: NSViewController,
         header.translatesAutoresizingMaskIntoConstraints = false
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         editorContainer.translatesAutoresizingMaskIntoConstraints = false
+        hintLabel.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(header)
         root.addSubview(toolbar)
         root.addSubview(listContainer)
         root.addSubview(divider)
         root.addSubview(editorContainer)
+        root.addSubview(hintLabel)
         NSLayoutConstraint.activate([
-            header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
-            header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            header.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
-            header.bottomAnchor.constraint(equalTo: heading.bottomAnchor),
-            // NSStackView has no intrinsic height of its own. Pin its bottom to
-            // the last arranged label so short Skill/Password forms cannot
-            // absorb the window's free height and push the whole pane down.
-            heading.bottomAnchor.constraint(equalTo: subtitleLabel.bottomAnchor),
+            header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            header.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
+            header.heightAnchor.constraint(equalToConstant: 30),
 
-            toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             toolbar.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 14),
             toolbar.widthAnchor.constraint(equalTo: listContainer.widthAnchor),
-            kindControl.widthAnchor.constraint(equalTo: toolbar.widthAnchor),
-            searchRow.widthAnchor.constraint(equalTo: toolbar.widthAnchor),
 
-            listContainer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            listContainer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             listContainer.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 12),
-            listContainer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
+            listContainer.bottomAnchor.constraint(equalTo: hintLabel.topAnchor, constant: -8),
             listContainer.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
             listContainer.widthAnchor.constraint(lessThanOrEqualToConstant: 286),
 
@@ -1481,10 +1507,14 @@ final class CapsulePaneViewController: NSViewController,
             divider.widthAnchor.constraint(equalToConstant: 1),
 
             editorContainer.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: 14),
-            editorContainer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
+            editorContainer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
             editorContainer.topAnchor.constraint(equalTo: toolbar.topAnchor),
-            editorContainer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
+            editorContainer.bottomAnchor.constraint(equalTo: listContainer.bottomAnchor),
             editorContainer.widthAnchor.constraint(greaterThanOrEqualToConstant: 280),
+
+            hintLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            hintLabel.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -14),
+            hintLabel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
         ])
         let preferredListWidth = listContainer.widthAnchor.constraint(
             equalTo: root.widthAnchor,
@@ -1572,9 +1602,7 @@ final class CapsulePaneViewController: NSViewController,
         concealPasswordPlaintext()
         guard confirmDiscardChangesIfNeeded() else { return }
         selectedKind = kind
-        kindControl.selectedSegment = CapsuleEntryKind.allCases.firstIndex(
-            of: kind
-        ) ?? 0
+        tabStrip.select(.saved(kind))
         searchField.placeholderString = kind == .password
             ? "仅搜索密码标题"
             : "搜索标题或内容"
@@ -1594,9 +1622,7 @@ final class CapsulePaneViewController: NSViewController,
         guard draft.id != id || draft.kind != kind else { return }
         guard confirmDiscardChangesIfNeeded() else { return }
         selectedKind = kind
-        kindControl.selectedSegment = CapsuleEntryKind.allCases.firstIndex(
-            of: kind
-        ) ?? 0
+        tabStrip.select(.saved(kind))
         searchField.placeholderString = kind == .password
             ? "仅搜索密码标题"
             : "搜索标题或内容"
@@ -1679,9 +1705,14 @@ final class CapsulePaneViewController: NSViewController,
 
     func applyAppearance() {
         guard isViewLoaded else { return }
-        view.layer?.backgroundColor = RimeUI.surface.cgColor
+        view.layer?.backgroundColor = RimeUI.workbenchChrome.cgColor
         titleLabel.textColor = RimeUI.textPrimary
-        subtitleLabel.textColor = RimeUI.textSecondary
+        countLabel.textColor = RimeUI.textMuted
+        hintLabel.textColor = RimeUI.textMuted
+        tabStrip.applyAppearance()
+        railButton.contentTintColor = RimeUI.textPrimary
+        railButton.layer?.backgroundColor = RimeUI.clipboardSelectedBackground.cgColor
+        closeButton.contentTintColor = RimeUI.textSecondary
         syncStatusLabel.textColor = RimeUI.textSecondary
         statusLabel.textColor = RimeUI.textSecondary
         listContainer.layer?.backgroundColor = RimeUI.surface2.cgColor
@@ -1854,9 +1885,7 @@ final class CapsulePaneViewController: NSViewController,
         passwordRevealTimer = nil
         passwordRevealState.conceal()
         selectedKind = kind
-        kindControl.selectedSegment = CapsuleEntryKind.allCases.firstIndex(
-            of: kind
-        ) ?? 0
+        tabStrip.select(.saved(kind))
         draft = .empty(kind: kind)
         editorDirty = false
         renderEditor()
@@ -1885,9 +1914,7 @@ final class CapsulePaneViewController: NSViewController,
         passwordRevealTimer = nil
         passwordRevealState.conceal()
         selectedKind = kind
-        kindControl.selectedSegment = CapsuleEntryKind.allCases.firstIndex(
-            of: kind
-        ) ?? 0
+        tabStrip.select(.saved(kind))
         draft = .empty(kind: kind)
         draft.title = "Media layout smoke"
         draft.content = path
@@ -1905,8 +1932,9 @@ final class CapsulePaneViewController: NSViewController,
     ) -> CapsulePaneLayoutSnapshot {
         layoutCurrentViewForSmoke()
 
-        let subtitleFrame = subtitleLabel.convert(subtitleLabel.bounds, to: view)
-        let kindFrame = kindControl.convert(kindControl.bounds, to: view)
+        let headerFrame = headerStack.map { $0.convert($0.bounds, to: view) } ?? .zero
+        let toolbarFrame = toolbarStack.map { $0.convert($0.bounds, to: view) } ?? .zero
+        let tabStripFrame = tabStrip.convert(tabStrip.bounds, to: view)
         let listFrame = listContainer.convert(listContainer.bounds, to: view)
         let editorFrame = editorContainer.convert(editorContainer.bounds, to: view)
         let actionsFrame = editorActions.map {
@@ -1921,16 +1949,16 @@ final class CapsulePaneViewController: NSViewController,
         let copyButtonFrame = fileCopyButton.map {
             $0.convert($0.bounds, to: view)
         }
-        let subtitleToTabsGap: CGFloat
-        let tabsTop: CGFloat
+        let headerToToolbarGap: CGFloat
+        let toolbarTop: CGFloat
         let editorTop: CGFloat
         if view.isFlipped {
-            subtitleToTabsGap = kindFrame.minY - subtitleFrame.maxY
-            tabsTop = kindFrame.minY
+            headerToToolbarGap = toolbarFrame.minY - headerFrame.maxY
+            toolbarTop = toolbarFrame.minY
             editorTop = editorFrame.minY
         } else {
-            subtitleToTabsGap = subtitleFrame.minY - kindFrame.maxY
-            tabsTop = kindFrame.maxY
+            headerToToolbarGap = headerFrame.minY - toolbarFrame.maxY
+            toolbarTop = toolbarFrame.maxY
             editorTop = editorFrame.maxY
         }
 
@@ -1977,11 +2005,11 @@ final class CapsulePaneViewController: NSViewController,
 
         return CapsulePaneLayoutSnapshot(
             rootFrame: view.frame,
-            subtitleToTabsGap: subtitleToTabsGap,
+            headerToToolbarGap: headerToToolbarGap,
             formTopGap: formTopGap,
-            tabsTop: tabsTop,
+            toolbarTop: toolbarTop,
             editorTop: editorTop,
-            kindControlFrame: kindFrame,
+            tabStripFrame: tabStripFrame,
             listFrame: listFrame,
             editorFrame: editorFrame,
             actionsFrame: actionsFrame,
@@ -2036,9 +2064,7 @@ final class CapsulePaneViewController: NSViewController,
         passwordRevealTimer?.invalidate()
         passwordRevealTimer = nil
         selectedKind = .password
-        kindControl.selectedSegment = CapsuleEntryKind.allCases.firstIndex(
-            of: .password
-        ) ?? 0
+        tabStrip.select(.saved(.password))
         draft = .empty(kind: .password)
         draft.content = "- 示例：值"
         editorDirty = false
@@ -2177,6 +2203,7 @@ final class CapsulePaneViewController: NSViewController,
         switch result {
         case let .success(rows):
             self.rows = rows
+            countLabel.stringValue = "\(rows.count) ITEMS"
             tableView.reloadData()
             if editorDirty, draft.kind == kind {
                 if let id = draft.id,
@@ -2216,6 +2243,7 @@ final class CapsulePaneViewController: NSViewController,
             )
         case let .failure(error):
             rows = []
+            countLabel.stringValue = ""
             tableView.reloadData()
             setStatus(error.localizedDescription, isError: true)
         }
@@ -2291,6 +2319,8 @@ final class CapsulePaneViewController: NSViewController,
         deleteButton.font = MailboxTerminalTypography.font(ofSize: 10)
         saveButton.target = self
         saveButton.action = #selector(saveCurrent)
+        saveButton.keyEquivalent = "s"
+        saveButton.keyEquivalentModifierMask = [.command]
         saveButton.bezelStyle = .rounded
         saveButton.font = MailboxTerminalTypography.font(
             ofSize: 10,
@@ -2991,19 +3021,21 @@ final class CapsulePaneViewController: NSViewController,
         statusLabel.textColor = isError ? .systemRed : RimeUI.textSecondary
     }
 
-    @objc private func kindChanged() {
-        let index = kindControl.selectedSegment
-        guard CapsuleEntryKind.allCases.indices.contains(index) else { return }
-        let requestedKind = CapsuleEntryKind.allCases[index]
-        guard requestedKind != selectedKind else { return }
+    /// Switches the list and editor to `kind`, confirming an unsaved draft
+    /// first. The tab row always ends up showing the kind actually selected.
+    func selectKind(_ requestedKind: CapsuleEntryKind) {
+        guard isViewLoaded else { return }
+        guard requestedKind != selectedKind else {
+            tabStrip.select(.saved(selectedKind))
+            return
+        }
         concealPasswordPlaintext()
         guard confirmDiscardChangesIfNeeded() else {
-            kindControl.selectedSegment = CapsuleEntryKind.allCases.firstIndex(
-                of: selectedKind
-            ) ?? 0
+            tabStrip.select(.saved(selectedKind))
             return
         }
         selectedKind = requestedKind
+        tabStrip.select(.saved(selectedKind))
         searchField.placeholderString = selectedKind == .password
             ? "仅搜索密码标题"
             : "搜索标题或内容"
@@ -3012,6 +3044,29 @@ final class CapsulePaneViewController: NSViewController,
         editorDirty = false
         renderEditor()
         reloadFromStore()
+    }
+
+    private func tabSelected(_ tab: CapsuleRailTab) {
+        guard let kind = tab.savedKind else {
+            tabStrip.select(.saved(selectedKind))
+            onReturnToRail?(.recent)
+            return
+        }
+        selectKind(kind)
+    }
+
+    @objc private func returnToRailPressed() {
+        onReturnToRail?(.saved(selectedKind))
+    }
+
+    @objc private func closePressed() {
+        view.window?.performClose(nil)
+    }
+
+    /// Esc returns to the rail. An input method's marked text never gets
+    /// here: the input method consumes that Esc first.
+    override func cancelOperation(_ sender: Any?) {
+        onReturnToRail?(.saved(selectedKind))
     }
 
     @objc private func searchChanged() {

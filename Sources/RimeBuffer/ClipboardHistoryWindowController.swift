@@ -388,6 +388,13 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
         hideImmediately()
     }
 
+    /// Shows the rail on `tab`, as returning from the manager asks.
+    func show(tab: CapsuleRailTab) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated { pane.selectTab(tab) }
+        show()
+    }
+
     private func hideImmediately() {
         dispatchPrecondition(condition: .onQueue(.main))
         presentationIntent = false
@@ -1372,11 +1379,12 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
     /// borrowed search session is retired before the application activates.
     private func openCapsuleManager(revealing entry: CapsuleRailEntry?) {
         dispatchPrecondition(condition: .onQueue(.main))
+        let railKind = MainActor.assumeIsolated { pane.selectedTab.savedKind }
         hide()
         if let entry {
             CapsuleWindowController.shared.show(revealing: entry.kind, id: entry.id)
         } else {
-            CapsuleWindowController.shared.show()
+            CapsuleWindowController.shared.show(kind: railKind)
         }
     }
 

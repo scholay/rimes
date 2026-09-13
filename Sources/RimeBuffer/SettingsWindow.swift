@@ -1182,7 +1182,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 : [
                     "settings.capsule-passcode-configuration",
                     "settings.capsule-cloud-actions",
-                    "settings.utility-shortcut.openCapsule",
+                    "settings.utility-shortcut.toggleClipboardHistory",
                 ]
             for identifier in routeSpecificIDs where descendant(
                 identifiedBy: NSUserInterfaceItemIdentifier(identifier),
@@ -1983,7 +1983,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         case .inputMethod: return inputPage(subpageID: subpageID ?? "encoding")
         case .appearance: return appearancePage(subpageID: subpageID ?? "theme")
         case .buffer: return bufferPage(subpageID: subpageID ?? "buffer")
-        case .clipboard: return clipSettingsPage()
         case .mailbox: return mailboxPage()
         case .capsule: return capsulePage()
         case .connectors: return connectionsPage(subpageID: subpageID ?? "ai-model")
@@ -2755,14 +2754,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             active: localIsAvailable
         )
 
-        let openButton = SettingsPointingButton(
-            title: "打开 Capsule",
-            target: self,
-            action: #selector(openCapsuleWindowFromSettings)
-        )
-        openButton.bezelStyle = .rounded
-        openButton.bezelColor = RimeUI.accentGreen
-
         let storageButton = SettingsPointingButton(
             title: "打开资料目录",
             target: self,
@@ -2770,8 +2761,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         )
         storageButton.bezelStyle = .rounded
 
-        let shortcutRecorder = utilityShortcutRecorder(for: .openCapsule)
-        let localActions = utilityActionRow([openButton, storageButton])
+        let shortcutRecorder = utilityShortcutRecorder(for: .toggleClipboardHistory)
+        let localActions = utilityActionRow([storageButton])
         let pathLabel = secondaryLabel("本地路径：\(localRoot.path)")
         pathLabel.toolTip = localRoot.path
         pathLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -2797,7 +2788,23 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         revealPasscodeSettings.translatesAutoresizingMaskIntoConstraints = false
         revealPasscodeSettings.widthAnchor.constraint(equalToConstant: 650).isActive = true
 
+        // Capsule's Recent tab is the clipboard history, so its capture and
+        // paste settings live on this page too.
         let page = contentColumn([
+            settingsRow(
+                title: "允许收录剪贴板内容",
+                detail: "RIMES 运行时后台收录；安全输入、锁屏和休眠期间不会读取。",
+                symbolName: "clipboard",
+                control: clipboardHistoryCheck
+            ),
+            settingsRow(
+                title: "回车后自动粘贴",
+                detail: "无法经输入法直接上屏的内容，改为发送一次 ⌘V，省去手动粘贴。",
+                symbolName: "doc.on.clipboard",
+                control: clipboardAutoPasteCheck
+            ),
+            clipboardAutoPasteStatusLabel,
+            spacer(12),
             sectionLabel("本地资料库"),
             settingsRow(
                 title: "本地 Capsule",
@@ -2811,7 +2818,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             sectionLabel("全局快捷键"),
             settingsRow(
                 title: "显示或隐藏 Capsule",
-                detail: "当前为 \(RimeShortcutPreferences.shortcut(for: .openCapsule).displayTitle)；在其他输入法下同样可用。",
+                detail: "当前为 \(RimeShortcutPreferences.shortcut(for: .toggleClipboardHistory).displayTitle)；在其他输入法下同样可用。",
                 symbolName: "keyboard",
                 control: shortcutRecorder
             ),
@@ -2860,24 +2867,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             spacer(20),
             sectionLabel("快捷键"),
             shortcutSettingsView(),
-        ])
-    }
-
-    private func clipSettingsPage() -> NSView {
-        contentColumn([
-            settingsRow(
-                title: "允许收录剪贴板内容",
-                detail: "RIMES 运行时后台收录；安全输入、锁屏和休眠期间不会读取。",
-                symbolName: "clipboard",
-                control: clipboardHistoryCheck
-            ),
-            settingsRow(
-                title: "回车后自动粘贴",
-                detail: "无法经输入法直接上屏的内容，改为发送一次 ⌘V，省去手动粘贴。",
-                symbolName: "doc.on.clipboard",
-                control: clipboardAutoPasteCheck
-            ),
-            clipboardAutoPasteStatusLabel,
         ])
     }
 
@@ -4181,12 +4170,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         settingsStatusLabel.textColor = RimeUI.textMuted
         reload()
         showCurrentRoute()
-    }
-
-    @objc private func openCapsuleWindowFromSettings() {
-        CapsuleWindowController.shared.show()
-        settingsStatusLabel.stringValue = "已打开独立 Capsule 窗口"
-        settingsStatusLabel.textColor = RimeUI.textMuted
     }
 
     @objc private func openCapsuleStorageDirectory() {

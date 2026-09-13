@@ -1859,7 +1859,9 @@ private final class ClipboardHistoryCardButton: NSButton {
         } else {
             previewLabel.textColor = RimeUI.textPrimary
         }
-        let showsEditButton = editable && hovered
+        // The brush belongs to the card the next command acts on, not to
+        // wherever the pointer happens to rest.
+        let showsEditButton = editable && focusedItem
         editButton.isHidden = !showsEditButton
         timeLabel.isHidden = showsEditButton
         savedMarker.isHidden = !inCapsule || showsEditButton
@@ -1893,7 +1895,7 @@ private final class ClipboardHistoryCardButton: NSButton {
     }
 }
 
-private class ClipboardFirstMouseButton: NSButton {
+class ClipboardFirstMouseButton: NSButton {
     private var pointerTrackingArea: NSTrackingArea?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -1925,8 +1927,9 @@ private class ClipboardFirstMouseButton: NSButton {
     }
 }
 
-/// The rail's tab row: Recent, then one tab per saved Capsule kind.
-private final class CapsuleRailTabStrip: NSView {
+/// The rail's tab row: Recent, then one tab per saved Capsule kind. The
+/// manager shows the same row, so both surfaces read as one Capsule.
+final class CapsuleRailTabStrip: NSView {
     var onSelect: ((CapsuleRailTab) -> Void)?
     private let stack = NSStackView()
     private var buttons: [CapsuleRailTabButton] = []
@@ -1983,7 +1986,7 @@ private final class CapsuleRailTabStrip: NSView {
     }
 }
 
-private final class CapsuleRailTabButton: ClipboardFirstMouseButton {
+final class CapsuleRailTabButton: ClipboardFirstMouseButton {
     let tab: CapsuleRailTab
     private let label = NSTextField(labelWithString: "")
     private let icon = NSImageView()

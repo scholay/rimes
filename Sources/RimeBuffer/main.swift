@@ -680,6 +680,14 @@ if CommandLine.arguments.contains("mailbox-window-smoke") {
 if CommandLine.arguments.contains("capsule-window-smoke") {
     exit(runCapsuleWindowSmokeTest() ? 0 : 1)
 }
+if let previewIndex = CommandLine.arguments.firstIndex(of: "capsule-manager-preview"),
+   CommandLine.arguments.indices.contains(previewIndex + 1) {
+    _ = NSApplication.shared
+    let path = CommandLine.arguments[previewIndex + 1]
+    exit(MainActor.assumeIsolated {
+        CapsuleRailSmoke.renderManagerPreview(to: path)
+    } ? 0 : 1)
+}
 if let previewIndex = CommandLine.arguments.firstIndex(of: "capsule-rail-preview"),
    CommandLine.arguments.indices.contains(previewIndex + 2) {
     _ = NSApplication.shared
@@ -6954,8 +6962,10 @@ func runBufferWindowSmokeTest() -> Bool {
         for: .toggleClipboardHistory,
         defaults: migrationDefaults
     )
+    // With Capsule's manager shortcut retired, Command-Shift-C is free again
+    // and is the first fallback.
     guard migratedClipboardShortcut == RimeKeyboardShortcut(
-            keyCode: UInt16(kVK_ANSI_D),
+            keyCode: UInt16(kVK_ANSI_C),
             modifiers: [.command, .shift]
           ),
           RimeShortcutPreferences.shortcut(
@@ -6965,7 +6975,7 @@ func runBufferWindowSmokeTest() -> Bool {
             keyCode: UInt16(kVK_ANSI_P),
             modifiers: [.command, .shift]
           ),
-          migratedClipboardHotKey.keyCode == UInt32(kVK_ANSI_D),
+          migratedClipboardHotKey.keyCode == UInt32(kVK_ANSI_C),
           migratedClipboardHotKey.modifiers == UInt32(cmdKey | shiftKey) else {
         print("FAILED: Clipboard shortcut migration overwrote an existing binding")
         return false
@@ -7011,96 +7021,6 @@ func runBufferWindowSmokeTest() -> Bool {
         return false
     }
 
-    let capsuleMigrationSuite =
-        "RimeBuffer.CapsuleShortcutMigrationSmoke.\(UUID().uuidString)"
-    guard let capsuleMigrationDefaults = UserDefaults(suiteName: capsuleMigrationSuite),
-          let legacyCommandShiftC = try? JSONEncoder().encode(
-            RimeKeyboardShortcut(
-                keyCode: UInt16(kVK_ANSI_C),
-                modifiers: [.command, .shift]
-            )
-          ) else {
-        print("FAILED: could not create Capsule shortcut migration fixture")
-        return false
-    }
-    defer {
-        capsuleMigrationDefaults.removePersistentDomain(
-            forName: capsuleMigrationSuite
-        )
-    }
-    capsuleMigrationDefaults.set(
-        legacyCommandShiftC,
-        forKey: "keyboardShortcut.v1.\(RimeShortcutAction.toggleClipboardHistory.rawValue)"
-    )
-    // Match production cold start: materialize the whole Carbon batch before
-    // reading any individual shortcut. The old ordering returned Clipboard=C
-    // and Capsule=C in this array even though Capsule migration persisted
-    // Clipboard=D later in the same call.
-    let coldStartDefinitions = GlobalHotKeyRouting.definitions(
-        defaults: capsuleMigrationDefaults
-    )
-    let coldStartDefinitionsByAction = Dictionary(
-        uniqueKeysWithValues: coldStartDefinitions.map { ($0.action, $0) }
-    )
-    let coldStartPhysicalShortcuts = coldStartDefinitions.map {
-        "\($0.keyCode)/\($0.modifiers)"
-    }
-    guard coldStartDefinitionsByAction[.openCapsule]?.keyCode
-            == UInt32(kVK_ANSI_C),
-          coldStartDefinitionsByAction[.toggleClipboardHistory]?.keyCode
-            == UInt32(kVK_ANSI_D),
-          Set(coldStartPhysicalShortcuts).count == coldStartDefinitions.count,
-          RimeShortcutPreferences.shortcut(
-            for: .openCapsule,
-            defaults: capsuleMigrationDefaults
-          ) == RimeKeyboardShortcut(
-            keyCode: UInt16(kVK_ANSI_C),
-            modifiers: [.command, .shift]
-          ),
-          RimeShortcutPreferences.shortcut(
-            for: .toggleClipboardHistory,
-            defaults: capsuleMigrationDefaults
-          ) == RimeKeyboardShortcut(
-            keyCode: UInt16(kVK_ANSI_D),
-            modifiers: [.command, .shift]
-          ) else {
-        print("FAILED: Capsule shortcut migration overwrote an existing binding")
-        return false
-    }
-
-    let capsuleDefinitionMigrationSuite =
-        "RimeBuffer.CapsuleDefinitionMigrationSmoke.\(UUID().uuidString)"
-    guard let capsuleDefinitionMigrationDefaults = UserDefaults(
-        suiteName: capsuleDefinitionMigrationSuite
-    ) else {
-        print("FAILED: could not create Capsule definition migration fixture")
-        return false
-    }
-    defer {
-        capsuleDefinitionMigrationDefaults.removePersistentDomain(
-            forName: capsuleDefinitionMigrationSuite
-        )
-    }
-    capsuleDefinitionMigrationDefaults.set(
-        legacyCommandShiftC,
-        forKey: "keyboardShortcut.v1.\(RimeShortcutAction.toggleClipboardHistory.rawValue)"
-    )
-    let migratedClipboardDefinition = GlobalHotKeyRouting.definition(
-        for: .toggleClipboardHistory,
-        defaults: capsuleDefinitionMigrationDefaults
-    )
-    let migratedCapsuleDefinition = GlobalHotKeyRouting.definition(
-        for: .openCapsule,
-        defaults: capsuleDefinitionMigrationDefaults
-    )
-    guard migratedClipboardDefinition.keyCode == UInt32(kVK_ANSI_D),
-          migratedClipboardDefinition.modifiers == UInt32(cmdKey | shiftKey),
-          migratedCapsuleDefinition.keyCode == UInt32(kVK_ANSI_C),
-          migratedCapsuleDefinition.modifiers == UInt32(cmdKey | shiftKey) else {
-        print("FAILED: individual hot key definition skipped Capsule migration")
-        return false
-    }
-
     let externalUtilityActions = GlobalHotKeyRouting.registeredActions(
         currentSourceIsOwn: false
     )
@@ -7111,7 +7031,6 @@ func runBufferWindowSmokeTest() -> Bool {
             .toggleWorkbench,
             .toggleClipboardHistory,
             .openMailbox,
-            .openCapsule,
           ],
           !externalUtilityActions.contains(.openSettings),
           rimeUtilityActions == Set(GlobalHotKeyAction.allCases) else {
@@ -7135,15 +7054,10 @@ func runBufferWindowSmokeTest() -> Bool {
         for: .openMailbox,
         defaults: hotKeyDefaults
     )
-    let capsuleHotKey = GlobalHotKeyRouting.definition(
-        for: .openCapsule,
-        defaults: hotKeyDefaults
-    )
     let workbenchHotKeyID = workbenchHotKey.identifier
     let clipboardHotKeyID = clipboardHotKey.identifier
     let settingsHotKeyID = settingsHotKey.identifier
     let mailboxHotKeyID = mailboxHotKey.identifier
-    let capsuleHotKeyID = capsuleHotKey.identifier
     let unrelatedHotKeyID = EventHotKeyID(
         signature: GlobalHotKeyRouting.signature,
         id: UInt32.max
@@ -7303,19 +7217,12 @@ func runBufferWindowSmokeTest() -> Bool {
           mailboxHotKey.keyCode == UInt32(kVK_ANSI_M),
           mailboxHotKey.modifiers == UInt32(cmdKey | shiftKey),
           mailboxHotKey.registrationOptions == OptionBits(kEventHotKeyExclusive),
-          capsuleHotKey.keyCode == UInt32(kVK_ANSI_C),
-          capsuleHotKey.modifiers == UInt32(cmdKey | shiftKey),
-          capsuleHotKey.registrationOptions == OptionBits(kEventHotKeyExclusive),
           workbenchHotKeyID.id != settingsHotKeyID.id,
           clipboardHotKeyID.id != workbenchHotKeyID.id,
           clipboardHotKeyID.id != settingsHotKeyID.id,
           mailboxHotKeyID.id != workbenchHotKeyID.id,
           mailboxHotKeyID.id != clipboardHotKeyID.id,
           mailboxHotKeyID.id != settingsHotKeyID.id,
-          capsuleHotKeyID.id != workbenchHotKeyID.id,
-          capsuleHotKeyID.id != clipboardHotKeyID.id,
-          capsuleHotKeyID.id != settingsHotKeyID.id,
-          capsuleHotKeyID.id != mailboxHotKeyID.id,
           reloadedSettingsHotKey.keyCode == UInt32(kVK_ANSI_G),
           reloadedSettingsHotKey.modifiers == UInt32(controlKey | optionKey),
           reloadedClipboardHotKey.keyCode == UInt32(kVK_ANSI_H),
@@ -7356,11 +7263,6 @@ func runBufferWindowSmokeTest() -> Bool {
           ) == .openMailbox,
           GlobalHotKeyRouting.route(
             eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed),
-            identifier: capsuleHotKeyID
-          ) == .openCapsule,
-          GlobalHotKeyRouting.route(
-            eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyReleased),
             identifier: workbenchHotKeyID
           ) == .ignore,
@@ -7369,7 +7271,7 @@ func runBufferWindowSmokeTest() -> Bool {
             eventKind: UInt32(kEventHotKeyPressed),
             identifier: unrelatedHotKeyID
           ) == .ignore else {
-        print("FAILED: global workbench/Clipboard/Mailbox/Capsule/settings hotkey routing")
+        print("FAILED: global workbench/Capsule/Mailbox/settings hotkey routing")
         return false
     }
 

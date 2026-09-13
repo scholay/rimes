@@ -110,6 +110,63 @@ enum CapsuleRailSmoke {
         return (try? data.write(to: URL(fileURLWithPath: path), options: .atomic)) != nil
     }
 
+    /// Renders the Capsule manager with sample notes from temporary stores,
+    /// at its default size, to a PNG at `path`.
+    static func renderManagerPreview(to path: String) -> Bool {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "rimes-capsule-manager-preview-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let contentStore = CapsuleContentStore(rootURL: root)
+        let passwordStore = CapsulePasswordStore(rootURL: root)
+        let samples = [
+            ("Capsule 合并方案", "合并体验，不合并存储。\n\n- 最近：本机剪贴板历史，不上 iCloud\n- 收入：⌘S 把选中项写成 Capsule 条目\n- 密码：只在管理视图查看，仍需四组并击"),
+            ("RIMES 本机构建", "DEVELOPER_DIR 指向 Xcode 再跑 dev-reload.sh；装完看 ~/rimebuffer.log。"),
+            ("Electron 输入框", "打开 AXManualAccessibility 后约 3 秒树才建好。"),
+        ]
+        for (title, content) in samples.reversed() {
+            _ = try? contentStore.put(CapsuleContentWriteRequest(
+                type: .note,
+                title: title,
+                content: content
+            ))
+        }
+        let pane = CapsulePaneViewController(
+            repository: CapsuleWindowRepository(
+                contentStore: contentStore,
+                passwordStore: passwordStore
+            ),
+            cloudSyncController: nil
+        )
+        let size = CapsuleWindowGeometry.defaultContentSize
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.contentViewController = pane
+        window.setContentSize(size)
+        pane.reloadFromStore()
+        let deadline = Date().addingTimeInterval(1.5)
+        while Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        pane.view.layoutSubtreeIfNeeded()
+        pane.view.displayIfNeeded()
+        guard let bitmap = pane.view.bitmapImageRepForCachingDisplay(in: pane.view.bounds) else {
+            return false
+        }
+        pane.view.cacheDisplay(in: pane.view.bounds, to: bitmap)
+        guard let data = bitmap.representation(using: .png, properties: [:]) else {
+            return false
+        }
+        return (try? data.write(to: URL(fileURLWithPath: path), options: .atomic)) != nil
+    }
+
     private static func checkRules(
         expect: (_ condition: @autoclosure () -> Bool, _ message: String) -> Void
     ) {

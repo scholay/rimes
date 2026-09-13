@@ -7396,10 +7396,6 @@ final class RIMESController: IMKInputController {
         StatusMenu.shared.openMailbox()
     }
 
-    @objc func openCapsuleFromInputMenu(_ sender: Any?) {
-        StatusMenu.shared.openCapsule()
-    }
-
     @objc func openCodexSessionFromInputMenu(_ sender: Any?) {
         StatusMenu.shared.openCodexSession()
     }

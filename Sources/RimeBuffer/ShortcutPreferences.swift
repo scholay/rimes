@@ -141,7 +141,6 @@ enum RimeShortcutAction: String, CaseIterable {
     case toggleWorkbench
     case toggleClipboardHistory
     case openMailbox
-    case openCapsule
     case openSettings
     case previousPlugin
     case nextPlugin
@@ -152,7 +151,6 @@ enum RimeShortcutAction: String, CaseIterable {
         case .toggleWorkbench: return "显示或隐藏工作台"
         case .toggleClipboardHistory: return "显示或隐藏 Capsule"
         case .openMailbox: return "显示或隐藏 Mailbox"
-        case .openCapsule: return "打开或关闭 Capsule 管理"
         case .openSettings: return "打开设置"
         case .previousPlugin: return "上一个缓冲插件"
         case .nextPlugin: return "下一个缓冲插件"
@@ -169,8 +167,6 @@ enum RimeShortcutAction: String, CaseIterable {
             return "在任何应用中呼出或收起 Capsule 底栏"
         case .openMailbox:
             return "在任何应用中打开或关闭本地保存的外部来源与 AI 会话"
-        case .openCapsule:
-            return "在任何应用中打开或关闭 Capsule 管理窗口"
         case .openSettings:
             return "仅在当前输入法为 RIMES 时打开设置"
         case .previousPlugin:
@@ -200,11 +196,6 @@ enum RimeShortcutAction: String, CaseIterable {
         case .openMailbox:
             return RimeKeyboardShortcut(
                 keyCode: UInt16(kVK_ANSI_M),
-                modifiers: [.command, .shift]
-            )
-        case .openCapsule:
-            return RimeKeyboardShortcut(
-                keyCode: UInt16(kVK_ANSI_C),
                 modifiers: [.command, .shift]
             )
         case .openSettings:
@@ -252,12 +243,11 @@ enum RimeShortcutPreferences {
     private static let keyPrefix = "keyboardShortcut.v1."
 
     /// Preserve every other global/custom binding when repairing a missing
-    /// Clipboard shortcut, including Capsule's product-default Command-Shift-C.
+    /// Clipboard shortcut.
     private static let actionsProtectedFromClipboardMigration: [RimeShortcutAction] = [
         .deliverBuffer,
         .toggleWorkbench,
         .openMailbox,
-        .openCapsule,
         .openSettings,
         .previousPlugin,
         .nextPlugin,
@@ -301,30 +291,6 @@ enum RimeShortcutPreferences {
         UInt16(kVK_ANSI_L),
     ]
 
-    /// Capsule arrived after every existing shortcut. Its product shortcut is
-    /// Command-Shift-C, so a legacy Clipboard migration that occupied that
-    /// chord is moved once to a deterministic free chord. Other explicit
-    /// conflicts remain preserved and Capsule receives a fallback.
-    private static let actionsPredatingCapsule: [RimeShortcutAction] = [
-        .deliverBuffer,
-        .toggleWorkbench,
-        .toggleClipboardHistory,
-        .openMailbox,
-        .openSettings,
-        .previousPlugin,
-        .nextPlugin,
-    ]
-
-    private static let capsuleFallbackKeyCodes: [UInt16] = [
-        UInt16(kVK_ANSI_D), UInt16(kVK_ANSI_E),
-        UInt16(kVK_ANSI_F), UInt16(kVK_ANSI_G), UInt16(kVK_ANSI_H),
-        UInt16(kVK_ANSI_I), UInt16(kVK_ANSI_J), UInt16(kVK_ANSI_K),
-        UInt16(kVK_ANSI_L), UInt16(kVK_ANSI_N), UInt16(kVK_ANSI_O),
-        UInt16(kVK_ANSI_R), UInt16(kVK_ANSI_T), UInt16(kVK_ANSI_U),
-        UInt16(kVK_ANSI_V), UInt16(kVK_ANSI_W), UInt16(kVK_ANSI_X),
-        UInt16(kVK_ANSI_Y), UInt16(kVK_ANSI_Z), UInt16(kVK_ANSI_A),
-    ]
-
     static func shortcut(for action: RimeShortcutAction,
                          defaults: UserDefaults = .standard) -> RimeKeyboardShortcut {
         if action == .toggleClipboardHistory {
@@ -333,107 +299,18 @@ enum RimeShortcutPreferences {
         if action == .openMailbox {
             migrateMailboxShortcutIfNeeded(defaults: defaults)
         }
-        if action == .openCapsule {
-            migrateCapsuleShortcutIfNeeded(defaults: defaults)
-        }
         return storedShortcut(for: action, defaults: defaults)
             ?? action.defaultShortcut
     }
 
     /// Resolve every upgrade migration that can affect a process-global
-    /// shortcut before Carbon definitions are materialized. A later migration
-    /// may move an earlier action (Capsule can move a legacy Clipboard binding),
-    /// so callers must not interleave migration with definition construction.
+    /// shortcut before Carbon definitions are materialized, so callers never
+    /// interleave migration with definition construction.
     static func migrateGlobalHotKeyShortcutsIfNeeded(
         defaults: UserDefaults = .standard
     ) {
         migrateClipboardHistoryShortcutIfNeeded(defaults: defaults)
         migrateMailboxShortcutIfNeeded(defaults: defaults)
-        migrateCapsuleShortcutIfNeeded(defaults: defaults)
-    }
-
-    private static func migrateCapsuleShortcutIfNeeded(defaults: UserDefaults) {
-        let capsuleAction = RimeShortcutAction.openCapsule
-        let capsuleKey = preferenceKey(for: capsuleAction)
-        if let data = defaults.data(forKey: capsuleKey),
-           let shortcut = try? JSONDecoder().decode(
-               RimeKeyboardShortcut.self,
-               from: data
-           ),
-           capsuleAction.accepts(shortcut) {
-            return
-        }
-
-        // Resolve migrations that existed before Capsule before taking the
-        // occupied snapshot. This preserves their already-defined upgrade
-        // semantics without recursing through allCases.
-        migrateClipboardHistoryShortcutIfNeeded(defaults: defaults)
-        migrateMailboxShortcutIfNeeded(defaults: defaults)
-        let occupied = actionsPredatingCapsule.map { action in
-            (action, storedShortcut(for: action, defaults: defaults)
-                ?? action.defaultShortcut)
-        }
-        let desired = capsuleAction.defaultShortcut
-        guard let conflict = occupied.first(where: { $0.1 == desired }) else {
-            return
-        }
-        if conflict.0 == .toggleClipboardHistory {
-            let clipboardAction = RimeShortcutAction.toggleClipboardHistory
-            let occupiedWithoutClipboard = occupied.filter {
-                $0.0 != clipboardAction
-            }
-            let clipboardFallback = clipboardHistoryFallbackKeyCodes.lazy
-                .map {
-                    RimeKeyboardShortcut(
-                        keyCode: $0,
-                        modifiers: [.command, .shift]
-                    )
-                }
-                .first { candidate in
-                    clipboardAction.accepts(candidate)
-                        && candidate != desired
-                        && !occupiedWithoutClipboard.contains(where: {
-                            $0.1 == candidate
-                        })
-                }
-            guard let clipboardFallback,
-                  let data = try? JSONEncoder().encode(clipboardFallback) else {
-                IMELog.write(
-                    "Capsule shortcut migration failed; no Clipboard fallback"
-                )
-                return
-            }
-            defaults.set(
-                data,
-                forKey: preferenceKey(for: clipboardAction)
-            )
-            IMELog.write(
-                "Capsule shortcut migrated; capsule=\(desired.displayTitle) "
-                    + "clipboard=\(clipboardFallback.displayTitle)"
-            )
-            return
-        }
-        let fallback = capsuleFallbackKeyCodes.lazy
-            .map {
-                RimeKeyboardShortcut(
-                    keyCode: $0,
-                    modifiers: [.command, .shift]
-                )
-            }
-            .first { candidate in
-                capsuleAction.accepts(candidate)
-                    && !occupied.contains(where: { $0.1 == candidate })
-            }
-        guard let fallback,
-              let data = try? JSONEncoder().encode(fallback) else {
-            IMELog.write("Capsule shortcut migration failed; no free fallback")
-            return
-        }
-        defaults.set(data, forKey: capsuleKey)
-        IMELog.write(
-            "Capsule shortcut migrated; preserved=\(conflict.0.rawValue) "
-                + "capsule=\(fallback.displayTitle)"
-        )
     }
 
     private static func migrateMailboxShortcutIfNeeded(defaults: UserDefaults) {

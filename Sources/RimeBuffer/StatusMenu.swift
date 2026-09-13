@@ -7,7 +7,6 @@ struct InputSourceMenuState {
     let bufferTitle: String
     let clipboardTitle: String
     let mailboxTitle: String
-    let capsuleTitle: String
 }
 
 /// Builds ETInput's commands for the system input-source menu. The menu items
@@ -43,8 +42,7 @@ final class StatusMenu {
             healthy: healthy,
             bufferTitle: bufferTitle,
             clipboardTitle: "Capsule…（\(clipboardShortcut)）",
-            mailboxTitle: mailboxTitle,
-            capsuleTitle: capsuleTitle
+            mailboxTitle: mailboxTitle
         ))
     }
 
@@ -88,13 +86,6 @@ final class StatusMenu {
             keyEquivalent: "")
         mailbox.target = target
         menu.addItem(mailbox)
-
-        let capsule = NSMenuItem(
-            title: state.capsuleTitle,
-            action: #selector(RIMESController.openCapsuleFromInputMenu(_:)),
-            keyEquivalent: "")
-        capsule.target = target
-        menu.addItem(capsule)
 
         let codexSession = NSMenuItem(
             title: "Codex 会话…",
@@ -194,13 +185,6 @@ final class StatusMenu {
             : "Mailbox…（\(shortcut)）"
     }
 
-    private var capsuleTitle: String {
-        let shortcut = RimeShortcutPreferences
-            .shortcut(for: .openCapsule)
-            .displayTitle
-        return "Capsule 管理…（\(shortcut)）"
-    }
-
     func openSettings() {
         SettingsWindowController.shared.show()
     }
@@ -216,10 +200,6 @@ final class StatusMenu {
     func openMailbox() {
         let threadID = MailboxStore.shared.selectLatestUnreadOrMostRecent()
         MailboxWindowController.shared.show(selecting: threadID)
-    }
-
-    func openCapsule() {
-        CapsuleWindowController.shared.show()
     }
 
     /// Opens the split session pane on the frontmost Finder-visible working

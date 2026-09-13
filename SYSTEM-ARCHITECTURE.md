@@ -1,5 +1,7 @@
 # RIMES · 系统架构
 
+> **2026-09-13 Capsule 合并第三步（当前，覆盖第一、二步中关于独立管理窗口与 `⌘⇧C` 的描述）**：Capsule 只有一个全局快捷键，即底栏的 `toggleClipboardHistory`（产品默认 `⌘⇧P`，可在设置中改，例如 `⌘⇧V`）。管理窗口只能经底栏齿轮或保存卡片的画笔打开：`openCapsule` 快捷键、`GlobalHotKeyAction` 原值 5、输入法菜单的「Capsule 管理…」与设置页中的快捷键行和「打开 Capsule」按钮均已删除，Clipboard 迁移的兜底键因此可以使用空出的 `⌘⇧C`。管理窗口是底栏向上长高的样子：与底栏同中心、同底边，透明标题栏、隐藏标准按钮、底栏的 chrome 与头部（标题、条数、同一组类型标签、点亮的齿轮、关闭），其下仍是原搜索、列表与编辑器；`⌘S` 保存。齿轮、Esc 或「最近」标签在确认未保存草稿后关闭窗口，约 0.15 秒后焦点回到原应用，再在对应标签上显示底栏。卡片画笔改为显示在当前选中（焦点）卡片上，而不是悬停卡片。设置中 Clipboard 一级页并入 Capsule 页：收录、自动粘贴、本地资料库、底栏快捷键、查看口令与 iCloud。
+
 > **2026-09-13 Capsule 底栏合并第二步（当前）**：「最近」卡片可以收入 Capsule。`⌘S` 在所有标签上都由底栏消费，避免落入宿主的保存；只在「最近」上把所选卡片立即保存，不弹对话框，底栏保持打开，结果以位于底栏上方的 toast 告知。文本与链接成为笔记，标题取首个非空行（最多 60 字）；图片文件与 PDF 文件成为指向原文件的条目；无文件的图片数据按 SHA-256 写入 `capsule/assets/<hash>.<ext>`（目录 0700、文件 0600，与 iCloud 镜像的资产命名一致）后成为 Image 条目；颜色、未知类型与其他文件拒绝。保存前按正文或路径查重，重复保存返回原条目。写入经 `CapsuleWindowRepository`，因此发布 store 变更并唤醒 iCloud 同步。`CapsuleRailSavedIndex` 只在 UserDefaults 记录「历史条目 id → Capsule 条目 id」（最多 2000 对，条目删除后清理）；卡片在该条目仍存在或文本与某条笔记完全相同时，在时间左侧显示胶囊标记。悬停「最近」卡片的画笔收起底栏，在管理窗口中打开预填的新条目，保存与否由用户决定。
 
 > **2026-09-13 Capsule 底栏合并第一步（当前）**：`⌘⇧P` 的底部窗口对外改名 Capsule，头部新增类型标签「最近 · 笔记 · 图片 · PDF · 技能 · 密码」（点击或 Tab/Shift-Tab 切换）与齿轮。「最近」仍是原 Clipboard History：本机 SQLite、不同步，行为不变。其余标签用同一卡片只读展示 Capsule 条目，由 `CapsuleRailLibrary` 在后台队列读取两个 store，按更新时间倒序；Password 条目只带标题与固定掩码，不含密文。Return、双击或 `⌘1`–`⌘9` 把笔记正文经精确 FocusToken 直接上屏，无精确目标或非 RIMES 输入源时写系统剪贴板并自动粘贴；图片、PDF、技能写入文件表示后自动粘贴；`⌘C` 只复制。每次写入后重建历史 baseline，保存条目不会进入「最近」。Password 在底栏不可上屏、不可复制；Delete 不删除保存条目。悬停保存卡片显示画笔；画笔与齿轮都先收起底栏，再打开 Capsule 管理窗口，画笔定位到该条目。内部类型与持久化键名仍为 `ClipboardHistory*`，设置页暂不改名；`⌘⇧C` 管理窗口在合并第三步前继续存在。
@@ -47,7 +49,7 @@
 
 RIMES 是一个 **macOS 中文输入法**（IMKit + 自包含 librime），并在其上叠加 Buffer、Clipboard History、Mailbox 与 Capsule 四个同级本机模块。Buffer 是独立、常驻、上屏前的文本工作台：中文 commit、ASCII/英文/标点、已接受的外部文字与用户主动请求的插件结果先进入缓冲，再由用户逐块或长按全部投递到实时校验的输入框。当前维护的 AI 生成、实时翻译与意识流输入都经过同一投递边界；Mailbox 独立保存 AI 会话和待审核外部推送；Clipboard History 在无保护且收录开启时后台持久保存多类型 pasteboard representation，并只在 `⌘⇧P` 打开的底部窗口展示。核心输入方案是雾凇全拼、自然码双拼、小鹤双拼、五笔 86 与英文；`my_combo` 由默认关闭的「并击」扩展拥有。意识流不修改当前普通输入方案：扩展关闭时把焦点绑定的物理 `a-z` 当作连续全拼，扩展开启时使用扩展当前的飞耀并击/互击模式映射物理批次，分别保留同批结算与相邻左/右半区跨批重组语义。完整音节自动加入 soft ASCII syllable Space，尚未配对的单侧拼音片段只映射、不切割。用户物理 Space 才是立即请求、以 `·` 可视化并参与短句强分块的 hard boundary；自动 Space 显示为普通空格，只参与全拼音节提示。AI 生成只在 Return 或主按钮明确请求时运行；意识流按停顿自动猜测配置上限内的 1–5 个互斥版本（默认 5）。多结果都在单一 target viewport 中分页并由 pager、↑/↓ 或数字 1–5 选择，Return/纸飞机先原子确认当前版本再发送，任何结果都不能自动上屏。`Command+Shift+B/P/M/C` 分别开关 Buffer、Clipboard History、Mailbox 与 Capsule；secure input、失效焦点与模块自有窗口始终隔离。
 
-`Command+Shift+C` 全局开关独立 Capsule 管理窗口；Capsule 不属于 Buffer 插件体系。
+Capsule 底栏由其全局快捷键开关，管理窗口只从底栏齿轮或卡片画笔打开；Capsule 不属于 Buffer 插件体系。
 
 ---
 
@@ -374,7 +376,7 @@ Delivery.insert(_ text, into: client)
 - **输入空态是 placeholder**：Default 与所有派生 Buffer 的 source 空态文案仅在逻辑输入未激活、source 与 preedit 都为空且 source rail 实际可见时渲染。点击 source rail 并成功取得精确 `FocusToken` 的 Buffer 输入权后，提示立即退出布局，空插入点只显示光标；离开 Buffer 回到直输后，若仍为空则恢复提示。不可编辑的 target 空态，以及 loading、failed、unavailable、protection 等运行状态不是 placeholder，不随 source 聚焦隐藏。
 - **React single-exchange 的原生映射是显式契约**：`AI -> derived singleExchange`，`Marine -> derived singleExchange`，`Remarkable -> standardBufferImport`。AI 与 Marine 都有独立 source/context 和 result workspace，视觉交换不改变其投递 authority；现有 refresh 会提前清除未投递结果，因此结果态只暴露“返回编辑”这一明确放弃动作。Remarkable 不属于 `DerivedBufferWorkspaceRouter`：它完成 SSH 当前页稳定复验与本地 OCR 后，把带 `.ssh` provenance 的识别正文写入普通 `BufferModel`，随后只走普通缓冲投递。若强行套 exchange rail 会制造第二份结果状态并绕开其原生安全生命周期，所以保留标准 rail。`BufferNativePresentationContract` 与 `buffer-window-smoke` 同时钉住三种映射。
 - **跨 Space/显示器恢复是唯一焦点跟随例外**：缓冲捕获开启且新焦点仍是精确、可信、非 secure 的外部文本目标时，如果工作台滞留旧 Space，或合法 caret 已在另一物理显示器，就只迁移一次。当前 Space 同屏字段切换、输入和流式刷新不移动窗口。自动路径在真正置前前再次校验 token、secure input 与会话保护；拿不到合法 caret 时只重排原 frame，不使用鼠标屏 fallback。未固定窗口同时使用 `.moveToActiveSpace` 与 `.fullScreenAuxiliary`，固定窗口使用 `.canJoinAllSpaces` 与 `.fullScreenAuxiliary`；两组 Space 行为互斥。自动 origin 不覆盖用户手动位置，关闭仍通过暂停捕获表达明确隐藏意图。
-- **全局切换快捷键与 Esc**：`GlobalHotKeyController` 用 Carbon 注册精确且可配置的 `Command+Shift+B`、`Command+Shift+P`、`Command+Shift+M` 与 `Command+Shift+C`，不需 Accessibility 权限；安装后的 one-shot Aqua 登录任务保证同一进程在其他输入法处于当前状态时也能响应。B 调用 `BufferWindowController.toggleVisibility()`：RIMES 输入源下沿用 Buffer 的捕获、投递与 close/pause 生命周期，其他输入源下只进入显式剪贴板导入/复制模式；P 开关屏幕底部的独立 Clipboard 窗口，RIMES 模式保持 nonactivating，外部输入法模式可取得 key input 以供原生搜索，但都不恢复 Buffer 捕获；M 与 C 分别开关正常 key window 形态的 Mailbox、Capsule。注册快捷键均被消费，不继续传给前台应用，也不切换输入源。Buffer 的 `Esc` 只关闭 Buffer；Clipboard 搜索非空时 `Esc` 先清搜索，搜索为空时关闭 Clipboard 自己，始终不触碰宿主 composition。
+- **全局切换快捷键与 Esc**：`GlobalHotKeyController` 用 Carbon 注册精确且可配置的 `Command+Shift+B`、`Command+Shift+P`、与 `Command+Shift+M`，不需 Accessibility 权限；安装后的 one-shot Aqua 登录任务保证同一进程在其他输入法处于当前状态时也能响应。B 调用 `BufferWindowController.toggleVisibility()`：RIMES 输入源下沿用 Buffer 的捕获、投递与 close/pause 生命周期，其他输入源下只进入显式剪贴板导入/复制模式；P 开关屏幕底部的独立 Clipboard 窗口，RIMES 模式保持 nonactivating，外部输入法模式可取得 key input 以供原生搜索，但都不恢复 Buffer 捕获；M 与 C 分别开关正常 key window 形态的 Mailbox、Capsule。注册快捷键均被消费，不继续传给前台应用，也不切换输入源。Buffer 的 `Esc` 只关闭 Buffer；Clipboard 搜索非空时 `Esc` 先清搜索，搜索为空时关闭 Clipboard 自己，始终不触碰宿主 composition。
 - **切离 RIMES**：任何非 RIMES 的 TIS 通知都先 fail-closed 撤销 RIMES 的精确焦点租约、IMK 捕获与投递 authority，并收束候选；不得关闭四个周边窗口或注销其快捷键。Buffer 保留 staged blocks 并进入只允许显式剪贴板导入/复制的外部输入法模式；Clipboard 激活只写 pasteboard、提升到首位并静默关闭；Mailbox 与 Capsule 继续作为正常 key window。重复的同一非 RIMES ID 通知仍清理残余 RIMES authority，但不得切换输入源、合成按键、调用 Accessibility/Post Event，或触碰外部输入法组字；切回 RIMES 也不自动建立捕获或投递租约。
 - **边缘绘制与主题**：圆角层内缩到透明窗口边距，使用当前 appearance family 的完整工作台背景 token，避免 HUD 背景采样破坏对比度；边框按 backing scale 以路径内 hairline 绘制，避免把居中 border 压在窗口 bounds 上造成圆角或边缘裁剪毛边。墨竹、翡翠、静谧是 Classic 家族配色；Rasta 是独立完整的红黄绿语义主题。
 - **关闭不会删除已有块**：RIMES 模式下先显式收束当前组字并暂停捕获；所有模式都会折叠工具栏、结束 transient 加载/错误状态并保留已有模型块，再隐藏。只有当前输入源为 RIMES 且从设置或输入法菜单显示工作台时才恢复底层捕获；外部输入法快捷键打开时保持 detached clipboard mode。工作台没有手动清空或撤销入口；隐私选项触发的跨 app 清理仍是不可恢复的安全操作。
@@ -498,7 +500,7 @@ Sources/RimeBuffer/
   BufferGeneratedResultCopy.swift 非BufferModel生成结果的冻结/写前重验与纯规则probe
   BufferModel.swift             缓冲枢纽（blocks / 全选粘贴 / 成功消费 / transient；无发送历史）
   BufferDeliveryCoordinator.swift 精确目标上的逐块投递与成功块消费
-  GlobalHotKeyController.swift    Command+Shift+B Buffer；Command+Shift+P Clipboard History；Command+Shift+M Mailbox；Command+Shift+C Capsule
+  GlobalHotKeyController.swift    Command+Shift+B Buffer；Command+Shift+P Capsule 底栏；Command+Shift+M Mailbox
   CapsuleWindowController.swift   八类本机 Markdown/密文条目 CRUD、媒体预览/复制、15 秒口令门禁与独立可输入窗口
   CapsuleRevealPasscode.swift     四槽物理键码并击、当前凭据先验、单个加盐摘要凭据与设置配置视图
   CapsuleWindowSmoke.swift        独立窗口 CRUD、脱敏与路径规则 smoke
