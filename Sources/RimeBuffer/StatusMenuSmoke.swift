@@ -70,9 +70,9 @@ func runStatusMenuSmokeTest() -> Bool {
     let state = InputSourceMenuState(
         healthy: true,
         bufferTitle: "Buffer…（⌃⌥B）",
-        clipboardTitle: "Clipboard History…（⌃⌥P）",
+        clipboardTitle: "Capsule…（⌃⌥P）",
         mailboxTitle: "Mailbox…（3 条未读 · ⌃⌥M）",
-        capsuleTitle: "Capsule…（⌃⌥C）"
+        capsuleTitle: "Capsule 管理…（⌃⌥C）"
     )
     let sourceMenu = StatusMenu.makeInputSourceMenu(target: spy, state: state)
     let sourceTitles = [
@@ -109,9 +109,9 @@ func runStatusMenuSmokeTest() -> Bool {
     let refreshedState = InputSourceMenuState(
         healthy: true,
         bufferTitle: "Buffer…（⇧⌘B）",
-        clipboardTitle: "Clipboard History…（⇧⌘P）",
+        clipboardTitle: "Capsule…（⇧⌘P）",
         mailboxTitle: "Mailbox…（⇧⌘M）",
-        capsuleTitle: "Capsule…（⇧⌘C）"
+        capsuleTitle: "Capsule 管理…（⇧⌘C）"
     )
     let refreshedMenu = StatusMenu.makeInputSourceMenu(target: spy, state: refreshedState)
     guard refreshedMenu.items.count == sourceTitles.count,

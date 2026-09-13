@@ -42,7 +42,7 @@ final class StatusMenu {
         return Self.makeInputSourceMenu(target: target, state: InputSourceMenuState(
             healthy: healthy,
             bufferTitle: bufferTitle,
-            clipboardTitle: "Clipboard History…（\(clipboardShortcut)）",
+            clipboardTitle: "Capsule…（\(clipboardShortcut)）",
             mailboxTitle: mailboxTitle,
             capsuleTitle: capsuleTitle
         ))
@@ -198,7 +198,7 @@ final class StatusMenu {
         let shortcut = RimeShortcutPreferences
             .shortcut(for: .openCapsule)
             .displayTitle
-        return "Capsule…（\(shortcut)）"
+        return "Capsule 管理…（\(shortcut)）"
     }
 
     func openSettings() {

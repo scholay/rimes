@@ -1,6 +1,6 @@
 # Capsule
 
-Capsule 是与 Buffer、Mailbox 同级的 RIMES 本机内容库。当前支持 `Prompt`、`Memory`、`Password`、`Skill`、`Note`、`URL`、`Image` 与 `PDF` 八类条目，并在独立 Capsule 窗口中提供搜索和增删改查。Capsule 不属于 Buffer 插件目录，也不受 Buffer 插件启停、工作台生命周期或当前输入源控制。
+Capsule 是与 Buffer、Mailbox 同级的 RIMES 本机内容库。当前支持 `Password`、`Skill`、`Note`、`Image` 与 `PDF` 五类条目（`Prompt`、`Memory`、`URL` 已下线，旧文件留在磁盘但不再列出），并在独立 Capsule 管理窗口中提供搜索和增删改查。Capsule 不属于 Buffer 插件目录，也不受 Buffer 插件启停、工作台生命周期或当前输入源控制。
 
 ## 本机数据
 
@@ -92,13 +92,17 @@ Drive 时，界面保持「iCloud Drive 不可用/未设置」，本机 CRUD 不
 - 未保存草稿在切换条目、类型、页面或关闭窗口前会要求确认；保存与删除携带已加载文件的 SHA-256 revision，并在 Store 文件锁内比较，另一窗口或 CLI 已更新时拒绝覆盖。直接在 Obsidian 修改普通 Markdown 后，旧窗口也必须重新载入才能保存。
 - 当前独立管理窗口只负责内容管理，不直接向外部输入框上屏。它不会主动切换当前输入源，不注入按键或 Accessibility 事件，也不读取、提交或取消外部输入法的组字。原先依附 Buffer workspace 的 Capsule 搜索、保护投递和并击拦截已经移除，因此 Capsule 不参与普通输入按键路径。后续若增加独立上屏，应采用 Capsule 自己的非激活快速面板和外部焦点授权协议，不能重新依附 Buffer，也不能退化为剪贴板或 Accessibility 注入。
 
+## 底栏
+
+`⌘⇧P` 的 Capsule 底栏在「最近」（本机剪贴板历史）之外，为每类条目提供一个只读标签。条目按更新时间倒序显示；Return、双击或 `⌘1`–`⌘9` 把笔记正文直接放入目标输入框，图片、PDF 与技能以文件表示写入剪贴板后自动粘贴，`⌘C` 只复制。密码卡片只显示标题与固定掩码，不能从底栏上屏或复制。悬停卡片出现画笔，点击后在管理窗口中打开该条目；头部齿轮打开管理窗口。底栏不创建、修改或删除条目。
+
 ## CLI 管理
 
 CLI 在 AppKit/IMK 启动前运行。普通条目示例：
 
 ```bash
 printf '%s' '{
-  "type": "memory",
+  "type": "note",
   "title": "项目事实",
   "content": "Capsule 条目使用 Markdown 管理。"
 }' | RimeBuffer capsule entry put

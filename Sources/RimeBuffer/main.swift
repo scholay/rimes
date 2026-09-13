@@ -680,6 +680,19 @@ if CommandLine.arguments.contains("mailbox-window-smoke") {
 if CommandLine.arguments.contains("capsule-window-smoke") {
     exit(runCapsuleWindowSmokeTest() ? 0 : 1)
 }
+if let previewIndex = CommandLine.arguments.firstIndex(of: "capsule-rail-preview"),
+   CommandLine.arguments.indices.contains(previewIndex + 2) {
+    _ = NSApplication.shared
+    let path = CommandLine.arguments[previewIndex + 1]
+    let tab = CommandLine.arguments[previewIndex + 2]
+    exit(MainActor.assumeIsolated {
+        CapsuleRailSmoke.renderPreview(to: path, tabName: tab)
+    } ? 0 : 1)
+}
+if CommandLine.arguments.contains("capsule-rail-smoke") {
+    _ = NSApplication.shared
+    exit(MainActor.assumeIsolated { CapsuleRailSmoke.run() } ? 0 : 1)
+}
 if CommandLine.arguments.contains("capsule-sync-smoke") {
     exit(runCapsuleCloudSyncSmokeTest() ? 0 : 1)
 }

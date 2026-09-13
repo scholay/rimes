@@ -150,9 +150,9 @@ enum RimeShortcutAction: String, CaseIterable {
         switch self {
         case .deliverBuffer: return "投递缓冲内容"
         case .toggleWorkbench: return "显示或隐藏工作台"
-        case .toggleClipboardHistory: return "显示或隐藏剪贴板历史"
+        case .toggleClipboardHistory: return "显示或隐藏 Capsule"
         case .openMailbox: return "显示或隐藏 Mailbox"
-        case .openCapsule: return "显示或隐藏 Capsule"
+        case .openCapsule: return "打开或关闭 Capsule 管理"
         case .openSettings: return "打开设置"
         case .previousPlugin: return "上一个缓冲插件"
         case .nextPlugin: return "下一个缓冲插件"
@@ -166,11 +166,11 @@ enum RimeShortcutAction: String, CaseIterable {
         case .toggleWorkbench:
             return "在任何应用中呼出或收起缓冲工作台"
         case .toggleClipboardHistory:
-            return "在任何应用中呼出或收起独立 Clipboard History 时间线"
+            return "在任何应用中呼出或收起 Capsule 底栏"
         case .openMailbox:
             return "在任何应用中打开或关闭本地保存的外部来源与 AI 会话"
         case .openCapsule:
-            return "在任何应用中打开或关闭本地 Prompt、Memory、Password、Skill、Note、URL、Image 与 PDF"
+            return "在任何应用中打开或关闭 Capsule 管理窗口"
         case .openSettings:
             return "仅在当前输入法为 RIMES 时打开设置"
         case .previousPlugin:

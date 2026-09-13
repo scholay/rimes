@@ -104,6 +104,17 @@ struct ClipboardHistoryPaneSnapshot: Equatable {
     let cardHeight: CGFloat
 }
 
+struct CapsuleRailPaneSnapshot: Equatable {
+    let tab: CapsuleRailTab
+    let cardCount: Int
+    let selectedEntryID: UUID?
+    let editableCardCount: Int
+    let hint: String
+    let stateMessage: String?
+    let clearButtonVisible: Bool
+    let countText: String
+}
+
 enum ClipboardHistoryStandaloneEditingRules {
     static func permitsSurfaceCommand(hasMarkedText: Bool) -> Bool {
         !hasMarkedText
@@ -128,9 +139,18 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     var onActivate: (([ClipboardHistoryItem]) -> Bool)?
     var onCopy: (([ClipboardHistoryItem]) -> Bool)?
     var onClose: (() -> Void)?
+    /// Saved Capsule entries. The pane never asks to insert or copy a
+    /// password, and the controller refuses one again before any write.
+    var onActivateSaved: ((CapsuleRailEntry) -> Bool)?
+    var onCopySaved: ((CapsuleRailEntry) -> Bool)?
+    var onEditSaved: ((CapsuleRailEntry) -> Void)?
+    var onManage: (() -> Void)?
 
     private let model: ClipboardHistoryModel
-    private let titleLabel = NSTextField(labelWithString: "Clipboard History")
+    private let library: CapsuleRailLibrary
+    private let titleLabel = NSTextField(labelWithString: "Capsule")
+    private let tabStrip = CapsuleRailTabStrip()
+    private let manageButton = ClipboardFirstMouseButton(title: "", target: nil, action: nil)
     private let countLabel = NSTextField(labelWithString: "")
     private let searchShell = NSView()
     private let searchIcon = NSImageView()
@@ -174,9 +194,22 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     private(set) var query = ""
     private(set) var composingText = ""
     private(set) var standaloneSearchEnabled = false
+    private(set) var selectedTab: CapsuleRailTab = .recent
+    private var savedSelectedIDs: [CapsuleEntryKind: UUID] = [:]
+    private var savedCardButtons: [UUID: ClipboardHistoryCardButton] = [:]
+    private var visibleSavedEntryByID: [UUID: CapsuleRailEntry] = [:]
+    private var savedThumbnailOperations: [UUID: Operation] = [:]
+    private let savedThumbnailCache: NSCache<NSUUID, NSImage> = {
+        let cache = NSCache<NSUUID, NSImage>()
+        cache.countLimit = 48
+        cache.totalCostLimit = 48 * 1_024 * 1_024
+        return cache
+    }()
 
-    init(model: ClipboardHistoryModel) {
+    init(model: ClipboardHistoryModel,
+         library: CapsuleRailLibrary = .inert()) {
         self.model = model
+        self.library = library
         super.init(frame: NSRect(
             x: 0,
             y: 0,
@@ -185,6 +218,9 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         ))
         configureView()
         modelObserver = model.addObserver { [weak self] in self?.reloadFromModel() }
+        library.onChange = { [weak self] in
+            MainActor.assumeIsolated { self?.reloadFromModel() }
+        }
         appearanceObserver = NotificationCenter.default.addObserver(
             forName: .rimeAppearanceDidChange,
             object: nil,
@@ -232,9 +268,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         standaloneSearchField.stringValue = query
         standaloneSearchField.isHidden = !enabled
         searchLabel.isHidden = enabled
-        hintLabel.stringValue = enabled
-            ? "TYPE TO SEARCH   ← → SELECT   ↩ PREPARE CLIPBOARD   ⌘C COPY   DELETE REMOVE   ESC CLOSE"
-            : "TYPE TO SEARCH   ← → SELECT   ⇧←→ / ⌘CLICK MULTI   ↩ INSERT   ⌘C COPY   DELETE REMOVE   ESC CLOSE"
+        updateHint()
         updateSearchPresentation()
     }
 
@@ -257,7 +291,9 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         composingText = ""
         selectionAnchorID = nil
         clearThumbnailState()
+        clearSavedThumbnailState()
         removeAllCards()
+        removeAllSavedCards()
         reloadFromModel()
     }
 
@@ -304,6 +340,12 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             hasMarkedText: textView.hasMarkedText()
         ) else { return false }
         switch NSStringFromSelector(commandSelector) {
+        case "insertTab:":
+            selectTab(selectedTab.cycled(by: 1))
+            return true
+        case "insertBacktab:":
+            selectTab(selectedTab.cycled(by: -1))
+            return true
         case "insertNewline:", "insertLineBreak:",
              "insertNewlineIgnoringFieldEditor:", "insertParagraphSeparator:":
             _ = activateSelectedItems()
@@ -319,6 +361,8 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             return true
         case "deleteBackward:", "deleteForward:",
              "deleteBackwardByDecomposingPreviousCharacter:":
+            // Saved entries are read-only here: Delete only edits the query.
+            guard selectedTab == .recent else { return query.isEmpty }
             guard ClipboardHistoryStandaloneEditingRules
                 .shouldDeleteSelectedCards(
                     queryIsEmpty: query.isEmpty,
@@ -387,6 +431,11 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         let intentModifiers = modifiers.intersection([.command, .control, .option, .shift])
         let commandOnly = intentModifiers == [.command]
 
+        if event.keyCode == UInt16(kVK_Tab),
+           intentModifiers.isEmpty || intentModifiers == [.shift] {
+            selectTab(selectedTab.cycled(by: intentModifiers == [.shift] ? -1 : 1))
+            return true
+        }
         if commandOnly, event.keyCode == UInt16(kVK_ANSI_F) { return true }
         if commandOnly, event.keyCode == UInt16(kVK_ANSI_C) {
             _ = copySelectedItems()
@@ -434,6 +483,17 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             )
             return true
         case UInt16(kVK_Delete), UInt16(kVK_ForwardDelete):
+            if selectedTab != .recent {
+                // Saved entries are read-only here: Delete only edits the query.
+                if !query.isEmpty {
+                    query.removeLast()
+                    reloadFromModel()
+                } else if !composingText.isEmpty {
+                    composingText = ""
+                    reloadFromModel()
+                }
+                return true
+            }
             if model.selectedIDs.count > 1
                     || (query.isEmpty && composingText.isEmpty) {
                 _ = deleteSelectedItems()
@@ -458,6 +518,12 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
 
     @discardableResult
     func activateSelectedItems() -> Bool {
+        if selectedTab != .recent {
+            guard let entry = selectedSavedEntry,
+                  CapsuleRailActivationRules.action(for: entry.kind) != .refuse,
+                  let onActivateSaved else { return false }
+            return onActivateSaved(entry)
+        }
         let items = selectedFilteredItems
         guard !items.isEmpty,
               let onActivate,
@@ -470,6 +536,12 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
 
     @discardableResult
     func copySelectedItems() -> Bool {
+        if selectedTab != .recent {
+            guard let entry = selectedSavedEntry,
+                  CapsuleRailActivationRules.allowsCopy(entry.kind),
+                  let onCopySaved else { return false }
+            return onCopySaved(entry)
+        }
         let items = selectedFilteredItems
         guard !items.isEmpty, let onCopy else { return false }
         return onCopy(items)
@@ -477,6 +549,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
 
     @discardableResult
     func deleteSelectedItems() -> Bool {
+        guard selectedTab == .recent else { return false }
         let items = selectedFilteredItems
         guard !items.isEmpty else { return false }
         selectionAnchorID = nil
@@ -485,9 +558,19 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
 
     func reloadFromModel() {
         let protectedContent = model.isContentShielded
-        if protectedContent { clearThumbnailState() }
+        if protectedContent {
+            clearThumbnailState()
+            clearSavedThumbnailState()
+        }
         applyAppearance()
         updateSearchPresentation()
+        tabStrip.select(selectedTab)
+        clearButton.isHidden = selectedTab != .recent
+        if let kind = selectedTab.savedKind {
+            reloadSavedEntries(kind: kind, protectedContent: protectedContent)
+            return
+        }
+        removeAllSavedCards()
         guard model.captureState.captureEnabled,
               model.captureState.windowVisible,
               !protectedContent else {
@@ -560,6 +643,230 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         )
     }
 
+    func capsuleRailSnapshotForSmoke() -> CapsuleRailPaneSnapshot {
+        CapsuleRailPaneSnapshot(
+            tab: selectedTab,
+            cardCount: cardDocumentView.cards.count,
+            selectedEntryID: selectedSavedEntry?.id,
+            editableCardCount: cardDocumentView.cards.filter(\.isEditable).count,
+            hint: hintLabel.stringValue,
+            stateMessage: stateContainer.isHidden ? nil : stateLabel.stringValue,
+            clearButtonVisible: !clearButton.isHidden,
+            countText: countLabel.stringValue
+        )
+    }
+
+    func selectTab(_ tab: CapsuleRailTab) {
+        guard tab != selectedTab else { return }
+        selectedTab = tab
+        if let kind = tab.savedKind, library.state(for: kind) == .idle {
+            library.reload()
+        }
+        updateHint()
+        reloadFromModel()
+    }
+
+    @discardableResult
+    func handleSavedCardInteraction(id: UUID, clickCount: Int) -> Bool {
+        guard let kind = selectedTab.savedKind,
+              visibleSavedEntryByID[id] != nil else { return false }
+        pointerDrivenSelectionDepth += 1
+        defer { pointerDrivenSelectionDepth -= 1 }
+        savedSelectedIDs[kind] = id
+        if clickCount >= 2 { return activateSelectedItems() }
+        reloadFromModel()
+        return true
+    }
+
+    private var filteredSavedEntries: [CapsuleRailEntry] {
+        guard let kind = selectedTab.savedKind else { return [] }
+        return Array(CapsuleRailSearchRules.filter(
+            library.entries(for: kind),
+            query: query
+        ).prefix(ClipboardHistoryWindowMetrics.maximumRenderedCards))
+    }
+
+    private var selectedSavedEntry: CapsuleRailEntry? {
+        guard let kind = selectedTab.savedKind else { return nil }
+        let entries = filteredSavedEntries
+        return entries.first { $0.id == savedSelectedIDs[kind] } ?? entries.first
+    }
+
+    private func updateHint() {
+        let activation = standaloneSearchEnabled ? "↩ PREPARE CLIPBOARD" : "↩ INSERT"
+        switch selectedTab {
+        case .recent:
+            hintLabel.stringValue = standaloneSearchEnabled
+                ? "TYPE TO SEARCH   ← → SELECT   ⇥ NEXT TAB   ↩ PREPARE CLIPBOARD   ⌘C COPY   DELETE REMOVE   ESC CLOSE"
+                : "TYPE TO SEARCH   ← → SELECT   ⇧←→ / ⌘CLICK MULTI   ⇥ NEXT TAB   ↩ INSERT   ⌘C COPY   DELETE REMOVE   ESC CLOSE"
+        case .saved(.password):
+            hintLabel.stringValue = "TYPE TO SEARCH   ← → SELECT   ⇥ NEXT TAB   PASSWORDS OPEN ONLY IN THE MANAGER   ESC CLOSE"
+        case .saved:
+            hintLabel.stringValue = "TYPE TO SEARCH   ← → SELECT   ⇥ NEXT TAB   \(activation)   ⌘C COPY   ESC CLOSE"
+        }
+    }
+
+    /// Saved entries render with the history card, read-only: no deletion and
+    /// no multi-selection, and only history capture settings never hide them.
+    private func reloadSavedEntries(kind: CapsuleEntryKind,
+                                    protectedContent: Bool) {
+        removeAllCards()
+        guard model.captureState.windowVisible, !protectedContent else {
+            removeAllSavedCards()
+            showState(message: savedStateMessage(), protectedContent: protectedContent)
+            countLabel.stringValue = ""
+            return
+        }
+        let all = library.entries(for: kind)
+        let matches = CapsuleRailSearchRules.filter(all, query: query)
+        let visible = Array(matches.prefix(
+            ClipboardHistoryWindowMetrics.maximumRenderedCards
+        ))
+        countLabel.stringValue = query.isEmpty
+            ? "\(all.count) ITEMS"
+            : "\(matches.count) / \(all.count)"
+        guard !visible.isEmpty else {
+            removeAllSavedCards()
+            let message: String
+            switch library.state(for: kind) {
+            case .idle, .loading: message = "正在读取 Capsule"
+            case .failed: message = "无法读取 Capsule"
+            case .loaded: message = query.isEmpty ? "还没有\(kind.tabLabel)" : "没有匹配的条目"
+            }
+            showState(message: message, protectedContent: false)
+            return
+        }
+        if !visible.contains(where: { $0.id == savedSelectedIDs[kind] }) {
+            savedSelectedIDs[kind] = visible[0].id
+        }
+        stateContainer.isHidden = true
+        scrollView.isHidden = false
+        reconcileSavedCards(visible, selectedID: savedSelectedIDs[kind])
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        if pointerDrivenSelectionDepth == 0 {
+            scrollSelectedIntoView()
+        }
+        requestSavedThumbnailsForVisibleCards()
+    }
+
+    private func savedStateMessage() -> String {
+        let protection = model.activeProtection
+        if protection.contains(.secureInput) { return "安全输入期间已隐藏内容" }
+        if protection.contains(.screenLocked) { return "屏幕锁定期间已隐藏内容" }
+        if protection.contains(.sessionInactive) { return "当前会话已保护" }
+        return "Capsule 已收起"
+    }
+
+    private func reconcileSavedCards(_ entries: [CapsuleRailEntry],
+                                     selectedID: UUID?) {
+        let validIDs = Set(entries.map(\.id))
+        visibleSavedEntryByID = Dictionary(
+            entries.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        for id in savedCardButtons.keys where !validIDs.contains(id) {
+            savedCardButtons.removeValue(forKey: id)?.removeFromSuperview()
+        }
+        let ordered = entries.enumerated().map { index, entry -> ClipboardHistoryCardButton in
+            let button = savedCardButtons[entry.id]
+                ?? ClipboardHistoryCardButton(itemID: entry.id)
+            button.target = self
+            button.action = #selector(savedCardPressed(_:))
+            let id = entry.id
+            button.onEdit = { [weak self] in
+                MainActor.assumeIsolated { self?.editSavedEntry(id: id) }
+            }
+            savedCardButtons[entry.id] = button
+            button.update(
+                entry: entry,
+                quickIndex: index < 9 ? index + 1 : nil,
+                thumbnail: savedThumbnailCache.object(forKey: entry.id as NSUUID),
+                selected: entry.id == selectedID
+            )
+            return button
+        }
+        cardDocumentView.setCards(ordered, viewportWidth: scrollView.contentSize.width)
+    }
+
+    private func removeAllSavedCards() {
+        guard !savedCardButtons.isEmpty else { return }
+        savedCardButtons.values.forEach { $0.removeFromSuperview() }
+        savedCardButtons.removeAll(keepingCapacity: false)
+        visibleSavedEntryByID.removeAll(keepingCapacity: false)
+        cardDocumentView.setCards([], viewportWidth: scrollView.contentSize.width)
+    }
+
+    private func requestSavedThumbnailsForVisibleCards() {
+        guard !scrollView.isHidden, !model.isContentShielded else { return }
+        let prefetch = scrollView.documentVisibleRect.insetBy(
+            dx: -ClipboardHistoryWindowMetrics.cardWidth,
+            dy: 0
+        )
+        for card in cardDocumentView.cards where card.frame.intersects(prefetch) {
+            guard let entry = visibleSavedEntryByID[card.itemID],
+                  entry.kind == .image || entry.kind == .pdf,
+                  let path = entry.payload,
+                  savedThumbnailCache.object(forKey: entry.id as NSUUID) == nil,
+                  savedThumbnailOperations[entry.id] == nil else { continue }
+            let id = entry.id
+            let generation = assetGeneration
+            savedThumbnailOperations[id] = CapsuleMediaPreviewLoader.shared.load(
+                kind: entry.kind,
+                path: path
+            ) { [weak self] result in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.savedThumbnailOperations[id] = nil
+                    guard generation == self.assetGeneration,
+                          !self.model.isContentShielded else { return }
+                    let image: CGImage
+                    switch result {
+                    case let .image(cgImage): image = cgImage
+                    case let .pdf(image: cgImage, pageCount: _): image = cgImage
+                    case .unavailable: return
+                    }
+                    let rendered = NSImage(
+                        cgImage: image,
+                        size: NSSize(width: image.width, height: image.height)
+                    )
+                    self.savedThumbnailCache.setObject(
+                        rendered,
+                        forKey: id as NSUUID,
+                        cost: max(1, image.bytesPerRow * image.height)
+                    )
+                    self.savedCardButtons[id]?.setThumbnail(rendered)
+                }
+            }
+        }
+    }
+
+    private func clearSavedThumbnailState() {
+        savedThumbnailOperations.values.forEach { $0.cancel() }
+        savedThumbnailOperations.removeAll(keepingCapacity: false)
+        savedThumbnailCache.removeAllObjects()
+    }
+
+    private func editSavedEntry(id: UUID) {
+        guard let entry = visibleSavedEntryByID[id], let onEditSaved else { return }
+        onEditSaved(entry)
+    }
+
+    @objc private func savedCardPressed(_ sender: ClipboardHistoryCardButton) {
+        _ = handleSavedCardInteraction(
+            id: sender.itemID,
+            clickCount: sender.actionContext.clickCount
+        )
+    }
+
+    @objc private func managePressed() { onManage?() }
+
+    /// Preview-only: shows the hover state of the card at `index`.
+    func hoverCardForPreview(at index: Int) {
+        guard cardDocumentView.cards.indices.contains(index) else { return }
+        cardDocumentView.cards[index].setHoveredForPreview(true)
+    }
+
     private var matchingItems: [ClipboardHistoryItem] {
         ClipboardHistorySearchRules.filter(model.visibleItems, query: query)
     }
@@ -579,12 +886,13 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         wantsLayer = true
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("Clipboard History")
-        setAccessibilityHelp("输入以搜索；左右键选择；回车上屏；Command-C 复制；Delete 删除；Escape 关闭")
+        setAccessibilityLabel("Capsule")
+        setAccessibilityHelp("输入以搜索；Tab 切换类型；左右键选择；回车上屏；Command-C 复制；Delete 删除；Escape 关闭")
 
         titleLabel.font = .monospacedSystemFont(ofSize: 15, weight: .bold)
         countLabel.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
         countLabel.alignment = .right
+        countLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         searchShell.wantsLayer = true
         searchShell.layer?.cornerRadius = 8
@@ -609,7 +917,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         searchShell.addSubview(searchLabel)
         searchShell.addSubview(standaloneSearchField)
         NSLayoutConstraint.activate([
-            searchShell.widthAnchor.constraint(greaterThanOrEqualToConstant: 250),
+            searchShell.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
             searchShell.heightAnchor.constraint(equalToConstant: 28),
             searchIcon.leadingAnchor.constraint(equalTo: searchShell.leadingAnchor, constant: 9),
             searchIcon.centerYAnchor.constraint(equalTo: searchShell.centerYAnchor),
@@ -623,6 +931,11 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             standaloneSearchField.centerYAnchor.constraint(equalTo: searchShell.centerYAnchor),
             standaloneSearchField.heightAnchor.constraint(equalToConstant: 22),
         ])
+        // The tabs share the header, so the search box gives way first on a
+        // narrow screen.
+        let preferredSearchWidth = searchShell.widthAnchor.constraint(equalToConstant: 250)
+        preferredSearchWidth.priority = .defaultHigh
+        preferredSearchWidth.isActive = true
 
         clearButton.target = self
         clearButton.action = #selector(clearPressed)
@@ -635,11 +948,23 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         closeButton.isBordered = false
         closeButton.target = self
         closeButton.action = #selector(closePressed)
-        closeButton.setAccessibilityLabel("关闭 Clipboard History")
+        closeButton.setAccessibilityLabel("关闭 Capsule")
+        tabStrip.onSelect = { [weak self] tab in
+            MainActor.assumeIsolated { self?.selectTab(tab) }
+        }
+        manageButton.image = RimeUI.symbol("gearshape", pointSize: 12, weight: .semibold)
+        manageButton.image?.isTemplate = true
+        manageButton.imagePosition = .imageOnly
+        manageButton.isBordered = false
+        manageButton.target = self
+        manageButton.action = #selector(managePressed)
+        manageButton.toolTip = "Capsule 管理"
+        manageButton.setAccessibilityLabel("打开 Capsule 管理")
 
         let headerSpacer = NSView()
         let header = NSStackView(views: [
-            titleLabel, countLabel, headerSpacer, searchShell, clearButton, closeButton,
+            titleLabel, countLabel, tabStrip, headerSpacer, searchShell,
+            clearButton, manageButton, closeButton,
         ])
         header.orientation = .horizontal
         header.alignment = .centerY
@@ -684,7 +1009,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         ])
 
         hintLabel.font = .monospacedSystemFont(ofSize: 9, weight: .medium)
-        hintLabel.stringValue = "TYPE TO SEARCH   ← → SELECT   ⇧←→ / ⌘CLICK MULTI   ↩ INSERT   ⌘C COPY   DELETE REMOVE   ESC CLOSE"
+        updateHint()
         hintLabel.lineBreakMode = .byTruncatingTail
         hintLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -715,13 +1040,13 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     private func updateSearchPresentation() {
         standaloneSearchField.textColor = RimeUI.textPrimary
         if standaloneSearchEnabled {
-            searchShell.setAccessibilityLabel("剪贴板历史搜索")
+            searchShell.setAccessibilityLabel("Capsule 搜索")
             return
         }
         if query.isEmpty && composingText.isEmpty {
             searchLabel.stringValue = "直接输入以搜索"
             searchLabel.textColor = RimeUI.textMuted
-            searchShell.setAccessibilityLabel("搜索剪贴板历史；直接输入")
+            searchShell.setAccessibilityLabel("搜索 Capsule；直接输入")
         } else {
             let rendered = NSMutableAttributedString(
                 string: query,
@@ -741,7 +1066,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
                 ))
             }
             searchLabel.attributedStringValue = rendered
-            searchShell.setAccessibilityLabel("剪贴板历史搜索")
+            searchShell.setAccessibilityLabel("Capsule 搜索")
         }
     }
 
@@ -808,12 +1133,21 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         if protection.contains(.screenLocked) { return "屏幕锁定期间已隐藏历史" }
         if protection.contains(.sessionInactive) { return "当前会话已保护" }
         if !model.captureState.captureEnabled { return "剪贴板历史收录已关闭" }
-        if !model.captureState.windowVisible { return "Clipboard History 已收起" }
+        if !model.captureState.windowVisible { return "Capsule 已收起" }
         if !model.isStarted { return "剪贴板历史尚未启动" }
         return "尚无剪贴板记录"
     }
 
     private func moveFilteredSelection(delta: Int, extending: Bool) {
+        if let kind = selectedTab.savedKind {
+            let entries = filteredSavedEntries
+            guard !entries.isEmpty else { return }
+            let current = entries.firstIndex { $0.id == savedSelectedIDs[kind] } ?? 0
+            let next = min(max(0, current + delta), entries.count - 1)
+            savedSelectedIDs[kind] = entries[next].id
+            reloadFromModel()
+            return
+        }
         let items = filteredItems
         guard !items.isEmpty else { return }
         let current = model.selectedID.flatMap { id in
@@ -846,6 +1180,12 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
 
     @discardableResult
     private func activateVisibleItem(at index: Int) -> Bool {
+        if let kind = selectedTab.savedKind {
+            let entries = filteredSavedEntries
+            guard entries.indices.contains(index) else { return false }
+            savedSelectedIDs[kind] = entries[index].id
+            return activateSelectedItems()
+        }
         let items = filteredItems
         guard items.indices.contains(index), model.select(id: items[index].id) else {
             return false
@@ -855,9 +1195,13 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     }
 
     private func scrollSelectedIntoView() {
-        guard let selectedID = model.selectedID,
-              let card = cardButtons[selectedID],
-              !scrollView.isHidden else { return }
+        let selectedCard: ClipboardHistoryCardButton?
+        if let kind = selectedTab.savedKind {
+            selectedCard = savedSelectedIDs[kind].flatMap { savedCardButtons[$0] }
+        } else {
+            selectedCard = model.selectedID.flatMap { cardButtons[$0] }
+        }
+        guard let card = selectedCard, !scrollView.isHidden else { return }
         let visible = scrollView.documentVisibleRect
         let targetX: CGFloat
         if card.frame.minX < visible.minX {
@@ -891,10 +1235,17 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         hintLabel.textColor = RimeUI.textMuted
         clearButton.contentTintColor = RimeUI.textSecondary
         closeButton.contentTintColor = RimeUI.textSecondary
+        manageButton.contentTintColor = RimeUI.textSecondary
+        tabStrip.applyAppearance()
         cardButtons.values.forEach { $0.refreshAppearance() }
+        savedCardButtons.values.forEach { $0.refreshAppearance() }
     }
 
     private func requestAssetsForVisibleCards() {
+        if selectedTab != .recent {
+            requestSavedThumbnailsForVisibleCards()
+            return
+        }
         guard !scrollView.isHidden, !model.isContentShielded else { return }
         let prefetch = scrollView.documentVisibleRect.insetBy(
             dx: -ClipboardHistoryWindowMetrics.cardWidth,
@@ -1148,6 +1499,14 @@ private final class ClipboardHistoryCardButton: NSButton {
     private var itemKind: ClipboardItemKind = .unknown
     private(set) var actionContext = ClipboardHistoryCardActionContext.keyboard
     private(set) var renderedBorderWidth: CGFloat = 1
+    /// Shown on hover for a saved entry; opens it in the Capsule manager.
+    var onEdit: (() -> Void)?
+    private let editButton = ClipboardFirstMouseButton(title: "", target: nil, action: nil)
+    private var editable = false
+    private var allowsThumbnail = false
+    private var savedTitle: String?
+    private var savedPreview: String?
+    var isEditable: Bool { editable }
     var isRenderedSelected: Bool { selectedItem }
     var isThumbnailRendered: Bool {
         previewImageView.image != nil && !previewImageView.isHidden
@@ -1185,6 +1544,18 @@ private final class ClipboardHistoryCardButton: NSButton {
             $0.setAccessibilityElement(false)
             addSubview($0)
         }
+        editButton.image = RimeUI.symbol("paintbrush", pointSize: 11, weight: .semibold)
+        editButton.image?.isTemplate = true
+        editButton.imagePosition = .imageOnly
+        editButton.isBordered = false
+        editButton.wantsLayer = true
+        editButton.layer?.cornerRadius = 6
+        editButton.target = self
+        editButton.action = #selector(editPressed)
+        editButton.toolTip = "在 Capsule 管理中编辑"
+        editButton.setAccessibilityLabel("编辑")
+        editButton.isHidden = true
+        addSubview(editButton)
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
     }
@@ -1200,6 +1571,9 @@ private final class ClipboardHistoryCardButton: NSButton {
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard !isHidden, isEnabled else { return nil }
         let local = superview.map { convert(point, from: $0) } ?? point
+        if !editButton.isHidden, editButton.frame.contains(local) {
+            return editButton
+        }
         return bounds.contains(local) ? self : nil
     }
 
@@ -1225,6 +1599,7 @@ private final class ClipboardHistoryCardButton: NSButton {
             width: bounds.width - 22,
             height: bounds.height - 43
         )
+        editButton.frame = NSRect(x: bounds.width - 32, y: 5, width: 22, height: 22)
     }
 
     override func updateTrackingAreas() {
@@ -1293,6 +1668,12 @@ private final class ClipboardHistoryCardButton: NSButton {
         timeLabel.stringValue = Self.relativeTimestamp(item.capturedAt)
         previewLabel.stringValue = preview
         itemKind = item.kind
+        allowsThumbnail = item.kind.allowsImageThumbnail
+        editable = false
+        onEdit = nil
+        savedTitle = nil
+        savedPreview = nil
+        toolTip = nil
         setThumbnail(thumbnail)
         setAccessibilityLabel("\(item.kind.rawValue)：\(accessible)")
         let activationHelp = "双击或回车使用；富内容会复制，然后在目标中粘贴"
@@ -1313,9 +1694,82 @@ private final class ClipboardHistoryCardButton: NSButton {
 
     func setThumbnail(_ image: NSImage?) {
         previewImageView.image = image
-        let shouldShowImage = itemKind.allowsImageThumbnail && image != nil
+        let shouldShowImage = allowsThumbnail && image != nil
         previewImageView.isHidden = !shouldShowImage
         previewLabel.isHidden = shouldShowImage
+    }
+
+    /// A saved Capsule entry. Image and PDF cards lead with their title and
+    /// show a thumbnail; the others show the title above a short preview.
+    func update(
+        entry: CapsuleRailEntry,
+        quickIndex: Int?,
+        thumbnail: NSImage?,
+        selected: Bool
+    ) {
+        let showsMedia = entry.kind == .image || entry.kind == .pdf
+        quickLabel.stringValue = quickIndex.map { "⌘\($0)" }
+            ?? entry.kind.displayName.uppercased()
+        sourceLabel.stringValue = showsMedia
+            ? entry.title
+            : entry.kind.displayName.uppercased()
+        setSourceIcon(Self.symbol(for: entry.kind))
+        timeLabel.stringValue = Self.relativeTimestamp(entry.updatedAt)
+        savedTitle = entry.title
+        savedPreview = Self.boundedPreview(
+            entry.preview,
+            maximumCharacters: ClipboardHistoryWindowMetrics.previewCharacterLimit
+        )
+        editable = true
+        allowsThumbnail = showsMedia
+        toolTip = entry.title
+        setThumbnail(thumbnail)
+        let masked = entry.kind == .password ? " · 已脱敏" : ""
+        setAccessibilityLabel("\(entry.kind.displayName)：\(entry.title)\(masked)")
+        let help = CapsuleRailActivationRules.action(for: entry.kind) == .refuse
+            ? "密码只能在 Capsule 管理中查看"
+            : "双击或回车放入目标输入框"
+        setAccessibilityHelp(selected ? "已选择；\(help)" : "单击选择；\(help)")
+        setAccessibilitySelected(selected)
+        selectedItem = selected
+        focusedItem = selected
+        refreshAppearance()
+    }
+
+    private func renderSavedPreview() {
+        guard let savedTitle else { return }
+        let text = NSMutableAttributedString(string: savedTitle, attributes: [
+            .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+            .foregroundColor: RimeUI.textPrimary,
+        ])
+        if let savedPreview, !savedPreview.isEmpty {
+            text.append(NSAttributedString(string: "\n" + savedPreview, attributes: [
+                .font: NSFont.systemFont(ofSize: 12),
+                .foregroundColor: RimeUI.textSecondary,
+            ]))
+        }
+        previewLabel.attributedStringValue = text
+    }
+
+    private static func symbol(for kind: CapsuleEntryKind) -> NSImage? {
+        let name: String
+        switch kind {
+        case .note: name = "note.text"
+        case .image: name = "photo"
+        case .pdf: name = "doc.richtext"
+        case .skill: name = "wand.and.stars"
+        case .password: name = "lock"
+        }
+        let image = RimeUI.symbol(name, pointSize: 12, weight: .regular)
+        image?.isTemplate = true
+        return image
+    }
+
+    @objc private func editPressed() { onEdit?() }
+
+    func setHoveredForPreview(_ value: Bool) {
+        hovered = value
+        refreshAppearance()
     }
 
     func refreshAppearance() {
@@ -1340,7 +1794,18 @@ private final class ClipboardHistoryCardButton: NSButton {
             sourceIconView.contentTintColor = RimeUI.textSecondary
         }
         timeLabel.textColor = RimeUI.textMuted
-        previewLabel.textColor = RimeUI.textPrimary
+        if savedTitle != nil {
+            renderSavedPreview()
+        } else {
+            previewLabel.textColor = RimeUI.textPrimary
+        }
+        let showsEditButton = editable && hovered
+        editButton.isHidden = !showsEditButton
+        timeLabel.isHidden = showsEditButton
+        editButton.contentTintColor = RimeUI.textPrimary
+        editButton.layer?.backgroundColor = RimeUI.surface2.cgColor
+        editButton.layer?.borderColor = RimeUI.borderStrong.cgColor
+        editButton.layer?.borderWidth = 1
         previewImageView.layer?.backgroundColor = RimeUI.surface3.cgColor
         layer?.backgroundColor = background.cgColor
         layer?.borderColor = border.cgColor
@@ -1366,7 +1831,7 @@ private final class ClipboardHistoryCardButton: NSButton {
     }
 }
 
-private final class ClipboardFirstMouseButton: NSButton {
+private class ClipboardFirstMouseButton: NSButton {
     private var pointerTrackingArea: NSTrackingArea?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -1395,5 +1860,131 @@ private final class ClipboardFirstMouseButton: NSButton {
 
     override func mouseExited(with event: NSEvent) {
         NSCursor.arrow.set()
+    }
+}
+
+/// The rail's tab row: Recent, then one tab per saved Capsule kind.
+private final class CapsuleRailTabStrip: NSView {
+    var onSelect: ((CapsuleRailTab) -> Void)?
+    private let stack = NSStackView()
+    private var buttons: [CapsuleRailTabButton] = []
+    private var selectedTab: CapsuleRailTab = .recent
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.borderWidth = 1
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 2
+        stack.edgeInsets = NSEdgeInsets(top: 3, left: 3, bottom: 3, right: 3)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(equalToConstant: 28),
+        ])
+        for tab in CapsuleRailTab.ordered {
+            let button = CapsuleRailTabButton(tab: tab)
+            button.target = self
+            button.action = #selector(tabPressed(_:))
+            stack.addArrangedSubview(button)
+            buttons.append(button)
+        }
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.tabGroup)
+        setAccessibilityLabel("Capsule 类型")
+        applyAppearance()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func select(_ tab: CapsuleRailTab) {
+        guard tab != selectedTab else { return }
+        selectedTab = tab
+        applyAppearance()
+    }
+
+    func applyAppearance() {
+        layer?.backgroundColor = RimeUI.surface2.cgColor
+        layer?.borderColor = RimeUI.border.cgColor
+        buttons.forEach { $0.render(selected: $0.tab == selectedTab) }
+    }
+
+    @objc private func tabPressed(_ sender: CapsuleRailTabButton) {
+        onSelect?(sender.tab)
+    }
+}
+
+private final class CapsuleRailTabButton: ClipboardFirstMouseButton {
+    let tab: CapsuleRailTab
+    private let label = NSTextField(labelWithString: "")
+    private let icon = NSImageView()
+    private let content = NSStackView()
+
+    init(tab: CapsuleRailTab) {
+        self.tab = tab
+        super.init(frame: .zero)
+        title = ""
+        isBordered = false
+        setButtonType(.momentaryChange)
+        focusRingType = .none
+        wantsLayer = true
+        layer?.cornerRadius = 6
+
+        // NSButton's own image-beside-title layout puts a small symbol on a
+        // different line from a CJK title. Lay the pair out explicitly and
+        // centre both on the same axis.
+        label.stringValue = tab.label
+        label.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
+        label.setAccessibilityElement(false)
+        content.orientation = .horizontal
+        content.alignment = .centerY
+        content.spacing = 3
+        content.translatesAutoresizingMaskIntoConstraints = false
+        if tab == .saved(.password) {
+            icon.image = RimeUI.symbol("lock.fill", pointSize: 8, weight: .semibold)
+            icon.image?.isTemplate = true
+            icon.imageScaling = .scaleNone
+            icon.setAccessibilityElement(false)
+            content.addArrangedSubview(icon)
+        }
+        content.addArrangedSubview(label)
+        addSubview(content)
+        NSLayoutConstraint.activate([
+            content.centerXAnchor.constraint(equalTo: centerXAnchor),
+            content.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        setAccessibilityLabel(tab.label)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+        render(selected: tab == .recent)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: ceil(content.fittingSize.width) + 20, height: 22)
+    }
+
+    /// One control: a click on the label or the lock is a click on the tab.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, isEnabled else { return nil }
+        let local = superview.map { convert(point, from: $0) } ?? point
+        return bounds.contains(local) ? self : nil
+    }
+
+    func render(selected: Bool) {
+        let color = selected ? RimeUI.textPrimary : RimeUI.textMuted
+        layer?.backgroundColor = selected
+            ? RimeUI.clipboardSelectedBackground.cgColor
+            : NSColor.clear.cgColor
+        label.textColor = color
+        icon.contentTintColor = color
+        setAccessibilitySelected(selected)
     }
 }

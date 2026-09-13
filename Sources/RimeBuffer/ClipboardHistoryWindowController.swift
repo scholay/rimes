@@ -186,6 +186,11 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
     private let chrome = ClipboardHistoryChromeView(frame: .zero)
     private let historyModel: ClipboardHistoryModel
     private let pane: ClipboardHistoryPaneView
+    private let capsuleLibrary: CapsuleRailLibrary
+    private let capsuleFileQueue = DispatchQueue(
+        label: "RIMES.CapsuleRail.file-activation",
+        qos: .userInitiated
+    )
     private var observers: [NSObjectProtocol] = []
     private var secureInputTimer: Timer?
     private var lastSecureInputState = IsSecureEventInputEnabled()
@@ -234,7 +239,11 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
 
         let model = MainActor.assumeIsolated { ClipboardHistoryModel() }
         historyModel = model
-        pane = MainActor.assumeIsolated { ClipboardHistoryPaneView(model: model) }
+        let library = CapsuleRailLibrary.live()
+        capsuleLibrary = library
+        pane = MainActor.assumeIsolated {
+            ClipboardHistoryPaneView(model: model, library: library)
+        }
         panel = ClipboardHistoryPanel(
             contentRect: NSRect(
                 x: 0,
@@ -302,6 +311,7 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
             pane.resetSearch()
             pane.setStandaloneSearchEnabled(mode == .standalonePasteboard)
         }
+        capsuleLibrary.reload()
 
         let initialTarget: FocusLease?
         switch mode {
@@ -723,7 +733,7 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
                 self.pane.handleStandaloneKeyEquivalent(event)
             }
         }
-        panel.setAccessibilityTitle("RIMES Clipboard History")
+        panel.setAccessibilityTitle("RIMES Capsule")
 
         chrome.translatesAutoresizingMaskIntoConstraints = false
         pane.translatesAutoresizingMaskIntoConstraints = false
@@ -742,6 +752,18 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
             }
             pane.onCopy = { [weak self] items in self?.copy(items) ?? false }
             pane.onClose = { [weak self] in self?.hide() }
+            pane.onActivateSaved = { [weak self] entry in
+                self?.activateSaved(entry, closesAfterWrite: true) ?? false
+            }
+            pane.onCopySaved = { [weak self] entry in
+                self?.activateSaved(entry, closesAfterWrite: false) ?? false
+            }
+            pane.onEditSaved = { [weak self] entry in
+                self?.openCapsuleManager(revealing: entry)
+            }
+            pane.onManage = { [weak self] in
+                self?.openCapsuleManager(revealing: nil)
+            }
         }
         applyAppearance()
     }
@@ -1056,6 +1078,141 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
         return true
     }
 
+    /// Saved entries leave the rail the way history items do: plain text goes
+    /// straight into the target box through the focus token; anything else
+    /// goes onto the pasteboard and is pasted into the target application.
+    /// History is re-baselined after each write, so using a saved entry never
+    /// adds it to Recent. A password never gets this far.
+    private func activateSaved(_ entry: CapsuleRailEntry,
+                               closesAfterWrite: Bool) -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard isVisible, captureState().allowsContentPresentation else {
+            NSSound.beep()
+            return false
+        }
+        switch CapsuleRailActivationRules.action(for: entry.kind) {
+        case .refuse:
+            IMELog.write("capsule rail refused \(entry.kind.rawValue) activation")
+            NSSound.beep()
+            return false
+        case .insertText:
+            guard let text = entry.payload, !text.isEmpty else { return false }
+            if closesAfterWrite, deliverSavedTextThroughFocusToken(text) {
+                IMELog.write("capsule rail inserted \(entry.kind.rawValue) through focus token")
+                hide()
+                return true
+            }
+            return writeSavedToPasteboard(
+                expectedChangeCount: NSPasteboard.general.changeCount,
+                closesAfterWrite: closesAfterWrite
+            ) { pasteboard, expectedChangeCount in
+                guard pasteboard.changeCount == expectedChangeCount else {
+                    throw CapsuleFilePasteboardError.pasteboardChanged
+                }
+                pasteboard.clearContents()
+                guard pasteboard.setString(text, forType: .string) else {
+                    throw CapsuleFilePasteboardError.pasteboardWriteFailed
+                }
+                return pasteboard.changeCount
+            }
+        case .pasteFile:
+            guard let path = entry.payload, !richActivationInFlight else { return false }
+            richActivationGeneration &+= 1
+            let generation = richActivationGeneration
+            richActivationInFlight = true
+            let expectedChangeCount = NSPasteboard.general.changeCount
+            let kind = entry.kind
+            // Preparing an image decodes it, so keep that off the main thread.
+            capsuleFileQueue.async { [weak self] in
+                let prepared = Result {
+                    try CapsuleFilePasteboardWriter.prepare(kind: kind, path: path)
+                }
+                DispatchQueue.main.async {
+                    guard let self,
+                          self.richActivationGeneration == generation else { return }
+                    self.richActivationInFlight = false
+                    _ = self.writeSavedToPasteboard(
+                        expectedChangeCount: expectedChangeCount,
+                        closesAfterWrite: closesAfterWrite
+                    ) { pasteboard, expectedChangeCount in
+                        try CapsuleFilePasteboardWriter.write(
+                            prepared.get(),
+                            to: pasteboard,
+                            expectedChangeCount: expectedChangeCount
+                        )
+                    }
+                }
+            }
+            return true
+        }
+    }
+
+    private func deliverSavedTextThroughFocusToken(_ text: String) -> Bool {
+        guard ClipboardHistoryActivationRules.shouldAttemptDirectTextDelivery(
+                mode: presentationMode,
+                currentSourceIsOwn: RimeInputSourceAuthority.currentSourceIsOwn(),
+                allItemsAreCompletePlainText: true
+              ),
+              let token = presentationTargetToken,
+              let target = InputFocusCoordinator.shared.liveTarget(
+                expected: token,
+                forceOverlayVisibilityRefresh: true
+              ),
+              target.isExternalTarget,
+              let controller = target.controller else { return false }
+        return controller.deliverClipboardHistoryText(text, expected: token)
+    }
+
+    private func writeSavedToPasteboard(
+        expectedChangeCount: Int,
+        closesAfterWrite: Bool,
+        write: (NSPasteboard, Int) throws -> Int
+    ) -> Bool {
+        guard isVisible,
+              captureState().allowsContentPresentation,
+              !IsSecureEventInputEnabled(),
+              !sessionProtectionActive else {
+            IMELog.write("capsule rail pasteboard write rejected by live protection")
+            return false
+        }
+        do {
+            let writtenChangeCount = try write(.general, expectedChangeCount)
+            MainActor.assumeIsolated {
+                _ = historyModel.baselineAfterOwnPasteboardWrite(
+                    expectedChangeCount: writtenChangeCount
+                )
+            }
+            syncCaptureState()
+            guard closesAfterWrite else { return true }
+            let target = presentationTargetApplication
+            closePreparedArchiveActivation(announcing: false)
+            ClipboardAutoPaste.pasteAfterWindowClose(target: target) { outcome in
+                ClipboardCopyToast.show(
+                    ClipboardActivationFeedback.message(for: outcome)
+                )
+            }
+            return true
+        } catch {
+            IMELog.write(
+                "capsule rail pasteboard write failed: \(error.localizedDescription)"
+            )
+            NSSound.beep()
+            return false
+        }
+    }
+
+    /// The manager is a normal key window. The rail closes first, so its
+    /// borrowed search session is retired before the application activates.
+    private func openCapsuleManager(revealing entry: CapsuleRailEntry?) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        hide()
+        if let entry {
+            CapsuleWindowController.shared.show(revealing: entry.kind, id: entry.id)
+        } else {
+            CapsuleWindowController.shared.show()
+        }
+    }
+
     private func installObservers() {
         let center = NotificationCenter.default
         observers.append(center.addObserver(
@@ -1063,6 +1220,14 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in self?.applyAppearance() })
+        observers.append(center.addObserver(
+            forName: .capsuleStoreDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isVisible else { return }
+            self.capsuleLibrary.reload()
+        })
 
         let workspace = NSWorkspace.shared.notificationCenter
         observers.append(workspace.addObserver(

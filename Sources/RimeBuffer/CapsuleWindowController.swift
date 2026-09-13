@@ -1049,6 +1049,12 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Opens the manager on one entry, as the rail's edit brush asks.
+    func show(revealing kind: CapsuleEntryKind, id: UUID) {
+        show()
+        contentController?.reveal(kind: kind, id: id)
+    }
+
     func windowDidBecomeKey(_ notification: Notification) {
         contentController?.windowBecameKey()
     }
@@ -1551,6 +1557,28 @@ final class CapsulePaneViewController: NSViewController,
         guard isViewLoaded else { return }
         concealPasswordPlaintext()
         scheduleReload(after: 0)
+    }
+
+    /// Switches to `kind` and selects entry `id` once the list reloads. An
+    /// unsaved draft is confirmed first, as for any other switch.
+    func reveal(kind: CapsuleEntryKind, id: UUID) {
+        guard isViewLoaded else { return }
+        concealPasswordPlaintext()
+        guard draft.id != id || draft.kind != kind else { return }
+        guard confirmDiscardChangesIfNeeded() else { return }
+        selectedKind = kind
+        kindControl.selectedSegment = CapsuleEntryKind.allCases.firstIndex(
+            of: kind
+        ) ?? 0
+        searchField.placeholderString = kind == .password
+            ? "仅搜索密码标题"
+            : "搜索标题或内容"
+        searchField.stringValue = ""
+        cancelPendingReload()
+        // The reload prefers the draft's id and then loads the full record.
+        draft = CapsuleWindowDraft(id: id, kind: kind, title: "", content: "")
+        editorDirty = false
+        reloadFromStore()
     }
 
     func windowBecameKey() {
