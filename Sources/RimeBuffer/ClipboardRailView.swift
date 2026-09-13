@@ -109,6 +109,7 @@ struct CapsuleRailPaneSnapshot: Equatable {
     let cardCount: Int
     let selectedEntryID: UUID?
     let editableCardCount: Int
+    let inCapsuleCardCount: Int
     let hint: String
     let stateMessage: String?
     let clearButtonVisible: Bool
@@ -145,6 +146,10 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     var onCopySaved: ((CapsuleRailEntry) -> Bool)?
     var onEditSaved: ((CapsuleRailEntry) -> Void)?
     var onManage: (() -> Void)?
+    /// Recent cards: ⌘S saves the selection into Capsule; the hover brush
+    /// opens one as a new, unsaved entry in the manager.
+    var onSaveHistory: (([ClipboardHistoryItem]) -> Bool)?
+    var onEditHistory: ((ClipboardHistoryItem) -> Void)?
 
     private let model: ClipboardHistoryModel
     private let library: CapsuleRailLibrary
@@ -437,6 +442,11 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             return true
         }
         if commandOnly, event.keyCode == UInt16(kVK_ANSI_F) { return true }
+        if commandOnly, event.keyCode == UInt16(kVK_ANSI_S) {
+            // Owned on every tab, so ⌘S never reaches the host app's Save.
+            _ = saveSelectedItems()
+            return true
+        }
         if commandOnly, event.keyCode == UInt16(kVK_ANSI_C) {
             _ = copySelectedItems()
             return true
@@ -548,6 +558,14 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     }
 
     @discardableResult
+    func saveSelectedItems() -> Bool {
+        guard selectedTab == .recent, let onSaveHistory else { return false }
+        let items = selectedFilteredItems
+        guard !items.isEmpty else { return false }
+        return onSaveHistory(items)
+    }
+
+    @discardableResult
     func deleteSelectedItems() -> Bool {
         guard selectedTab == .recent else { return false }
         let items = selectedFilteredItems
@@ -649,6 +667,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             cardCount: cardDocumentView.cards.count,
             selectedEntryID: selectedSavedEntry?.id,
             editableCardCount: cardDocumentView.cards.filter(\.isEditable).count,
+            inCapsuleCardCount: cardDocumentView.cards.filter(\.isMarkedInCapsule).count,
             hint: hintLabel.stringValue,
             stateMessage: stateContainer.isHidden ? nil : stateLabel.stringValue,
             clearButtonVisible: !clearButton.isHidden,
@@ -697,8 +716,8 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         switch selectedTab {
         case .recent:
             hintLabel.stringValue = standaloneSearchEnabled
-                ? "TYPE TO SEARCH   ← → SELECT   ⇥ NEXT TAB   ↩ PREPARE CLIPBOARD   ⌘C COPY   DELETE REMOVE   ESC CLOSE"
-                : "TYPE TO SEARCH   ← → SELECT   ⇧←→ / ⌘CLICK MULTI   ⇥ NEXT TAB   ↩ INSERT   ⌘C COPY   DELETE REMOVE   ESC CLOSE"
+                ? "TYPE TO SEARCH   ← → SELECT   ⇥ NEXT TAB   ↩ PREPARE CLIPBOARD   ⌘C COPY   ⌘S SAVE TO CAPSULE   DELETE REMOVE   ESC CLOSE"
+                : "TYPE TO SEARCH   ← → SELECT   ⇧←→ / ⌘CLICK MULTI   ⇥ NEXT TAB   ↩ INSERT   ⌘C COPY   ⌘S SAVE TO CAPSULE   DELETE REMOVE   ESC CLOSE"
         case .saved(.password):
             hintLabel.stringValue = "TYPE TO SEARCH   ← → SELECT   ⇥ NEXT TAB   PASSWORDS OPEN ONLY IN THE MANAGER   ESC CLOSE"
         case .saved:
@@ -845,6 +864,11 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         savedThumbnailOperations.values.forEach { $0.cancel() }
         savedThumbnailOperations.removeAll(keepingCapacity: false)
         savedThumbnailCache.removeAllObjects()
+    }
+
+    private func editHistoryItem(id: UUID) {
+        guard let item = visibleItemByID[id], let onEditHistory else { return }
+        onEditHistory(item)
     }
 
     private func editSavedEntry(id: UUID) {
@@ -1095,8 +1119,17 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
                 } ?? fallbackSourceIcon,
                 thumbnail: thumbnailCache.object(forKey: item.id as NSUUID),
                 selected: model.selectedIDs.contains(item.id),
-                focused: item.id == model.selectedID
+                focused: item.id == model.selectedID,
+                editable: CapsuleRailSaveRules.isSaveable(item.kind),
+                inCapsule: library.isInCapsule(
+                    historyItemID: item.id,
+                    text: item.textCompleteness == .complete ? item.canonicalText : nil
+                )
             )
+            let id = item.id
+            button.onEdit = { [weak self] in
+                MainActor.assumeIsolated { self?.editHistoryItem(id: id) }
+            }
             return button
         }
         cardDocumentView.setCards(ordered, viewportWidth: scrollView.contentSize.width)
@@ -1502,7 +1535,10 @@ private final class ClipboardHistoryCardButton: NSButton {
     /// Shown on hover for a saved entry; opens it in the Capsule manager.
     var onEdit: (() -> Void)?
     private let editButton = ClipboardFirstMouseButton(title: "", target: nil, action: nil)
+    private let savedMarker = NSImageView()
     private var editable = false
+    private var inCapsule = false
+    var isMarkedInCapsule: Bool { inCapsule }
     private var allowsThumbnail = false
     private var savedTitle: String?
     private var savedPreview: String?
@@ -1556,6 +1592,13 @@ private final class ClipboardHistoryCardButton: NSButton {
         editButton.setAccessibilityLabel("编辑")
         editButton.isHidden = true
         addSubview(editButton)
+        savedMarker.image = RimeUI.symbol("capsule.fill", pointSize: 8, weight: .semibold)
+        savedMarker.image?.isTemplate = true
+        savedMarker.imageScaling = .scaleNone
+        savedMarker.toolTip = "已收入 Capsule"
+        savedMarker.setAccessibilityElement(false)
+        savedMarker.isHidden = true
+        addSubview(savedMarker)
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
     }
@@ -1600,6 +1643,14 @@ private final class ClipboardHistoryCardButton: NSButton {
             height: bounds.height - 43
         )
         editButton.frame = NSRect(x: bounds.width - 32, y: 5, width: 22, height: 22)
+        // Just left of the right-aligned time, however wide the time is.
+        let timeWidth = ceil(timeLabel.attributedStringValue.size().width)
+        savedMarker.frame = NSRect(
+            x: bounds.width - 10 - timeWidth - 17,
+            y: 10,
+            width: 13,
+            height: 13
+        )
     }
 
     override func updateTrackingAreas() {
@@ -1638,7 +1689,9 @@ private final class ClipboardHistoryCardButton: NSButton {
         sourceIcon: NSImage?,
         thumbnail: NSImage?,
         selected: Bool,
-        focused: Bool
+        focused: Bool,
+        editable: Bool = false,
+        inCapsule: Bool = false
     ) {
         let fallbackPreview: String
         switch item.kind {
@@ -1669,13 +1722,17 @@ private final class ClipboardHistoryCardButton: NSButton {
         previewLabel.stringValue = preview
         itemKind = item.kind
         allowsThumbnail = item.kind.allowsImageThumbnail
-        editable = false
-        onEdit = nil
+        self.editable = editable
+        self.inCapsule = inCapsule
+        editButton.toolTip = "在 Capsule 管理中新建"
+        needsLayout = true
         savedTitle = nil
         savedPreview = nil
         toolTip = nil
         setThumbnail(thumbnail)
-        setAccessibilityLabel("\(item.kind.rawValue)：\(accessible)")
+        setAccessibilityLabel(
+            "\(item.kind.rawValue)：\(accessible)" + (inCapsule ? " · 已收入 Capsule" : "")
+        )
         let activationHelp = "双击或回车使用；富内容会复制，然后在目标中粘贴"
         setAccessibilityHelp(selected ? "已选择；\(activationHelp)" : "单击选择；\(activationHelp)")
         setAccessibilitySelected(selected)
@@ -1721,6 +1778,9 @@ private final class ClipboardHistoryCardButton: NSButton {
             maximumCharacters: ClipboardHistoryWindowMetrics.previewCharacterLimit
         )
         editable = true
+        inCapsule = false
+        editButton.toolTip = "在 Capsule 管理中编辑"
+        needsLayout = true
         allowsThumbnail = showsMedia
         toolTip = entry.title
         setThumbnail(thumbnail)
@@ -1802,6 +1862,8 @@ private final class ClipboardHistoryCardButton: NSButton {
         let showsEditButton = editable && hovered
         editButton.isHidden = !showsEditButton
         timeLabel.isHidden = showsEditButton
+        savedMarker.isHidden = !inCapsule || showsEditButton
+        savedMarker.contentTintColor = selectedItem ? RimeUI.accentBlue : RimeUI.textMuted
         editButton.contentTintColor = RimeUI.textPrimary
         editButton.layer?.backgroundColor = RimeUI.surface2.cgColor
         editButton.layer?.borderColor = RimeUI.borderStrong.cgColor

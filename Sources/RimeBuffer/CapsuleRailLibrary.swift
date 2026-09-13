@@ -104,6 +104,7 @@ final class CapsuleRailLibrary {
                                passwords: Result<[CapsuleRailEntry], Error>)
 
     var onChange: (() -> Void)?
+    let savedIndex: CapsuleRailSavedIndex
 
     private let loader: Loader
     private let queue = DispatchQueue(
@@ -113,9 +114,13 @@ final class CapsuleRailLibrary {
     private var generation: UInt64 = 0
     private var byKind: [CapsuleEntryKind: [CapsuleRailEntry]] = [:]
     private var stateByKind: [CapsuleEntryKind: LoadState] = [:]
+    private var notePayloads: Set<String> = []
+    private var contentEntryIDs: Set<UUID> = []
 
-    init(loader: @escaping Loader) {
+    init(loader: @escaping Loader,
+         savedIndex: CapsuleRailSavedIndex = CapsuleRailSavedIndex(defaults: nil)) {
         self.loader = loader
+        self.savedIndex = savedIndex
     }
 
     /// A library that never reads anything, for panes built without stores.
@@ -125,9 +130,10 @@ final class CapsuleRailLibrary {
 
     /// Reads the real Capsule stores.
     static func live() -> CapsuleRailLibrary {
-        CapsuleRailLibrary(loader: {
-            load(contentStore: .shared, passwordStore: .shared)
-        })
+        CapsuleRailLibrary(
+            loader: { load(contentStore: .shared, passwordStore: .shared) },
+            savedIndex: CapsuleRailSavedIndex(defaults: .standard)
+        )
     }
 
     func entries(for kind: CapsuleEntryKind) -> [CapsuleRailEntry] {
@@ -138,6 +144,22 @@ final class CapsuleRailLibrary {
     func state(for kind: CapsuleEntryKind) -> LoadState {
         dispatchPrecondition(condition: .onQueue(.main))
         return stateByKind[kind] ?? .idle
+    }
+
+    /// Whether a Recent card is already in Capsule: saved from the rail into
+    /// an entry that still exists, or text that matches a note exactly.
+    func isInCapsule(historyItemID: UUID, text: String?) -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        if let entry = savedIndex.entryID(forHistoryItem: historyItemID),
+           contentEntryIDs.contains(entry) {
+            return true
+        }
+        return text.map(notePayloads.contains) ?? false
+    }
+
+    func recordSaved(historyItemID: UUID, entryID: UUID) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        savedIndex.record(historyItem: historyItemID, entry: entryID)
     }
 
     /// Starts a fresh read. What is already shown stays until it lands.
@@ -171,6 +193,9 @@ final class CapsuleRailLibrary {
                 byKind[kind] = entries.filter { $0.kind == kind }
                 stateByKind[kind] = .loaded
             }
+            notePayloads = Set(entries.filter { $0.kind == .note }.compactMap(\.payload))
+            contentEntryIDs = Set(entries.map(\.id))
+            savedIndex.prune(keeping: contentEntryIDs)
         case let .failure(error):
             IMELog.write("capsule rail content load failed: \(error.localizedDescription)")
             for kind in contentKinds {

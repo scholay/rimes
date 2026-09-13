@@ -191,6 +191,11 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
         label: "RIMES.CapsuleRail.file-activation",
         qos: .userInitiated
     )
+    private let capsuleSaveQueue = DispatchQueue(
+        label: "RIMES.CapsuleRail.save",
+        qos: .userInitiated
+    )
+    private var capsuleSaveInFlight = false
     private var observers: [NSObjectProtocol] = []
     private var secureInputTimer: Timer?
     private var lastSecureInputState = IsSecureEventInputEnabled()
@@ -764,6 +769,12 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
             pane.onManage = { [weak self] in
                 self?.openCapsuleManager(revealing: nil)
             }
+            pane.onSaveHistory = { [weak self] items in
+                self?.saveHistoryToCapsule(items) ?? false
+            }
+            pane.onEditHistory = { [weak self] item in
+                self?.openHistoryDraft(item)
+            }
         }
         applyAppearance()
     }
@@ -1199,6 +1210,162 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
             NSSound.beep()
             return false
         }
+    }
+
+    /// What a Recent card needs to be planned off the main thread.
+    private struct HistorySaveSource {
+        let id: UUID
+        let kind: ClipboardItemKind
+        let completeText: String?
+        let capturedAt: Date
+
+        init(_ item: ClipboardHistoryItem) {
+            id = item.id
+            kind = item.kind
+            completeText = item.textCompleteness == .complete ? item.canonicalText : nil
+            capturedAt = item.capturedAt
+        }
+    }
+
+    /// ⌘S on Recent: saves the selected cards into Capsule at once, without
+    /// a dialog, and says what happened in a toast above the rail. The rail
+    /// stays open.
+    private func saveHistoryToCapsule(_ items: [ClipboardHistoryItem]) -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard isVisible,
+              captureState().allowsContentPresentation,
+              !items.isEmpty,
+              !capsuleSaveInFlight else {
+            NSSound.beep()
+            return false
+        }
+        let saveable = items.filter { CapsuleRailSaveRules.isSaveable($0.kind) }
+        let unsupported = [CapsuleRailSaveOutcome](
+            repeating: .unsupported(.kind),
+            count: items.count - saveable.count
+        )
+        guard !saveable.isEmpty else {
+            showCapsuleToast(CapsuleRailSaveRules.toast(for: unsupported))
+            return false
+        }
+        capsuleSaveInFlight = true
+        let sources = saveable.map(HistorySaveSource.init)
+        MainActor.assumeIsolated {
+            historyModel.loadArchives(ids: sources.map(\.id)) { [weak self] archives in
+                guard let self else { return }
+                guard let archives, archives.count == sources.count else {
+                    self.capsuleSaveInFlight = false
+                    self.showCapsuleToast("收入 Capsule 失败")
+                    return
+                }
+                let saver = CapsuleRailSaver.live()
+                self.capsuleSaveQueue.async {
+                    var results: [(historyID: UUID, outcome: CapsuleRailSaveOutcome)] = []
+                    for (source, archive) in zip(sources, archives) {
+                        let plans = CapsuleRailSaveRules.plans(
+                            kind: source.kind,
+                            completeText: source.completeText,
+                            capturedAt: source.capturedAt,
+                            archive: archive
+                        )
+                        for outcome in saver.save(plans) {
+                            results.append((source.id, outcome))
+                        }
+                    }
+                    DispatchQueue.main.async {
+                        self.capsuleSaveInFlight = false
+                        for (historyID, outcome) in results {
+                            switch outcome {
+                            case let .saved(_, entryID), let .alreadySaved(_, entryID):
+                                self.capsuleLibrary.recordSaved(
+                                    historyItemID: historyID,
+                                    entryID: entryID
+                                )
+                            case .unsupported, .failed:
+                                break
+                            }
+                        }
+                        self.capsuleLibrary.reload()
+                        let outcomes = results.map(\.outcome) + unsupported
+                        IMELog.write("capsule rail saved cards=\(sources.count) outcomes=\(outcomes.count)")
+                        self.showCapsuleToast(CapsuleRailSaveRules.toast(for: outcomes))
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    /// The brush on a Recent card: opens it in the manager as a new entry the
+    /// user still has to save. A pasted image is written to Capsule's assets
+    /// first, because an Image entry has to point at a file.
+    private func openHistoryDraft(_ item: ClipboardHistoryItem) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard isVisible,
+              captureState().allowsContentPresentation,
+              CapsuleRailSaveRules.isSaveable(item.kind),
+              !capsuleSaveInFlight else {
+            NSSound.beep()
+            return
+        }
+        capsuleSaveInFlight = true
+        let source = HistorySaveSource(item)
+        MainActor.assumeIsolated {
+            historyModel.loadArchives(ids: [source.id]) { [weak self] archives in
+                guard let self else { return }
+                guard let archive = archives?.first else {
+                    self.capsuleSaveInFlight = false
+                    NSSound.beep()
+                    return
+                }
+                self.capsuleSaveQueue.async {
+                    let plan = CapsuleRailSaveRules.plans(
+                        kind: source.kind,
+                        completeText: source.completeText,
+                        capturedAt: source.capturedAt,
+                        archive: archive
+                    ).first {
+                        if case .unsupported = $0 { return false }
+                        return true
+                    }
+                    var draft: (kind: CapsuleEntryKind, title: String, content: String)?
+                    switch plan {
+                    case let .note(title, text)?:
+                        draft = (.note, title, text)
+                    case let .file(kind, title, path)?:
+                        draft = (kind, title, path)
+                    case let .imageData(title, data, fileExtension)?:
+                        if let path = try? CapsuleRailSaver.live()
+                            .writeAsset(data, fileExtension: fileExtension) {
+                            draft = (.image, title, path)
+                        }
+                    case .unsupported?, nil:
+                        draft = nil
+                    }
+                    DispatchQueue.main.async {
+                        self.capsuleSaveInFlight = false
+                        guard let draft else {
+                            self.showCapsuleToast("此类型暂不能收入 Capsule")
+                            return
+                        }
+                        self.hide()
+                        CapsuleWindowController.shared.show(
+                            draftKind: draft.kind,
+                            title: draft.title,
+                            content: draft.content
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func showCapsuleToast(_ message: String) {
+        ClipboardCopyToast.show(
+            message,
+            symbolName: "capsule",
+            above: isVisible ? panel.frame : nil
+        )
     }
 
     /// The manager is a normal key window. The rail closes first, so its

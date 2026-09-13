@@ -17,6 +17,9 @@ enum CapsuleRailSmoke {
         checkRules(expect: expect)
         checkLibraryProjection(expect: expect)
         checkPane(expect: expect)
+        checkSaveRules(expect: expect)
+        checkSaver(expect: expect)
+        checkSavedIndexAndMarkers(expect: expect)
         return ok
     }
 
@@ -45,6 +48,7 @@ enum CapsuleRailSmoke {
             entry(.note, "Capsule 合并方案", "合并体验，不合并存储。最近只存本机；收入后才写 Markdown 与 iCloud。", now.addingTimeInterval(-7_200)),
             entry(.note, "RIMES 本机构建", "DEVELOPER_DIR 指向 Xcode 再跑 dev-reload.sh；装完看 ~/rimebuffer.log。", now.addingTimeInterval(-172_800)),
             entry(.note, "Electron 输入框", "打开 AXManualAccessibility 后约 3 秒树才建好。", now.addingTimeInterval(-432_000)),
+            entry(.note, "dev-reload", "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer ./dev-reload.sh", now.addingTimeInterval(-600_000)),
         ]
         let images = [
             CapsuleRailEntry(id: UUID(), kind: .image, title: "RIMES 图标", preview: "Image · icon_256x256.png", updatedAt: now.addingTimeInterval(-86_400), payload: icon, searchText: "RIMES 图标"),
@@ -63,7 +67,10 @@ enum CapsuleRailSmoke {
             height: ClipboardHistoryWindowMetrics.preferredHeight
         )
         let tab = CapsuleEntryKind(rawValue: tabName).map(CapsuleRailTab.saved) ?? .recent
-        if tab != .recent {
+        if tab == .recent {
+            library.reload()
+            waitUntil { library.state(for: .note) == .loaded }
+        } else {
             pane.selectTab(tab)
             waitUntil { library.state(for: .note) == .loaded }
             if tab == .saved(.image) {
@@ -235,7 +242,11 @@ enum CapsuleRailSmoke {
         let recent = pane.capsuleRailSnapshotForSmoke()
         expect(recent.tab == .recent, "rail opens on Recent")
         expect(recent.clearButtonVisible, "Recent shows clear")
-        expect(recent.editableCardCount == 0, "Recent cards have no edit brush in step 1")
+        expect(recent.editableCardCount == 1, "a text history card offers the brush")
+        var savedFromHistory: [[UUID]] = []
+        pane.onSaveHistory = { items in savedFromHistory.append(items.map(\.id)); return true }
+        expect(pane.handleKeyDown(key(kVK_ANSI_S, modifiers: .command)), "Command-S owned on Recent")
+        expect(savedFromHistory.count == 1, "Command-S saves the selected history card")
 
         expect(pane.handleKeyDown(key(kVK_Tab)), "Tab is owned by the rail")
         expect(pane.selectedTab == .saved(.note), "Tab moves to Notes")
@@ -255,6 +266,11 @@ enum CapsuleRailSmoke {
         expect(activated.map(\.id) == [noteB.id], "Return activates the selected note")
         expect(pane.handleKeyDown(key(kVK_ANSI_C, modifiers: .command)), "Command-C owned")
         expect(copied.map(\.id) == [noteB.id], "Command-C copies the selected note")
+        expect(
+            pane.handleKeyDown(key(kVK_ANSI_S, modifiers: .command)),
+            "Command-S stays owned on a saved tab, so it never reaches the host"
+        )
+        expect(savedFromHistory.count == 1, "Command-S saves nothing from a saved tab")
         expect(pane.handleKeyDown(key(kVK_Delete)), "Delete owned")
         expect(pane.capsuleRailSnapshotForSmoke().cardCount == 2, "Delete never removes a saved entry")
         expect(model.itemCount == 1, "Delete on a saved tab leaves history alone")
@@ -294,6 +310,210 @@ enum CapsuleRailSmoke {
         let shielded = pane.capsuleRailSnapshotForSmoke()
         expect(shielded.cardCount == 0, "protection hides saved cards")
         expect(shielded.stateMessage == "安全输入期间已隐藏内容", "protection message on a saved tab")
+    }
+
+    private static func checkSaveRules(
+        expect: (_ condition: @autoclosure () -> Bool, _ message: String) -> Void
+    ) {
+        expect(
+            CapsuleRailSaveRules.title(fromText: "  \n  第一行   标题 \n第二行") == "第一行 标题",
+            "title is the first non-empty line, whitespace collapsed"
+        )
+        let long = String(repeating: "长", count: 80)
+        expect(
+            CapsuleRailSaveRules.title(fromText: long) == String(repeating: "长", count: 60) + "…",
+            "a long first line is bounded"
+        )
+        expect(CapsuleRailSaveRules.isSaveable(.text), "text is saveable")
+        expect(!CapsuleRailSaveRules.isSaveable(.color), "color is not saveable")
+
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        guard let textArchive = archive(["public.utf8-plain-text": Data("第一行\n正文".utf8)]),
+              let fileArchive = try? ClipboardPasteboardArchive(items: [
+                .init(types: ["public.file-url"], dataByType: ["public.file-url": Data("file:///tmp/报告.pdf".utf8)]),
+                .init(types: ["public.file-url"], dataByType: ["public.file-url": Data("file:///tmp/notes.txt".utf8)]),
+              ]),
+              let png = fixturePNG(),
+              let imageArchive = archive(["public.png": png]) else {
+            expect(false, "could not build rule archives")
+            return
+        }
+        expect(
+            CapsuleRailSaveRules.plans(kind: .text, completeText: nil, capturedAt: now, archive: textArchive)
+                == [.note(title: "第一行", text: "第一行\n正文")],
+            "text becomes a note, falling back to the archive text"
+        )
+        expect(
+            CapsuleRailSaveRules.plans(kind: .link, completeText: "https://example.com", capturedAt: now, archive: textArchive)
+                == [.note(title: "https://example.com", text: "https://example.com")],
+            "a link becomes a note of its complete text"
+        )
+        expect(
+            CapsuleRailSaveRules.plans(kind: .files, completeText: nil, capturedAt: now, archive: fileArchive)
+                == [.file(kind: .pdf, title: "报告.pdf", path: "/tmp/报告.pdf"), .unsupported(.fileType)],
+            "a PDF file becomes a PDF entry; other files are refused"
+        )
+        if case let .imageData(_, data, fileExtension)? = CapsuleRailSaveRules.plans(
+            kind: .image, completeText: nil, capturedAt: now, archive: imageArchive
+        ).first {
+            expect(data == png && fileExtension == "png", "a pasted PNG is stored as PNG")
+        } else {
+            expect(false, "a pasted image becomes image data")
+        }
+        expect(
+            CapsuleRailSaveRules.plans(kind: .color, completeText: nil, capturedAt: now, archive: textArchive)
+                == [.unsupported(.kind)],
+            "a color is refused"
+        )
+
+        let id = UUID()
+        expect(CapsuleRailSaveRules.toast(for: [.saved(.note, id)]) == "已收入 Capsule · 笔记", "single save toast")
+        expect(CapsuleRailSaveRules.toast(for: [.saved(.note, id), .saved(.image, id)]) == "已收入 Capsule · 2 条", "multiple save toast")
+        expect(CapsuleRailSaveRules.toast(for: [.alreadySaved(.note, id)]) == "已在 Capsule 中", "duplicate toast")
+        expect(CapsuleRailSaveRules.toast(for: [.unsupported(.kind)]) == "此类型暂不能收入 Capsule", "unsupported toast")
+        expect(CapsuleRailSaveRules.toast(for: [.failed]) == "收入 Capsule 失败", "failure toast")
+    }
+
+    private static func checkSaver(
+        expect: (_ condition: @autoclosure () -> Bool, _ message: String) -> Void
+    ) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "rimes-capsule-rail-save-smoke-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let contentStore = CapsuleContentStore(rootURL: root)
+        let passwordStore = CapsulePasswordStore(rootURL: root)
+        let saver = CapsuleRailSaver(
+            contentStore: contentStore,
+            repository: CapsuleWindowRepository(
+                contentStore: contentStore,
+                passwordStore: passwordStore
+            ),
+            assetsURL: root.appendingPathComponent("assets", isDirectory: true)
+        )
+        let note = CapsuleRailSavePlan.note(title: "焦点租约", text: "FocusToken 只认 client")
+        let first = saver.save([note])
+        let second = saver.save([note])
+        guard case let .saved(.note, noteID)? = first.first else {
+            expect(false, "a note plan saves: \(first)")
+            return
+        }
+        expect(second == [.alreadySaved(.note, noteID)], "saving the same text again finds the entry")
+
+        guard let png = fixturePNG() else {
+            expect(false, "could not build a PNG")
+            return
+        }
+        let image = saver.save([.imageData(title: "图片", data: png, fileExtension: "png")])
+        let imageAgain = saver.save([.imageData(title: "图片", data: png, fileExtension: "png")])
+        guard case let .saved(.image, imageID)? = image.first,
+              let record = try? contentStore.record(id: imageID) else {
+            expect(false, "pasted image data saves as an Image entry: \(image)")
+            return
+        }
+        let assetURL = URL(fileURLWithPath: record.content)
+        expect(
+            assetURL.deletingLastPathComponent().lastPathComponent == "assets"
+                && assetURL.deletingPathExtension().lastPathComponent.count == 64,
+            "pasted image lands in assets under its SHA-256"
+        )
+        let mode = (try? FileManager.default.attributesOfItem(atPath: assetURL.path))?[.posixPermissions] as? NSNumber
+        expect(mode?.intValue == 0o600, "asset file is private")
+        expect(imageAgain == [.alreadySaved(.image, imageID)], "the same image is saved once")
+
+        let pdfURL = root.appendingPathComponent("报告.pdf")
+        try? Data("%PDF-1.4\n%rimes smoke\n".utf8).write(to: pdfURL)
+        let pdf = saver.save([.file(kind: .pdf, title: "报告.pdf", path: pdfURL.path)])
+        if case .saved(.pdf, _)? = pdf.first {} else {
+            expect(false, "a PDF file saves as a PDF entry: \(pdf)")
+        }
+        expect(
+            saver.save([.unsupported(.fileType)]) == [.unsupported(.fileType)],
+            "unsupported plans write nothing"
+        )
+    }
+
+    private static func checkSavedIndexAndMarkers(
+        expect: (_ condition: @autoclosure () -> Bool, _ message: String) -> Void
+    ) {
+        let suite = "RimeBuffer.CapsuleRailSmoke.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            expect(false, "could not create isolated defaults")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let history = UUID()
+        let entry = UUID()
+        let index = CapsuleRailSavedIndex(defaults: defaults)
+        index.record(historyItem: history, entry: entry)
+        expect(
+            CapsuleRailSavedIndex(defaults: defaults).entryID(forHistoryItem: history) == entry,
+            "saved index persists"
+        )
+        index.prune(keeping: [])
+        expect(
+            CapsuleRailSavedIndex(defaults: defaults).entryID(forHistoryItem: history) == nil,
+            "saved index forgets deleted entries"
+        )
+
+        let model = ClipboardHistoryModel(
+            configuration: .init(),
+            pasteboard: CapsuleRailPasteboardDouble(),
+            schedulesAutomaticPolling: false
+        )
+        model.start()
+        model.update(windowVisible: true, captureEnabled: true, protection: [])
+        _ = model.ingest("already a note")
+        _ = model.ingest("not saved")
+        let note = self.entry(.note, "already", "already a note", Date())
+        let library = CapsuleRailLibrary(
+            loader: { (.success([note]), .success([])) },
+            savedIndex: CapsuleRailSavedIndex(defaults: nil)
+        )
+        let pane = ClipboardHistoryPaneView(model: model, library: library)
+        pane.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: ClipboardHistoryWindowMetrics.preferredWidth,
+            height: ClipboardHistoryWindowMetrics.preferredHeight
+        )
+        library.reload()
+        waitUntil { library.state(for: .note) == .loaded }
+        pane.layoutSubtreeIfNeeded()
+        let snapshot = pane.capsuleRailSnapshotForSmoke()
+        expect(snapshot.cardCount == 2, "marker pane shows both history cards")
+        expect(snapshot.inCapsuleCardCount == 1, "only the card matching a note is marked")
+    }
+
+    private static func archive(_ dataByType: [String: Data]) -> ClipboardPasteboardArchive? {
+        try? ClipboardPasteboardArchive(items: [
+            .init(types: Array(dataByType.keys), dataByType: dataByType),
+        ])
+    }
+
+    private static func fixturePNG() -> Data? {
+        guard let context = CGContext(
+            data: nil,
+            width: 2,
+            height: 2,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.setFillColor(CGColor(red: 0.2, green: 0.6, blue: 0.4, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        guard let image = context.makeImage() else { return nil }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data,
+            "public.png" as CFString,
+            1,
+            nil
+        ) else { return nil }
+        CGImageDestinationAddImage(destination, image, nil)
+        return CGImageDestinationFinalize(destination) ? data as Data : nil
     }
 
     private static func entry(_ kind: CapsuleEntryKind,

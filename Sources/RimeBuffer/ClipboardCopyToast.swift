@@ -18,7 +18,11 @@ enum ClipboardCopyToast {
     private static var panel: NSPanel?
     private static var generation = 0
 
-    static func show(_ message: String = "已复制到剪贴板") {
+    /// `anchor` is a window that stays open, such as the rail after a save;
+    /// the toast then sits just above it instead of over its content.
+    static func show(_ message: String = "已复制到剪贴板",
+                     symbolName: String = "doc.on.clipboard",
+                     above anchor: NSRect? = nil) {
         dispatchPrecondition(condition: .onQueue(.main))
         // The pointer's screen is where the user is looking; the clipboard
         // window itself has already gone by the time this runs.
@@ -31,7 +35,9 @@ enum ClipboardCopyToast {
         generation &+= 1
         let currentGeneration = generation
 
-        let frame = NSRect(
+        let frame = anchor.map {
+            NSRect(x: $0.midX - width / 2, y: $0.maxY + 12, width: width, height: height)
+        } ?? NSRect(
             x: screen.visibleFrame.midX - width / 2,
             y: screen.visibleFrame.minY + bottomInset,
             width: width,
@@ -64,7 +70,7 @@ enum ClipboardCopyToast {
         chrome.layer?.borderWidth = 1
 
         let icon = NSImageView()
-        icon.image = RimeUI.symbol("doc.on.clipboard", pointSize: 12,
+        icon.image = RimeUI.symbol(symbolName, pointSize: 12,
                                    weight: .semibold)
         icon.image?.isTemplate = true
         icon.contentTintColor = RimeUI.isRasta

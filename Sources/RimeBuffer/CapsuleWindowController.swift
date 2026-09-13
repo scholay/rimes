@@ -1049,6 +1049,12 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Opens the manager on a new, unsaved entry prefilled from the rail.
+    func show(draftKind kind: CapsuleEntryKind, title: String, content: String) {
+        show()
+        contentController?.beginDraft(kind: kind, title: title, content: content)
+    }
+
     /// Opens the manager on one entry, as the rail's edit brush asks.
     func show(revealing kind: CapsuleEntryKind, id: UUID) {
         show()
@@ -1557,6 +1563,27 @@ final class CapsulePaneViewController: NSViewController,
         guard isViewLoaded else { return }
         concealPasswordPlaintext()
         scheduleReload(after: 0)
+    }
+
+    /// Starts a new entry of `kind` filled in from the rail. It stays unsaved
+    /// until the user saves it; closing asks, as for any unsaved draft.
+    func beginDraft(kind: CapsuleEntryKind, title: String, content: String) {
+        guard isViewLoaded else { return }
+        concealPasswordPlaintext()
+        guard confirmDiscardChangesIfNeeded() else { return }
+        selectedKind = kind
+        kindControl.selectedSegment = CapsuleEntryKind.allCases.firstIndex(
+            of: kind
+        ) ?? 0
+        searchField.placeholderString = kind == .password
+            ? "仅搜索密码标题"
+            : "搜索标题或内容"
+        searchField.stringValue = ""
+        cancelPendingReload()
+        draft = CapsuleWindowDraft(kind: kind, title: title, content: content)
+        editorDirty = true
+        renderEditor()
+        reloadFromStore()
     }
 
     /// Switches to `kind` and selects entry `id` once the list reloads. An
@@ -2160,7 +2187,7 @@ final class CapsulePaneViewController: NSViewController,
                     tableView.deselectAll(nil)
                     applyingSelection = false
                 }
-                setStatus("本地列表已变化；当前编辑尚未保存")
+                setStatus(draft.id == nil ? "新条目尚未保存" : "本地列表已变化；当前编辑尚未保存")
                 return
             }
             if let preferredID,
