@@ -4,11 +4,12 @@ import Foundation
 /// Whether the Buffer knows exactly which input box it would send to.
 enum BufferTargetBoxState: Equatable {
     /// One identified box — and, while capturing, the same box capture was
-    /// granted for.
+    /// granted for. An app that exposes no boxes at all counts its input
+    /// session as the box.
     case locked
-    /// No box can be named: Accessibility is not granted, or the host does
-    /// not expose a text box. Typing into the Buffer still works; sending does
-    /// not, and the text can be copied out instead.
+    /// No box can be named: Accessibility is not granted, or focus is on
+    /// something that is not a text box. Typing into the Buffer still works;
+    /// sending does not, and the text can be copied out instead.
     case unidentified
     /// Capture was granted for one box and focus has since left it.
     case changed
@@ -41,12 +42,21 @@ enum BufferTargetBoxRules {
     }
 }
 
-/// An Accessibility text element, compared by identity only.
-struct BufferTargetBox: Equatable {
-    let element: AXUIElement
+/// What a capture is locked to inside its application.
+enum BufferTargetBox: Equatable {
+    /// An Accessibility text element, compared by identity only.
+    case element(AXUIElement)
+    /// The application answered that nothing in it has focus: it draws its
+    /// own controls and exposes no boxes (WeChat). Its input session — the
+    /// capture's `FocusToken` — stands in for the box.
+    case wholeSession
 
     static func == (lhs: BufferTargetBox, rhs: BufferTargetBox) -> Bool {
-        CFEqual(lhs.element, rhs.element)
+        switch (lhs, rhs) {
+        case let (.element(lhs), .element(rhs)): return CFEqual(lhs, rhs)
+        case (.wholeSession, .wholeSession): return true
+        default: return false
+        }
     }
 }
 
@@ -55,7 +65,9 @@ enum BufferCaptureBoxBinding {
     /// The user chose the route: lock whichever box is focused now.
     case current
     /// The route is being restored after the host lost its input session, not
-    /// chosen again, so it may only re-lock the box it already had.
+    /// chosen again, so it may only re-lock the box it already had — or, for
+    /// an app that exposes no boxes, the same application, which the pending
+    /// request already requires.
     case sameAs(BufferTargetBox?)
 }
 
@@ -186,6 +198,7 @@ final class BufferTargetBoxLock {
                               element: result.element,
                               failure: result.failure,
                               answered: result.answered,
+                              exposesNoBoxes: result.exposesNoBoxes,
                               uptime: uptime)
             }
         }
@@ -196,6 +209,7 @@ final class BufferTargetBoxLock {
                          element: AXUIElement?,
                          failure: String?,
                          answered: Bool,
+                         exposesNoBoxes: Bool,
                          uptime: TimeInterval) {
         dispatchPrecondition(condition: .onQueue(.main))
         if inFlight == token { inFlight = nil }
@@ -212,7 +226,10 @@ final class BufferTargetBoxLock {
             return
         }
         if let sample, sample.token == token, sample.uptime > uptime { return }
-        let box = element.map(BufferTargetBox.init)
+        // An app that answered "nothing in me has focus" draws its own
+        // controls and exposes no boxes: its input session stands in for one.
+        let box: BufferTargetBox? = element.map { .element($0) }
+            ?? (exposesNoBoxes ? .wholeSession : nil)
         sample = Sample(token: token, box: box, uptime: uptime)
         var resolved: (() -> Void)?
         if token == self.token, let binding = pendingBinding {
@@ -225,9 +242,15 @@ final class BufferTargetBoxLock {
             case let .sameAs(previous):
                 self.box = previous != nil && box == previous ? box : nil
             }
-            let detail = self.box != nil
-                ? "locked"
-                : "unidentified (\(failure ?? "not the box the route had"))"
+            let detail: String
+            switch self.box {
+            case .element?:
+                detail = "locked"
+            case .wholeSession?:
+                detail = "locked to its input session (the app exposes no boxes)"
+            case nil:
+                detail = "unidentified (\(failure ?? "not the box the route had"))"
+            }
             IMELog.write("buffer target box \(detail) token=\(token)")
         }
         onSample?()

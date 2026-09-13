@@ -6639,6 +6639,19 @@ func runBufferWindowSmokeTest() -> Bool {
           !BufferTargetBoxRules.deliveryAllowed(state: .locked, sampleAge: nil),
           !BufferTargetBoxRules.deliveryAllowed(state: .locked, sampleAge: -1),
           !BufferTargetBoxRules.deliveryAllowed(state: .unidentified, sampleAge: 0.1),
+          // An app that exposes no boxes locks to its input session; a box
+          // appearing in it later is a change, not the same lock.
+          BufferTargetBoxRules.state(capturing: true,
+                                     lockedBox: BufferTargetBox.wholeSession,
+                                     currentBox: .wholeSession) == .locked,
+          BufferTargetBoxRules.state(capturing: true,
+                                     lockedBox: BufferTargetBox.wholeSession,
+                                     currentBox: .element(AXUIElementCreateApplication(getpid()))) == .changed,
+          BufferTargetBoxRules.state(capturing: false,
+                                     lockedBox: nil as BufferTargetBox?,
+                                     currentBox: .wholeSession) == .locked,
+          BufferTargetBox.element(AXUIElementCreateApplication(getpid()))
+            == .element(AXUIElementCreateApplication(getpid())),
           !BufferTargetAssociationRules.shouldClearCue(
             state: .capturing,
             hasPresentedCue: true,

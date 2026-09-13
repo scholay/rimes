@@ -140,7 +140,7 @@ Marine Chrome 的上下文不进 `InboundBus`，也不进外部 Action Plugin ru
 1. **外部文字永不自动上屏**——MCP/HTTP 先持久化到 Mailbox 待决；用户主动调用且仍匹配原 request/context/focus 的插件结果可直接进缓冲，失效或迟到结果退回 Mailbox 审核。
 2. **插件/处理器结果永不直接上屏**——无论直接进缓冲还是退回 Mailbox，都只能由用户随后明确投递。
 3. **secure input（密码框）激活时，Return 在动作边界同步 fail-closed**：只吞下按键，不收束组字、不重建 U+200B guard、不请求 AI，也不投递；工作台正文与派生 workspace 同步进入保护态。
-4. **缓冲投递不保存“最近输入框”兜底**：只有当前 `FocusToken` 的外部文本框能接收。一个 IMK client 可能对应多个输入框（整张网页就是一个 client），所以还须由 Accessibility 认出当前聚焦的具体文本框：捕获时锁定该元素，每块发送前核对最近 1 秒内的后台采样（Accessibility 查询只在后台队列进行，不阻塞按键与并击时序；宿主超时未答复不视为换框）；换了框、认不出框或未授权辅助功能都不发送，此时 Buffer 仍可输入并提供复制。应用切换本身不会完成延迟的 Buffer 点击，必须先点进该应用。普通 App 的 bundle/PID 必须同时匹配当前前台应用。Spotlight/Paste 需匹配各自精确 bundle/path、唯一 PID、自有可见窗口与下层前台锚点；AppKit 打开/保存面板则要求所有同 bundle 活服务都来自固定系统 XPC 路径，并匹配发起 App bundle/PID 与冻结的面板窗口 ID，不绑定任一可能残留的 service PID。切 app、切文本框、窗口隐藏或服务来源异常都会令旧目标失效。
+4. **缓冲投递不保存“最近输入框”兜底**：只有当前 `FocusToken` 的外部文本框能接收。一个 IMK client 可能对应多个输入框（整张网页就是一个 client），所以还须由 Accessibility 认出当前聚焦的具体文本框：捕获时锁定该元素，每块发送前核对最近 1 秒内的后台采样（Accessibility 查询只在后台队列进行，不阻塞按键与并击时序；宿主超时未答复不视为换框；Electron 应用报告无焦点元素时，经 AXManualAccessibility 请求其无障碍树并等待构建；应用完全不暴露焦点元素时（如微信），以其输入会话代替输入框锁定）；换了框、认不出框或未授权辅助功能都不发送，此时 Buffer 仍可输入并提供复制。应用切换本身不会完成延迟的 Buffer 点击，必须先点进该应用。普通 App 的 bundle/PID 必须同时匹配当前前台应用。Spotlight/Paste 需匹配各自精确 bundle/path、唯一 PID、自有可见窗口与下层前台锚点；AppKit 打开/保存面板则要求所有同 bundle 活服务都来自固定系统 XPC 路径，并匹配发起 App bundle/PID 与冻结的面板窗口 ID，不绑定任一可能残留的 service PID。切 app、切文本框、窗口隐藏或服务来源异常都会令旧目标失效。
 5. **手动投递不等于目标已确认收到**：当前产品在 `Delivery.insert` 成功返回后立即消费 live block，不保留明文发送历史；失败的块和后续尚未发送的块原位保留。
 6. **不存在远端直通例外**：隔空传字运行时已删除；遗留 `.remotePeer` 只用于旧数据/测试兼容，不存在生产接收端，也不能绕过 Buffer/Mailbox 审核边界。
 7. **缓冲按键与宿主隔离**：缓冲模式下普通/Shift+Return 与 Backspace 总是被输入法消费。有未决 Rime/并击组字或尚未 ready 的意识流 raw 时，本次 Return 只收束/强制生成并抑制同一物理按键余下事件；意识流 final 已 ready 时，keyDown 先确认所选候选并淘汰其余项，同一次按键继续进入轻按/长按投递。其他没有未决组字的内容也在 Return keyDown 中定点重建不可见 marked-text guard。普通/ready 内容仍是轻按发送下一块、按住约 1.2 秒发送全部；AI request 状态则在 keyDown 就吞下整次物理按键并请求生成，running/disabled 只吞键，不进入长按计时。`didCommand` 与 repeat 只有消费权。Backspace 只在精确焦点下编辑 Rime/并击状态或删除缓冲块。焦点不可信时始终吞键且不投递；宿主绝不会收到换行或删除。
@@ -445,7 +445,7 @@ Delivery.insert(_ text, into: client)
 |---|---|---|
 | 密码框保护 | `IsSecureEventInputEnabled()` 在投递动作时刻同步查；命中拒发 | ✅ M0（Delivery 唯一咽喉） |
 | 切换应用重置 | 默认跨应用保留；启用后，仅当整个缓冲不含外部来源块时不可撤销地丢弃 blocks；只要含外部块就全部保留 | ✅ |
-| 焦点租约 | 单调 FocusToken + controller/client 对象身份 + client bundle + 前台 bundle/PID + 事件/生命周期归因；缓冲投递另需 Accessibility 认出的具体输入框元素，捕获时锁定、每块发送前核对 1 秒内的后台采样，认不出则只可复制；Spotlight/Paste 另需精确路径、唯一 PID/自有窗口，打开/保存面板另需全体服务来源可信/冻结发起 App 窗口，两类都由 keyDown 建权；无 recent/last client 回退 | ✅ |
+| 焦点租约 | 单调 FocusToken + controller/client 对象身份 + client bundle + 前台 bundle/PID + 事件/生命周期归因；缓冲投递另需 Accessibility 认出的具体输入框元素，捕获时锁定、每块发送前核对 1 秒内的后台采样，认不出则只可复制（完全不暴露焦点元素的应用以输入会话代替输入框）；Spotlight/Paste 另需精确路径、唯一 PID/自有窗口，打开/保存面板另需全体服务来源可信/冻结发起 App 窗口，两类都由 keyDown 建权；无 recent/last client 回退 | ✅ |
 | 工作台隐私 | secure-input 自动遮蔽正文并禁用发送/插件动作；锁屏/睡眠/会话切出撤销租约且不回写旧 client；自身设置窗口不成为缓冲捕获源 | ✅ |
 | 日志脱敏 | 用户文本走 `IMELog.redact()` 只记长度；日志 0600；CI 断言禁 `'\(…)'` 明文 | ✅ M0 |
 | 本地端口鉴权 | 只绑 127.0.0.1 + Bearer token（0600）+ 常数时间比较 + 严格解析上限 | ✅ M2 |
