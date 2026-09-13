@@ -23,6 +23,7 @@ final class ChordKeymapEditorViewController: NSViewController,
     private let profilePicker = NSPopUpButton(frame: .zero, pullsDown: false)
     private let nameField = NSTextField()
     private let boundaryPicker = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let encodingPicker = NSPopUpButton(frame: .zero, pullsDown: false)
     private let leftField = NSTextField()
     private let rightField = NSTextField()
     private let searchField = NSSearchField()
@@ -97,6 +98,7 @@ final class ChordKeymapEditorViewController: NSViewController,
             profileStatus,
             row([label("名称"), nameField, deleteProfileButton]),
             row([label("音节边界"), boundaryPicker, spacer()]),
+            row([label("输出编码"), encodingPicker, spacer()]),
         ]))
         profilePicker.target = self
         profilePicker.action = #selector(selectProfile)
@@ -112,6 +114,12 @@ final class ChordKeymapEditorViewController: NSViewController,
         boundaryPicker.action = #selector(boundaryChanged)
         boundaryPicker.setAccessibilityIdentifier("chord-keymap.boundary-policy")
         boundaryPicker.toolTip = "复制飞耀时默认保留原来的分隔行为；新建方案可由每条映射的类型决定音节边界。"
+        encodingPicker.addItems(withTitles: ChordOutputEncoding.allCases.map(\.title))
+        encodingPicker.controlSize = .small
+        encodingPicker.target = self
+        encodingPicker.action = #selector(encodingChanged)
+        encodingPicker.setAccessibilityIdentifier("chord-keymap.output-encoding")
+        encodingPicker.toolTip = "映射表始终按全拼填写；选择自然码双拼时，应用方案会把每个完整音节编成两个键、声母或韵母编成一个键。"
 
         leftField.placeholderString = "左区字母键"
         rightField.placeholderString = "右区字母键"
@@ -313,6 +321,7 @@ final class ChordKeymapEditorViewController: NSViewController,
         guard isViewLoaded, !loading, !draft.isBuiltIn else { return }
         draft.name = nameField.stringValue
         draft.boundaryPolicy = boundaryPicker.indexOfSelectedItem == 0 ? .legacyBatches : .explicitSyllables
+        draft.outputEncoding = ChordOutputEncoding.allCases[max(encodingPicker.indexOfSelectedItem, 0)]
         draft.leftKeys = leftField.stringValue.lowercased()
         draft.rightKeys = rightField.stringValue.lowercased()
     }
@@ -330,6 +339,7 @@ final class ChordKeymapEditorViewController: NSViewController,
         if let index = listed.firstIndex(where: { $0.id == draft.id }) { profilePicker.selectItem(at: index) }
         nameField.stringValue = draft.name
         boundaryPicker.selectItem(at: draft.boundaryPolicy == .legacyBatches ? 0 : 1)
+        encodingPicker.selectItem(at: ChordOutputEncoding.allCases.firstIndex(of: draft.outputEncoding) ?? 0)
         leftField.stringValue = draft.leftKeys
         rightField.stringValue = draft.rightKeys
         clearEntryFields()
@@ -345,6 +355,7 @@ final class ChordKeymapEditorViewController: NSViewController,
         profilePicker.isEnabled = !applying
         kindPicker.isEnabled = editable
         boundaryPicker.isEnabled = editable
+        encodingPicker.isEnabled = editable
         for button in operationButtons { button.isEnabled = !applying }
         saveButton.isEnabled = editable
         applyButton.isEnabled = !applying
@@ -518,6 +529,12 @@ final class ChordKeymapEditorViewController: NSViewController,
     @objc private func boundaryChanged() {
         captureProfileFields()
         setStatus("音节边界规则已修改，尚未保存或应用。")
+        retainUnsavedDraft()
+    }
+
+    @objc private func encodingChanged() {
+        captureProfileFields()
+        setStatus("输出编码已改为\(draft.outputEncoding.title)，尚未保存或应用。")
         retainUnsavedDraft()
     }
 
@@ -714,7 +731,12 @@ final class ChordKeymapEditorViewController: NSViewController,
         let canonical = profile.canonicalKeys(lower)
         let codes = Set(lower.unicodeScalars.map { Int32($0.value) })
         if let entry = profile.entry(for: codes) {
-            return "\(canonical.uppercased()) → \(entry.output)  ·  \(entry.kind == .syllable ? "完整音节" : "拼音片段")"
+            let kind = entry.kind == .syllable ? "完整音节" : "拼音片段"
+            guard profile.outputEncoding == .ziranma else {
+                return "\(canonical.uppercased()) → \(entry.output)  ·  \(kind)"
+            }
+            let code = profile.engineOutput(for: entry) ?? "无法转换"
+            return "\(canonical.uppercased()) → \(entry.output)（自然码 \(code)）  ·  \(kind)"
         }
         if lower.count == 1 {
             if lower == "," || lower == "." {

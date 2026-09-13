@@ -443,7 +443,8 @@ if StandaloneRimeCommandRules.requiresIsolatedUserDir(
     }
     if (CommandLine.arguments.contains("smoke")
         || CommandLine.arguments.contains("user-lexicon-bridge-smoke")
-        || CommandLine.arguments.contains("chord-keymap-engine-smoke")),
+        || CommandLine.arguments.contains("chord-keymap-engine-smoke")
+        || CommandLine.arguments.contains("chord-ziranma-engine-smoke")),
        !configureEngineSmokeRuntime(isolatedUserDir: isolatedUserDir) {
         exit(1)
     }
@@ -917,6 +918,14 @@ if CommandLine.arguments.contains("chord-keymap-smoke") {
 }
 if CommandLine.arguments.contains("chord-keymap-engine-smoke") {
     exit(runChordKeymapEngineSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("chord-ziranma-smoke") {
+    exit(runChordZiranmaSmokeTest() ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "chord-ziranma-engine-smoke") {
+    let report = CommandLine.arguments.indices.contains(index + 1)
+        ? URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true) : nil
+    exit(runChordZiranmaEngineSmokeTest(reportDirectory: report) ? 0 : 1)
 }
 if CommandLine.arguments.contains("chord-keymap-activation-smoke") {
     exit(runChordKeymapActivationSmokeTest() ? 0 : 1)

@@ -254,7 +254,7 @@ enum FlyChordBoundaryRules {
 
     static func plan(for context: RimeContextModel) -> FlyChordBoundaryPlan {
         let bytes = Array(context.input.utf8)
-        let cursor = min(max(context.cursorPos, 0), bytes.count)
+        let cursor = min(max(context.inputCaretPos ?? context.cursorPos, 0), bytes.count)
         let delimiter = UInt8(delimiterKeycode)
         return FlyChordBoundaryPlan(
             before: cursor > 0 && bytes[cursor - 1] != delimiter,

@@ -698,6 +698,7 @@ final class RimeEngine {
         model.preedit = ctx.preedit.map { String(cString: $0) } ?? ""
         model.input = ctx.input.map { String(cString: $0) } ?? ""
         model.cursorPos = Int(ctx.cursorPos)
+        model.inputCaretPos = ctx.inputCaretPos >= 0 ? Int(ctx.inputCaretPos) : nil
         model.selStart = Int(ctx.selStart)
         model.selEnd = Int(ctx.selEnd)
         model.pageSize = Int(ctx.pageSize)

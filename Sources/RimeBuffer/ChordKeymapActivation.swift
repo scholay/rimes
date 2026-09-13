@@ -318,7 +318,8 @@ final class ChordKeymapActivationCoordinator {
             let keys = entry.keys.unicodeScalars.map { Int32($0.value) }
             for key in keys { _ = engine.processKey(key, session: session) }
             for key in keys { _ = engine.processKey(key, mask: RimeKey.releaseMask, session: session) }
-            guard engine.getContext(session: session).input == entry.output else { return false }
+            guard let expected = profile.engineOutput(for: entry),
+                  engine.getContext(session: session).input == expected else { return false }
         }
         return true
     }

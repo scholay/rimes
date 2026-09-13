@@ -211,7 +211,6 @@ chord_composer:
     - 'xform/^qu$/qu/'       # qu - 区、去、曲
     - 'xform/^qi$/qi/'       # qi - 期、起、期
     - 'xform/^qp$/qun/'      # qun - 群、群、群
-    - 'xform/^qn$/qin/'      # qin - 亲、亲、亲
     # q声母 + 组合韵母
     - 'xform/^qjl$/qiu/'      # qiu - 求、球、秋
     - 'xform/^qui$/quan/'     # quan - 全、权、圈
@@ -219,7 +218,6 @@ chord_composer:
     - 'xform/^qil$/qie/'      # qie - 切、且、茄
     - 'xform/^qlm$/qiao/'     # qiao - 桥、巧、敲
     - 'xform/^qk\.$/qia/'     # qia - 恰、恰、恰
-    - 'xform/^qui$/quan/'     # quan - 全、权、圈
     - 'xform/^qkm$/qiong/'   # qiong - 穷、穷、穷
     - 'xform/^quo$/qiang/'   # qiang - 强、墙、抢
 
@@ -396,7 +394,6 @@ chord_composer:
     - 'xform/^xil$/xie/'      # xie - 些、些、些
     - 'xform/^xjl$/xiu/'      # xiu - 修、修、修
     - 'xform/^xk\.$/xia/'     # xia - 下、夏、霞
-    - 'xform/^xui$/xuan/'     # xuan - 选、选、选
     - 'xform/^xkm$/xiong/'  # xiong - 胸、胸、胸
     - 'xform/^xlm$/xiao/'   # xiao - 小、笑、笑
     - 'xform/^xuo$/xiang/'    # xiang - 想、想、想
@@ -411,8 +408,6 @@ chord_composer:
     - 'xform/^ci$/ci/'       # ci - 此、次、词
     - 'xform/^cu$/cu/'       # cu - 粗、粗、粗
     - 'xform/^cp$/cun/'      # cun - 存、存、存
-    - 'xform/^cj$/can/'      # can - 参、残、餐
-    - 'xform/^ck$/cao/'      # cao - 草、操、曹
   
     # c声母 + 组合键韵母
     - 'xform/^cij$/ce/'       # ce - 策、策、策
@@ -708,12 +703,10 @@ chord_composer:
     - 'xform/^eij$/e/'       # e -呃
     - 'xform/^em,$/eng/'     # eng - 嗯
     - 'xform/^ajk$/a/'       # a - 啊、阿、呵
-    - 'xform/^eij$/e/'       # e - 额、鹅、饿
     - 'xform/^xvo$/x*o/'     # o - 哦、喔（临时标记，避免命中右手 o）
     - 'xform/^an$/an/'       # an - 安、按、暗
     - 'xform/^en$/en/'       # en - 恩
     - 'xform/^xvu$/ou/'      # ou - 欧、偶、藕
-    - 'xform/^em,$/eng/'     # eng - 嗯
     - 'xform/^ah$/ang/'      # ang - 昂、盎
     - 'xform/^eui$/e*r/'     # er - 儿、耳、尔（临时标记，避免命中左手 er）
 

@@ -70,10 +70,12 @@ struct ChordKeymapProfile: Codable, Equatable, Identifiable {
     var rightKeys: String
     var mappings: [ChordKeymapEntry]
     var boundaryPolicy: ChordKeymapBoundaryPolicy = .explicitSyllables
+    var outputEncoding: ChordOutputEncoding = .fullPinyin
 
     init(formatVersion: Int = 1, id: String, name: String,
          leftKeys: String, rightKeys: String, mappings: [ChordKeymapEntry],
-         boundaryPolicy: ChordKeymapBoundaryPolicy = .explicitSyllables) {
+         boundaryPolicy: ChordKeymapBoundaryPolicy = .explicitSyllables,
+         outputEncoding: ChordOutputEncoding = .fullPinyin) {
         self.formatVersion = formatVersion
         self.id = id
         self.name = name
@@ -81,10 +83,11 @@ struct ChordKeymapProfile: Codable, Equatable, Identifiable {
         self.rightKeys = rightKeys
         self.mappings = mappings
         self.boundaryPolicy = boundaryPolicy
+        self.outputEncoding = outputEncoding
     }
 
     private enum CodingKeys: String, CodingKey {
-        case formatVersion, id, name, leftKeys, rightKeys, mappings, boundaryPolicy
+        case formatVersion, id, name, leftKeys, rightKeys, mappings, boundaryPolicy, outputEncoding
     }
 
     init(from decoder: Decoder) throws {
@@ -97,6 +100,8 @@ struct ChordKeymapProfile: Codable, Equatable, Identifiable {
         mappings = try container.decode([ChordKeymapEntry].self, forKey: .mappings)
         boundaryPolicy = try container.decodeIfPresent(ChordKeymapBoundaryPolicy.self,
                                                        forKey: .boundaryPolicy) ?? .explicitSyllables
+        outputEncoding = try container.decodeIfPresent(ChordOutputEncoding.self,
+                                                       forKey: .outputEncoding) ?? .fullPinyin
     }
 
     var alphabet: String { leftKeys + rightKeys }
@@ -197,6 +202,9 @@ struct ChordKeymapProfile: Codable, Equatable, Identifiable {
               !requireMappings || !mappings.isEmpty else {
             throw ChordKeymapError.invalid("应用方案需要 1–4096 条映射")
         }
+        guard !isBuiltIn || outputEncoding == .fullPinyin else {
+            throw ChordKeymapError.invalid("内置飞耀方案只能使用全拼输出，请复制后再切换编码")
+        }
         var normalized = self
         normalized.id = isBuiltIn ? id : id.lowercased()
         var seen = Set<String>()
@@ -215,6 +223,11 @@ struct ChordKeymapProfile: Codable, Equatable, Identifiable {
             guard !mapping.output.isEmpty, mapping.output.utf8.count <= 32,
                   mapping.output.utf8.allSatisfy({ (97...122).contains($0) }) else {
                 throw ChordKeymapError.invalid("第 \(row) 条输出须为 1–32 个小写英文字母；ü 请写 v")
+            }
+            if outputEncoding == .ziranma, engineOutput(for: mapping) == nil {
+                throw ChordKeymapError.invalid(mapping.kind == .syllable
+                    ? "第 \(row) 条“\(mapping.output)”不是可转为自然码的完整拼音音节"
+                    : "第 \(row) 条“\(mapping.output)”不是可转为自然码的声母或韵母片段")
             }
             return ChordKeymapEntry(keys: canonical,
                                     output: mapping.output,
@@ -551,7 +564,8 @@ final class ChordKeymapStore {
 
 /// The generated schema is a RIMES-owned adapter over the full rime_ice chain.
 /// All table matches first become non-alphabet markers; only after the final
-/// match do markers expand to pinyin, so an output can never rematch a key set.
+/// match do markers expand to the encoded output (full pinyin or 自然码
+/// codes), so an output can never rematch a key set.
 enum ChordKeymapCompiler {
     static func algebraRules(for profile: ChordKeymapProfile) throws -> [String] {
         let profile = try profile.validated()
@@ -575,7 +589,8 @@ enum ChordKeymapCompiler {
         rules.append("xform/^!(.*)[,.](.*)!$/!$1$2!/")
         rules.append("xform/^!(.*)!$/$1/")
         for (index, mapping) in profile.mappings.enumerated() {
-            rules.append("xform/^~\(index)~$/\(mapping.output)/")
+            // validated() guarantees every output encodes.
+            rules.append("xform/^~\(index)~$/\(profile.engineOutput(for: mapping) ?? mapping.output)/")
         }
         return rules
     }
@@ -584,6 +599,7 @@ enum ChordKeymapCompiler {
         let profile = try profile.validated()
         let algebra = try algebraRules(for: profile).map { "    - " + yamlScalar($0) }
             .joined(separator: "\n")
+        let spelling = spellingYAML(for: profile.outputEncoding)
         return """
         # Generated from a RIMES chord keymap; edit the profile, not this file.
         __include: rime_ice.schema:/
@@ -652,25 +668,7 @@ enum ChordKeymapCompiler {
           alphabet: \(yamlScalar(profile.alphabet))
           algebra:
         \(algebra)
-        speller:
-          __include: rime_ice.schema:/speller
-          alphabet: 'qwertyuiopasdfghjklzxcvbnm'
-          initials: 'qwertyuiopasdfghjklzxcvbnm'
-          delimiter: " '"
-        translator:
-          dictionary: rime_ice
-          prism: rime_ice
-          enable_word_completion: true
-          spelling_hints: 8
-          always_show_comments: true
-          initial_quality: 1.2
-          comment_format:
-            - xform/^/［/
-            - xform/$/］/
-          preedit_format:
-            - xform/([nl])v/$1ü/
-            - xform/([nl])ue/$1üe/
-            - xform/([jqxy])v/$1u/
+        \(spelling)
         punctuator:
           import_preset: default
         key_binder:
@@ -681,6 +679,76 @@ enum ChordKeymapCompiler {
             punct: "^$"
 
         """
+    }
+
+    /// Speller, translator and the code-keyed side tables. Both encodings
+    /// share the rime_ice dictionary, so user learning carries across them.
+    private static func spellingYAML(for encoding: ChordOutputEncoding) -> String {
+        func list(_ rules: [String]) -> String {
+            rules.map { "    - " + yamlScalar($0) }.joined(separator: "\n")
+        }
+        switch encoding {
+        case .fullPinyin:
+            return """
+            speller:
+              __include: rime_ice.schema:/speller
+              alphabet: 'qwertyuiopasdfghjklzxcvbnm'
+              initials: 'qwertyuiopasdfghjklzxcvbnm'
+              delimiter: " '"
+            translator:
+              dictionary: rime_ice
+              prism: rime_ice
+              enable_word_completion: true
+              spelling_hints: 8
+              always_show_comments: true
+              initial_quality: 1.2
+              comment_format:
+                - xform/^/［/
+                - xform/$/］/
+              preedit_format:
+                - xform/([nl])v/$1ü/
+                - xform/([nl])ue/$1üe/
+                - xform/([jqxy])v/$1u/
+            """
+        case .ziranma:
+            // No abbrev: initials-only spellings would reintroduce the
+            // variable-length segmentation this encoding exists to remove.
+            // rime_ice's two-letter date/lunar triggers (ts, sj, xq, nl) are
+            // real 自然码 syllables, so they move to words as in
+            // double_pinyin. Pins stay inherited: pin_cand_filter matches the
+            // formatted pinyin preedit, not the codes.
+            return """
+            speller:
+              alphabet: 'qwertyuiopasdfghjklzxcvbnm'
+              initials: 'qwertyuiopasdfghjklzxcvbnm'
+              delimiter: " '"
+              algebra:
+            \(list(ZiranmaShuangpin.syllableAlgebra))
+            translator:
+              dictionary: rime_ice
+              prism: rimes_chord_ziranma
+              enable_word_completion: true
+              spelling_hints: 8
+              always_show_comments: true
+              initial_quality: 1.2
+              comment_format:
+                - xform/^/［/
+                - xform/$/］/
+              preedit_format:
+            \(list(ZiranmaShuangpin.preeditFormat))
+            cn_en:
+              user_dict: en_dicts/cn_en_double_pinyin
+            custom_phrase:
+              user_dict: custom_phrase_double
+            date_translator:
+              date: date
+              time: time
+              week: week
+              datetime: datetime
+              timestamp: timestamp
+            lunar: lunar
+            """
+        }
     }
 
     private static func yamlScalar(_ value: String) -> String {

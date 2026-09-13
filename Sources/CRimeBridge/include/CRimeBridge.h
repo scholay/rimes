@@ -27,7 +27,8 @@ typedef struct {
     bool active;                // raw input non-empty OR preedit OR candidates>0
     const char* preedit;        // composition preedit (may be empty)
     const char* input;          // raw input buffer
-    int cursorPos;
+    int cursorPos;              // caret within preedit (formatted text)
+    int inputCaretPos;          // caret within raw input; -1 when unavailable
     int selStart;
     int selEnd;
     int pageSize;
