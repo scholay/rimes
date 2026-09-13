@@ -2124,6 +2124,9 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var renderedTargetBoxState: BufferTargetBoxState = .unidentified
     private var renderedTargetBoxToken: FocusToken?
     private var rebindTargetBox: BufferTargetBox?
+    /// The capture Music suspended when it took the keyboard. Leaving Music
+    /// for any other plugin restores it to the same application and box.
+    private var musicSuspendedCapture: (bundleID: String, box: BufferTargetBox?)?
     private var targetBoxTimer: Timer?
     /// A folded workbench is toolbar-only; the row folds away with the rail.
     private var liveMetricsRowShown: Bool {
@@ -2490,6 +2493,18 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             if RimeInputSourceAuthority.currentSourceIsOwn(),
                let target = InputFocusCoordinator.shared.owner {
                 target.controller?.resolveCompositionForWorkbenchTransition(target: target)
+                if BufferModel.shared.capturesInput(for: target.token),
+                   BufferModel.shared.captureFocusToken == target.token {
+                    musicSuspendedCapture = (target.bundleID, BufferTargetBoxLock.shared.box)
+                }
+            }
+            // Cycling straight back into Music before the host's session
+            // returned: keep owing that restore rather than dropping it.
+            if musicSuspendedCapture == nil, captureRebindPending,
+               let bundleID = pendingCaptureRequest?.expectedBundleID {
+                musicSuspendedCapture = (bundleID, rebindTargetBox)
+                pendingCaptureRequest = nil
+                rebindTargetBox = nil
             }
             BufferModel.shared.routeDirectPreservingContent(reason: "music performance focus")
             clearInlineComposition()
@@ -2576,6 +2591,10 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
                 targetApplicationIndicator.isHidden = false
                 exchangeEditSlot.isHidden = false
                 resetDerivedControlRendering()
+                // Resigning key hands focus back to the host a turn later.
+                DispatchQueue.main.async { [weak self] in
+                    self?.restoreCaptureSuspendedByMusic()
+                }
             }
             return false
         }
@@ -2604,6 +2623,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
 
     func hideWithoutPausing() {
+        musicSuspendedCapture = nil
         deactivateMusicSurface()
         liveMetricsTimer?.invalidate()
         liveMetricsTimer = nil
@@ -6725,6 +6745,19 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// stranding the workbench folded until the target field is clicked
     /// again.
     func rearmCaptureAfterHostSessionLoss(bundleID: String) {
+        rearmCapture(bundleID: bundleID, box: BufferTargetBoxLock.shared.box)
+    }
+
+    /// Music routes keys to itself while it performs, so the host's field
+    /// never saw the capture end. Choosing another plugin, including the wrap
+    /// from Music back to Default, gives that capture back.
+    private func restoreCaptureSuspendedByMusic() {
+        guard let suspended = musicSuspendedCapture, !musicSelected else { return }
+        musicSuspendedCapture = nil
+        rearmCapture(bundleID: suspended.bundleID, box: suspended.box)
+    }
+
+    private func rearmCapture(bundleID: String, box: BufferTargetBox?) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard isVisible, !musicSelected, !hiddenForSession,
               !sessionProtectionActive else { return }
@@ -6734,7 +6767,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier
                 == bundleID else { return }
         // The re-armed route may only re-lock the box it had.
-        rebindTargetBox = BufferTargetBoxLock.shared.box
+        rebindTargetBox = box
         armPendingCapture(at: BufferModel.shared.blocks.count,
                           expectedBundleID: bundleID)
         // Nothing else is guaranteed to run when the request simply expires,
@@ -6764,7 +6797,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     /// Called from `refresh()`, which already runs on every focus transition,
     /// so a deferred click completes the moment a field becomes available.
     private func completePendingCaptureIfPossible() {
-        guard let pending = pendingCaptureRequest else { return }
+        // Music owns the keyboard; a restore waits until it hands it back.
+        guard !musicSelected, let pending = pendingCaptureRequest else { return }
         guard pending.isLive(at: Date()) else {
             pendingCaptureRequest = nil
             return
@@ -6799,6 +6833,8 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             }
         }
         if musicPresentationActive {
+            // Clicking the host is a departure, as it is for every plugin.
+            musicSuspendedCapture = nil
             deactivateMusicSurface()
             return
         }
