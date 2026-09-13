@@ -187,6 +187,8 @@ enum CapsuleRailSmoke {
         expect(CapsuleRailActivationRules.action(for: .password) == .refuse, "password is refused")
         expect(!CapsuleRailActivationRules.allowsCopy(.password), "password never copies")
         expect(CapsuleRailActivationRules.allowsCopy(.note), "note copies")
+        expect(CapsuleRailCountText.items(1) == "1 ITEM", "singular count")
+        expect(CapsuleRailCountText.items(3) == "3 ITEMS", "plural count")
     }
 
     private static func checkLibraryProjection(

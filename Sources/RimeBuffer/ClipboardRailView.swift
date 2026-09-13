@@ -742,7 +742,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             ClipboardHistoryWindowMetrics.maximumRenderedCards
         ))
         countLabel.stringValue = query.isEmpty
-            ? "\(all.count) ITEMS"
+            ? CapsuleRailCountText.items(all.count)
             : "\(matches.count) / \(all.count)"
         guard !visible.isEmpty else {
             removeAllSavedCards()
@@ -1096,7 +1096,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
 
     private func updateCount(visibleCount: Int) {
         countLabel.stringValue = query.isEmpty
-            ? "\(model.itemCount) ITEMS"
+            ? CapsuleRailCountText.items(model.itemCount)
             : "\(visibleCount) / \(model.itemCount)"
     }
 

@@ -6932,15 +6932,15 @@ func runBufferWindowSmokeTest() -> Bool {
     }
     defer { hotKeyDefaults.removePersistentDomain(forName: hotKeyDefaultsSuite) }
 
-    // Upgrade fixture: preserve a pre-existing custom Command-Shift-P binding
-    // and give Clipboard the deterministic first free fallback, while reserving
-    // Command-Shift-C for Capsule, instead of registering a duplicate hot key.
+    // Upgrade fixture: preserve a pre-existing custom binding on Capsule's
+    // default Command-Shift-V and give the rail the deterministic first free
+    // fallback instead of registering a duplicate hot key.
     let migrationDefaultsSuite =
         "RimeBuffer.ClipboardShortcutMigrationSmoke.\(UUID().uuidString)"
     guard let migrationDefaults = UserDefaults(suiteName: migrationDefaultsSuite),
-          let legacyCommandShiftP = try? JSONEncoder().encode(
+          let customCommandShiftV = try? JSONEncoder().encode(
             RimeKeyboardShortcut(
-                keyCode: UInt16(kVK_ANSI_P),
+                keyCode: UInt16(kVK_ANSI_V),
                 modifiers: [.command, .shift]
             )
           ) else {
@@ -6951,7 +6951,7 @@ func runBufferWindowSmokeTest() -> Bool {
         migrationDefaults.removePersistentDomain(forName: migrationDefaultsSuite)
     }
     migrationDefaults.set(
-        legacyCommandShiftP,
+        customCommandShiftV,
         forKey: "keyboardShortcut.v1.\(RimeShortcutAction.openSettings.rawValue)"
     )
     let migratedClipboardShortcut = RimeShortcutPreferences.shortcut(
@@ -6972,7 +6972,7 @@ func runBufferWindowSmokeTest() -> Bool {
             for: .openSettings,
             defaults: migrationDefaults
           ) == RimeKeyboardShortcut(
-            keyCode: UInt16(kVK_ANSI_P),
+            keyCode: UInt16(kVK_ANSI_V),
             modifiers: [.command, .shift]
           ),
           migratedClipboardHotKey.keyCode == UInt32(kVK_ANSI_C),
@@ -7207,7 +7207,7 @@ func runBufferWindowSmokeTest() -> Bool {
     guard workbenchHotKey.keyCode == UInt32(kVK_ANSI_B),
           workbenchHotKey.modifiers == UInt32(cmdKey | shiftKey),
           workbenchHotKey.registrationOptions == OptionBits(kEventHotKeyNoOptions),
-          clipboardHotKey.keyCode == UInt32(kVK_ANSI_P),
+          clipboardHotKey.keyCode == UInt32(kVK_ANSI_V),
           clipboardHotKey.modifiers == UInt32(cmdKey | shiftKey),
           clipboardHotKey.registrationOptions
             == OptionBits(kEventHotKeyExclusive),

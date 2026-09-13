@@ -2203,7 +2203,7 @@ final class CapsulePaneViewController: NSViewController,
         switch result {
         case let .success(rows):
             self.rows = rows
-            countLabel.stringValue = "\(rows.count) ITEMS"
+            countLabel.stringValue = CapsuleRailCountText.items(rows.count)
             tableView.reloadData()
             if editorDirty, draft.kind == kind {
                 if let id = draft.id,

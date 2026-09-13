@@ -75,6 +75,13 @@ enum CapsuleRailActivationRules {
     }
 }
 
+enum CapsuleRailCountText {
+    /// The header count, singular for exactly one.
+    static func items(_ count: Int) -> String {
+        count == 1 ? "1 ITEM" : "\(count) ITEMS"
+    }
+}
+
 enum CapsuleRailSearchRules {
     static func filter(_ entries: [CapsuleRailEntry],
                        query: String) -> [CapsuleRailEntry] {

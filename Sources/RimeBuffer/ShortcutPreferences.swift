@@ -189,8 +189,9 @@ enum RimeShortcutAction: String, CaseIterable {
                 modifiers: [.command, .shift]
             )
         case .toggleClipboardHistory:
+            // Capsule's rail, on the chord clipboard managers such as Paste use.
             return RimeKeyboardShortcut(
-                keyCode: UInt16(kVK_ANSI_P),
+                keyCode: UInt16(kVK_ANSI_V),
                 modifiers: [.command, .shift]
             )
         case .openMailbox:
@@ -253,7 +254,7 @@ enum RimeShortcutPreferences {
         .nextPlugin,
     ]
 
-    /// A missing Clipboard binding normally resolves to Command-Shift-P. If a
+    /// A missing Clipboard binding normally resolves to Command-Shift-V. If a
     /// pre-existing action already owns it, persist the first free fallback so
     /// Carbon never receives duplicate registrations from this process.
     private static let clipboardHistoryFallbackKeyCodes: [UInt16] = [
@@ -262,7 +263,7 @@ enum RimeShortcutPreferences {
         UInt16(kVK_ANSI_I), UInt16(kVK_ANSI_J), UInt16(kVK_ANSI_K),
         UInt16(kVK_ANSI_L), UInt16(kVK_ANSI_M), UInt16(kVK_ANSI_N),
         UInt16(kVK_ANSI_O), UInt16(kVK_ANSI_R),
-        UInt16(kVK_ANSI_T), UInt16(kVK_ANSI_U), UInt16(kVK_ANSI_V),
+        UInt16(kVK_ANSI_T), UInt16(kVK_ANSI_U), UInt16(kVK_ANSI_P),
         UInt16(kVK_ANSI_W), UInt16(kVK_ANSI_X), UInt16(kVK_ANSI_Y),
         UInt16(kVK_ANSI_Z), UInt16(kVK_ANSI_A), UInt16(kVK_ANSI_B),
         UInt16(kVK_ANSI_S),
