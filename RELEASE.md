@@ -162,7 +162,7 @@ Installer 身份/Team、公证票据，以及四个 universal dylib 的独立 SH
 - **`Vendor/` 是 gitignore 的**——二进制不进 git，构建时按锁定版本拉取，可复现。
 - 运行时 `CRimeBridge` 优先 `dlopen` app bundle 内的 librime（找不到才回退系统 Squirrel），
   `shared_data_dir` 指向 bundle 的 `SharedSupport`；首启自动 `start_maintenance` 部署词库到
-  `~/Library/RimeBuffer`。因此 CI 与终端用户机器都无需预装 Squirrel。
+  `~/Library/RIMES`。因此 CI 与终端用户机器都无需预装 Squirrel。
 
 ## 三、持续集成（CI）
 

@@ -253,7 +253,7 @@ Provider 侧：当前 LocalGateway 持有独立 NW 队列并切回主线程调�
 
 当前一个监听器绑定 `127.0.0.1:47700`（可配置），基于 Network.framework `NWListener` 手写极简 HTTP/1.1。响应使用 `Content-Length` 并保持 keep-alive；**没有 chunked 响应、MCP SSE 下行流或可删除的 MCP session**。MCP 采用 stateless Streamable HTTP：每次 `POST /mcp` 返回一个 JSON 响应。SSE 订阅是后续独立 provider，不是当前 LocalGateway 的第三种协议。
 
-除公开健康检查外，端点要求 `Authorization: Bearer <token>`。token 生成后写入 `~/Library/RimeBuffer/gateway-token`（0600；**不用 Keychain**，避免 ad-hoc 签名重建时反复触发 ACL 提示；拿到 Developer ID 正式签名后再评估迁移）。当前设置页默认只展示脱敏的通用 MCP JSON，复制时才写入真实 token；Claude Code 注册命令收在可选展开区，仍**没有重新生成 token 的 UI**。
+除公开健康检查外，端点要求 `Authorization: Bearer <token>`。token 生成后写入 `~/Library/RIMES/gateway-token`（0600；**不用 Keychain**，避免 ad-hoc 签名重建时反复触发 ACL 提示；拿到 Developer ID 正式签名后再评估迁移）。当前设置页默认只展示脱敏的通用 MCP JSON，复制时才写入真实 token；Claude Code 注册命令收在可选展开区，仍**没有重新生成 token 的 UI**。
 
 端点：
 
@@ -279,7 +279,7 @@ buffer_stream_end(stream_id)            → 确认文本      标记完成，条
 
 ```bash
 claude mcp add --transport http etinput http://127.0.0.1:47700/mcp \
-  --header "Authorization: Bearer $(cat ~/Library/RimeBuffer/gateway-token)"
+  --header "Authorization: Bearer $(cat ~/Library/RIMES/gateway-token)"
 ```
 
 ### 4.3 其余 provider
@@ -329,11 +329,11 @@ claude mcp add --transport http etinput http://127.0.0.1:47700/mcp \
 ### 5.3 单一 AI 文本缓冲插件与三个连接器（已实现）
 
 - **统一插件**：`AITextInternalPlugin` 是唯一占用缓冲插件 owner 的「AI 生成」入口，`AITextConnectorSelectionStore` 单独持久化当前模型源；切换连接器不会变成另一个插件，也不会改写其他缓冲插件的 owner。
-- **Codex CLI 连接器**：显式 `RIMEBUFFER_CODEX_PATH` 仍是最高优先级；普通自动探测则优先 ChatGPT app bundled Codex，再查找 Homebrew、用户 PATH、常见版本管理器、nvm/fnm 与 Cursor/VS Code 扩展内置安装。它用一次性 app-server 的双向 stdio JSON-RPC 接收 answer delta。专用 ChatGPT 登录持久化在 `~/Library/RimeBuffer/ai/codex-home`，不读取 `~/.codex` 中的订阅登录或 MCP/Hook/插件/技能；设置页把登录凭据与 CLI 能力分开呈现，可直接发起、取消或重新授权结构化浏览器登录，并在完成事件后复核账户。每次请求创建私有临时工作目录，并在发送正文前用 `mcpServerStatus/list` 再次断言零 MCP。严格 permission profile 将文件读取限制到临时目录并关闭工具网络、shell/连接器等能力；完整隔离握手不成立时在正文出进程前失败关闭。
+- **Codex CLI 连接器**：显式 `RIMEBUFFER_CODEX_PATH` 仍是最高优先级；普通自动探测则优先 ChatGPT app bundled Codex，再查找 Homebrew、用户 PATH、常见版本管理器、nvm/fnm 与 Cursor/VS Code 扩展内置安装。它用一次性 app-server 的双向 stdio JSON-RPC 接收 answer delta。专用 ChatGPT 登录持久化在 `~/Library/RIMES/ai/codex-home`，不读取 `~/.codex` 中的订阅登录或 MCP/Hook/插件/技能；设置页把登录凭据与 CLI 能力分开呈现，可直接发起、取消或重新授权结构化浏览器登录，并在完成事件后复核账户。每次请求创建私有临时工作目录，并在发送正文前用 `mcpServerStatus/list` 再次断言零 MCP。严格 permission profile 将文件读取限制到临时目录并关闭工具网络、shell/连接器等能力；完整隔离握手不成立时在正文出进程前失败关闭。
 - **Claude Code CLI 连接器**：设置页用固定 `claude auth login --claudeai` 发起官方浏览器授权，可取消或重新授权；后台探测用 `claude auth status --json` 的 `loggedIn` 布尔值缓存就绪状态，定期复核时不阻塞输入法主线程。生成以 `claude -p --output-format stream-json --include-partial-messages` 运行，禁用 tools、slash commands、会话持久化与交互式授权，只经 stdin 传源正文。RimeBuffer 不读取凭据文件、不展示账户元数据，也不把 `CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CONFIG_DIR` 或 ambient API key 传给子进程；官方 CLI 只从经过滤的进程环境中的 `HOME` 解析它自己管理的 CLI 授权。
 - 上述两个 CLI 都由 `Process` 直接启动，不调 shell，不显示 stderr/reasoning/tool 输出，且在 0700 临时目录内受 120s/1MiB 上限约束。准入不依赖版本号：Codex 必须以完整隔离参数完成无提示词的 app-server initialize 与空 MCP 握手，Claude 必须提供实际生成所需的工具关闭和流式参数；能力契约不成立时在正文出进程前 fail-closed。**这不是本地推理**：点击生成后，缓冲全文会通过各自 CLI 的已登录服务发送。
 - **OpenAI 兼容 API 连接器**：用户可在“设置 › 连接器 › AI 模型”配置 Base URL、model 和 API key。请求为 `POST {baseURL}/chat/completions`，`stream: true`，要求标准 SSE `choices[].delta.content`/`[DONE]`；2xx 非 SSE 响应失败关闭。远程地址必须 HTTPS，HTTP 仅允许 `localhost`/`127.0.0.1`/`::1`；拒绝 userinfo、query、fragment 和 redirect，避免 Authorization 泄露。
-- Base URL/model/key 保存于 **0600 文件** `~/Library/RimeBuffer/ai/openai-compatible.json`，不进 UserDefaults、Keychain 或日志。继续沿用 ad-hoc 签名下避免 Keychain ACL 重复弹窗的决策，Developer ID 后再评估迁移。
+- Base URL/model/key 保存于 **0600 文件** `~/Library/RIMES/ai/openai-compatible.json`，不进 UserDefaults、Keychain 或日志。继续沿用 ad-hoc 签名下避免 Keychain ACL 重复弹窗的决策，Developer ID 后再评估迁移。
 - 「AI 生成」插件只在用户显式点击右侧 AI 主按钮或按 Return 时把当前缓冲全文交给所选连接器，永不附带输入历史、preedit、剪贴板或屏幕上下文。预置/自定义提示词模板仍属后续，不写成当前能力。
 
 ---

@@ -29,9 +29,9 @@ Plugin 提供的可信配置。插件设置必须通过
 - 普通偏好使用 `PluginConfigurationUserDefaultsStore`，每个插件一个
   namespace，并以完整字典原子替换。
 - 只要 schema 含 `secureText`，必须使用私有存储。默认路径是
-  `~/Library/RimeBuffer/plugin-config/<plugin-id>/configuration.json`，
+  `~/Library/RIMES/plugin-config/<plugin-id>/configuration.json`，
   `plugin-config` 与 `<plugin-id>` 目录权限为 `0700`、文件权限为
-  `0600`。共享的 `~/Library/RimeBuffer` 根目录必须是当前用户所有且
+  `0600`。共享的 `~/Library/RIMES` 根目录必须是当前用户所有且
   不可由 group/world 写入；兼容 Rime 数据导入留下的安全 `0755`，
   不得因此拒绝读取内部的私有配置。
 - 已有专用凭据文件的插件通过 `PluginConfigurationStoring` adapter
@@ -40,7 +40,8 @@ Plugin 提供的可信配置。插件设置必须通过
   `description`、日志、崩溃诊断或测试输出。
 - **历史兼容（已下架 My Prompt）**：旧版本中 My Prompt 的普通偏好写入
   UserDefaults，用户导入的 Markdown、远程 checkout 与 SQLite 索引位于
-  `~/Library/RimeBuffer/my-prompt`（测试优先
+  数据目录下的 `my-prompt`（现为 `~/Library/RIMES/my-prompt`，更名前为
+  `~/Library/RimeBuffer/my-prompt`；测试优先
   `RIMEBUFFER_LOCAL_DATA_ROOT` / `RIMEBUFFER_USER_DIR`）。当前版本不再
   暴露或运行该插件；升级、重部署和卸载迁移不得擅自删除既有用户数据，
   查询词和提示词正文仍不得进入日志。

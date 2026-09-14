@@ -37,7 +37,7 @@
 >
 > **2026-08-21 工作台与插件覆盖（优先于下文刷新槽、轨道和插件清单）**：右上角用户可见的刷新按钮已经废弃；generation 作废、上下文重验、配置变化重启等内部生命周期刷新仍保留，但不再以常驻按钮暴露。派生插件在输入为空且没有真实结果/显式状态时只显示单轨；只有存在实际 source、result 或需要向用户说明的 status 时，才增加第二轨或把当前轨交换成结果轨。设置中的“最后一块上屏后关闭工作台”默认开启，适用于 `Default` 与所有 Buffer 插件：只有 `BufferDeliveryCoordinator` 成功投递精确的最后一个 block、对应 source 已原子消费、同一 generation/工作台会话仍有效且目标仍存活时，才关闭并暂停工作台。设置关闭、部分成功、失败、新内容到达、迟到 generation、目标丢失或 owner/会话已切换时都不得关闭。
 >
-> **2026-09-01 当前模块边界**：Buffer、Clipboard History、Mailbox 与 Capsule 是四个同级核心本机模块，各自拥有独立窗口、快捷键和生命周期；当前 Buffer 只维护并发布 **AI 生成 2.1、实时翻译 2.1、意识流输入 1.3** 三个插件。Capsule 在 `~/Library/RimeBuffer/capsule` 用 Obsidian 可读 Markdown/本机密文逐条管理 Prompt、Memory、Password、Skill、Note、URL、Image 与 PDF；Image/PDF 保存用户管理文件的本机路径并在选中时异步预览。用户可选择真实 iCloud Drive 文件夹，以独立镜像自动双向同步六类可迁移条目及内容寻址媒体；本机目录仍是 canonical，`content-library-v1.json` 标识本机库，`~/Library/RimeBuffer/capsule-sync/config-v1.json` 与 `state-<library-id>.json` 保存同步配置和逐库状态，Password、Skill 绝对路径与 `master-key` 保持本机。下载媒体 materialize 到 `capsule/assets/`；本机源媒体离线且需要上传时仅将该条标为 deferred。离线媒体败者在覆盖或删除前先完整归档到本机私有 `capsule/conflicts/`，云端只保留脱敏摘要；托管缓存丢失时可从云端自愈。删除 Image/PDF 条目只删除 entry 并写 tombstone，本轮不自动回收已上传 asset 或 materialized cache，以保留并发冲突恢复能力；不得手工删除仍被有效条目或冲突副本引用的 asset。Capsule 一次性预设 `RIMES 默认词条` Memory；它不进入 Buffer 插件目录、派生 workspace、Return 投递或按键并击路径。Mailbox 可独立收信、保存会话与继续 AI 对话；“发送到 Buffer”仅是显式可选桥接。Clipboard History 不属于 Buffer，也不会把历史加入 `BufferModel`。`Marine Chrome`、`My Prompt`、`Remarkable` 已从当前产品清单下架，不再下载、安装、启用或出现在运行时路由中；本文后续关于它们的实现、版本和测试说明仅保留为历史设计记录，不代表当前可用能力。
+> **2026-09-01 当前模块边界**：Buffer、Clipboard History、Mailbox 与 Capsule 是四个同级核心本机模块，各自拥有独立窗口、快捷键和生命周期；当前 Buffer 只维护并发布 **AI 生成 2.1、实时翻译 2.1、意识流输入 1.3** 三个插件。Capsule 在 `~/Library/RIMES/capsule` 用 Obsidian 可读 Markdown/本机密文逐条管理 Prompt、Memory、Password、Skill、Note、URL、Image 与 PDF；Image/PDF 保存用户管理文件的本机路径并在选中时异步预览。用户可选择真实 iCloud Drive 文件夹，以独立镜像自动双向同步六类可迁移条目及内容寻址媒体；本机目录仍是 canonical，`content-library-v1.json` 标识本机库，`~/Library/RIMES/capsule-sync/config-v1.json` 与 `state-<library-id>.json` 保存同步配置和逐库状态，Password、Skill 绝对路径与 `master-key` 保持本机。下载媒体 materialize 到 `capsule/assets/`；本机源媒体离线且需要上传时仅将该条标为 deferred。离线媒体败者在覆盖或删除前先完整归档到本机私有 `capsule/conflicts/`，云端只保留脱敏摘要；托管缓存丢失时可从云端自愈。删除 Image/PDF 条目只删除 entry 并写 tombstone，本轮不自动回收已上传 asset 或 materialized cache，以保留并发冲突恢复能力；不得手工删除仍被有效条目或冲突副本引用的 asset。Capsule 一次性预设 `RIMES 默认词条` Memory；它不进入 Buffer 插件目录、派生 workspace、Return 投递或按键并击路径。Mailbox 可独立收信、保存会话与继续 AI 对话；“发送到 Buffer”仅是显式可选桥接。Clipboard History 不属于 Buffer，也不会把历史加入 `BufferModel`。`Marine Chrome`、`My Prompt`、`Remarkable` 已从当前产品清单下架，不再下载、安装、启用或出现在运行时路由中；本文后续关于它们的实现、版本和测试说明仅保留为历史设计记录，不代表当前可用能力。
 >
 > **2026-08-20 React BufferSurface 原生移植覆盖（几何由页首 2026-08-30 契约修订）**：缓冲工作台默认采用 760pt React 母版宽度，继续是 nonactivating 原生 `NSPanel`，不改 `FocusToken`、secure/session protection、跨 Space 恢复或 `BufferDeliveryCoordinator -> Delivery.insert` 投递契约。当前普通/source-only/target-only 为 44pt 折叠、78pt 展开；live source+target 为 78pt 折叠、112pt 展开，最大方向预判按 112pt。派生 workspace 可呈现 1–5 个互斥 alternative，但 `BufferInlineView` 只维护一个稳定 target viewport，以 pager 切换活动项，不再堆叠 target row 或因候选数改变窗口高度。当前实时翻译与意识流采用 live-expand，AI 生成采用 single-exchange；该段原有 My Prompt、Marine Chrome、Remarkable 描述只属历史兼容。返回编辑是用户明确放弃当前结果；用户可见刷新按钮与固定刷新槽已经移除。33pt 工具栏由前置输入/插件图标切换，仅在正文未承载活动摘要时以状态区作为后备；返回编辑按状态出现。主操作恢复为 22×22 纯图标按钮（投递用纸飞机、生成用 sparkles、生成中用 spinner），可见文字由 tooltip 与无障碍标签承载。
 >
@@ -86,7 +86,7 @@
 | 定位 | 从零做的现代 macOS 输入法：**librime 引擎 + 自绘 UI + 常驻缓冲区(buffer)**，终点是替代 Squirrel 成为用户日常主力 |
 | 仓库 | `~/Documents/05-dev/apps/rime-buffer`（SwiftPM：C++ 桥 target + Swift executable） |
 | 进程模型 | **内部单进程**。IMK、librime、候选窗、buffer、网关、菜单都在同一进程；禁止把内部 UI/状态拆成依赖轮询或 IPC 的伴随进程。MCP/HTTP 与配对传字是明确的外部接口，不在此禁令内 |
-| 引擎 | 优先 dlopen app 自带的 `librime.1.dylib` + lua/octagram/predict 插件；开发态才回退 Squirrel 路径；用户数据独立在 `~/Library/RimeBuffer` |
+| 引擎 | 优先 dlopen app 自带的 `librime.1.dylib` + lua/octagram/predict 插件；开发态才回退 Squirrel 路径；用户数据独立在 `~/Library/RIMES` |
 | 上屏 | 只经 `client.insertText`（IMK 一等公民通道，网页/Electron/原生通吃） |
 | 已验证 | 引擎 smoke 覆盖五个普通方案、可选飞耀方案、F4、雾凇拼音上屏，以及英文补全/空格/生词兜底；.app 可安装可注册可输入 |
 | 当前状态 | §4 的 3 个现场 bug 对应修复已落地；§9 P1' 保留为历史验收记录，当前仍需安装后真机回归 |
@@ -191,7 +191,7 @@
 │                                                                              │
 │  RimeEngine (可实例化封装, 每控制器独立 session) ── CRimeBridge (C++, dlopen) │
 │    └─ app 自带 librime.1.dylib + lua/octagram/predict；开发态回退 Squirrel   │
-│    └─ 用户目录: ~/Library/RimeBuffer (自 ~/Library/Rime 播种的独立副本)        │
+│    └─ 用户目录: ~/Library/RIMES (自 ~/Library/Rime 播种的独立副本)             │
 │                                                                              │
 │  BufferWindowController + BufferModel + BufferDeliveryCoordinator             │
 │  AITextPlugins(已实现)  [P3] 语音  [P4] 学习词同步/签名公证             │
@@ -208,7 +208,7 @@
 
 ### 5.2 RimeEngine（Swift）— 状态：✅ 已写
 
-可实例化（**无单例、无共享 session**——前身的共享 session 会让组字状态跨输入框串扰）。`start()` 失败时保持可重试。用户目录默认 `~/Library/RimeBuffer`，环境变量 `RIMEBUFFER_USER_DIR` 可覆盖（CLI smoke 用）。
+可实例化（**无单例、无共享 session**——前身的共享 session 会让组字状态跨输入框串扰）。`start()` 失败时保持可重试。用户目录默认 `~/Library/RIMES`，环境变量 `RIMEBUFFER_USER_DIR` 可覆盖（CLI smoke 用）。
 
 ### 5.3 RimeBufferController — 状态：✅ 已实现并持续演进
 
@@ -304,18 +304,18 @@ macOS 版本不可靠。`Info.plist` 的 `etinput-menu.pdf` 继续负责系统�
 - `AITextConnectorRegistry` 把 Codex CLI、Claude Code CLI 与 OpenAI 兼容 API 作为独立于 `.bufferAction` owner 的三个模型源；旧 provider-specific plugin 选择会迁移为「AI 生成」owner + 原连接器偏好。AI 生成配置写回同一共享选择。实时翻译与 Marine 选择“当前 AI 渠道”时也复用它；Marine 另外允许 60–600 秒调用超时，并在每次请求开始时冻结。带 `preparePath` 的 Action Plugin 只返回通过五字段身份校验的 `blocks-v1` prompt，RimeBuffer 保留模型选择、凭据、执行、工具策略和结果校验。
 - `MarineChromeWorkspace` 直接消费扩展提供的 6 秒网页上下文租约和当前 Stable Chrome `FocusToken`，不经过旧 Action Plugin 的 `preparePath`。生成时冻结 context、focus、source block IDs 和所选 AI provider；上下文、焦点、owner、secure input 或 source 任一变化都会取消/墓碑旧结果。CLI/API 可用性通知会刷新 idle/unavailable phase，但不得打断 running、撤销 ready 投递权或自动清除可见 failure。生命周期日志只能记录脱敏枚举和计数。
 - `StreamInputWorkspace` 是第三种派生 source，不读取 `BufferModel`：它把 `a-z` 与归一化 ASCII Space 组成的 raw 全拼绑定到创建它的精确外部焦点，按灵敏 140/500、平衡 220/800（默认）或稳定 350/1200 ms 的 debounce/max-wait 自动请求意识流自己选择的 AI provider（默认 OpenAI 兼容）。捕获不以当前 Rime 配置为门槛，选择插件也绝不调用 `InputConfigurationStore.set` 或重部署 schema；Space 在 raw 中写入一个真实硬边界、上轨仅将其显示为 `·` 并立即请求，前导/连续 Space no-op，其他标点只消费，数字 1–5 与无修饰 ↑/↓ 控制候选。精确 Control/Command+A 只全选 raw source，Control/Command+V 在尾部追加或替换选中 raw；粘贴只接受 ASCII 字母与空白，任一其他字符或归一化后总 raw 超过 16 KiB 都原子拒绝。workspace 最多允许两个 provider 请求短暂重叠：旧路仅维持视觉连续，新 challenger 的首个合法非空 snapshot 或终态到达后才取消/墓碑旧路；两路都占用时只保留一个 latest-only pending。
-- `MyPromptWorkspace` 是第四种派生 source，但继续读取普通 `BufferModel`：上轨是精确查询快照，下轨是本地索引返回且先裁为 1–3 条的互斥候选。候选展示文本只含标题/摘要，投递始终读取内部保存的完整 prompt；选择变化增加 delivery generation，协调器冻结前确认唯一结果。SQLite 使用 WAL 与 FTS5；导入器拒绝 symlink、非普通文件、NUL、越界文件和越界正文，并把 Fabric/Obsidian/aggregate Markdown 归一为稳定 source/record identity。远程 synchronizer 只接受无凭据 HTTPS URL，以固定 `/usr/bin/git` argv、禁用交互和 file/ext protocol，同步完成后才更新本地 source。数据库、library 与 checkout 位于 `RIMEBUFFER_LOCAL_DATA_ROOT`/`RIMEBUFFER_USER_DIR` 下的 `my-prompt`，后备为 `~/Library/RimeBuffer/my-prompt`，目录/数据库分别收紧为 `0700/0600`。
+- `MyPromptWorkspace` 是第四种派生 source，但继续读取普通 `BufferModel`：上轨是精确查询快照，下轨是本地索引返回且先裁为 1–3 条的互斥候选。候选展示文本只含标题/摘要，投递始终读取内部保存的完整 prompt；选择变化增加 delivery generation，协调器冻结前确认唯一结果。SQLite 使用 WAL 与 FTS5；导入器拒绝 symlink、非普通文件、NUL、越界文件和越界正文，并把 Fabric/Obsidian/aggregate Markdown 归一为稳定 source/record identity。远程 synchronizer 只接受无凭据 HTTPS URL，以固定 `/usr/bin/git` argv、禁用交互和 file/ext protocol，同步完成后才更新本地 source。数据库、library 与 checkout 位于 `RIMEBUFFER_LOCAL_DATA_ROOT`/`RIMEBUFFER_USER_DIR` 下的 `my-prompt`，后备为 `~/Library/RIMES/my-prompt`，目录/数据库分别收紧为 `0700/0600`。
 - 2026-07-26 飞耀扩展：串击/双拼仍逐字写连续全拼；显式 `.chord` 与 `.mutual` 都读取 `my_combo` 的有效映射并使用独立、焦点绑定的批次状态。并击只映射同批；互击额外允许相邻左/右半区批次在精确快照仍一致时重组。只有完整音节映射追加 soft ASCII syllable Space，单侧拼音片段映射不追加，二者都走普通 220/800 ms 调度请求。只有用户物理 Space（包括把末尾 soft Space 原位提升）是显示 `·`、立即请求并增加宿主最小分块数的 hard boundary。
 - 每次意识流请求的 source 都是触发边界时的完整 raw 拼音，模型必须从全局重新解释，不能只处理新增后缀或把输入分段拼接。请求同时冻结本轮的候选上限与响应节奏，后续设置变化不能改变其 prompt、provider schema/decoder、partial/final 校验或 retry merge。旧显示、partial、baseline 与跨 revision 的旧响应不得进入 prompt；唯一例外是同 revision 的一次补候选请求可把前一个严格合法 final 作为有界、JSON 编码且不可信的排重数据。本地 `StreamInputPinyinHints` 生成最多三条全覆盖、lossless 边界提示，明确以 ` | ` 保留 Space；无法识别的 English/错键片段原样保留，超过 512 bytes 时省略提示。本地提示多于一种时 payload 设置 `minimumGuessCount=2`，但会被本轮候选上限封顶。waiting/running 时临时结果不显示选中态，也不能建立 result/delivery lease。补候选 partial 从已有候选之后的槽位开始且仍不可投递；final 必须逐槽精确覆盖 partial，旧 baseline 尾部不得进入正文。模型产出 1–5 个完整、互斥猜测，且永不超过本轮冻结上限；所有候选共享一个分页 target viewport，活动项内部再经 `SemanticBlockSegmenter` 细分为短句、中文分句或英文短词组。Space 子句数建立最小分块目标，宿主只在不切断英文单词、URL、代码、数字或引文时补拆。Return/纸飞机在协调器冻结 generation 前确认当前候选并删除其余状态，防止任一路径绕过选择；同一次 Return 轻按发送下一块、长按发送全部。raw 在部分投递期间保留，只在所选答案最后一块成功后清除；首块后继续输入字母或 Space 才会撤销未发送尾部与旧 raw，已发送前缀不能重复出现。
-- `CodexCLITextProvider` 通过双向 stdio JSON-RPC 运行一次性 Codex app-server，消费 `item/agentMessage/delta`；除显式 `RIMEBUFFER_CODEX_PATH` 覆盖外，可执行文件探测优先 ChatGPT.app bundled Codex，再按顺序选择第一个通过能力检查的 Homebrew、用户 PATH、常见版本管理器或编辑器内置安装。它使用 `~/Library/RimeBuffer/ai/codex-home` 中独立、可持续刷新的 ChatGPT 登录，不读取 `~/.codex`。设置页把本地凭据状态与 CLI 能力状态分开呈现；account/login app-server 流程打开 HTTPS 授权页，按 loginId 绑定完成通知，再以 account/read 验证 ChatGPT 账户。取消、超时、进程退出与迟到回调均 fail-closed，生成前还要求 `mcpServerStatus/list` 为空。`ClaudeCodeCLITextProvider` 使用 `stream-json` partial；它在后台以官方 `claude auth status --json` 的 `loggedIn` 布尔值校验 CLI 授权，设置页通过固定 `claude auth login --claudeai` 流程发起、取消或重新授权。RimeBuffer 不读取 Claude 凭据文件，不传透 `CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CONFIG_DIR` 或 ambient API key。两个 CLI 都按实际能力而非版本号准入：Codex 候选必须以完整隔离 argv 完成无提示词 initialize 与空 MCP 握手，Claude 候选必须公开实际生成所需的工具关闭和流式参数；新旧版本只要满足契约即可使用。能力/授权探测在后台缓存并周期复核，hot path 只读缓存；生成前用 stat 指纹确认已验证可执行文件未被替换。两者均用 `Process`、固定 argv/stdin 和 0700 临时工作目录，不经 shell，不把正文放入进程参数或日志，并限制时间与输出大小、关闭工具及会话持久化。“本地 CLI”只表示进程在本机启动，**不代表本地推理**。
-- `OpenAICompatibleTextProvider` 调用 `POST {baseURL}/chat/completions` 并要求 `text/event-stream`，消费 SSE delta 和 `[DONE]`；2xx 非 SSE 响应 fail-closed。Base URL、model 与 API key 在“连接器 › AI 模型”管理；远程端点必须 HTTPS，HTTP 仅允许精确 loopback。意识流选用该渠道时，`.alternativeGuesses` 显式发送 `thinking: {type: disabled}`、`response_format: {type: json_object}`、`max_tokens: 1024` 与低 temperature；普通 AI 生成不继承这些专用字段。请求阶段日志仅记录 request UUID、HTTP 状态、首 transport/content/snapshot 耗时、字节/块数及枚举结果，写入进程级异步串行日志器，永不记录 URL、model、raw、prompt、正文或 key。配置与密钥存于 `~/Library/RimeBuffer/ai/openai-compatible.json` 的 0600 文件，不进 UserDefaults 或日志；文件位于 app bundle 外，开发安装脚本重播种 Rime 数据时必须排除 `ai`，pkg/应用内更新也只替换 app，不能清除已有配置。
+- `CodexCLITextProvider` 通过双向 stdio JSON-RPC 运行一次性 Codex app-server，消费 `item/agentMessage/delta`；除显式 `RIMEBUFFER_CODEX_PATH` 覆盖外，可执行文件探测优先 ChatGPT.app bundled Codex，再按顺序选择第一个通过能力检查的 Homebrew、用户 PATH、常见版本管理器或编辑器内置安装。它使用 `~/Library/RIMES/ai/codex-home` 中独立、可持续刷新的 ChatGPT 登录，不读取 `~/.codex`。设置页把本地凭据状态与 CLI 能力状态分开呈现；account/login app-server 流程打开 HTTPS 授权页，按 loginId 绑定完成通知，再以 account/read 验证 ChatGPT 账户。取消、超时、进程退出与迟到回调均 fail-closed，生成前还要求 `mcpServerStatus/list` 为空。`ClaudeCodeCLITextProvider` 使用 `stream-json` partial；它在后台以官方 `claude auth status --json` 的 `loggedIn` 布尔值校验 CLI 授权，设置页通过固定 `claude auth login --claudeai` 流程发起、取消或重新授权。RimeBuffer 不读取 Claude 凭据文件，不传透 `CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CONFIG_DIR` 或 ambient API key。两个 CLI 都按实际能力而非版本号准入：Codex 候选必须以完整隔离 argv 完成无提示词 initialize 与空 MCP 握手，Claude 候选必须公开实际生成所需的工具关闭和流式参数；新旧版本只要满足契约即可使用。能力/授权探测在后台缓存并周期复核，hot path 只读缓存；生成前用 stat 指纹确认已验证可执行文件未被替换。两者均用 `Process`、固定 argv/stdin 和 0700 临时工作目录，不经 shell，不把正文放入进程参数或日志，并限制时间与输出大小、关闭工具及会话持久化。“本地 CLI”只表示进程在本机启动，**不代表本地推理**。
+- `OpenAICompatibleTextProvider` 调用 `POST {baseURL}/chat/completions` 并要求 `text/event-stream`，消费 SSE delta 和 `[DONE]`；2xx 非 SSE 响应 fail-closed。Base URL、model 与 API key 在“连接器 › AI 模型”管理；远程端点必须 HTTPS，HTTP 仅允许精确 loopback。意识流选用该渠道时，`.alternativeGuesses` 显式发送 `thinking: {type: disabled}`、`response_format: {type: json_object}`、`max_tokens: 1024` 与低 temperature；普通 AI 生成不继承这些专用字段。请求阶段日志仅记录 request UUID、HTTP 状态、首 transport/content/snapshot 耗时、字节/块数及枚举结果，写入进程级异步串行日志器，永不记录 URL、model、raw、prompt、正文或 key。配置与密钥存于 `~/Library/RIMES/ai/openai-compatible.json` 的 0600 文件，不进 UserDefaults 或日志；文件位于 app bundle 外，开发安装脚本重播种 Rime 数据时必须排除 `ai`，pkg/应用内更新也只替换 app，不能清除已有配置。
 - 未经 review 的 Action Plugin 目标绑定块不能被 AI 插件当作源文，避免洗掉原 runtime/context/focus 权限。语音输入仍属后续能力。
 
 ### 5.12 Deploy / userdb（P4）— 状态：✅ 自包含部署已实现；学习词同步仍是路线图
 
-- **现状**：app 自带 librime、插件和 Rime shared data，启动时在独立的 `~/Library/RimeBuffer` 执行 maintenance/deploy；正式安装不依赖 Squirrel。`build_install.sh` 默认可从 `~/Library/Rime` 重新播种用户配置与 userdb，也可在没有 Squirrel 用户目录时从 bundled schemas 独立部署。
+- **现状**：app 自带 librime、插件和 Rime shared data，启动时在独立的 `~/Library/RIMES` 执行 maintenance/deploy；正式安装不依赖 Squirrel。更名前的 `~/Library/RimeBuffer` 在首次启动时整体复制到 `~/Library/RIMES`（仅当新目录尚不存在，完成后写入迁移标记），原目录保留、不自动删除。`build_install.sh` 默认可从 `~/Library/Rime` 重新播种用户配置与 userdb，也可在没有 Squirrel 用户目录时从 bundled schemas 独立部署。
 - 激活热路径只对 `build/default.yaml`、已部署 schema 与 `squirrel.yaml` 做轻量文件指纹检查；schema 列表和键盘布局解析按文件内容/原子替换自动失效，进程内部署成功后显式清缓存。任何 standalone smoke/preview 都在初始化 librime 前强制改用临时 userdir；engine smoke 在该目录中复刻正式包的 `Vendor + rime-data` SharedSupport，不打开 live LevelDB。
-- **隔离不变量**：两个活跃 Rime 实例不能共享同一 userdb LevelDB，因此运行时继续使用 `~/Library/RimeBuffer`，不直接打开 Squirrel 的 `~/Library/Rime`。
+- **隔离不变量**：两个活跃 Rime 实例不能共享同一 userdb LevelDB，因此运行时继续使用 `~/Library/RIMES`，不直接打开 Squirrel 的 `~/Library/Rime`。
 - **[P4 路线图]** 决定使用 librime sync 还是显式迁移来同步学习词；Developer ID/hardened runtime/双重公证的 fail-closed workflow 已落地，首次正式 tag 仍需在仓库配置 8 项受保护凭据并通过 Apple 在线验收。不得为了同步而恢复两个进程直接共用一个 userdb。
 
 ---
@@ -413,7 +413,7 @@ pkill -x RimeBuffer                # 系统会按需重新拉起
 
 已踩坑速查：本地 `build_install.sh` 仍用 ad-hoc；正式 tag 由一次性 keychain 完成 Developer ID + hardened runtime + app/pkg 公证，不可降级回未签名 · 我方 Bash 沙盒里 `open` GUI app 会假失败，装完由系统拉起或用户双击 · smoke 若 0 候选先查五个普通方案及已启用的可选飞耀方案是否部署，以及 userdb LOCK。
 
-不要用 `rm -rf ~/Library/RimeBuffer` 触发 reseed：该目录还包含 `ai/openai-compatible.json` 等用户凭据和产品持久状态。`build_install.sh` 自带安全重播种逻辑，会保留这些目录；若只想替换应用且完全跳过 userdb 重播种，使用 `RB_KEEP_USERDB=1 ./build_install.sh`。
+不要用 `rm -rf ~/Library/RIMES` 触发 reseed：该目录还包含 `ai/openai-compatible.json` 等用户凭据和产品持久状态。`build_install.sh` 自带安全重播种逻辑，会保留这些目录；若只想替换应用且完全跳过 userdb 重播种，使用 `RB_KEEP_USERDB=1 ./build_install.sh`。
 
 ---
 
@@ -453,7 +453,7 @@ pkill -x RimeBuffer                # 系统会按需重新拉起
 | chord 时序被改坏 | 逐字节移植 + schema 门控 + duration 读配置 + 日志每键可追 |
 | marked text 在个别敌意 App 仍坏 | per-app placeholder 模式表，逐个登记而非全局裸奔 |
 | 每控制器 session 割裂全局开关体感 | activateServer 镜像 + UserDefaults 记忆 |
-| userdb 双实例锁冲突 | 独立 ~/Library/RimeBuffer；转正后统一（§5.12） |
+| userdb 双实例锁冲突 | 独立 ~/Library/RIMES；转正后统一（§5.12） |
 | Squirrel 升级/卸载破坏 dylib 依赖 | 启动路径校验 + 明示错误；P4 考虑自带 librime |
 | Lua 脚本卡死输入线程 | watchdog 记录定位；用户改 Lua 先过 smoke |
 

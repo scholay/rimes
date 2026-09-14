@@ -7,7 +7,7 @@ Capsule 是与 Buffer、Mailbox 同级的 RIMES 本机内容库。当前支持 `
 默认目录：
 
 ```text
-~/Library/RimeBuffer/
+~/Library/RIMES/
 ├── capsule/
 │   ├── content-seed-v1
 │   ├── content-library-v1.json
@@ -37,7 +37,7 @@ Capsule 是与 Buffer、Mailbox 同级的 RIMES 本机内容库。当前支持 `
 
 Capsule 的本机目录始终是权威副本。用户在 Capsule 顶部选择一个真实的
 iCloud Drive 文件夹后，RIMES 会在后台维护独立的 `v1` 镜像；不会移动或
-软链接 `~/Library/RimeBuffer/capsule`，也不会把整个目录直接复制到云端。
+软链接 `~/Library/RIMES/capsule`，也不会把整个目录直接复制到云端。
 启动、窗口打开、本机条目变更、系统唤醒与低频定时检查都会触发一次逐条
 reconcile，用户也可以手动点击「立即同步」。关闭同步只停止自动任务并保留
 两端数据。
