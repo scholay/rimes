@@ -86,7 +86,7 @@ enum MarineChromeGatewayFiles {
         let url = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DIR"].map {
             URL(fileURLWithPath: $0, isDirectory: true)
         } ?? URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+            .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
         try? FileManager.default.createDirectory(at: url,
                                                  withIntermediateDirectories: true)
         return url

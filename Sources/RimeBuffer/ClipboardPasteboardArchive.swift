@@ -136,6 +136,7 @@ struct ClipboardPasteboardArchive: Equatable, Sendable {
         case confidentialContent
         case unreadablePasteboardType
         case pasteboardItemCreationFailed
+        case pasteboardChanged
         case pasteboardWriteFailed
         case invalidCompressionLevel
 
@@ -173,6 +174,8 @@ struct ClipboardPasteboardArchive: Equatable, Sendable {
                 return "无法完整读取剪贴板中的某个数据类型。"
             case .pasteboardItemCreationFailed:
                 return "无法重建剪贴板条目。"
+            case .pasteboardChanged:
+                return "准备期间系统剪贴板已变化；未覆盖较新的内容。"
             case .pasteboardWriteFailed:
                 return "无法将归档内容写回系统剪贴板。"
             case .invalidCompressionLevel:
@@ -365,9 +368,14 @@ struct ClipboardPasteboardArchive: Equatable, Sendable {
     @discardableResult
     func write(
         to pasteboard: NSPasteboard = .general,
-        limits: Limits = .standard
+        limits: Limits = .standard,
+        expectedChangeCount: Int? = nil
     ) throws -> Int {
         let pasteboardItems = try makePasteboardItems(limits: limits)
+        if let expectedChangeCount,
+           pasteboard.changeCount != expectedChangeCount {
+            throw ArchiveError.pasteboardChanged
+        }
         pasteboard.clearContents()
         guard pasteboard.writeObjects(pasteboardItems) else {
             throw ArchiveError.pasteboardWriteFailed

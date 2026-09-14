@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runs before Installer replaces /Library/Input Methods/ETInput.app. If an old
+# Runs before Installer replaces /Library/Input Methods/RIMES.app. If an old
 # RIMES process is active, hand its clients to a safe ASCII source while the old
 # executable and controller are still intact.
 set -u
@@ -7,6 +7,7 @@ set -u
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 . "$SCRIPT_DIR/rimes-install-common.sh"
 HANDOFF_HELPER="$SCRIPT_DIR/rimes-update-handoff"
+COMPANION_AGENT_HELPER="$SCRIPT_DIR/rimes-companion-launch-agent.sh"
 
 if [ ! -x "$RIMES_TIMEOUT_HELPER" ] || [ ! -x "$HANDOFF_HELPER" ] \
     || ! rimes_run_bounded 5 /usr/bin/codesign --verify --strict \
@@ -14,6 +15,11 @@ if [ ! -x "$RIMES_TIMEOUT_HELPER" ] || [ ! -x "$HANDOFF_HELPER" ] \
     || ! rimes_run_bounded 5 /usr/bin/codesign --verify --strict \
         "$HANDOFF_HELPER"; then
     echo "RIMES preinstall: signed installer lifecycle helpers are invalid"
+    exit 1
+fi
+if [ ! -x "$COMPANION_AGENT_HELPER" ] \
+    || ! rimes_run_bounded 3 /bin/bash -n "$COMPANION_AGENT_HELPER"; then
+    echo "RIMES preinstall: companion lifecycle helper is invalid"
     exit 1
 fi
 rimes_begin_budget 30 || {
@@ -60,7 +66,7 @@ HANDOFF_HELPER="$STAGED_HANDOFF"
 # migration: older RIMES builds used com.isaac.inputmethod.ETInput at this same
 # frozen path. Relocation is disabled, so explicitly accept only current/legacy
 # RIMES here and refuse to overwrite any unrelated or malformed occupant.
-CANONICAL_APP="/Library/Input Methods/ETInput.app"
+CANONICAL_APP="/Library/Input Methods/RIMES.app"
 if [ -e "$CANONICAL_APP" ] || [ -L "$CANONICAL_APP" ]; then
     if [ -L "$CANONICAL_APP" ] || [ ! -d "$CANONICAL_APP" ] \
         || ! rimes_is_owned_bundle "$CANONICAL_APP"; then
@@ -69,7 +75,31 @@ if [ -e "$CANONICAL_APP" ] || [ -L "$CANONICAL_APP" ]; then
     fi
 fi
 
-if ! rimes_resolve_console_user; then
+HAS_CONSOLE_USER=0
+ALLOWED_CONSOLE_UID=none
+if rimes_resolve_console_user; then
+    HAS_CONSOLE_USER=1
+    ALLOWED_CONSOLE_UID="$RIMES_LOGIN_UID"
+fi
+
+# A system package and a per-user development bundle publish the same frozen
+# input-source identity. Inspect every local ordinary account before PackageKit
+# replaces the payload. Only the active console user's verified dev artifacts
+# may proceed, because postinstall can retire those in that user's own context.
+# Offline/non-console accounts cannot be converged safely, so any exact dev app
+# or agent there fails before the system bundle is changed.
+if ! rimes_run_bounded 15 /bin/bash "$COMPANION_AGENT_HELPER" \
+        audit-system-conflicts "$ALLOWED_CONSOLE_UID"; then
+    echo "RIMES preinstall: per-user development install conflict; system payload was not replaced"
+    exit 1
+fi
+if ! rimes_run_bounded 5 /bin/bash "$COMPANION_AGENT_HELPER" \
+        audit-system-processes "$ALLOWED_CONSOLE_UID"; then
+    echo "RIMES preinstall: another login session still runs RIMES; payload was not replaced"
+    exit 1
+fi
+
+if [ "$HAS_CONSOLE_USER" -ne 1 ]; then
     echo "RIMES preinstall: no ordinary GUI console user; deferring handoff"
     exit 0
 fi
@@ -84,6 +114,15 @@ if ! rimes_run_console_user_bounded 5 "$HANDOFF_HELPER"; then
 fi
 rimes_run_bounded 1 /bin/sleep 0.5 || true
 
-rimes_run_console_user_bounded 3 /usr/bin/killall ETInput 2>/dev/null || true
+for legacy_exe in RIMES ETInput RimeBuffer; do
+    rimes_run_console_user_bounded 3 /usr/bin/killall "$legacy_exe" 2>/dev/null || true
+done
 rimes_run_console_user_bounded 3 /usr/bin/killall RimeBuffer 2>/dev/null || true
+if ! rimes_run_bounded 4 /bin/bash "$COMPANION_AGENT_HELPER" \
+        wait-user-processes-stopped "$RIMES_LOGIN_UID" \
+    || ! rimes_run_bounded 3 /bin/bash "$COMPANION_AGENT_HELPER" \
+        audit-system-processes none; then
+    echo "RIMES preinstall: old RIMES process did not stop; payload was not replaced"
+    exit 1
+fi
 exit 0

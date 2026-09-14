@@ -74,7 +74,7 @@ enum StreamInputPinyinHints {
 
         let bytes = Array(raw.utf8)
         guard bytes.allSatisfy({
-            (0x61...0x7a).contains($0) || $0 == 0x20
+            (0x61...0x7a).contains($0) || $0 == 0x20 || $0 == 0x2c
         }) else {
             return []
         }
@@ -91,10 +91,13 @@ enum StreamInputPinyinHints {
 
         for position in bytes.indices {
             guard !beams[position].isEmpty else { continue }
-            if bytes[position] == 0x20 {
+            if bytes[position] == 0x20 || bytes[position] == 0x2c {
                 for path in beams[position] {
                     var next = path
-                    if automaticSyllableSpaceOffsets.contains(position) {
+                    // An explicit comma is a hard clause boundary; only a
+                    // chord-inserted Space is a mere syllable separator.
+                    if bytes[position] == 0x20,
+                       automaticSyllableSpaceOffsets.contains(position) {
                         next.appendSyllableBoundary(at: position)
                     } else {
                         next.appendBoundary(at: position)

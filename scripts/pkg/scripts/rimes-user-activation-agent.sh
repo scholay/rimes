@@ -7,7 +7,7 @@ set -u
 MODE="${1:-}"
 MARKER_KIND="${2:-activation}"
 LABEL="com.scholay.rimes.activation-repair"
-EXE="/Library/Input Methods/ETInput.app/Contents/MacOS/ETInput"
+EXE="/Library/Input Methods/RIMES.app/Contents/MacOS/RIMES"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 TIMEOUT_HELPER="${RIMES_TIMEOUT_HELPER:-$SCRIPT_DIR/rimes-timeout}"
 MARKER_DIR="$HOME/Library/Application Support/RIMES"

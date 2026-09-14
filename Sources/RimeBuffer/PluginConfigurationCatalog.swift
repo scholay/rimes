@@ -213,8 +213,8 @@ enum PluginConfigurationCatalog {
             fields: [
                 .choice(
                     id: StreamInputPluginConfigurationFieldID.connector,
-                    title: "猜测渠道",
-                    helpText: "这是意识流输入自己的选择，不会改动普通 AI 生成的渠道。",
+                    title: "猜测模型",
+                    helpText: "意识流猜测完全由所选连接器完成；这是它自己的选择，不会改动普通 AI 生成的渠道。",
                     options: aiConnectorChoices,
                     defaultValue:
                         AITextProviderKind.openAICompatible.rawValue
@@ -355,7 +355,7 @@ enum PluginConfigurationCatalog {
                     id: MyPromptPluginConfigurationFieldID.libraryDirectory,
                     title: "本地提示词目录",
                     helpText: "支持 ~/ 开头或绝对路径。目录不存在时会自动创建；提示词正文不会写入日志。",
-                    placeholder: "~/Library/RimeBuffer/my-prompt/library",
+                    placeholder: "~/Library/\(RimesPaths.directoryName)/my-prompt/library",
                     defaultValue: defaultMyPromptLibraryDirectory.path,
                     maximumLength: 2_048,
                     isRequired: true,
@@ -607,7 +607,7 @@ enum PluginConfigurationCatalog {
         return (root.map {
             URL(fileURLWithPath: $0, isDirectory: true)
         } ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/RimeBuffer", isDirectory: true))
+            .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true))
             .appendingPathComponent("my-prompt", isDirectory: true)
     }
 
@@ -671,7 +671,7 @@ enum PluginConfigurationCatalog {
             "id", "pl", "ru", "th", "tr", "uk", "vi",
         ]
         let standardDictionaryKey =
-            "RimeBuffer.PluginConfiguration.\(BuiltInPluginID.appleTranslation)"
+            "\(RimesIdentity.preferenceKeyPrefix)PluginConfiguration.\(BuiltInPluginID.appleTranslation)"
         let standardValues = defaults.dictionary(
             forKey: standardDictionaryKey
         )
@@ -752,7 +752,7 @@ private final class StreamInputConfigurationStore:
             defaults: defaults
         )
         storageKey =
-            "RimeBuffer.PluginConfiguration.\(BuiltInPluginID.streamInput)"
+            "\(RimesIdentity.preferenceKeyPrefix)PluginConfiguration.\(BuiltInPluginID.streamInput)"
     }
 
     func validate(schema: PluginConfigurationSchema) throws {

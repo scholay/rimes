@@ -124,6 +124,70 @@ enum ClipboardHistorySmoke {
             ),
             "other-space window reported visible"
         )
+        expect(
+            clipboardHistoryStandalonePanelKeyboardProbe(),
+            "standalone Clipboard panel cannot own native search input"
+        )
+        expect(
+            ClipboardHistoryPresentationMode.resolve(
+                currentSourceIsOwn: true
+            ) == .borrowedRime,
+            "RIMES clipboard presentation mode"
+        )
+        expect(
+            ClipboardHistoryPresentationMode.resolve(
+                currentSourceIsOwn: false
+            ) == .standalonePasteboard,
+            "external clipboard presentation mode"
+        )
+        expect(
+            ClipboardHistoryActivationRules.shouldAttemptDirectTextDelivery(
+                mode: .borrowedRime,
+                currentSourceIsOwn: true,
+                allItemsAreCompletePlainText: true
+            ),
+            "borrowed RIMES text delivery policy"
+        )
+        expect(
+            !ClipboardHistoryActivationRules.shouldAttemptDirectTextDelivery(
+                mode: .standalonePasteboard,
+                currentSourceIsOwn: false,
+                allItemsAreCompletePlainText: true
+            ),
+            "external input method attempted direct text delivery"
+        )
+        expect(
+            ClipboardHistoryStandaloneEditingRules.shouldDeleteSelectedCards(
+                queryIsEmpty: true,
+                selectedCount: 1,
+                hasMarkedText: false
+            ),
+            "standalone empty-query Delete did not target the selected card"
+        )
+        expect(
+            ClipboardHistoryStandaloneEditingRules.shouldDeleteSelectedCards(
+                queryIsEmpty: false,
+                selectedCount: 2,
+                hasMarkedText: false
+            ),
+            "standalone multi-selection Delete did not target cards"
+        )
+        expect(
+            !ClipboardHistoryStandaloneEditingRules.shouldDeleteSelectedCards(
+                queryIsEmpty: false,
+                selectedCount: 1,
+                hasMarkedText: false
+            ),
+            "standalone query Delete bypassed native text editing"
+        )
+        expect(
+            !ClipboardHistoryStandaloneEditingRules.shouldDeleteSelectedCards(
+                queryIsEmpty: true,
+                selectedCount: 1,
+                hasMarkedText: true
+            ),
+            "standalone Delete interrupted an active external-IME composition"
+        )
 
         let eligible = ClipboardHistoryWindowLifecycleRules.captureState(
             windowVisibleOnActiveSpace: true,
@@ -223,10 +287,45 @@ enum ClipboardHistorySmoke {
                 ] == synthesizedUTF16,
                 "rich fixture did not mirror readable synthesized UTF-16"
             )
+            let expectedChangeCount = isolatedPasteboard.changeCount
+            isolatedPasteboard.clearContents()
+            isolatedPasteboard.setString(
+                "newer-user-clipboard",
+                forType: .string
+            )
+            do {
+                _ = try archive.write(
+                    to: isolatedPasteboard,
+                    expectedChangeCount: expectedChangeCount
+                )
+                expect(false, "stale archive overwrote newer pasteboard")
+            } catch ClipboardPasteboardArchive.ArchiveError.pasteboardChanged {
+                // Expected: asynchronous restoration is compare-before-write.
+            }
+            expect(
+                isolatedPasteboard.string(forType: .string)
+                    == "newer-user-clipboard",
+                "stale archive cleared newer pasteboard"
+            )
         } catch {
             expect(false, "rich fixture archive: \(error.localizedDescription)")
         }
         runCapturePolicyChecks(expect: expect)
+        for command in [
+            "insertNewline:", "cancelOperation:", "moveLeft:", "moveRight:",
+            "moveUp:", "moveDown:", "deleteBackward:", "deleteForward:",
+        ] {
+            expect(
+                !ClipboardHistoryStandaloneEditingRules
+                    .permitsSurfaceCommand(hasMarkedText: true),
+                "standalone marked composition leaked command \(command)"
+            )
+        }
+        expect(
+            ClipboardHistoryStandaloneEditingRules
+                .permitsSurfaceCommand(hasMarkedText: false),
+            "standalone settled search rejected surface commands"
+        )
         expect(
             ClipboardHistoryScrollRules.horizontalDelta(
                 deltaX: 0,
@@ -242,8 +341,8 @@ enum ClipboardHistorySmoke {
                 deltaY: 4,
                 precise: true,
                 shiftHeld: true
-            ) == -10,
-            "Shift precise-wheel reversed acceleration"
+            ) == 10,
+            "Shift precise-wheel acceleration follows the trackpad"
         )
         expect(
             ClipboardHistoryScrollRules.horizontalDelta(
@@ -261,7 +360,7 @@ enum ClipboardHistorySmoke {
                 precise: true,
                 shiftHeld: false
             ) == 5,
-            "native horizontal delta direction"
+            "trackpad horizontal delta follows the fingers"
         )
         expect(
             ClipboardHistoryScrollRules.horizontalDelta(
@@ -269,8 +368,26 @@ enum ClipboardHistorySmoke {
                 deltaY: 1,
                 precise: false,
                 shiftHeld: false
-            ) == 32,
+            ) == -32,
             "unmodified vertical timeline direction"
+        )
+        // macOS inverts scroll direction per device, so the wheel and the
+        // trackpad must take opposite signs to feel identical in the hand.
+        // Every trackpad path agrees with itself; the wheel opposes it.
+        expect(
+            ClipboardHistoryScrollRules.horizontalDelta(
+                deltaX: 0, deltaY: 3, precise: true, shiftHeld: false
+            ) > 0
+                && ClipboardHistoryScrollRules.horizontalDelta(
+                    deltaX: 0, deltaY: 3, precise: true, shiftHeld: true
+                ) > 0
+                && ClipboardHistoryScrollRules.horizontalDelta(
+                    deltaX: 3, deltaY: 0, precise: true, shiftHeld: false
+                ) > 0
+                && ClipboardHistoryScrollRules.horizontalDelta(
+                    deltaX: 0, deltaY: 3, precise: false, shiftHeld: true
+                ) < 0,
+            "trackpad must oppose the wheel, not match it"
         )
 
         let pasteboard = ClipboardHistoryPasteboardDouble()
@@ -939,11 +1056,11 @@ enum ClipboardHistorySmoke {
                 "plain-text activation classification"
             )
             expect(
-                ClipboardHistoryActivationRules.canInsertEveryItemAsPlainText(
+                !ClipboardHistoryActivationRules.canInsertEveryItemAsPlainText(
                     items: [directTextItem],
                     archives: [decoded]
                 ),
-                "text activation should use canonical text despite rich archive"
+                "rich text activation flattened its archived representations"
             )
             expect(
                 !ClipboardHistoryActivationRules.canInsertEveryItemAsPlainText(
@@ -1220,6 +1337,23 @@ enum ClipboardHistorySmoke {
         expect(snapshot.cardHeight == 126, "timeline card height")
         expect(snapshot.selectedCardCount == 1, "timeline single selection")
         expect(snapshot.selectedCardBorderWidth == 2, "selected timeline border")
+        pane.setStandaloneSearchEnabled(true)
+        expect(
+            pane.standaloneSearchEnabled,
+            "standalone native search did not enable"
+        )
+        pane.setStandaloneSearchTextForSmoke("beta")
+        expect(
+            pane.query == "beta"
+                && pane.snapshotForSmoke().queryCharacterCount == 4,
+            "standalone native search did not update the model query"
+        )
+        pane.resetSearch()
+        pane.setStandaloneSearchEnabled(false)
+        expect(
+            !pane.standaloneSearchEnabled,
+            "borrowed RIMES search did not restore"
+        )
 
         guard let searchA = keyEvent(keyCode: 0, characters: "a") else {
             expect(false, "search event creation")
@@ -1326,8 +1460,37 @@ enum ClipboardHistorySmoke {
             expect(false, "command event creation")
             return
         }
-        expect(pane.handleKeyDown(commandCopy), "Command-C was not consumed")
+        pane.setStandaloneSearchEnabled(true)
+        copiedID = nil
+        let activationCountBeforeMarkedCommands = rejectedActivationCount
+        expect(
+            !pane.handleStandaloneKeyEquivalent(
+                commandCopy,
+                hasMarkedText: true
+            ),
+            "marked standalone Command-C was consumed"
+        )
+        expect(copiedID == nil, "marked standalone Command-C copied a card")
+        expect(
+            !pane.handleStandaloneKeyEquivalent(
+                commandOne,
+                hasMarkedText: true
+            ),
+            "marked standalone Command-1 was consumed"
+        )
+        expect(
+            rejectedActivationCount == activationCountBeforeMarkedCommands,
+            "marked standalone Command-1 activated a card"
+        )
+        expect(
+            pane.handleStandaloneKeyEquivalent(
+                commandCopy,
+                hasMarkedText: false
+            ),
+            "settled standalone Command-C was not consumed"
+        )
         expect(copiedID == model.selectedID, "Command-C copied wrong item")
+        pane.setStandaloneSearchEnabled(false)
         expect(pane.handleKeyDown(capsLockCommandCopy), "Caps-Lock Command-C was not consumed")
         expect(
             ClipboardHistoryWindowController.hardwareKeyCodes(
@@ -1458,6 +1621,60 @@ enum ClipboardHistorySmoke {
             plainClickActivationCount == 0,
             "plain single-click activated an item"
         )
+
+        // A click selects where the pointer already is, so the rail must not
+        // scroll underneath it — otherwise the second click of a double click
+        // lands on a different card. Keyboard selection still scrolls, because
+        // nothing is under the pointer to keep still.
+        do {
+            let scrollModel = ClipboardHistoryModel(
+                configuration: .init(),
+                pasteboard: ClipboardHistoryPasteboardDouble(),
+                schedulesAutomaticPolling: false
+            )
+            scrollModel.start()
+            scrollModel.update(windowVisible: true, captureEnabled: true,
+                               protection: [])
+            for index in 0..<12 { _ = scrollModel.ingest("overflow card \(index)") }
+            let scrollPane = ClipboardHistoryPaneView(model: scrollModel)
+            scrollPane.frame = NSRect(
+                x: 0,
+                y: 0,
+                width: ClipboardHistoryWindowMetrics.preferredWidth,
+                height: ClipboardHistoryWindowMetrics.preferredHeight
+            )
+            scrollPane.layoutSubtreeIfNeeded()
+            let overflowIDs = scrollModel.items.map(\.id)
+            guard overflowIDs.count == 12, let lastID = overflowIDs.last else {
+                expect(false, "click-scroll fixture")
+                return
+            }
+            _ = scrollModel.select(id: overflowIDs[0])
+            scrollPane.layoutSubtreeIfNeeded()
+            let restingOrigin = scrollPane.scrollOriginXForSmoke
+            _ = scrollPane.handleCardInteraction(
+                itemID: lastID,
+                modifiers: [],
+                clickCount: 1
+            )
+            scrollPane.layoutSubtreeIfNeeded()
+            expect(
+                abs(scrollPane.scrollOriginXForSmoke - restingOrigin) < 0.5,
+                "a click scrolled the rail out from under the pointer"
+            )
+            expect(
+                scrollModel.selectedID == lastID,
+                "click on an off-screen card did not select it"
+            )
+            _ = scrollModel.select(id: overflowIDs[0])
+            scrollPane.layoutSubtreeIfNeeded()
+            _ = scrollModel.select(id: lastID)
+            scrollPane.layoutSubtreeIfNeeded()
+            expect(
+                scrollPane.scrollOriginXForSmoke > restingOrigin + 0.5,
+                "keyboard selection stopped scrolling into view"
+            )
+        }
 
         _ = model.select(id: multiIDs[0])
         expect(
@@ -1622,3 +1839,161 @@ private enum ClipboardHistorySmokeMain {
     }
 }
 #endif
+
+/// Activation policy and its feedback. A silent fallback to the pasteboard is
+/// what made this feel unreliable next to a dedicated paste utility: the
+/// gesture looked like it had failed when the content was ready and only the
+/// synthetic key press was blocked.
+func runClipboardActivationPolicySmokeTest() -> Bool {
+    print("== RIMES clipboard activation policy smoke ==")
+    let suite = "clipboard-policy-smoke-\(UUID().uuidString)"
+    guard let defaults = UserDefaults(suiteName: suite) else {
+        print("FAILED: could not create a defaults suite")
+        return false
+    }
+    defer { defaults.removeSuite(named: suite) }
+
+    guard ClipboardActivationPolicy(rawValue: "pasteIntoApp") == .pasteIntoApp,
+          ClipboardActivationPolicy(rawValue: "clipboardOnly") == .clipboardOnly,
+          ClipboardActivationPolicy(rawValue: "nonsense") == nil,
+          ClipboardActivationPolicy.allCases.count == 2 else {
+        print("FAILED: activation policy cases")
+        return false
+    }
+
+    // Every outcome says what happened. A blocked paste must never be
+    // reported the same way as a successful one, and must name its cause:
+    // the grant is the one thing the user can act on.
+    let outcomes: [ClipboardAutoPasteOutcome] = [
+        .pasted, .clipboardOnlyByChoice, .blockedWithoutAccessibility,
+        .blockedBySecureInput, .targetUnavailable,
+    ]
+    let messages = outcomes.map(ClipboardActivationFeedback.message)
+    guard Set(messages).count == messages.count,
+          messages.allSatisfy({ !$0.isEmpty }) else {
+        print("FAILED: every outcome needs its own message")
+        return false
+    }
+    guard ClipboardActivationFeedback.message(for: .pasted) == "已粘贴到目标应用",
+          ClipboardActivationFeedback.message(for: .clipboardOnlyByChoice)
+            == "已复制到剪贴板",
+          ClipboardActivationFeedback.message(for: .blockedWithoutAccessibility)
+            .contains("辅助功能") else {
+        print("FAILED: outcome wording")
+        return false
+    }
+    // A paste that did not happen must not claim it did.
+    for outcome in outcomes where outcome != .pasted {
+        guard !ClipboardActivationFeedback.message(for: outcome)
+            .contains("已粘贴") else {
+            print("FAILED: \(outcome) reported itself as a paste")
+            return false
+        }
+    }
+
+    // The permission inventory. Anything listed must name a real feature and
+    // a real consequence, and must reach a settings pane — a row that cannot
+    // be acted on is worse than no row.
+    guard SystemPermission.allCases.count == 2,
+          SystemPermission.allCases.allSatisfy({
+              !$0.title.isEmpty && !$0.enables.isEmpty
+                  && !$0.whenMissing.isEmpty && $0.settingsURL != nil
+          }) else {
+        return clipboardPermissionFail("permission inventory completeness")
+    }
+    // Input Monitoring is deliberately absent: the global monitors watch
+    // mouse buttons only and the hotkeys are Carbon registrations. Listing a
+    // permission that is never used teaches the user to grant things blindly.
+    guard !SystemPermission.allCases.contains(where: {
+        $0.rawValue.lowercased().contains("input")
+    }) else {
+        return clipboardPermissionFail("unused permissions must not be listed")
+    }
+
+    let reports = SystemPermissionAudit.reportAll()
+    guard reports.count == SystemPermission.allCases.count,
+          reports.allSatisfy({ !$0.actionTitle.isEmpty }) else {
+        return clipboardPermissionFail("every permission needs a live report")
+    }
+    // Local network has no read API; claiming to know its state would be a
+    // lie, and a lie here sends the user to check the wrong thing.
+    guard SystemPermissionAudit.status(for: .localNetwork) == .undeterminable else {
+        return clipboardPermissionFail("local network cannot be queried")
+    }
+    // A denied grant that will not prompt must offer the pane, not a request
+    // that produces no dialog — the failure the user actually hit.
+    let silentDenied = SystemPermissionReport(permission: .accessibility,
+                                              status: .denied,
+                                              promptWouldBeSilent: true)
+    let promptableDenied = SystemPermissionReport(permission: .accessibility,
+                                                  status: .denied,
+                                                  promptWouldBeSilent: false)
+    guard silentDenied.actionTitle == "前往系统设置",
+          promptableDenied.actionTitle == "请求权限" else {
+        return clipboardPermissionFail("denied grants must offer the right action")
+    }
+
+    // Identity. The grant is recorded against the identifier, and this bundle
+    // carries three different names — folder/executable ETInput, display
+    // RIMES, identifier RimeBuffer — so the mismatch must be detectable
+    // rather than left for the user to notice in a system list.
+    let agreeing = SystemPermissionAudit.Identity(
+        bundleIdentifier: "com.example.Widget",
+        bundleName: "Widget",
+        executableName: "Widget",
+        bundlePath: "/Applications/Widget.app",
+        isAdHocSigned: false
+    )
+    let mismatched = SystemPermissionAudit.Identity(
+        bundleIdentifier: RimesIdentity.bundleIdentifier,
+        bundleName: "RIMES",
+        executableName: "ETInput",
+        bundlePath: "/Users/x/Library/Input Methods/ETInput.app",
+        isAdHocSigned: true
+    )
+    guard agreeing.namesAgree, !mismatched.namesAgree else {
+        return clipboardPermissionFail("identity name agreement")
+    }
+    // Reading the live identity must never produce an empty field, including
+    // from this bare test executable, which has no bundle at all — a blank
+    // line in the settings page would be worse than an honest "unknown".
+    let live = SystemPermissionAudit.identity()
+    guard !live.bundleIdentifier.isEmpty,
+          !live.bundleName.isEmpty,
+          !live.executableName.isEmpty,
+          !live.bundlePath.isEmpty else {
+        return clipboardPermissionFail("live identity must have no blank fields")
+    }
+    // Resetting a record needs a real identifier; an empty one must not
+    // shell out at all.
+    guard !SystemPermissionAudit.resetAccessibilityRecord(
+        bundleIdentifier: ""
+    ) else {
+        return clipboardPermissionFail("empty identifier must not be reset")
+    }
+
+    // Signing decides whether a grant outlives a rebuild: an ad-hoc
+    // requirement is a cdhash, which changes every build, while an identity
+    // requirement names a certificate and does not. The two readings must
+    // never both be true, or the page would claim both at once.
+    let adHoc = SystemPermissionAudit.isAdHocSigned()
+    let authority = SystemPermissionAudit.signingAuthority()
+    guard !(adHoc && authority != nil) else {
+        return clipboardPermissionFail(
+            "a build cannot be both ad-hoc and identity-signed"
+        )
+    }
+    if let authority {
+        guard !authority.isEmpty else {
+            return clipboardPermissionFail("a signing authority must be named")
+        }
+    }
+
+    print("clipboard activation policy smoke: OK")
+    return true
+}
+
+private func clipboardPermissionFail(_ message: String) -> Bool {
+    print("FAILED: \(message)")
+    return false
+}

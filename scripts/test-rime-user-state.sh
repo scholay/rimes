@@ -18,9 +18,12 @@ EXPECTED_CONFIG="$TEST_STATE_ROOT/expected-openai-compatible.json"
 EXPECTED_PLUGIN_CONFIG="$TEST_STATE_ROOT/expected-remarkable-credentials.json"
 EXPECTED_PROMPT="$TEST_STATE_ROOT/expected-prompt.md"
 EXPECTED_PROMPT_INDEX="$TEST_STATE_ROOT/expected-prompt-index.sqlite"
+EXPECTED_MAILBOX_DIR="$TEST_STATE_ROOT/expected-mailbox"
 EXPECTED_MARINE_DIR="$TEST_STATE_ROOT/expected-marine-chrome"
 EXPECTED_CAPSULE_DIR="$TEST_STATE_ROOT/expected-capsule"
 EXPECTED_CAPSULE_SYNC_DIR="$TEST_STATE_ROOT/expected-capsule-sync"
+EXPECTED_CHORD_KEYMAP_DIR="$TEST_STATE_ROOT/expected-chord-keymaps"
+CHORD_KEYMAP_ID='44444444-4444-4444-8444-444444444444'
 CAPSULE_ENTRY_ID='11111111-1111-4111-8111-111111111111'
 CAPSULE_PASSWORD_ID='22222222-2222-4222-8222-222222222222'
 CAPSULE_LIBRARY_ID='33333333-3333-4333-8333-333333333333'
@@ -32,11 +35,13 @@ MARINE_STATE_FILES=(
     marine-chrome-credential.lock
 )
 mkdir -p "$PROFILE_DIR/ai" "$PROFILE_DIR/plugins" "$PROFILE_DIR/preset-plugins" "$PROFILE_DIR/stats" \
-         "$PROFILE_DIR/learning" "$PROFILE_DIR/my-prompt/library" \
+         "$PROFILE_DIR/learning" "$PROFILE_DIR/chord-keymaps" "$PROFILE_DIR/my-prompt/library" \
+         "$PROFILE_DIR/mailbox" \
          "$PROFILE_DIR/build" \
          "$PROFILE_DIR/plugin-config/builtin.remarkable" "$IMPORT_DIR/ai" \
          "$IMPORT_DIR/plugins" "$IMPORT_DIR/preset-plugins" "$IMPORT_DIR/stats" "$IMPORT_DIR/learning" \
-         "$IMPORT_DIR/my-prompt" "$IMPORT_DIR/plugin-config/builtin.remarkable" \
+         "$IMPORT_DIR/my-prompt" "$IMPORT_DIR/mailbox" "$IMPORT_DIR/chord-keymaps" \
+         "$IMPORT_DIR/plugin-config/builtin.remarkable" \
          "$PROFILE_DIR/capsule/entries" "$PROFILE_DIR/capsule/passwords" \
          "$PROFILE_DIR/capsule/assets" "$PROFILE_DIR/capsule-sync" \
          "$EXPECTED_MARINE_DIR"
@@ -63,6 +68,11 @@ printf '%s\n' '# Research prompt' '' 'Summarize this paper.' > "$EXPECTED_PROMPT
 printf '%s\n' 'SQLite format 3 prompt-index-fixture' > "$EXPECTED_PROMPT_INDEX"
 cp "$EXPECTED_PROMPT" "$PROFILE_DIR/my-prompt/library/research.md"
 cp "$EXPECTED_PROMPT_INDEX" "$PROFILE_DIR/my-prompt/prompts.sqlite"
+printf '%s\n' '{"schemaVersion":1,"nextSequence":2,"threads":[]}' \
+    > "$PROFILE_DIR/mailbox/mailbox.json"
+chmod 0700 "$PROFILE_DIR/mailbox"
+chmod 0600 "$PROFILE_DIR/mailbox/mailbox.json"
+cp -R "$PROFILE_DIR/mailbox" "$EXPECTED_MAILBOX_DIR"
 printf '%s\n' 'installed-plugin' > "$PROFILE_DIR/plugins/marker"
 printf '%s\n' 'installed-preset-plugin' > "$PROFILE_DIR/preset-plugins/marker"
 printf '%s\n' 'stats-state' > "$PROFILE_DIR/stats/marker"
@@ -131,6 +141,19 @@ chmod 0600 "$PROFILE_DIR/capsule/entries/$CAPSULE_ENTRY_ID.md" \
 cp -R "$PROFILE_DIR/capsule" "$EXPECTED_CAPSULE_DIR"
 cp -R "$PROFILE_DIR/capsule-sync" "$EXPECTED_CAPSULE_SYNC_DIR"
 
+# A saved draft may be newer than the applied revision. Both native documents
+# must retain their exact bytes and private modes during upgrade reseeding.
+printf '%s\n' \
+    "{\"formatVersion\":1,\"id\":\"$CHORD_KEYMAP_ID\",\"name\":\"Saved draft\",\"leftKeys\":\"dv\",\"rightKeys\":\"i\",\"mappings\":[{\"keys\":\"dvi\",\"output\":\"hao\",\"kind\":\"syllable\"}]}" \
+    > "$PROFILE_DIR/chord-keymaps/$CHORD_KEYMAP_ID.json"
+printf '%s\n' \
+    "{\"formatVersion\":1,\"id\":\"$CHORD_KEYMAP_ID\",\"name\":\"Applied revision\",\"leftKeys\":\"dv\",\"rightKeys\":\"i\",\"mappings\":[{\"keys\":\"dvi\",\"output\":\"ni\",\"kind\":\"syllable\"}]}" \
+    > "$PROFILE_DIR/chord-keymaps/active-profile.json"
+chmod 0700 "$PROFILE_DIR/chord-keymaps"
+chmod 0600 "$PROFILE_DIR/chord-keymaps/$CHORD_KEYMAP_ID.json" \
+    "$PROFILE_DIR/chord-keymaps/active-profile.json"
+cp -R "$PROFILE_DIR/chord-keymaps" "$EXPECTED_CHORD_KEYMAP_DIR"
+
 printf '%s\n' 'discard-me' > "$PROFILE_DIR/build/cache"
 printf '%s\n' 'discard-me' > "$PROFILE_DIR/installation.yaml"
 printf '%s\n' 'discard-me' > "$PROFILE_DIR/old.schema.yaml"
@@ -146,11 +169,21 @@ printf '%s\n' '{"password":"must-not-replace"}' \
     > "$IMPORT_DIR/plugin-config/builtin.remarkable/credentials.json"
 printf '%s\n' 'must-not-replace-stats' > "$IMPORT_DIR/stats/marker"
 printf '%s\n' 'must-not-replace-learning' > "$IMPORT_DIR/learning/marker"
+printf '%s\n' 'must-not-replace-keymap-draft' \
+    > "$IMPORT_DIR/chord-keymaps/$CHORD_KEYMAP_ID.json"
+printf '%s\n' 'must-not-replace-applied-keymap' \
+    > "$IMPORT_DIR/chord-keymaps/active-profile.json"
+printf '%s\n' 'must-not-add-keymap-file' \
+    > "$IMPORT_DIR/chord-keymaps/import-only.json"
 mkdir -p "$IMPORT_DIR/my-prompt/library"
 printf '%s\n' 'must-not-replace-prompt' \
     > "$IMPORT_DIR/my-prompt/library/research.md"
 printf '%s\n' 'must-not-replace-prompt-index' \
     > "$IMPORT_DIR/my-prompt/prompts.sqlite"
+printf '%s\n' 'must-not-replace-mailbox' \
+    > "$IMPORT_DIR/mailbox/mailbox.json"
+printf '%s\n' 'must-not-add-mailbox-file' \
+    > "$IMPORT_DIR/mailbox/import-only.json"
 printf '%s\n' 'must-not-replace-gateway' > "$IMPORT_DIR/gateway-token"
 printf '%s\n' 'must-not-replace-identity' > "$IMPORT_DIR/remote_identity.key"
 for state_file in "${MARINE_STATE_FILES[@]}"; do
@@ -207,6 +240,27 @@ assert_capsule_state_preserved() {
     test ! -e "$PROFILE_DIR/capsule-sync/import-only.json"
 }
 
+assert_mailbox_state_preserved() {
+    diff -r "$EXPECTED_MAILBOX_DIR" "$PROFILE_DIR/mailbox"
+    test "$(mode_of "$PROFILE_DIR/mailbox")" = '700'
+    test "$(mode_of "$PROFILE_DIR/mailbox/mailbox.json")" = '600'
+    test ! -e "$PROFILE_DIR/mailbox/import-only.json"
+}
+
+assert_chord_keymaps_preserved() {
+    diff -r "$EXPECTED_CHORD_KEYMAP_DIR" "$PROFILE_DIR/chord-keymaps"
+    test "$(mode_of "$PROFILE_DIR/chord-keymaps")" = '700'
+    test "$(mode_of "$PROFILE_DIR/chord-keymaps/$CHORD_KEYMAP_ID.json")" = '600'
+    test "$(mode_of "$PROFILE_DIR/chord-keymaps/active-profile.json")" = '600'
+    test ! -e "$PROFILE_DIR/chord-keymaps/import-only.json"
+    # No lifecycle step may confuse the unapplied draft with its snapshot.
+    if cmp -s "$PROFILE_DIR/chord-keymaps/$CHORD_KEYMAP_ID.json" \
+        "$PROFILE_DIR/chord-keymaps/active-profile.json"; then
+        echo 'keymap draft unexpectedly replaced its applied snapshot' >&2
+        exit 1
+    fi
+}
+
 CONFIG_MODE_BEFORE="$(mode_of "$PROFILE_DIR/ai/openai-compatible.json")"
 AI_DIR_MODE_BEFORE="$(mode_of "$PROFILE_DIR/ai")"
 PLUGIN_CONFIG_MODE_BEFORE="$(
@@ -237,7 +291,9 @@ cmp -s "$EXPECTED_PROMPT_INDEX" "$PROFILE_DIR/my-prompt/prompts.sqlite"
 test "$(cat "$PROFILE_DIR/gateway-token")" = 'gateway-state'
 test "$(cat "$PROFILE_DIR/remote_identity.key")" = 'identity-state'
 assert_marine_chrome_state_preserved
+assert_mailbox_state_preserved
 assert_capsule_state_preserved
+assert_chord_keymaps_preserved
 test "$(cat "$PROFILE_DIR/default.yaml")" = 'new-schema'
 test ! -e "$PROFILE_DIR/build"
 test ! -e "$PROFILE_DIR/installation.yaml"
@@ -264,7 +320,9 @@ test "$(mode_of "$PROFILE_DIR/plugin-config/builtin.remarkable")" = \
 test "$(cat "$PROFILE_DIR/plugins/marker")" = 'installed-plugin'
 test "$(cat "$PROFILE_DIR/preset-plugins/marker")" = 'installed-preset-plugin'
 assert_marine_chrome_state_preserved
+assert_mailbox_state_preserved
 assert_capsule_state_preserved
+assert_chord_keymaps_preserved
 test ! -e "$PROFILE_DIR/build"
 test ! -e "$PROFILE_DIR/default.yaml"
 
@@ -281,4 +339,4 @@ grep -Fq 'source scripts/lib/rime-user-state.sh' build_install.sh
 grep -Fq 'import_rime_user_dir_preserving_product_state "$HOME/Library/Rime" "$RB_USER"' build_install.sh
 grep -Fq 'reset_rime_user_dir_preserving_product_state "$RB_USER"' build_install.sh
 
-echo 'rime-user-state: durable config and Capsule state preserved across import and reset'
+echo 'rime-user-state: durable config, Mailbox, Capsule, and chord keymaps preserved across import and reset'

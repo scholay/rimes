@@ -24,6 +24,9 @@ struct TranslationOutputBlock: Equatable {
     /// derived rails remain unnumbered through the defaults below.
     let ordinal: Int?
     let selected: Bool
+    /// Per-chip readiness for an immutable prefix while another unit updates.
+    /// Generic generated workspaces retain their existing phase-only styling.
+    let deliveryReady: Bool
     /// UTF-16 offset where an inert tail retained from the previous global
     /// request begins. The renderer dims only that tail; delivery never reads
     /// this presentation metadata.
@@ -33,12 +36,14 @@ struct TranslationOutputBlock: Equatable {
          text: String,
          ordinal: Int? = nil,
          selected: Bool = false,
-         retainedTailStart: Int? = nil) {
+         retainedTailStart: Int? = nil,
+         deliveryReady: Bool = false) {
         self.id = id
         self.text = text
         self.ordinal = ordinal
         self.selected = selected
         self.retainedTailStart = retainedTailStart
+        self.deliveryReady = deliveryReady
     }
 }
 
@@ -292,11 +297,23 @@ final class AppleTranslationWorkspace {
         let sourceText: String
         let sourceLanguageID: String
         let targetLanguageID: String
+        let unitID: UUID?
+
+        init(generation: UInt64, sourceText: String,
+             sourceLanguageID: String, targetLanguageID: String,
+             unitID: UUID? = nil) {
+            self.generation = generation
+            self.sourceText = sourceText
+            self.sourceLanguageID = sourceLanguageID
+            self.targetLanguageID = targetLanguageID
+            self.unitID = unitID
+        }
     }
 
     private let defaults: UserDefaults
     private let sourceModel: BufferModel
     private let aiProvider: any AITextProvider
+    private let selectionResolver: () -> Bool
     private var observers: [NSObjectProtocol] = []
     private var debounceTimer: Timer?
     private var maxWaitTimer: Timer?
@@ -307,13 +324,33 @@ final class AppleTranslationWorkspace {
     private var protectedSession = false
     private var generation: UInt64 = 0
     private var activeJob: Job?
-    private var pendingSourceText = ""
-    private var capturedSourceText = ""
-    private var capturedSourceBlockIDs: [UUID] = []
-    private var outputAllowsRemoteMirror = true
+    private var units: [TranslationSourceUnit] = []
+    private var consumingSource = false
+    private var lastReconciledSourceChangeCount = -1
+    private var sourceChangesNeedScheduling = false
+    private var lastPrivacyDiscardChangeCount = -1
+    private var contentRevocationEpoch: UInt64 = 0
+    private var conflictedSourceBlockIDs: Set<UUID> = []
+    private struct PreparedDelivery {
+        let generation: UInt64
+        let revocationEpoch: UInt64
+        let blockIDs: [UUID]
+        let units: [TranslationSourceUnit]
+    }
+    /// One bounded synchronous delivery preflight, never a delivery history.
+    private var preparedDelivery: PreparedDelivery?
     private(set) var detectedSourceLanguageID: String?
     private(set) var phase: Phase = .idle
-    private(set) var outputBlocks: [TranslationOutputBlock] = []
+    var outputBlocks: [TranslationOutputBlock] {
+        guard !protectedSession else { return [] }
+        let readyIDs = Set(deliveryPendingBlocks.map(\.id))
+        return units.flatMap(\.output).map {
+            TranslationOutputBlock(id: $0.id, text: $0.text,
+                                   ordinal: $0.ordinal, selected: $0.selected,
+                                   retainedTailStart: $0.retainedTailStart,
+                                   deliveryReady: readyIDs.contains($0.id))
+        }
+    }
     private(set) var languageOptions: [TranslationLanguageOption]
 
     private var pluginSettings: RealtimeTranslationPluginSettings {
@@ -335,7 +372,7 @@ final class AppleTranslationWorkspace {
     }
 
     var isSelected: Bool {
-        BufferPluginSelectionStore.shared.isSelected(Self.pluginKey)
+        selectionResolver()
     }
 
     var isActive: Bool {
@@ -394,15 +431,19 @@ final class AppleTranslationWorkspace {
 
     init(defaults: UserDefaults = .standard,
          sourceModel: BufferModel = .shared,
-         aiProvider: any AITextProvider = AITextConnectorRegistry.shared) {
+         aiProvider: any AITextProvider = AITextConnectorRegistry.shared,
+         isSelected: @escaping () -> Bool = {
+             BufferPluginSelectionStore.shared.isSelected(AppleTranslationWorkspace.pluginKey)
+         }) {
         self.defaults = defaults
         self.sourceModel = sourceModel
         self.aiProvider = aiProvider
+        self.selectionResolver = isSelected
         languageOptions = Self.fallbackLanguageOptions()
         migrateStoredLanguagePairIfNeeded()
     }
 
-    func start() {
+    func start(loadSupportedLanguages: Bool = true) {
         guard !started else { return }
         started = true
         observers.append(NotificationCenter.default.addObserver(
@@ -410,7 +451,10 @@ final class AppleTranslationWorkspace {
             object: sourceModel,
             queue: .main
         ) { [weak self] _ in
-            self?.sourceOrLanguageDidChange()
+            guard let self else { return }
+            self.observePrivacyDiscardIfNeeded()
+            guard !self.consumingSource else { return }
+            self.sourceOrLanguageDidChange()
         })
         observers.append(NotificationCenter.default.addObserver(
             forName: .activeBufferPluginDidChange,
@@ -441,7 +485,7 @@ final class AppleTranslationWorkspace {
             }
             self?.schedulePluginConfigurationRefresh()
         })
-        loadSupportedLanguagesIfAvailable()
+        if loadSupportedLanguages { loadSupportedLanguagesIfAvailable() }
         sourceOrLanguageDidChange()
     }
 
@@ -451,6 +495,12 @@ final class AppleTranslationWorkspace {
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
         configurationRefreshScheduled = false
+        contentRevocationEpoch &+= 1
+        units.removeAll()
+        preparedDelivery = nil
+        conflictedSourceBlockIDs.removeAll()
+        lastReconciledSourceChangeCount = -1
+        sourceChangesNeedScheduling = false
         invalidateTranslation(clearOutput: true, phase: .idle)
     }
 
@@ -460,9 +510,7 @@ final class AppleTranslationWorkspace {
         if #available(macOS 15.0, *) {
             let bridge = AppleTranslationBridgeModel(workspace: self)
             bridgeObject = bridge
-            let host = NSHostingView(rootView: AppleTranslationBridgeView(model: bridge))
-            host.translatesAutoresizingMaskIntoConstraints = false
-            host.alphaValue = 0.001
+            let host = bridge.makeHostView()
             // `start()` can observe existing source text before the workbench
             // has created this host. Retry once the bridge exists so a draft
             // that was already present cannot stay stuck at "session not ready".
@@ -582,19 +630,28 @@ final class AppleTranslationWorkspace {
 
     private func sourceOrLanguageDidChange() {
         dispatchPrecondition(condition: .onQueue(.main))
-        let text = sourceModel.stagedText
-        if text.isEmpty {
+        guard !consumingSource else { return }
+        synchronizeSourceUnitsIfNeeded()
+        let changed = sourceChangesNeedScheduling
+        sourceChangesNeedScheduling = false
+        if units.isEmpty {
             invalidateTranslation(clearOutput: true, phase: .idle)
-            pendingSourceText = ""
+            notifyChange()
+            return
+        }
+        if !conflictedSourceBlockIDs.isEmpty {
+            invalidateTranslation(clearOutput: true,
+                                  phase: .failed("发送时原文发生变化；请删除或重新粘贴受影响原文"))
             notifyChange()
             return
         }
         guard isActive else {
-            // Preserve a completed in-memory result across ordinary close /
-            // pause only while its source is still byte-for-byte current.
-            if capturedSourceText != text || phase != .ready {
-                invalidateTranslation(clearOutput: true, phase: .idle)
-            }
+            // Pending immutable translations survive ordinary pause/owner
+            // changes. Their already-retired source must never be translated
+            // again. Presentation and actual delivery remain protection-gated.
+            invalidateTranslation(clearOutput: false,
+                                  phase: units.allSatisfy { !$0.output.isEmpty }
+                                    ? .ready : .idle)
             notifyChange()
             return
         }
@@ -636,24 +693,20 @@ final class AppleTranslationWorkspace {
             return
         }
 
-        pendingSourceText = text
-        if let activeJob {
-            if !TranslationResultGate.isCurrent(
-                job: activeJob,
-                sourceText: text,
-                sourceLanguageID: sourceLanguageID,
-                targetLanguageID: targetLanguageID
-            ) {
-                // One TranslationSession stays in flight. Keep its result as
-                // a non-deliverable stale preview, then immediately translate
-                // the newest queued snapshot when that session finishes.
-                generation &+= 1
-                debounceTimer?.invalidate()
-                debounceTimer = nil
-                maxWaitTimer?.invalidate()
-                maxWaitTimer = nil
-                phase = .translating
-            }
+        guard units.contains(where: { !$0.sourceRetired && $0.output.isEmpty }) else {
+            phase = .ready
+            notifyChange()
+            return
+        }
+
+        if activeJob != nil {
+            // Apple sessions remain single-flight. A changed tail can retire
+            // that unit, but cannot invalidate an unchanged earlier sentence.
+            phase = .translating
+            notifyChange()
+            return
+        }
+        if !changed, phase == .waiting || isFailurePhase {
             notifyChange()
             return
         }
@@ -684,22 +737,24 @@ final class AppleTranslationWorkspace {
 
     private func beginTranslation() {
         dispatchPrecondition(condition: .onQueue(.main))
+        synchronizeSourceUnitsIfNeeded()
         debounceTimer?.invalidate()
         debounceTimer = nil
         maxWaitTimer?.invalidate()
         maxWaitTimer = nil
         guard isActive,
+              conflictedSourceBlockIDs.isEmpty,
               activeJob == nil,
-              !pendingSourceText.isEmpty,
-              pendingSourceText == sourceModel.stagedText else {
-            sourceOrLanguageDidChange()
+              let unit = units.first(where: { !$0.sourceRetired && $0.output.isEmpty }),
+              BufferSourceSlice.matches(unit.slices, in: sourceModel.blocks) else {
             return
         }
         generation &+= 1
         let job = Job(generation: generation,
-                      sourceText: pendingSourceText,
+                      sourceText: unit.sourceText,
                       sourceLanguageID: sourceLanguageID,
-                      targetLanguageID: targetLanguageID)
+                      targetLanguageID: targetLanguageID,
+                      unitID: unit.id)
         activeJob = job
         phase = .translating
         notifyChange()
@@ -715,6 +770,74 @@ final class AppleTranslationWorkspace {
             }
         case .aiConnector:
             beginAITranslation(job)
+        }
+    }
+
+    /// Deterministic scheduling seam: smoke tests inject a fake provider and
+    /// drive the same job/completion path without invoking Apple or a network.
+    func translatePendingNowForSmoke() { beginTranslation() }
+
+    private var isFailurePhase: Bool {
+        switch phase {
+        case .failed, .unavailable: return true
+        default: return false
+        }
+    }
+
+    @discardableResult
+    private func reconcileSourceUnits() -> Bool {
+        let previous = units
+        let retained = previous.filter(\.sourceRetired)
+        let pending = TranslationSourceUnitBuilder.build(from: sourceModel.blocks).map { next in
+            previous.first(where: {
+                !$0.sourceRetired && $0.slices == next.slices
+                    && $0.sourceText == next.sourceText
+                    && $0.allowsRemoteMirror == next.allowsRemoteMirror
+            }) ?? next
+        }
+        units = retained + pending
+        let changed = previous.map(\.id) != units.map(\.id)
+        if changed { generation &+= 1 }
+        return changed
+    }
+
+    private func observePrivacyDiscardIfNeeded() {
+        guard sourceModel.lastMutationReason == .privacyDiscard,
+              lastPrivacyDiscardChangeCount != sourceModel.changeCount else { return }
+        lastPrivacyDiscardChangeCount = sourceModel.changeCount
+        contentRevocationEpoch &+= 1
+        units.removeAll()
+        preparedDelivery = nil
+        conflictedSourceBlockIDs.removeAll()
+    }
+
+    /// BufferModel invokes its UI callback before its change notification.
+    /// Reconcile identities synchronously in read-side gates, without starting
+    /// provider work, so an edited tail cannot borrow old delivery authority.
+    /// Latch changes for the later scheduling observer instead of losing them.
+    private func synchronizeSourceUnitsIfNeeded() {
+        observePrivacyDiscardIfNeeded()
+        guard !consumingSource,
+              lastReconciledSourceChangeCount != sourceModel.changeCount else { return }
+        conflictedSourceBlockIDs.formIntersection(Set(sourceModel.blocks.map(\.id)))
+        sourceChangesNeedScheduling = reconcileSourceUnits() || sourceChangesNeedScheduling
+        lastReconciledSourceChangeCount = sourceModel.changeCount
+    }
+
+    func workbenchWillPause() {
+        invalidateTranslation(clearOutput: false, phase: .idle)
+    }
+
+    private func unitIndex(for job: Job) -> Int? {
+        synchronizeSourceUnitsIfNeeded()
+        return units.firstIndex {
+            !$0.sourceRetired && $0.id == job.unitID
+                && TranslationResultGate.isCurrent(
+                    job: job, sourceText: $0.sourceText,
+                    sourceLanguageID: sourceLanguageID,
+                    targetLanguageID: targetLanguageID
+                )
+                && BufferSourceSlice.matches($0.slices, in: sourceModel.blocks)
         }
     }
 
@@ -798,14 +921,21 @@ final class AppleTranslationWorkspace {
             translationFailed("翻译返回的语言与请求不一致", job: job)
             return
         }
-        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let index = unitIndex(for: job) else {
+            activeJob = nil
+            continueWithLatestSourceAfterCompletion()
+            return
+        }
+        let normalized = TranslationSourceUnitBuilder.translatedText(
+            text, for: units[index], targetLanguageID: job.targetLanguageID
+        )
         guard !normalized.isEmpty else {
             translationFailed("未产生可用译文", job: job)
             return
         }
         activeJob = nil
         detectedSourceLanguageID = sourceLanguageID
-        outputBlocks = SemanticBlockSegmenter.refine(
+        units[index].output = SemanticBlockSegmenter.refine(
             [SemanticLogicalBlock(sourceIndex: 0,
                                   text: normalized,
                                   title: nil)],
@@ -814,26 +944,10 @@ final class AppleTranslationWorkspace {
             TranslationOutputBlock(id: UUID(), text: fragment.text)
         }
 
-        if TranslationResultGate.isCurrent(
-            job: job,
-            sourceText: sourceModel.stagedText,
-            sourceLanguageID: self.sourceLanguageID,
-            targetLanguageID: targetLanguageID
-        ) {
-            generation &+= 1
-            capturedSourceText = job.sourceText
-            capturedSourceBlockIDs = sourceModel.blocks.map(\.id)
-            outputAllowsRemoteMirror = sourceModel.blocks.allSatisfy {
-                $0.origin.allowsRemoteMirror
-            }
-            phase = .ready
-            notifyChange()
-        } else {
-            // The completed snapshot is useful visual feedback during
-            // uninterrupted typing, but phase remains non-ready so it can
-            // never be delivered. Start the newest queued snapshot now.
-            continueWithLatestSourceAfterCompletion()
-        }
+        generation &+= 1
+        phase = .idle
+        IMELog.write("translation segment ready blocks=\(units[index].output.count)")
+        continueWithLatestSourceAfterCompletion()
     }
 
     fileprivate func translationFailed(_ message: String, job: Job) {
@@ -846,15 +960,10 @@ final class AppleTranslationWorkspace {
             return
         }
         activeJob = nil
-        if !TranslationResultGate.isCurrent(
-                job: job,
-                sourceText: sourceModel.stagedText,
-                sourceLanguageID: sourceLanguageID,
-                targetLanguageID: targetLanguageID
-           ) {
+        if unitIndex(for: job) == nil {
+            phase = .idle
             continueWithLatestSourceAfterCompletion()
         } else {
-            outputBlocks.removeAll()
             phase = .failed(Self.userFacingFailure(message))
             notifyChange()
         }
@@ -893,9 +1002,9 @@ final class AppleTranslationWorkspace {
             bridge.cancel()
         }
         if clearOutput {
-            outputBlocks.removeAll()
-            capturedSourceText = ""
-            capturedSourceBlockIDs.removeAll()
+            for index in units.indices where !units[index].sourceRetired {
+                units[index].output.removeAll()
+            }
             detectedSourceLanguageID = nil
         }
         self.phase = phase
@@ -1080,36 +1189,62 @@ final class AppleTranslationWorkspace {
 
 extension AppleTranslationWorkspace: BufferDeliveryContentSource {
     var deliveryWorkspaceID: String { "translation-target" }
-    var deliveryGeneration: UInt64 { generation }
+    var deliveryGeneration: UInt64 {
+        synchronizeSourceUnitsIfNeeded()
+        return generation
+    }
+    var supportsIncrementalDelivery: Bool { true }
     var hasIncompleteDeliveryBlocks: Bool {
-        guard isSelected, !sourceText.isEmpty else { return false }
-        return phase != .ready
+        guard isSelected else { return false }
+        synchronizeSourceUnitsIfNeeded()
+        return !conflictedSourceBlockIDs.isEmpty
+            || (!sourceText.isEmpty && units.isEmpty)
+            || units.contains {
+                !$0.sourceRetired && ($0.output.isEmpty
+                    || !BufferSourceSlice.matches($0.slices, in: sourceModel.blocks))
+            }
     }
 
     var deliveryPendingBlocks: [BufferModel.Block] {
-        guard phase == .ready,
-              capturedSourceText == sourceModel.stagedText else { return [] }
-        return outputBlocks.map {
-            BufferModel.Block(
-                id: $0.id,
-                text: $0.text,
-                origin: .processor(id: Self.processorID,
-                                   allowsRemoteMirror: outputAllowsRemoteMirror)
-            )
+        guard isSelected, !protectedSession else { return [] }
+        synchronizeSourceUnitsIfNeeded()
+        var result: [BufferModel.Block] = []
+        for unit in units {
+            guard !unit.output.isEmpty,
+                  unit.sourceRetired || unit.slices.allSatisfy({
+                    !conflictedSourceBlockIDs.contains($0.blockID)
+                  }),
+                  unit.sourceRetired || BufferSourceSlice.matches(
+                    unit.slices, in: sourceModel.blocks
+                  ) else { break }
+            result += unit.output.map {
+                BufferModel.Block(
+                    id: $0.id, text: $0.text,
+                    origin: .processor(id: Self.processorID,
+                                       allowsRemoteMirror: unit.allowsRemoteMirror)
+                )
+            }
         }
+        return result
     }
 
     func deliveryBlock(id: UUID, generation: UInt64) -> BufferModel.Block? {
-        guard self.generation == generation,
-              phase == .ready,
-              capturedSourceText == sourceModel.stagedText,
-              let block = outputBlocks.first(where: { $0.id == id }) else { return nil }
-        return BufferModel.Block(
-            id: block.id,
-            text: block.text,
-            origin: .processor(id: Self.processorID,
-                               allowsRemoteMirror: outputAllowsRemoteMirror)
+        synchronizeSourceUnitsIfNeeded()
+        guard self.generation == generation else { return nil }
+        return deliveryPendingBlocks.first { $0.id == id }
+    }
+
+    @discardableResult
+    func prepareForDelivery() -> Bool {
+        let pending = deliveryPendingBlocks
+        guard !pending.isEmpty else { preparedDelivery = nil; return false }
+        let ids = Set(pending.map(\.id))
+        preparedDelivery = PreparedDelivery(
+            generation: generation, revocationEpoch: contentRevocationEpoch,
+            blockIDs: pending.map(\.id),
+            units: units.filter { $0.output.contains { ids.contains($0.id) } }
         )
+        return true
     }
 
     func consumeDelivered(blockIDs: [UUID], generation: UInt64) {
@@ -1123,30 +1258,104 @@ extension AppleTranslationWorkspace: BufferDeliveryContentSource {
         blockIDs: [UUID],
         generation: UInt64
     ) -> BufferDeliveryTerminalSourceReceipt? {
-        guard self.generation == generation,
-              !blockIDs.isEmpty else { return nil }
-        let ids = Set(blockIDs)
-        let consumedIDs = Set(outputBlocks.lazy.filter {
-            ids.contains($0.id)
-        }.map(\.id))
-        guard !consumedIDs.isEmpty else { return nil }
-        outputBlocks.removeAll { ids.contains($0.id) }
-        let terminal = outputBlocks.isEmpty
-        if terminal {
-            let sourceIDs = capturedSourceBlockIDs
-            self.generation &+= 1
-            capturedSourceText = ""
-            capturedSourceBlockIDs.removeAll()
-            phase = .idle
-            sourceModel.consumeDelivered(blockIDs: sourceIDs)
+        guard !blockIDs.isEmpty else { return nil }
+        synchronizeSourceUnitsIfNeeded()
+        let ownership: [TranslationSourceUnit]
+        if let prepared = preparedDelivery,
+           prepared.generation == generation,
+           prepared.revocationEpoch == contentRevocationEpoch,
+           Array(prepared.blockIDs.prefix(blockIDs.count)) == blockIDs {
+            // insertText can reenter source/owner callbacks before returning
+            // success. Accepted IDs still belong to this frozen preflight,
+            // even when a later tail or owner has changed the global generation.
+            ownership = prepared.units
+        } else {
+            guard self.generation == generation,
+                  Array(deliveryPendingBlocks.prefix(blockIDs.count).map(\.id)) == blockIDs
+            else { return nil }
+            ownership = units
         }
+        preparedDelivery = nil
+        let revocationEpoch = contentRevocationEpoch
+        let ids = Set(blockIDs)
+        let acceptedUnits = ownership.filter { $0.output.contains { ids.contains($0.id) } }
+        let acceptedUnitIDs = Set(acceptedUnits.map(\.id))
+        let liveIDs = Set(sourceModel.blocks.map(\.id))
+        var slices: [BufferSourceSlice] = []
+        for unit in acceptedUnits where !unit.sourceRetired {
+            if BufferSourceSlice.matches(unit.slices, in: sourceModel.blocks) {
+                slices += unit.slices
+            } else {
+                // A source overwrite is not a license to guess which equal
+                // substring was sent. Block only surviving ambiguous IDs;
+                // explicitly replaced new UUIDs remain genuinely new source.
+                conflictedSourceBlockIDs.formUnion(
+                    Set(unit.slices.map(\.blockID)).intersection(liveIDs)
+                )
+            }
+        }
+        let positions = Dictionary(uniqueKeysWithValues:
+            sourceModel.blocks.enumerated().map { ($0.element.id, $0.offset) })
+        slices.sort {
+            let left = positions[$0.blockID] ?? Int.max
+            let right = positions[$1.blockID] ?? Int.max
+            return left == right ? $0.range.location < $1.range.location : left < right
+        }
+        var frozenRemainder = acceptedUnits.map { original -> TranslationSourceUnit in
+            var unit = original
+            unit.sourceRetired = true
+            unit.slices = []
+            unit.sourceText = ""
+            unit.output.removeAll { ids.contains($0.id) }
+            return unit
+        }.filter { !$0.output.isEmpty }
+        frozenRemainder += units.filter { $0.sourceRetired && !acceptedUnitIDs.contains($0.id) }
+        let previousPending = units.filter { !$0.sourceRetired && !acceptedUnitIDs.contains($0.id) }
+        let rebasedPending = previousPending.compactMap { original -> TranslationSourceUnit? in
+            guard let rebased = BufferSourceSlice.rebasing(original.slices, afterConsuming: slices)
+            else { return nil } // A grown old tail is rebuilt after exact prefix retirement.
+            var unit = original
+            unit.slices = rebased
+            return unit
+        }
+        // Publish ownership and positional rebasing before BufferModel's
+        // synchronous notifications. An unsent tail in the SAME UUID remains
+        // editable and belongs only to its own following translation unit.
+        units = frozenRemainder + rebasedPending
+        consumingSource = true
+        let retired = slices.isEmpty || sourceModel.consumeTranslatedSource(slices)
+        consumingSource = false
+        guard revocationEpoch == contentRevocationEpoch else { return nil }
+        if !retired {
+            // Do not restore an already accepted child on a failed source
+            // transaction. Preserve the remaining translation, quarantine the
+            // ambiguous source, and let explicit source replacement resolve it.
+            units = frozenRemainder + previousPending
+            conflictedSourceBlockIDs.formUnion(slices.map(\.blockID))
+        }
+        lastReconciledSourceChangeCount = -1
+        synchronizeSourceUnitsIfNeeded()
+        self.generation &+= 1
+        let terminal = units.isEmpty && sourceModel.blocks.isEmpty
+        if terminal { phase = .idle }
+        else if !conflictedSourceBlockIDs.isEmpty {
+            invalidateTranslation(clearOutput: true,
+                                  phase: .failed("发送时原文发生变化；请删除或重新粘贴受影响原文"))
+        }
+        else if activeJob == nil {
+            phase = units.allSatisfy { !$0.output.isEmpty } ? .ready : .idle
+        }
+        IMELog.write("translation delivery retired-source=\(!slices.isEmpty) remaining-blocks=\(outputBlocks.count)")
         notifyChange()
+        if !terminal, activeJob == nil, conflictedSourceBlockIDs.isEmpty {
+            sourceOrLanguageDidChange()
+        }
         guard terminal else { return nil }
         return BufferDeliveryTerminalSourceReceipt(
             workspaceID: deliveryWorkspaceID,
             generation: generation,
             generationAfterConsumption: self.generation,
-            consumedBlockIDs: consumedIDs
+            consumedBlockIDs: ids
         )
     }
 
@@ -1155,71 +1364,56 @@ extension AppleTranslationWorkspace: BufferDeliveryContentSource {
     }
 }
 
+/// Job semantics on top of the shared session bridge. What is workspace-
+/// specific stays here — generation identity, unit ownership, the phase and
+/// delivery callbacks — while session lifetime and the SwiftUI attachment
+/// requirement live in `AppleTranslationSessionBridge`, shared with every
+/// other caller that needs a translation.
 @available(macOS 15.0, *)
-private final class AppleTranslationBridgeModel: ObservableObject {
-    struct Request: Equatable, Identifiable {
-        let id: UInt64
-        let configuration: TranslationSession.Configuration
-        let job: AppleTranslationWorkspace.Job
-    }
-
-    @Published private(set) var request: Request?
+private final class AppleTranslationBridgeModel {
+    private let bridge = AppleTranslationSessionBridge()
     private weak var workspace: AppleTranslationWorkspace?
-    private var configuration: TranslationSession.Configuration?
-    private var pair: (String, String)?
+    private var activeJob: AppleTranslationWorkspace.Job?
 
     init(workspace: AppleTranslationWorkspace) {
         self.workspace = workspace
     }
 
+    func makeHostView() -> NSView { bridge.makeHostView() }
+
     func submit(_ job: AppleTranslationWorkspace.Job) {
         dispatchPrecondition(condition: .onQueue(.main))
-        let nextPair = (job.sourceLanguageID, job.targetLanguageID)
-        let nextConfiguration: TranslationSession.Configuration
-        if pair?.0 == nextPair.0, pair?.1 == nextPair.1,
-           var current = configuration {
-            current.invalidate()
-            nextConfiguration = current
-        } else {
-            pair = nextPair
-            nextConfiguration = TranslationSession.Configuration(
-                source: Locale.Language(identifier: job.sourceLanguageID),
-                target: Locale.Language(identifier: job.targetLanguageID)
-            )
+        activeJob = job
+        bridge.submit(sourceLanguageID: job.sourceLanguageID,
+                      targetLanguageID: job.targetLanguageID) { [weak self] session in
+            await self?.run(session: session, job: job)
         }
-        configuration = nextConfiguration
-        request = Request(id: job.generation,
-                          configuration: nextConfiguration,
-                          job: job)
     }
 
     func cancel() {
         dispatchPrecondition(condition: .onQueue(.main))
-        request = nil
-        pair = nil
-        configuration = nil
+        activeJob = nil
+        bridge.cancel()
     }
 
-    func run(session: TranslationSession, request: Request) async {
-        guard await isCurrent(request.id) else { return }
-        guard Self.session(session, matches: request.job) else {
-            await abortCurrent(request,
-                               message: "本地翻译会话的语言与请求不一致")
+    private func run(session: TranslationSession,
+                     job: AppleTranslationWorkspace.Job) async {
+        guard await isCurrent(job) else { return }
+        guard await sessionMatches(session) else {
+            await abort(job, message: "本地翻译会话的语言与请求不一致")
             return
         }
-        let job = request.job
         do {
             try await session.prepareTranslation()
             try Task.checkCancellation()
-            guard await isCurrent(request.id) else { return }
-            guard Self.session(session, matches: job) else {
-                await abortCurrent(request,
-                                   message: "本地翻译会话的语言已变化")
+            guard await isCurrent(job) else { return }
+            guard await sessionMatches(session) else {
+                await abort(job, message: "本地翻译会话的语言已变化")
                 return
             }
             let response = try await session.translate(job.sourceText)
             try Task.checkCancellation()
-            guard await isCurrent(request.id) else { return }
+            guard await isCurrent(job) else { return }
             await MainActor.run { [weak workspace] in
                 workspace?.translationCompleted(
                     response.targetText,
@@ -1230,8 +1424,8 @@ private final class AppleTranslationBridgeModel: ObservableObject {
                 )
             }
         } catch is CancellationError {
-            guard await isCurrent(request.id) else { return }
-            await abortCurrent(request, message: "本地翻译会话被系统取消")
+            guard await isCurrent(job) else { return }
+            await abort(job, message: "本地翻译会话被系统取消")
         } catch {
             await MainActor.run { [weak workspace] in
                 workspace?.translationFailed(error.localizedDescription, job: job)
@@ -1239,63 +1433,23 @@ private final class AppleTranslationBridgeModel: ObservableObject {
         }
     }
 
-    private func abortCurrent(_ request: Request, message: String) async {
-        guard await isCurrent(request.id) else { return }
+    private func abort(_ job: AppleTranslationWorkspace.Job,
+                       message: String) async {
+        guard await isCurrent(job) else { return }
         await MainActor.run { [weak workspace] in
-            workspace?.translationBridgeAborted(message, job: request.job)
+            workspace?.translationBridgeAborted(message, job: job)
         }
     }
 
-    private func isCurrent(_ requestID: UInt64) async -> Bool {
+    private func isCurrent(_ job: AppleTranslationWorkspace.Job) async -> Bool {
+        await MainActor.run { [weak self] in self?.activeJob == job }
+    }
+
+    private func sessionMatches(_ session: TranslationSession) async -> Bool {
         await MainActor.run { [weak self] in
-            self?.request?.id == requestID
+            guard let self, let work = self.bridge.work else { return false }
+            return self.bridge.session(session, matches: work)
         }
-    }
-
-    private static func session(_ session: TranslationSession,
-                                matches job: AppleTranslationWorkspace.Job) -> Bool {
-        guard let actualTarget = session.targetLanguage?.minimalIdentifier,
-              TranslationLanguageIdentity.matches(actualTarget,
-                                                  expected: job.targetLanguageID) else {
-            return false
-        }
-        guard let actualSource = session.sourceLanguage?.minimalIdentifier else {
-            return false
-        }
-        return TranslationLanguageIdentity.matches(actualSource,
-                                                   expected: job.sourceLanguageID)
-    }
-}
-
-@available(macOS 15.0, *)
-private struct AppleTranslationBridgeView: View {
-    @ObservedObject var model: AppleTranslationBridgeModel
-
-    var body: some View {
-        Group {
-            if let request = model.request {
-                AppleTranslationTaskView(model: model, request: request)
-                    .id(request.id)
-            } else {
-                Color.clear
-            }
-        }
-        .frame(width: 1, height: 1)
-        .opacity(0.001)
-        .allowsHitTesting(false)
-    }
-}
-
-@available(macOS 15.0, *)
-private struct AppleTranslationTaskView: View {
-    @ObservedObject var model: AppleTranslationBridgeModel
-    let request: AppleTranslationBridgeModel.Request
-
-    var body: some View {
-        Color.clear
-            .translationTask(request.configuration) { session in
-                await model.run(session: session, request: request)
-            }
     }
 }
 

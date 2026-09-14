@@ -132,7 +132,7 @@ final class UserLexiconService {
         let userDirectory = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DIR"].map {
             URL(fileURLWithPath: $0, isDirectory: true)
         } ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+            .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
         self.temporaryDirectory = temporaryDirectory
             ?? userDirectory.appendingPathComponent("tmp/lexicon", isDirectory: true)
     }

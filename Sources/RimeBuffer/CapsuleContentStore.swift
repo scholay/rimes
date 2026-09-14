@@ -3,23 +3,21 @@ import CryptoKit
 import Foundation
 
 enum CapsuleEntryKind: String, Codable, CaseIterable, Hashable {
-    case prompt
-    case memory
     case password
     case skill
     case note
-    case url
     case image
     case pdf
 
+    /// Kinds this build no longer offers. Their files stay on disk untouched;
+    /// listing skips them so one retired record cannot hide every current one.
+    static let retiredRawValues: Set<String> = ["prompt", "memory", "url"]
+
     var displayName: String {
         switch self {
-        case .prompt: return "Prompt"
-        case .memory: return "Memory"
         case .password: return "Password"
         case .skill: return "Skill"
         case .note: return "Note"
-        case .url: return "URL"
         case .image: return "Image"
         case .pdf: return "PDF"
         }
@@ -29,12 +27,9 @@ enum CapsuleEntryKind: String, Codable, CaseIterable, Hashable {
     /// readable as the local library grows beyond the original four kinds.
     var tabLabel: String {
         switch self {
-        case .prompt: return "提示"
-        case .memory: return "记忆"
         case .password: return "密码"
         case .skill: return "技能"
         case .note: return "笔记"
-        case .url: return "网址"
         case .image: return "图片"
         case .pdf: return "PDF"
         }
@@ -42,9 +37,9 @@ enum CapsuleEntryKind: String, Codable, CaseIterable, Hashable {
 
     var storesMarkdownText: Bool {
         switch self {
-        case .prompt, .memory, .note:
+        case .note:
             return true
-        case .password, .skill, .url, .image, .pdf:
+        case .password, .skill, .image, .pdf:
             return false
         }
     }
@@ -53,7 +48,7 @@ enum CapsuleEntryKind: String, Codable, CaseIterable, Hashable {
         switch self {
         case .skill, .image, .pdf:
             return true
-        case .prompt, .memory, .password, .note, .url:
+        case .password, .note:
             return false
         }
     }
@@ -94,16 +89,7 @@ struct CapsuleContentRecord: Equatable {
             return "Image · " + URL(fileURLWithPath: content).lastPathComponent
         case .pdf:
             return "PDF · " + URL(fileURLWithPath: content).lastPathComponent
-        case .url:
-            guard let components = URLComponents(string: content),
-                  let host = components.host else {
-                return "Web link"
-            }
-            let path = components.path == "/" ? "" : components.path
-            let value = host + path
-            guard value.count > 72 else { return value }
-            return String(value.prefix(72)) + "…"
-        case .prompt, .memory, .password, .skill, .note:
+        case .password, .skill, .note:
             break
         }
         let flattened = content
@@ -154,6 +140,9 @@ enum CapsuleContentStoreError: LocalizedError, Equatable {
     case invalidRequest(String)
     case malformedDocument(String)
     case recordNotFound
+    /// A file written by a build that still offered this kind. Not corruption,
+    /// so listing skips it rather than failing.
+    case retiredRecord
     case revisionConflict
     case fileOperation(String)
 
@@ -167,6 +156,8 @@ enum CapsuleContentStoreError: LocalizedError, Equatable {
             return "Capsule Markdown 格式无效：\(path)"
         case .recordNotFound:
             return "未找到 Capsule 条目"
+        case .retiredRecord:
+            return "该 Capsule 条目属于已下架的类型"
         case .revisionConflict:
             return "Capsule 条目已被其他窗口更新"
         case let .fileOperation(message):
@@ -238,7 +229,7 @@ final class CapsuleContentStore {
                 _ = try writeRecordWithoutLock(
                     CapsuleContentWriteRequest(
                         id: Self.defaultEntryID,
-                        type: .memory,
+                        type: .note,
                         title: Self.defaultEntryTitle,
                         content: Self.defaultEntryContent
                     ),
@@ -616,7 +607,7 @@ final class CapsuleContentStore {
             _ = try writeRecordWithoutLock(
                 CapsuleContentWriteRequest(
                     id: Self.defaultEntryID,
-                    type: .memory,
+                    type: .note,
                     title: Self.defaultEntryTitle,
                     content: Self.defaultEntryContent
                 ),
@@ -702,9 +693,14 @@ final class CapsuleContentStore {
         guard urls.count <= Self.maximumRecordCount else {
             throw CapsuleContentStoreError.unsafeStorage(entryDirectoryURL.path)
         }
-        return try urls.compactMap { url in
+        return try urls.compactMap { url -> CapsuleContentRecord? in
             guard url.pathExtension.lowercased() == "md" else { return nil }
-            let record = try parseDocumentWithoutLock(url)
+            let record: CapsuleContentRecord
+            do {
+                record = try parseDocumentWithoutLock(url)
+            } catch CapsuleContentStoreError.retiredRecord {
+                return nil
+            }
             guard url.deletingPathExtension().lastPathComponent
                     == record.summary.id.uuidString.lowercased() else {
                 throw CapsuleContentStoreError.malformedDocument(url.path)
@@ -774,6 +770,10 @@ final class CapsuleContentStore {
                 throw CapsuleContentStoreError.malformedDocument(url.path)
             }
             fields[key] = value
+        }
+        if let kindRaw = fields["capsule"],
+           CapsuleEntryKind.retiredRawValues.contains(kindRaw) {
+            throw CapsuleContentStoreError.retiredRecord
         }
         guard fields["version"] == "1",
               let kindRaw = fields["capsule"],
@@ -1027,22 +1027,6 @@ final class CapsuleContentStore {
            URL(fileURLWithPath: request.content).pathExtension.lowercased()
                 != "pdf" {
             throw CapsuleContentStoreError.invalidRequest("PDF 条目必须指向 .pdf 文件")
-        }
-        if request.type == .url {
-            let value = request.content.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            )
-            guard value == request.content,
-                  !value.contains("\n"),
-                  !value.contains("\r"),
-                  let components = URLComponents(string: value),
-                  let scheme = components.scheme,
-                  ["http", "https"].contains(scheme.lowercased()),
-                  components.host?.isEmpty == false else {
-                throw CapsuleContentStoreError.invalidRequest(
-                    "URL 必须是完整的 HTTP 或 HTTPS 网址"
-                )
-            }
         }
         return CapsuleContentWriteRequest(
             id: request.id,

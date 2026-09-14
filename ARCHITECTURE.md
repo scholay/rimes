@@ -1,8 +1,29 @@
 # RimeBuffer P1/P2 历史架构（交接版 v2）
 
-> **2026-08-31 Buffer UI、结果复制与主题最新覆盖（优先于本文全部旧 UI 描述）**：Buffer 始终显示 33pt 顶部工具栏及 1pt 分隔线，不可折叠、不可由前置图标关闭。普通/source-only/target-only 为 78pt，live source+target 为 112pt。前置输入/插件图标只标识当前插件，不再切换工具栏。工具栏承载插件选择、当前插件配置、按状态出现的返回编辑、状态与关闭；空白 chrome、状态、间距和弹性留白是拖窗区，控件保持首击交互。右侧专用 24pt 拖拽条已删除。工具栏常显不写偏好，隐藏或 secure/session protection 也不收起工具栏。alternative 数量与独立候选浮窗均不增高；target rail 不显示角色图标。完整且新鲜的非 `BufferModel` 生成结果在回传框左侧、结果文字之前显示复制按钮，纯 `Command+C` 与点击按钮等价：冻结并重新验证同一 source/workspace/generation/有序 block IDs 与文本，按 block 顺序无分隔拼接后写入系统剪贴板，再走安全关闭/暂停生命周期。复制不是上屏，不调用 `prepare`、`consume`、`BufferDeliveryCoordinator` 或 `Delivery.insert`，也不提交、修改或消费 source；普通 Buffer 原文、空/未完成、protected 或 stale/drifted 结果 fail closed/按既有规则透传。墨竹、翡翠、静谧是 **Classic** 主题家族的三种配色；**Rasta** 是独立、完整的红黄绿语义主题。本文后续可折叠工具栏、前置图标切换、44/78 折叠高度、回传框右侧复制、toolbarless、专用右侧拖动区、target 角色图标、旧主题分类及通过 Delivery 复制等冲突表述均为历史记录，由本条覆盖。
+> **2026-09-09 Buffer 电音演奏覆盖（当前）**：内置 `builtin.music` 0.2.3（AudioKit 5.7.2），按需挂载四排各十键的 E1–A1–D2–G2 贝斯指板、和声信息、鼓组控制与最多两条 Loop 轨道。面板高度随 0/1/2 轨为 159/193/227pt；工具栏显示录制、停止、移调/八度步进器和状态。使用随包提供的 AVL Black Pearl 五层力度真实架子鼓采样，电音主奏仍由本地原创音色生成，无模型或联网下载。音乐模式保持 nonactivating、不成为主窗口，只在演奏期间允许成为 key panel；原始 keyDown/keyUp 不经 IMK/并击结算，不注册全局演奏热键，不切换输入源。进入前按原精确租约收束组字并暂停文字捕获；失焦/关闭/保护态停止发声并清空临时 Loop，退出音乐恢复被动 Buffer。只有面板获焦时消费演奏键；移调与八度暂不分配快捷键，Cmd+Shift+上下恢复切换 Buffer 插件并沿用现有快捷键配置；BPM 文本编辑与其他系统快捷键保留；音乐禁止自动发送保留文字。音频准备与节拍排程在独立串行队列。现行预置目录为 AI 生成、实时翻译、意识流输入、电音演奏四项，覆盖下文旧三项说明。操作、采样来源和验证见 [BUFFER-MUSIC.md](BUFFER-MUSIC.md)。
 
-> **2026-08-31 Buffer 点击、指针与拖动补充**：前置输入/插件图标在祖先 rail 手势识别前被排除，点击不再切换工具栏，也不同时触发正文捕获；所有可交互按钮、弹出控件和可选 chip 在 nonactivating panel 内主动设置 pointing-hand，禁用或离开时恢复 arrow。只有常显工具栏的空白 chrome、状态、间距和弹性留白使用 open/closed-hand 并可拖窗；正文轨、窗口背景、插件/配置控件、复制、发送与关闭命中区都不参与拖动，不保留右侧 24pt 专用拖动区。
+> **2026-09-08 实时翻译与自动发送生命周期覆盖（当前）**：实时翻译先按本机句子边界建立原文单元，保留精确源 UUID、UTF-16 范围与正文；译后小块只负责展示和交付，不用于倒推源文。未发送单元只因自身源范围变化而重译，稳定前段不被编辑尾段整体作废。一个单元的首个译文子块成功上屏后，原文范围原子退休，尚未发送的译文转为独立不可变待交付内容；后续请求绝不再包含该源范围。普通暂停、插件/语言切换保留这些未发译文，保护态隐藏且禁投递，隐私丢弃与进程退出不保留明文历史。可选自动发送沿用用户开关，以实际路由后目标块的身份和正文使用单调时钟计龄；新块从零开始，空缓冲、隐藏、暂停和安全状态不补算时间。稳定译文可在尾段编辑/组字时继续计龄，但自动插入绝不收束组字，仍经精确焦点与 secure-input 验证的唯一 Delivery 路径。有序 ready 前缀可先发送，复制完整结果及最后一块关闭仍要求整个工作区完成。下文整段源文重译、目标全部发完才消费全部源文和禁止可选自动发送的旧说明由本条覆盖。
+
+> **2026-09-07 统计与文章测速覆盖（当前）**：旧被动测速并入「统计」，沿用既有键频与 `stats/typing_speed.json` 历史及活跃时间口径，以指标卡、速度/字数趋势、活动日历与键盘热力图呈现。两项旧采集偏好分别保留，不因合并开启此前关闭的记录。「打字测速」改为内置多篇中英文文章的原生跟打页，按连续总时间、正确成文、过程字准、物理键、并击批次与两类回退独立计分，题文对齐仅处理本页已提交正文，marked text 不判错。测试输入与日常统计隔离，成绩只保存本机聚合及文章/输入配置身份；不得向后台遥测加入正文或借用外部 Buffer 焦点租约。详见 [测速口径](TYPING-METRICS.md)。
+
+> **2026-09-07 统一并击行为覆盖（当前）**：产品只提供「并击」一套行为，不再区分「并击／互击」或暴露仅同批模式。组键间隔划分物理批次；同批可直接映射，左区批次与紧接着的右区批次也可在至少一批为多键时重组，优先使用合并键集合的整组映射而非拼接片段。跨批要求输入、光标／选择、焦点及配置快照仍一致；「按映射类型」方案还要求合并项显式为完整音节。分隔符、编辑、焦点或方案变化会结束配对，单纯停顿不会。旧严格同批偏好自动迁移为统一行为，启用状态、当前方案、键位、间隔及进度保留；音节边界策略只决定分隔语义，不是另一个模式。`ChordExtensionConfiguration` 与 store 的 `settlementPolicy` 固定为 `independentHalves`，无模式选择 API。下文涉及两种可选模式或按旧严格语义迁移的内容均属历史，由本条覆盖。
+
+> **2026-09-07 并击键位方案覆盖（当前）**：「并击」扩展提供通用键位配置能力，飞耀是内置只读模板（`builtin.flyyao` → `my_combo`）；用户可复制、新建、导入原生 JSON 方案，并可视化编辑键区、键集合与「完整音节／拼音片段」映射。草稿 `<UUID>.json` 与已应用 `active-profile.json` 分别保存在本机私有 `chord-keymaps/`，保存不会改变当前输入，重启也不能偷用未应用草稿。显式应用会冻结版本、退休旧会话、生成 schema、部署并逐条验证后再发布；失败恢复原文件与方案选择。普通输入已经使用并击时才跟随新方案；普通方案保持选择，另由「设为当前输入方案」显式切入。意识流使用同一已应用快照与映射类型；完整音节保留边界，片段不补边界，单键始终原字符。自定义并击以有效方案身份门控，不再仅用 `schemaID == my_combo` 识别；飞耀保留既有普通输入语义。自定义 schema 是可重建产物，安装重新播种保留原生目录及权限，并排除导入源同名目录。此前把扩展与飞耀等同、只存在一个并击 schema 的文字由本条覆盖；详见 [并击键位方案](CHORD-KEYMAPS.md)。
+
+> **2026-08-31 Buffer 常驻工具栏、结果复制与主题基线（布局由下方 2026-09-04 全宽主轨覆盖）**：Buffer 始终显示 33pt 顶部工具栏及 1pt 分隔线，不可折叠。普通/source-only/target-only 为 78pt，live source+target 为 112pt；alternative 数量与独立候选浮窗均不增高。完整且新鲜的非 `BufferModel` 生成结果允许“复制结果并关闭”，纯 `Command+C` 与点击按钮等价：冻结并重新验证同一 source/workspace/generation/有序 block IDs 与文本，按 block 顺序无分隔拼接后写入系统剪贴板，再走安全关闭/暂停生命周期。复制不是上屏，不调用 `prepare`、`consume`、`BufferDeliveryCoordinator` 或 `Delivery.insert`，也不提交、修改或消费 source；普通 Buffer 原文、空/未完成、protected 或 stale/drifted 结果 fail closed/按既有规则透传。墨竹、翡翠、静谧是 **Classic** 主题家族的三种配色；**Rasta** 是独立、完整的红黄绿语义主题。
+
+> **Buffer UI 契约优先级**：本文后续若仍出现可折叠工具栏、正文前置插件图标、44/78pt 折叠高度、操作按钮作为主 Stack 的 arranged sibling、返回轨前置复制、正文目标状态锚或双轨角色图标，均为历史记录；以页首 2026-09-04 三项当前覆盖和 §5.10 为准。
+
+> **2026-09-04 Buffer 点击、指针与拖动覆盖（当前）**：所有可点击按钮、弹出控件和可选 chip 在 nonactivating panel 内保持首击并使用 pointing-hand；功能入口、主轨动作和关闭等图标用持久底板/hairline 及 hover/pressed 状态表明可点击。被动状态图标无底板、无 action、使用 arrow，其命中区可归入工具栏拖窗。只有常显工具栏的空白 chrome、被动状态、间距和弹性留白可拖窗；正文轨、窗口背景、插件/配置控件和主轨 overlay 动作都不参与拖动，也不保留右侧 24pt 专用拖动区。
+
+> **2026-09-04 Buffer 目标关联提示覆盖（当前）**：只有 `BufferModel.captureFocusToken` 与实时 `InputFocusCoordinator.liveTarget` 精确一致时才把目标视为正在关联；目标变化、无目标、secure/session protection 与非 RIMES detached 模式不得用保存的 bundle 名、旧 App icon 或旧 caret 冒充关联。有效目标以对应运行中 App 的真实 icon 表示，固定放在顶部关闭按钮左侧；该 icon 只是无底板的被动状态，不接受点击、聚焦、切输入源或切输入路由。App 名只进入 tooltip/accessibility，焦点失效、隐藏、切输入法或保护态立即清除 icon 与名称。显式捕获成功后，在输入源、会话 epoch、route generation、同一 token、controller/client 与 caret 的前后两次复验之间，于宿主 caret 显示约 700ms 的双括号信标，同时在 Buffer 朝向该 caret 的最近边缘显示同色缺口。提示 panel 必须 borderless、nonactivating、click-through，并沿用宿主感知的候选窗口层级；Reduce Motion 下不缩放。焦点失效、出现 preedit、外部指针归还宿主、窗口移动/移屏/Space 或屏幕变化、隐藏、secure input、锁屏/睡眠/会话切出、输入源离开 RIMES 时同步清除；不得通过 Accessibility、CGEvent、轮询其他输入法或合成按键实现。
+
+> **2026-09-04 Buffer 全宽主轨覆盖（当前）**：每个可见 `BufferInlineView` rail 都占满所在正文 row 的可用宽度；普通与 single-exchange 状态只有一个 rail，live source+target 状态有上下两个独立全宽 rail。剪贴板导入、复制并关闭、发送/生成三个动作按固定顺序组成主轨右侧 overlay，作为普通 subview 悬浮在 rail 边界内，绝不作为主 `NSStackView` 的 arranged sibling，也不缩短 rail 外框。单轨时 overlay 与唯一 rail 垂直居中，live 双轨时对齐 target rail；横向 document 必须保留足够的 trailing clearance，使末块、状态、loading 和逻辑 caret 都能滚到 overlay 左侧。剪贴板导入从顶部工具栏移入该操作组，生成结果复制也从返回轨左侧移到发送旁边；detached 模式不得同时出现两个“复制并关闭”动作。顶部工具栏以功能网格按钮起首并打开既有 `Default + 已启用缓冲插件` 选择器，正文 rail 不再放前置插件图标；该入口复用唯一 owner 状态。
+
+>
+> **2026-09-04 周边功能跨输入法覆盖（当前）**：开发安装与发布包各自安装一个不带 `KeepAlive` 的 one-shot Aqua LaunchAgent，在冷登录时只执行一次后台 `open -g`，使同一个 RIMES 进程在当前输入源属于其他输入法时也能提供 Buffer、Clipboard History、Mailbox 与 Capsule 的四个全局快捷键。开发版任务以同目录临时文件校验后原子替换并打开用户 App；系统包在替换 payload 前审计所有本机普通账户，只允许当前 GUI 用户存在可安全退休的开发版，其他账户有同 ID dev App/任务或 home 无法安全核验就 fail-closed。postinstall 退休当前用户开发版并复核全机无冲突后，才以原始 agent 字节/缺席状态快照事务发布系统任务；系统登录 guard 对后来出现的开发版痕迹只作防御性短路。Mailbox 与 Capsule 是正常取得键盘焦点的管理窗口；Clipboard 在非 RIMES 输入源下激活任意条目时只恢复原始 pasteboard、提升到历史首位并静默关闭，由用户自行按 `Command+V`；Buffer 在非 RIMES 输入源下只允许显式剪贴板导入与结果复制，不取得 IMK 捕获或投递 authority。设置窗口仍只允许从 RIMES 输入源打开，其中 Mailbox/Capsule 路由只承载配置与状态，不嵌入实际操作 pane。所有周边路径都不得访问外部 IMK client、切换输入源、合成粘贴或其他按键、调用 Accessibility/Post Event，或读取、提交、取消其他输入法的组字。
+
+> **2026-09-04 Capsule 密码查看口令覆盖（当前）**：Password 的「查看明文」必须先验证顺序固定的四组原生物理字母键并击，界面用四个槽位显示进度；每组直接汇总 native `keyDown`/`keyUp` 的物理键码，全部松开才结算，不使用输入法产生的字符或组字。默认序列是 `RH / WO / CVN / QU`。设置新口令和恢复默认都必须先验证当前凭据；新口令需完整输入两次。自定义原始 chord 永不进入 UserDefaults、日志、pasteboard、Capsule Markdown 或 iCloud，只落一个包含版本、24-byte 随机盐与 SHA-256 摘要的本机凭据；损坏的自定义凭据 fail-closed，不能回退到公开默认值。验证成功仅打开最多 15 秒的只读明文期，窗口/应用失焦、保护态、切换条目及任何保存/删除/重载/关闭生命周期都会提前遮蔽。
 
 > 本文保留 P1/P2 的设计动因、marked-text 契约与踩坑记录。当前系统结构、缓冲工作台与里程碑
 > 以 `SYSTEM-ARCHITECTURE.md` 为准；本文与其冲突时以后者为准。
@@ -16,17 +37,17 @@
 >
 > **2026-08-21 工作台与插件覆盖（优先于下文刷新槽、轨道和插件清单）**：右上角用户可见的刷新按钮已经废弃；generation 作废、上下文重验、配置变化重启等内部生命周期刷新仍保留，但不再以常驻按钮暴露。派生插件在输入为空且没有真实结果/显式状态时只显示单轨；只有存在实际 source、result 或需要向用户说明的 status 时，才增加第二轨或把当前轨交换成结果轨。设置中的“最后一块上屏后关闭工作台”默认开启，适用于 `Default` 与所有 Buffer 插件：只有 `BufferDeliveryCoordinator` 成功投递精确的最后一个 block、对应 source 已原子消费、同一 generation/工作台会话仍有效且目标仍存活时，才关闭并暂停工作台。设置关闭、部分成功、失败、新内容到达、迟到 generation、目标丢失或 owner/会话已切换时都不得关闭。
 >
-> **2026-09-01 当前模块边界**：Buffer、Clipboard History、Mailbox 与 Capsule 是四个同级核心本机模块，各自拥有独立窗口、快捷键和生命周期；当前 Buffer 只维护并发布 **AI 生成 2.1、实时翻译 2.1、意识流输入 1.3** 三个插件。Capsule 在 `~/Library/RimeBuffer/capsule` 用 Obsidian 可读 Markdown/本机密文逐条管理 Prompt、Memory、Password、Skill、Note、URL、Image 与 PDF；Image/PDF 保存用户管理文件的本机路径并在选中时异步预览。用户可选择真实 iCloud Drive 文件夹，以独立镜像自动双向同步六类可迁移条目及内容寻址媒体；本机目录仍是 canonical，`content-library-v1.json` 标识本机库，`~/Library/RimeBuffer/capsule-sync/config-v1.json` 与 `state-<library-id>.json` 保存同步配置和逐库状态，Password、Skill 绝对路径与 `master-key` 保持本机。下载媒体 materialize 到 `capsule/assets/`；本机源媒体离线且需要上传时仅将该条标为 deferred。离线媒体败者在覆盖或删除前先完整归档到本机私有 `capsule/conflicts/`，云端只保留脱敏摘要；托管缓存丢失时可从云端自愈。删除 Image/PDF 条目只删除 entry 并写 tombstone，本轮不自动回收已上传 asset 或 materialized cache，以保留并发冲突恢复能力；不得手工删除仍被有效条目或冲突副本引用的 asset。Capsule 一次性预设 `RIMES 默认词条` Memory；它不进入 Buffer 插件目录、派生 workspace、Return 投递或按键并击路径。Mailbox 可独立收信、保存会话与继续 AI 对话；“发送到 Buffer”仅是显式可选桥接。Clipboard History 不属于 Buffer，也不会把历史加入 `BufferModel`。`Marine Chrome`、`My Prompt`、`Remarkable` 已从当前产品清单下架，不再下载、安装、启用或出现在运行时路由中；本文后续关于它们的实现、版本和测试说明仅保留为历史设计记录，不代表当前可用能力。
+> **2026-09-01 当前模块边界**：Buffer、Clipboard History、Mailbox 与 Capsule 是四个同级核心本机模块，各自拥有独立窗口、快捷键和生命周期；当前 Buffer 只维护并发布 **AI 生成 2.1、实时翻译 2.1、意识流输入 1.3** 三个插件。Capsule 在 `~/Library/RIMES/capsule` 用 Obsidian 可读 Markdown/本机密文逐条管理 Prompt、Memory、Password、Skill、Note、URL、Image 与 PDF；Image/PDF 保存用户管理文件的本机路径并在选中时异步预览。用户可选择真实 iCloud Drive 文件夹，以独立镜像自动双向同步六类可迁移条目及内容寻址媒体；本机目录仍是 canonical，`content-library-v1.json` 标识本机库，`~/Library/RIMES/capsule-sync/config-v1.json` 与 `state-<library-id>.json` 保存同步配置和逐库状态，Password、Skill 绝对路径与 `master-key` 保持本机。下载媒体 materialize 到 `capsule/assets/`；本机源媒体离线且需要上传时仅将该条标为 deferred。离线媒体败者在覆盖或删除前先完整归档到本机私有 `capsule/conflicts/`，云端只保留脱敏摘要；托管缓存丢失时可从云端自愈。删除 Image/PDF 条目只删除 entry 并写 tombstone，本轮不自动回收已上传 asset 或 materialized cache，以保留并发冲突恢复能力；不得手工删除仍被有效条目或冲突副本引用的 asset。Capsule 一次性预设 `RIMES 默认词条` Memory；它不进入 Buffer 插件目录、派生 workspace、Return 投递或按键并击路径。Mailbox 可独立收信、保存会话与继续 AI 对话；“发送到 Buffer”仅是显式可选桥接。Clipboard History 不属于 Buffer，也不会把历史加入 `BufferModel`。`Marine Chrome`、`My Prompt`、`Remarkable` 已从当前产品清单下架，不再下载、安装、启用或出现在运行时路由中；本文后续关于它们的实现、版本和测试说明仅保留为历史设计记录，不代表当前可用能力。
 >
 > **2026-08-20 React BufferSurface 原生移植覆盖（几何由页首 2026-08-30 契约修订）**：缓冲工作台默认采用 760pt React 母版宽度，继续是 nonactivating 原生 `NSPanel`，不改 `FocusToken`、secure/session protection、跨 Space 恢复或 `BufferDeliveryCoordinator -> Delivery.insert` 投递契约。当前普通/source-only/target-only 为 44pt 折叠、78pt 展开；live source+target 为 78pt 折叠、112pt 展开，最大方向预判按 112pt。派生 workspace 可呈现 1–5 个互斥 alternative，但 `BufferInlineView` 只维护一个稳定 target viewport，以 pager 切换活动项，不再堆叠 target row 或因候选数改变窗口高度。当前实时翻译与意识流采用 live-expand，AI 生成采用 single-exchange；该段原有 My Prompt、Marine Chrome、Remarkable 描述只属历史兼容。返回编辑是用户明确放弃当前结果；用户可见刷新按钮与固定刷新槽已经移除。33pt 工具栏由前置输入/插件图标切换，仅在正文未承载活动摘要时以状态区作为后备；返回编辑按状态出现。主操作恢复为 22×22 纯图标按钮（投递用纸飞机、生成用 sparkles、生成中用 spinner），可见文字由 tooltip 与无障碍标签承载。
 >
-> **2026-09-01 Clipboard History 持久化、选择与激活覆盖（替代早先的自动粘贴方案）**：`Command+Shift+P` 通过可配置的全局 Carbon hot key 只在当前输入源属于 RIMES 时打开屏幕底部的独立 nonactivating 窗口，不显示 Buffer 外壳、不启停 `BufferModel`，也不参与 Buffer 几何；切到其他输入法立即撤销该窗口权限。收录开关开启且 secure input、锁屏、睡眠、会话失活均不存在时，同一输入法进程在后台读取系统 pasteboard 并将文本、链接、图片、文件、颜色以及未知类型的原始 representation 持久写入 `~/Library/Application Support/RIMES/clipboard/clipboard.sqlite`；原始大负载只在用户激活时惰性读取，不写正文日志或仓库。带 confidential/transient 标记的内容和保护期间的内容仍拒绝收录，恢复时只建立新的 `changeCount` baseline，绝不补抓。界面借鉴 Paste 的横向卡片时间流：所有元数据和图片类别别名参与搜索、展示层最多实例化 200 张卡片；图片记录与可解码的图片文件异步请求有界缩略图，卡片同时显示真实来源 App 图标；Shift 加纵向滚轮按反向映射横向移动。单击只改变选择，双击、Return 或 `Command+1`–`Command+9` 才激活。文本/链接经 exact `FocusToken` 和 IMK `Delivery.insert` 上屏并提升到历史首位；图片、RTF、HTML、文件、颜色和未知类型只无损恢复原始 pasteboard、提升到首位并静默关闭，用户随后自行按 `Command+V`。Clipboard 不自动调用 Paste 或右键，不合成或投递 `Command+V`，也不请求 Accessibility/Post Event。`Command+C` 恢复所选原始表示并提升历史但保持窗口，Delete/清空同步更新持久库。Paste 导入使用来源标识幂等 upsert，保留每条原始压缩负载、时间、来源和类型，不修改 Paste 源数据。历史、原始负载与预览均只在本机，不进仓库、不加入 Buffer，也不做云端或跨设备同步。
+> **2026-09-04 Clipboard History 持久化、选择与激活覆盖（替代早先的输入源门禁与自动粘贴方案）**：`Command+Shift+P` 通过可配置的全局 Carbon hot key，在安装后的 Aqua 登录 bootstrap 已启动宿主进程时跨输入法打开屏幕底部的独立窗口；RIMES 模式保持 nonactivating 和 exact-target 路由，其他输入法模式则成为可取得 key input 的 AppKit 搜索窗口。它不显示 Buffer 外壳、不启停 `BufferModel`，也不参与 Buffer 几何。收录开关开启且 secure input、锁屏、睡眠、会话失活均不存在时，宿主进程在后台读取系统 pasteboard，并将文本、链接、图片、文件、颜色以及未知类型的原始 representation 持久写入 `~/Library/Application Support/RIMES/clipboard/clipboard.sqlite`；原始大负载只在用户激活时惰性读取，不写正文日志或仓库。带 confidential/transient 标记的内容和保护期间的内容仍拒绝收录，恢复时只建立新的 `changeCount` baseline，绝不补抓。界面借鉴 Paste 的横向卡片时间流：所有元数据和图片类别别名参与搜索、展示层最多实例化 200 张卡片；图片记录与可解码的图片文件异步请求有界缩略图，卡片同时显示真实来源 App 图标；Shift 加纵向滚轮按反向映射横向移动。单击只改变选择，双击、Return 或 `Command+1`–`Command+9` 才激活。当前输入源属于 RIMES 且 exact `FocusToken` 有效时，文本/链接可经 IMK `Delivery.insert` 上屏；当前输入源属于其他输入法时，所有类型都只无损恢复原始 pasteboard、提升到首位并静默关闭，由用户自行按 `Command+V`。图片、RTF、HTML、文件、颜色和未知类型在任一输入源下也只走 pasteboard。Clipboard 不自动调用 Paste 或右键，不合成或投递 `Command+V`，不请求 Accessibility/Post Event，也不切换输入源或触碰外部输入法组字。`Command+C` 恢复所选原始表示并提升历史但保持窗口，Delete/清空同步更新持久库。Paste 导入使用来源标识幂等 upsert，保留每条原始压缩负载、时间、来源和类型，不修改 Paste 源数据。历史、原始负载与预览均只在本机，不进仓库、不加入 Buffer，也不做云端或跨设备同步。
 >
 > **2026-08-30 Esc 与活动状态覆盖**：Buffer 与 Clipboard History 各自处理自己的 Escape 生命周期。Buffer 继续通过安全关闭流程收束自己拥有的组字；Clipboard 搜索非空时第一次 `Esc` 只清搜索，搜索为空时再次 `Esc` 关闭 Clipboard 窗口，始终不提交、取消或改写宿主 composition。AI/插件活动摘要只允许一个可见承载者：正文 target/status rail 已显示该信息时，工具栏状态列必须隐藏同一文案；正文不承担时才由工具栏作为后备显示，禁止重复。
 >
 > **2026-08-13 工作台跨屏恢复覆盖（覆盖下一条“只在显式 hidden→visible 定位”）**：缓冲捕获开启时，新建立或重新确认的可信外部文本焦点会检查工作台是否仍在当前 macOS Space、以及合法 caret 是否落在另一物理显示器。只有发生这两类可见性断裂时，才把 nonactivating 工作台一次性带到当前 Space/目标显示器；同屏字段切换、输入与流式刷新仍不追踪 caret。自动恢复继续以精确 `FocusToken`、前台身份、secure input 与会话保护作前后门控，真正置前前再次复验；无合法 caret 时只在当前 Space 重排并保留已有 frame，禁止借鼠标屏 fallback 猜测显示器。未固定窗口使用 `.moveToActiveSpace + .fullScreenAuxiliary`，固定窗口使用 `.canJoinAllSpaces + .fullScreenAuxiliary`。关闭工作台仍会暂停捕获，因此 `BufferModel.enabled` 是恢复可见性的权威意图；自动位置保持 transient，不覆盖用户保存的 origin。
 >
-> **2026-08-30 工作台焦点与候选承载覆盖**：用户显式从隐藏态唤出缓冲工作台时，先收束宿主直输组字，再把当前精确外部 `FocusToken` 的逻辑输入权交给 Buffer；宿主文本框只保留为后续投递锚点。随后以 `liveTarget` 的 controller/client、前台 PID 和 secure-input 门控前后夹住一次 caret 查询。`attributes(forCharacterIndex:)` 的下标按 InputMethodKit 契约相对于 inline session，必须沿用稳定的相对下标 `0`；宿主的 `selectedRange`/`markedRange` 是文档级坐标，禁止直接混入。合法零宽 caret 所在屏幕有空间时工作台优先位于输入框下方，否则翻到上方；只有 Buffer 自身的基础轨道参与最大高度和稳定方向预判，真实当前 frame 始终贴输入行 10pt。工作台自身高度变化沿远离输入框的方向展开。直输时唯一 `CandidateWindow` panel 跟随宿主 caret；Buffer 捕获时 Rime preedit 在 `BufferInlineView` 的逻辑插入光标处内联投影，同一个候选 panel 保持独立、nonactivating，并悬浮跟随该 Buffer caret，不占工作台高度。无精确目标、矩形非法或离屏时，才在鼠标所在屏幕居中靠下。工作台定位只发生在显式 hidden→visible 转换或跨 Space/显示器恢复，显示期间不会随同屏字段或流式刷新跳动；候选 panel 则随当前可见的真实输入 caret 更新。Clipboard History 拥有自己的底部窗口、frame 与输入路由，不参与本段 Buffer 定位。
+> **2026-08-30 工作台焦点与候选承载覆盖（输入源边界由页首 2026-09-04 契约修订）**：当前输入源属于 RIMES 且用户显式从隐藏态唤出缓冲工作台时，先收束宿主直输组字，再把当前精确外部 `FocusToken` 的逻辑输入权交给 Buffer；宿主文本框只保留为后续投递锚点。随后以 `liveTarget` 的 controller/client、前台 PID 和 secure-input 门控前后夹住一次 caret 查询。其他输入法下不执行这些 IMK/focus/caret 步骤，只显示 detached 工作台并提供显式剪贴板导入与结果复制。RIMES 路由中，`attributes(forCharacterIndex:)` 的下标按 InputMethodKit 契约相对于 inline session，必须沿用稳定的相对下标 `0`；宿主的 `selectedRange`/`markedRange` 是文档级坐标，禁止直接混入。合法零宽 caret 所在屏幕有空间时工作台优先位于输入框下方，否则翻到上方；只有 Buffer 自身的基础轨道参与最大高度和稳定方向预判，真实当前 frame 始终贴输入行 10pt。工作台自身高度变化沿远离输入框的方向展开。直输时唯一 `CandidateWindow` panel 跟随宿主 caret；Buffer 捕获时 Rime preedit 在 `BufferInlineView` 的逻辑插入光标处内联投影，同一个候选 panel 保持独立、nonactivating，并悬浮跟随该 Buffer caret，不占工作台高度。无精确目标、外部输入法 detached 模式、矩形非法或离屏时，才在鼠标所在屏幕居中靠下。工作台定位只发生在显式 hidden→visible 转换或跨 Space/显示器恢复，显示期间不会随同屏字段或流式刷新跳动；候选 panel 则随当前可见的真实输入 caret 更新。Clipboard History 拥有自己的底部窗口、frame 与输入路由，不参与本段 Buffer 定位。
 >
 > **2026-08-06 Marine Chrome 0.2.3 覆盖**：`builtin.marine-chrome` 是内置派生 workspace，配套 MV3 扩展使用固定 ID、RIMES 原生允许 + 扩展页确认的双确认流程自动领取内部凭据，日常不复制、不显示 token。没有网页上下文或用户备注时工作台隐藏空 source rail，以 78pt 单 target rail 显示“等待网页上下文”；真实 source 到达后恢复 112pt 双轨。工具栏右侧分别显示“Chrome 已配对/未配对”“上下文 在线/未挂载”“字幕来源”和“AI 就绪/未就绪”，其中“已配对”只表达本机信任关系，不能冒充扩展在线。抓取复用旧 Marine 的宿主标签绑定语义：popup 独立窗口造成的 `WINDOW_ID_NONE` 与父窗口 `focused=false` 不撤销同一 selected tab；worker 仍要求 main frame/document、tab/window/URL/epoch 与 `lastFocusedWindow` 的 active tab 全部一致，并在 PUT 前后重验。可恢复的前台 409、回环网络中断、正文未就绪和 503 必须保留不含正文的 suspended 读取意图；手动读取与无精确目标的 B 站直评可用只含 protocolVersion/URL 的前台探针恢复，精确回复仍要求真实 deep active editor 并重新解析评论 ID。Bilibili 的标题/URL 只是未就绪元数据，只有字幕、已捕获评论或明确视频简介可发布；空字幕按 2/5/10/30 秒退避重试，成功按 BV/分 P 缓存，隐藏页停发，导航 generation 拒绝迟到结果。popup 占焦期间到达的数据必须保留 dirty 标记并在页面恢复后用新 revision 重建；心跳必须单飞，不能在慢回环上排队。`dom` 权限只用于穿透 Bilibili 开放/闭合 Shadow DOM。状态轮询必须与 PUT/心跳串行，并且只把当前标签与 content identity 同时匹配的租约报为在线。切标签、跳转、关闭、Escape 或评论框失焦立即取消。AI capability/auth 探测完成后必须刷新被缓存的 unavailable phase；生成日志只记录 request ID、provider、来源枚举、结果分类与 block 数，不记录 URL、标题、网页正文、提示词、结果或凭据。
 >
@@ -34,7 +55,7 @@
 
 > **2026-08-26 候选条操作收敛（当前）**：候选条不再显示 `0 + tray` 缓冲入口，也不再把数字 `0` 解释为开启 Buffer 并提交当前候选。`0` 继续交给 librime/当前输入路由；`1`–`9` 的 Rime 选重和展开矩阵列选择保留，齿轮设置仍是候选条唯一尾部操作。Buffer 只从设置、输入法菜单或全局工作台快捷键显式开启。
 
-> **2026-08-21 输入源/Space 生命周期覆盖**：直输候选 panel 使用 `.moveToActiveSpace + .fullScreenAuxiliary`，不再常驻所有 Space；已显示却滞留旧 Space 时先 `orderOut` 再重新置前。真实输入源从 RIMES 切到其他输入法时，先撤销焦点租约并收束候选，再执行工作台 `closeAndPause()`：保留 staged blocks、停止捕获与 transient 插件工作并隐藏；重复的同一非 RIMES 输入源通知仍会 fail-closed 撤销残余焦点/候选 authority，但不重复推进工作台关闭，切回 RIMES 也不自动打开。
+> **2026-09-04 输入源/Space 生命周期覆盖**：直输候选 panel 使用 `.moveToActiveSpace + .fullScreenAuxiliary`，不再常驻所有 Space；已显示却滞留旧 Space 时先 `orderOut` 再重新置前。真实输入源从 RIMES 切到其他输入法时，只撤销 RIMES 的精确焦点租约、IMK 捕获与投递 authority，并收束候选；四个周边快捷键及其可见窗口继续工作。Buffer 保留 staged blocks，进入只允许显式剪贴板导入/复制的外部输入法模式，不访问 IMK；Clipboard 激活只写 pasteboard、置顶并静默关闭；Mailbox 与 Capsule 继续作为普通 key window。重复的同一非 RIMES 通知继续 fail-closed 清理残余 RIMES authority，但不得关闭周边窗口、切换输入源或触碰外部输入法组字；切回 RIMES 也不自动建立捕获或投递租约。
 >
 > **2026-07-20 输入配置/翻译覆盖（UI 由页首 2026-08-30 契约修订）**：设置层已把输入编码（自然码双拼/全拼/英文）与键入模式（串击/并击/互击）拆开，再映射到经过验证的固定 schema。飞耀互击复用 `my_combo`：并击结算同一计时批内的全部按键，多键的左侧、右侧或跨区组合均可映射但不跨批重组；互击在此基础上允许相邻的左侧声母与右侧韵母跨批配对。单独敲下的物理字母保留为英文原码，不自动插入分词符，也不与另一个单键批次重组。「实时翻译」作为内置缓冲插件只出现在缓冲插件列表；默认用 Apple 本地翻译，也可改用当前 AI 渠道。源文在上方连续缓冲轨显示，译文在下方独立分块轨显示；折叠态为 78pt，前置输入/插件图标展开 33pt 工具栏 + 1pt divider 后为 112pt。工具栏空白区域可拖，控件不可拖；发送与目标语言行对齐，只能经 `BufferDeliveryCoordinator -> Delivery.insert` 手动发送。
 >
@@ -65,7 +86,7 @@
 | 定位 | 从零做的现代 macOS 输入法：**librime 引擎 + 自绘 UI + 常驻缓冲区(buffer)**，终点是替代 Squirrel 成为用户日常主力 |
 | 仓库 | `~/Documents/05-dev/apps/rime-buffer`（SwiftPM：C++ 桥 target + Swift executable） |
 | 进程模型 | **内部单进程**。IMK、librime、候选窗、buffer、网关、菜单都在同一进程；禁止把内部 UI/状态拆成依赖轮询或 IPC 的伴随进程。MCP/HTTP 与配对传字是明确的外部接口，不在此禁令内 |
-| 引擎 | 优先 dlopen app 自带的 `librime.1.dylib` + lua/octagram/predict 插件；开发态才回退 Squirrel 路径；用户数据独立在 `~/Library/RimeBuffer` |
+| 引擎 | 优先 dlopen app 自带的 `librime.1.dylib` + lua/octagram/predict 插件；开发态才回退 Squirrel 路径；用户数据独立在 `~/Library/RIMES` |
 | 上屏 | 只经 `client.insertText`（IMK 一等公民通道，网页/Electron/原生通吃） |
 | 已验证 | 引擎 smoke 覆盖五个普通方案、可选飞耀方案、F4、雾凇拼音上屏，以及英文补全/空格/生词兜底；.app 可安装可注册可输入 |
 | 当前状态 | §4 的 3 个现场 bug 对应修复已落地；§9 P1' 保留为历史验收记录，当前仍需安装后真机回归 |
@@ -170,7 +191,7 @@
 │                                                                              │
 │  RimeEngine (可实例化封装, 每控制器独立 session) ── CRimeBridge (C++, dlopen) │
 │    └─ app 自带 librime.1.dylib + lua/octagram/predict；开发态回退 Squirrel   │
-│    └─ 用户目录: ~/Library/RimeBuffer (自 ~/Library/Rime 播种的独立副本)        │
+│    └─ 用户目录: ~/Library/RIMES (自 ~/Library/Rime 播种的独立副本)             │
 │                                                                              │
 │  BufferWindowController + BufferModel + BufferDeliveryCoordinator             │
 │  AITextPlugins(已实现)  [P3] 语音  [P4] 学习词同步/签名公证             │
@@ -187,7 +208,7 @@
 
 ### 5.2 RimeEngine（Swift）— 状态：✅ 已写
 
-可实例化（**无单例、无共享 session**——前身的共享 session 会让组字状态跨输入框串扰）。`start()` 失败时保持可重试。用户目录默认 `~/Library/RimeBuffer`，环境变量 `RIMEBUFFER_USER_DIR` 可覆盖（CLI smoke 用）。
+可实例化（**无单例、无共享 session**——前身的共享 session 会让组字状态跨输入框串扰）。`start()` 失败时保持可重试。用户目录默认 `~/Library/RIMES`，环境变量 `RIMEBUFFER_USER_DIR` 可覆盖（CLI smoke 用）。
 
 ### 5.3 RimeBufferController — 状态：✅ 已实现并持续演进
 
@@ -242,13 +263,23 @@
 ### 5.7 StatusMenu — 状态：✅ 系统输入法菜单单入口
 
 只使用 macOS 已有的输入法专属位置，不再创建独立 `NSStatusItem`。`RimeBufferController.menu()`
-每次打开系统输入法菜单时返回最新 `NSMenu`；设置、更新检查、日志、重新部署、重新安装与重启
-均放在这里，引擎异常则在菜单顶部显示禁用的警告行。
+每次打开系统输入法菜单时返回最新 `NSMenu`；主菜单只保留设置、Buffer、Clipboard History、
+Mailbox、Capsule 与「维护…」，引擎异常则在菜单顶部显示禁用的警告行。
+常显所有桌面与移到当前屏幕不再作为输入法菜单入口；底层工作台窗口行为与偏好保持不变。
 
 InputMethodKit 会把菜单命令经 `doCommandBySelector:commandDictionary:` 发回当前
 `IMKInputController`，因此每个条目的 target/action 必须落在当前 `RimeBufferController`，再转发给
 `StatusMenu` 的共享操作。不要把 action 只挂到菜单单例上——旧实现曾因此出现菜单可见但动作在部分
 macOS 版本不可靠。`Info.plist` 的 `etinput-menu.pdf` 继续负责系统输入法位置的图标。
+
+「维护…」是点击展开入口：顶层 selector 返回后，在下一次主队列 turn、原鼠标屏幕坐标处用
+本进程的 `NSMenu.popUp` 展示检查更新、打开日志、重新部署并重启、重新安装、重启进程五项。
+不把这五项设为系统菜单的 `submenu`：历史实测中嵌套项能显示但点击没有回传。原生弹出菜单
+在 tracking 期间强持有当前 controller，仍使用同一组 action，不激活应用、不创建额外状态栏图标
+或隐藏窗口；取消选单不执行任何维护操作。更新已就绪时，检查更新项继续显示待安装版本。
+`status-menu-smoke` 用纯值状态和 spy 验证结构及 action 派发，不冒充系统菜单跨进程实测。
+可选的 `status-menu-preview-smoke` 显示同一个原生维护选单，但所有点击只记录 spy；适合验证
+菜单显示与取消，不会真正更新、打开日志、部署、安装或退出正在运行的输入法。
 
 方案切换只经 F4。Rime 内切换成功后把 schema id 记为 `preferredSchema`，各控制器激活时恢复该选择；设置页复选框只管理 F4 的 `schema_list`。
 
@@ -258,11 +289,11 @@ macOS 版本不可靠。`Info.plist` 的 `etinput-menu.pdf` 继续负责系统�
 
 ### 5.9 Delivery — 状态：✅ 已实现
 
-`Delivery.insert` 仍是唯一上屏咽喉。Return 轻按请求 `sendNext`、长按请求 `sendAll`；主条右侧纸飞机每次只请求 `sendNext`。键盘路径固定使用 keyDown 时捕获的 `FocusToken`；协调器在每个块投递前重新校验 token、组字状态和 secure input。焦点变化立即停止，既不会改送新目标，也不会回送旧目标；未发送块保留。输入法自身窗口不是投递目标，也不参与远端镜像。
+`Delivery.insert` 仍是唯一上屏咽喉。Return 轻按请求 `sendNext`、长按请求 `sendAll`；主轨右侧 overlay 中的纸飞机每次只请求 `sendNext`。键盘路径固定使用 keyDown 时捕获的 `FocusToken`；协调器在每个块投递前重新校验 token、组字状态和 secure input。焦点变化立即停止，既不会改送新目标，也不会回送旧目标；未发送块保留。输入法自身窗口不是投递目标，也不参与远端镜像。
 
 ### 5.10 BufferWindowController + BufferModel（P2）— 状态：✅ 已实现
 
-- 工作台是独立、nonactivating、可调整宽度的 `NSPanel`。它初始只显示单行正文：普通/source-only/target-only 为 44pt，实时翻译与意识流的 live source+target 为 78pt。点击正文唯一的前置输入/插件图标，切换恢复的 33pt 顶部工具栏和 1pt divider；展开后对应为 78pt 与 112pt。工具栏显示状态、带小图标的缓冲插件选择器及当前配置、按状态出现的返回编辑与关闭；其空白 chrome、状态、间距和弹性留白调用 `performDrag`，按钮、下拉与其他 `NSControl` 保持首击。正文轨、窗口背景与右侧动作均不可拖，并且不再存在 24pt 专用右侧拖动条。展开态只属于当前进程/会话，不写 UserDefaults；隐藏、secure input、锁屏、睡眠或会话失活会重置折叠。派生 workspace 可提供 1–5 个 alternatives，但只维护一个稳定 target viewport，以 pager 切换而不改变当前折叠/展开高度；活动项内部的横向 document row 关闭 autoresizing-mask constraints 并将高度绑定到 scroll viewport。内置 AI 被选中时，右侧主控件在禁用 AI 图标/可请求 AI 图标/转圈/纸飞机间原位切换，工具栏不放第二个生成按钮。设置页可多选启用缓冲插件，选择器只显示该集合并用 `Default` 表示无插件；选择器直接改写唯一 owner。显式从隐藏态唤出时，先收束宿主直输组字，再把当前精确外部 `FocusToken` 的逻辑输入权交给 Buffer；外部文本框只保留为后续上屏目标。工作台读取该租约的一次新鲜 host caret 行矩形，只以 Buffer 自身最大 112pt 高度选择稳定一侧，真实当前高度仍与输入行保持 10pt；通常位于下方，空间不足则翻到上方。焦点锚定布局切 owner、单/双轨或工具栏状态时保持靠输入框的一侧并向外增减；手动/无目标布局仍固定底边。Rime preedit 直接占用 source rail 中现有的逻辑插入位置，候选 panel 独立计算自己的尺寸和屏幕夹取，因此两者都不改变工作台高度或 canonical frame。没有可信目标时才在鼠标所在屏幕居中靠下，显示后工作台不追踪光标。圆角表面使用当前主题 palette，内缩到透明窗口边距，并按 backing scale 在路径内绘制 hairline。显隐、frame 与 pin 持久化，多屏变化时恢复到可见区域；工具栏展开态和候选位置不持久化。普通关闭会收束组字、折叠工具栏、暂停捕获、结束 transient 加载/错误状态并保留已有块。`Command+Shift+B` 通过全局 Carbon hot key 调用 `toggleVisibility()`，隐藏态打开时优先把输入路由切到 Buffer；工作台不提供块编辑器、面板内缓冲开关、手动遮蔽、历史恢复或清空撤销。Clipboard History 的底部窗口不参与这里的尺寸、frame 或输入 ownership。
+- 工作台是独立、nonactivating、可调整宽度的 `NSPanel`。33pt 顶部工具栏和 1pt divider 永久可见，所以普通/source-only/target-only 固定 78pt，实时翻译与意识流的 live source+target 固定 112pt。顶部以可点击的功能网格入口和既有缓冲插件选择器起首，并保留当前配置、状态、按条件出现的返回编辑、关闭；精确目标的真实运行中 App icon 作为被动状态紧邻关闭左侧。工具栏空白 chrome、被动状态、间距和弹性留白调用 `performDrag`，可点击按钮、下拉与其他 `NSControl` 保持首击，并以持久底板/hairline、hover、pressed 与 pointing-hand 区别于无底板无手势的被动图标。每个可见正文 rail 都由一个全宽 `BufferInlineView` 承载：单轨状态一个，live source+target 状态上下两个；各 rail 均不带前置插件图标；剪贴板导入、复制并关闭及当前发送/生成动作在 rail 内组成不参与主 Stack 排宽的 trailing overlay。单轨时该组居中，live 双轨时对齐 target rail，document 的尾部安全区保证正文和逻辑 caret 不被覆盖。派生 workspace 可提供 1–5 个 alternatives，但只维护一个稳定 target viewport，以 pager 切换而不改变高度；活动项内部的横向 document row 关闭 autoresizing-mask constraints 并将高度绑定到 scroll viewport。内置 AI 被选中时，overlay 中的主控件在禁用 AI 图标、可请求 AI 图标、转圈、纸飞机间原位切换，工具栏不放第二个生成按钮；生成结果的复制并关闭紧邻它而不再插入 target document row。设置页可多选启用缓冲插件，选择器只显示该集合并用 `Default` 表示无插件；功能网格入口复用同一选择器，不建立第二套 owner 状态。当前输入源属于 RIMES 时，显式从隐藏态唤出会先收束宿主直输组字，再把当前精确外部 `FocusToken` 的逻辑输入权交给 Buffer；外部文本框只保留为后续上屏目标。其他输入法下只显示 detached 工作台，保留 staged blocks，只允许显式剪贴板导入与结果复制，不取得 `FocusToken`，也不访问 IMK，并且 overlay 不得提供两个等价的复制关闭入口。RIMES 模式下，工作台读取该租约的一次新鲜 host caret 行矩形，只以 Buffer 自身最大 112pt 高度选择稳定一侧，真实当前高度仍与输入行保持 10pt；通常位于下方，空间不足则翻到上方。焦点锚定布局切 owner 或单/双轨时保持靠输入框的一侧并向外增减；手动、无目标或外部输入法 detached 布局固定底边。Rime preedit 直接占用 source rail 中现有的逻辑插入位置，候选 panel 独立计算自己的尺寸和屏幕夹取，因此两者都不改变工作台高度或 canonical frame。没有可信目标时才在鼠标所在屏幕居中靠下，显示后工作台不追踪光标。圆角表面使用当前主题 palette，内缩到透明窗口边距，并按 backing scale 在路径内绘制 hairline。显隐、frame 与 pin 持久化，多屏变化时恢复到可见区域；候选位置不持久化。RIMES 模式下的普通关闭会收束组字并暂停捕获；所有模式都会结束 transient 加载/错误状态并保留已有块。`Command+Shift+B` 通过全局 Carbon hot key 调用 `toggleVisibility()`：RIMES 模式从隐藏态打开时才把输入路由切到 Buffer，外部输入法下保持 detached clipboard mode。工作台不提供块编辑器、面板内缓冲开关、手动遮蔽、历史恢复或清空撤销。Clipboard History 的底部窗口不参与这里的尺寸、frame 或输入 ownership。
 - Rime commit 只在捕获开启时进入 `BufferModel`；preedit 永不存入模型。成功调用 `Delivery.insert` 后，该 block 立即从 live buffer 消失且不保留明文发送历史；失败 block 和未发送后缀保留。
 - 缓冲块在工作台中是被动展示单元，不再支持点选后单块编辑；Backspace 删除和显式投递仍由模型/协调器保持身份与顺序不变。输入法自身所有文本框都绕过缓冲捕获与远端镜像。
 - Rime 候选始终只有一个 `CandidateWindow` 状态机和一套独立 `NSPanel` 内容层级。精确焦点处于直输 route 时，它跟随宿主 caret；同一精确 `FocusToken` 被 Buffer 捕获时，`BufferInlineView` 在逻辑插入 caret 处投影 preedit，候选 panel 切换到该 caret 并保持悬浮，不进入工作台 view tree。preedit-only 时 panel 隐藏；候选出现时也不改变 Buffer 高度。secure input、锁屏和会话保护会先清除 inline preedit、候选、tooltip 与 accessibility 明文再隐藏。意识流的 1–5 个互斥解释仍在独立的派生 target viewport 中分页，不属于 Rime 候选。缓冲启停、常显与移屏入口保留在设置/输入法菜单；锁屏、睡眠或会话切出会撤销租约、在 Rime 内收束组字并隐藏窗口，恢复后仍必须等新 activation/event。
@@ -273,18 +304,18 @@ macOS 版本不可靠。`Info.plist` 的 `etinput-menu.pdf` 继续负责系统�
 - `AITextConnectorRegistry` 把 Codex CLI、Claude Code CLI 与 OpenAI 兼容 API 作为独立于 `.bufferAction` owner 的三个模型源；旧 provider-specific plugin 选择会迁移为「AI 生成」owner + 原连接器偏好。AI 生成配置写回同一共享选择。实时翻译与 Marine 选择“当前 AI 渠道”时也复用它；Marine 另外允许 60–600 秒调用超时，并在每次请求开始时冻结。带 `preparePath` 的 Action Plugin 只返回通过五字段身份校验的 `blocks-v1` prompt，RimeBuffer 保留模型选择、凭据、执行、工具策略和结果校验。
 - `MarineChromeWorkspace` 直接消费扩展提供的 6 秒网页上下文租约和当前 Stable Chrome `FocusToken`，不经过旧 Action Plugin 的 `preparePath`。生成时冻结 context、focus、source block IDs 和所选 AI provider；上下文、焦点、owner、secure input 或 source 任一变化都会取消/墓碑旧结果。CLI/API 可用性通知会刷新 idle/unavailable phase，但不得打断 running、撤销 ready 投递权或自动清除可见 failure。生命周期日志只能记录脱敏枚举和计数。
 - `StreamInputWorkspace` 是第三种派生 source，不读取 `BufferModel`：它把 `a-z` 与归一化 ASCII Space 组成的 raw 全拼绑定到创建它的精确外部焦点，按灵敏 140/500、平衡 220/800（默认）或稳定 350/1200 ms 的 debounce/max-wait 自动请求意识流自己选择的 AI provider（默认 OpenAI 兼容）。捕获不以当前 Rime 配置为门槛，选择插件也绝不调用 `InputConfigurationStore.set` 或重部署 schema；Space 在 raw 中写入一个真实硬边界、上轨仅将其显示为 `·` 并立即请求，前导/连续 Space no-op，其他标点只消费，数字 1–5 与无修饰 ↑/↓ 控制候选。精确 Control/Command+A 只全选 raw source，Control/Command+V 在尾部追加或替换选中 raw；粘贴只接受 ASCII 字母与空白，任一其他字符或归一化后总 raw 超过 16 KiB 都原子拒绝。workspace 最多允许两个 provider 请求短暂重叠：旧路仅维持视觉连续，新 challenger 的首个合法非空 snapshot 或终态到达后才取消/墓碑旧路；两路都占用时只保留一个 latest-only pending。
-- `MyPromptWorkspace` 是第四种派生 source，但继续读取普通 `BufferModel`：上轨是精确查询快照，下轨是本地索引返回且先裁为 1–3 条的互斥候选。候选展示文本只含标题/摘要，投递始终读取内部保存的完整 prompt；选择变化增加 delivery generation，协调器冻结前确认唯一结果。SQLite 使用 WAL 与 FTS5；导入器拒绝 symlink、非普通文件、NUL、越界文件和越界正文，并把 Fabric/Obsidian/aggregate Markdown 归一为稳定 source/record identity。远程 synchronizer 只接受无凭据 HTTPS URL，以固定 `/usr/bin/git` argv、禁用交互和 file/ext protocol，同步完成后才更新本地 source。数据库、library 与 checkout 位于 `RIMEBUFFER_LOCAL_DATA_ROOT`/`RIMEBUFFER_USER_DIR` 下的 `my-prompt`，后备为 `~/Library/RimeBuffer/my-prompt`，目录/数据库分别收紧为 `0700/0600`。
+- `MyPromptWorkspace` 是第四种派生 source，但继续读取普通 `BufferModel`：上轨是精确查询快照，下轨是本地索引返回且先裁为 1–3 条的互斥候选。候选展示文本只含标题/摘要，投递始终读取内部保存的完整 prompt；选择变化增加 delivery generation，协调器冻结前确认唯一结果。SQLite 使用 WAL 与 FTS5；导入器拒绝 symlink、非普通文件、NUL、越界文件和越界正文，并把 Fabric/Obsidian/aggregate Markdown 归一为稳定 source/record identity。远程 synchronizer 只接受无凭据 HTTPS URL，以固定 `/usr/bin/git` argv、禁用交互和 file/ext protocol，同步完成后才更新本地 source。数据库、library 与 checkout 位于 `RIMEBUFFER_LOCAL_DATA_ROOT`/`RIMEBUFFER_USER_DIR` 下的 `my-prompt`，后备为 `~/Library/RIMES/my-prompt`，目录/数据库分别收紧为 `0700/0600`。
 - 2026-07-26 飞耀扩展：串击/双拼仍逐字写连续全拼；显式 `.chord` 与 `.mutual` 都读取 `my_combo` 的有效映射并使用独立、焦点绑定的批次状态。并击只映射同批；互击额外允许相邻左/右半区批次在精确快照仍一致时重组。只有完整音节映射追加 soft ASCII syllable Space，单侧拼音片段映射不追加，二者都走普通 220/800 ms 调度请求。只有用户物理 Space（包括把末尾 soft Space 原位提升）是显示 `·`、立即请求并增加宿主最小分块数的 hard boundary。
 - 每次意识流请求的 source 都是触发边界时的完整 raw 拼音，模型必须从全局重新解释，不能只处理新增后缀或把输入分段拼接。请求同时冻结本轮的候选上限与响应节奏，后续设置变化不能改变其 prompt、provider schema/decoder、partial/final 校验或 retry merge。旧显示、partial、baseline 与跨 revision 的旧响应不得进入 prompt；唯一例外是同 revision 的一次补候选请求可把前一个严格合法 final 作为有界、JSON 编码且不可信的排重数据。本地 `StreamInputPinyinHints` 生成最多三条全覆盖、lossless 边界提示，明确以 ` | ` 保留 Space；无法识别的 English/错键片段原样保留，超过 512 bytes 时省略提示。本地提示多于一种时 payload 设置 `minimumGuessCount=2`，但会被本轮候选上限封顶。waiting/running 时临时结果不显示选中态，也不能建立 result/delivery lease。补候选 partial 从已有候选之后的槽位开始且仍不可投递；final 必须逐槽精确覆盖 partial，旧 baseline 尾部不得进入正文。模型产出 1–5 个完整、互斥猜测，且永不超过本轮冻结上限；所有候选共享一个分页 target viewport，活动项内部再经 `SemanticBlockSegmenter` 细分为短句、中文分句或英文短词组。Space 子句数建立最小分块目标，宿主只在不切断英文单词、URL、代码、数字或引文时补拆。Return/纸飞机在协调器冻结 generation 前确认当前候选并删除其余状态，防止任一路径绕过选择；同一次 Return 轻按发送下一块、长按发送全部。raw 在部分投递期间保留，只在所选答案最后一块成功后清除；首块后继续输入字母或 Space 才会撤销未发送尾部与旧 raw，已发送前缀不能重复出现。
-- `CodexCLITextProvider` 通过双向 stdio JSON-RPC 运行一次性 Codex app-server，消费 `item/agentMessage/delta`；除显式 `RIMEBUFFER_CODEX_PATH` 覆盖外，可执行文件探测优先 ChatGPT.app bundled Codex，再按顺序选择第一个通过能力检查的 Homebrew、用户 PATH、常见版本管理器或编辑器内置安装。它使用 `~/Library/RimeBuffer/ai/codex-home` 中独立、可持续刷新的 ChatGPT 登录，不读取 `~/.codex`。设置页把本地凭据状态与 CLI 能力状态分开呈现；account/login app-server 流程打开 HTTPS 授权页，按 loginId 绑定完成通知，再以 account/read 验证 ChatGPT 账户。取消、超时、进程退出与迟到回调均 fail-closed，生成前还要求 `mcpServerStatus/list` 为空。`ClaudeCodeCLITextProvider` 使用 `stream-json` partial；它在后台以官方 `claude auth status --json` 的 `loggedIn` 布尔值校验 CLI 授权，设置页通过固定 `claude auth login --claudeai` 流程发起、取消或重新授权。RimeBuffer 不读取 Claude 凭据文件，不传透 `CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CONFIG_DIR` 或 ambient API key。两个 CLI 都按实际能力而非版本号准入：Codex 候选必须以完整隔离 argv 完成无提示词 initialize 与空 MCP 握手，Claude 候选必须公开实际生成所需的工具关闭和流式参数；新旧版本只要满足契约即可使用。能力/授权探测在后台缓存并周期复核，hot path 只读缓存；生成前用 stat 指纹确认已验证可执行文件未被替换。两者均用 `Process`、固定 argv/stdin 和 0700 临时工作目录，不经 shell，不把正文放入进程参数或日志，并限制时间与输出大小、关闭工具及会话持久化。“本地 CLI”只表示进程在本机启动，**不代表本地推理**。
-- `OpenAICompatibleTextProvider` 调用 `POST {baseURL}/chat/completions` 并要求 `text/event-stream`，消费 SSE delta 和 `[DONE]`；2xx 非 SSE 响应 fail-closed。Base URL、model 与 API key 在“连接器 › AI 模型”管理；远程端点必须 HTTPS，HTTP 仅允许精确 loopback。意识流选用该渠道时，`.alternativeGuesses` 显式发送 `thinking: {type: disabled}`、`response_format: {type: json_object}`、`max_tokens: 1024` 与低 temperature；普通 AI 生成不继承这些专用字段。请求阶段日志仅记录 request UUID、HTTP 状态、首 transport/content/snapshot 耗时、字节/块数及枚举结果，写入进程级异步串行日志器，永不记录 URL、model、raw、prompt、正文或 key。配置与密钥存于 `~/Library/RimeBuffer/ai/openai-compatible.json` 的 0600 文件，不进 UserDefaults 或日志；文件位于 app bundle 外，开发安装脚本重播种 Rime 数据时必须排除 `ai`，pkg/应用内更新也只替换 app，不能清除已有配置。
+- `CodexCLITextProvider` 通过双向 stdio JSON-RPC 运行一次性 Codex app-server，消费 `item/agentMessage/delta`；除显式 `RIMEBUFFER_CODEX_PATH` 覆盖外，可执行文件探测优先 ChatGPT.app bundled Codex，再按顺序选择第一个通过能力检查的 Homebrew、用户 PATH、常见版本管理器或编辑器内置安装。它使用 `~/Library/RIMES/ai/codex-home` 中独立、可持续刷新的 ChatGPT 登录，不读取 `~/.codex`。设置页把本地凭据状态与 CLI 能力状态分开呈现；account/login app-server 流程打开 HTTPS 授权页，按 loginId 绑定完成通知，再以 account/read 验证 ChatGPT 账户。取消、超时、进程退出与迟到回调均 fail-closed，生成前还要求 `mcpServerStatus/list` 为空。`ClaudeCodeCLITextProvider` 使用 `stream-json` partial；它在后台以官方 `claude auth status --json` 的 `loggedIn` 布尔值校验 CLI 授权，设置页通过固定 `claude auth login --claudeai` 流程发起、取消或重新授权。RimeBuffer 不读取 Claude 凭据文件，不传透 `CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CONFIG_DIR` 或 ambient API key。两个 CLI 都按实际能力而非版本号准入：Codex 候选必须以完整隔离 argv 完成无提示词 initialize 与空 MCP 握手，Claude 候选必须公开实际生成所需的工具关闭和流式参数；新旧版本只要满足契约即可使用。能力/授权探测在后台缓存并周期复核，hot path 只读缓存；生成前用 stat 指纹确认已验证可执行文件未被替换。两者均用 `Process`、固定 argv/stdin 和 0700 临时工作目录，不经 shell，不把正文放入进程参数或日志，并限制时间与输出大小、关闭工具及会话持久化。“本地 CLI”只表示进程在本机启动，**不代表本地推理**。
+- `OpenAICompatibleTextProvider` 调用 `POST {baseURL}/chat/completions` 并要求 `text/event-stream`，消费 SSE delta 和 `[DONE]`；2xx 非 SSE 响应 fail-closed。Base URL、model 与 API key 在“连接器 › AI 模型”管理；远程端点必须 HTTPS，HTTP 仅允许精确 loopback。意识流选用该渠道时，`.alternativeGuesses` 显式发送 `thinking: {type: disabled}`、`response_format: {type: json_object}`、`max_tokens: 1024` 与低 temperature；普通 AI 生成不继承这些专用字段。请求阶段日志仅记录 request UUID、HTTP 状态、首 transport/content/snapshot 耗时、字节/块数及枚举结果，写入进程级异步串行日志器，永不记录 URL、model、raw、prompt、正文或 key。配置与密钥存于 `~/Library/RIMES/ai/openai-compatible.json` 的 0600 文件，不进 UserDefaults 或日志；文件位于 app bundle 外，开发安装脚本重播种 Rime 数据时必须排除 `ai`，pkg/应用内更新也只替换 app，不能清除已有配置。
 - 未经 review 的 Action Plugin 目标绑定块不能被 AI 插件当作源文，避免洗掉原 runtime/context/focus 权限。语音输入仍属后续能力。
 
 ### 5.12 Deploy / userdb（P4）— 状态：✅ 自包含部署已实现；学习词同步仍是路线图
 
-- **现状**：app 自带 librime、插件和 Rime shared data，启动时在独立的 `~/Library/RimeBuffer` 执行 maintenance/deploy；正式安装不依赖 Squirrel。`build_install.sh` 默认可从 `~/Library/Rime` 重新播种用户配置与 userdb，也可在没有 Squirrel 用户目录时从 bundled schemas 独立部署。
+- **现状**：app 自带 librime、插件和 Rime shared data，启动时在独立的 `~/Library/RIMES` 执行 maintenance/deploy；正式安装不依赖 Squirrel。更名前的 `~/Library/RimeBuffer` 在首次启动时整体复制到 `~/Library/RIMES`（仅当新目录尚不存在，完成后写入迁移标记），原目录保留、不自动删除。`build_install.sh` 默认可从 `~/Library/Rime` 重新播种用户配置与 userdb，也可在没有 Squirrel 用户目录时从 bundled schemas 独立部署。
 - 激活热路径只对 `build/default.yaml`、已部署 schema 与 `squirrel.yaml` 做轻量文件指纹检查；schema 列表和键盘布局解析按文件内容/原子替换自动失效，进程内部署成功后显式清缓存。任何 standalone smoke/preview 都在初始化 librime 前强制改用临时 userdir；engine smoke 在该目录中复刻正式包的 `Vendor + rime-data` SharedSupport，不打开 live LevelDB。
-- **隔离不变量**：两个活跃 Rime 实例不能共享同一 userdb LevelDB，因此运行时继续使用 `~/Library/RimeBuffer`，不直接打开 Squirrel 的 `~/Library/Rime`。
+- **隔离不变量**：两个活跃 Rime 实例不能共享同一 userdb LevelDB，因此运行时继续使用 `~/Library/RIMES`，不直接打开 Squirrel 的 `~/Library/Rime`。
 - **[P4 路线图]** 决定使用 librime sync 还是显式迁移来同步学习词；Developer ID/hardened runtime/双重公证的 fail-closed workflow 已落地，首次正式 tag 仍需在仓库配置 8 项受保护凭据并通过 Apple 在线验收。不得为了同步而恢复两个进程直接共用一个 userdb。
 
 ---
@@ -294,7 +325,7 @@ macOS 版本不可靠。`Info.plist` 的 `etinput-menu.pdf` 继续负责系统�
 - **vtable 顺序 load-bearing**；`RIME_STRUCT_INIT` 每个 Rime 结构体必做（data_size 版本协商）。
 - keysym：X11/ibus 体系。修饰 mask：shift 1<<0 / lock 1<<1 / ctrl 1<<2 / alt 1<<3 / super 1<<6 / **release 1<<30**。特殊键 0xff08(BS) 0xff09(Tab) 0xff0d(CR) 0xff1b(Esc) 0xff51–54(箭头) 0xff55/56(翻页) 0xffe1–ec(修饰) **0xffbe+n(Fn)**；可打印 0x20–0x7e 原码直传。
 - 线程：IMK 键回调在主线程；P1 全部 librime 调用留主线程 + **watchdog**（单次 process_key/get_context >250ms 记日志定 Lua 嫌疑）。gMutex 不可重入。
-- IMK 注册：bundle id=`com.isaac.inputmethod.RimeBuffer`，可选择 mode id=`com.isaac.inputmethod.RimeBuffer.Hans`（父/子 TIS id 必须不同），`InputMethodConnectionName=RimeBuffer_1_Connection`，`InputMethodServerControllerClass=RimeBufferController`（对应 `@objc(RimeBufferController)`）。父输入法不声明 repertoire，使 TIS 保持标准的 ASCII-capable parent；只有中文 child mode 声明 `Hans/Hant`，且不可含 `Latn`。底层键盘布局遵循 `squirrel.yaml`：`last`/空值不 override，`default` 才映射 ABC。安装不复用旧 TIS ref，而是以短命子进程按 `register → verify installed → enable parent → verify parent → enable child → verify enabled roster → best-effort select` 分阶段收敛；每阶段都用 bundle/source id 精确过滤的新快照，拒绝重复 ref，并把 presence/type/enabled/select/ASCII 分开诊断，ASCII 不再作为启用成功条件。每个子进程有 3 秒硬超时，整个激活有 90 秒总预算；selection 不进入持久重试条件。Installer 不结束 `imklaunchagent`/`TextInputMenuAgent`；当前 GUI 会话未收敛时，写入用户 marker 与 one-shot Aqua LaunchAgent，下次登录重试并在成功后自清理。无 GUI 用户时只安装 payload，下次登录由用户激活。两者都不把已成功落盘的 payload 转成 PackageKit Code 112。只有缺少 executable、bundle id/输入 mode metadata 错误或签名完整性失败才使 pkg 失败。重装/更新的 fallback/deactivate 必须在 preinstall、即 payload 替换前，由包内当前版本的签名最小 helper 在 5 秒边界内执行，不能依赖旧 app 理解新参数。IMKServer 引用存顶层变量保活；为 nil 时大声记日志退出，不留僵尸输入源。
+- IMK 注册：bundle id=`com.isaac.inputmethod.RimeBuffer`，可选择 mode id=`com.isaac.inputmethod.RimeBuffer.Hans`（父/子 TIS id 必须不同），`InputMethodConnectionName=RimeBuffer_1_Connection`，`InputMethodServerControllerClass=RimeBufferController`（对应 `@objc(RimeBufferController)`）。父输入法不声明 repertoire，使 TIS 保持标准的 ASCII-capable parent；只有中文 child mode 声明 `Hans/Hant`，且不可含 `Latn`。底层键盘布局遵循 `squirrel.yaml`：`last`/空值不 override，`default` 才映射 ABC。安装不复用旧 TIS ref，而是以短命子进程按 `register → verify installed → enable parent → verify parent → enable child → verify enabled roster → best-effort select` 分阶段收敛；每阶段都用 bundle/source id 精确过滤的新快照，拒绝重复 ref，并把 presence/type/enabled/select/ASCII 分开诊断，ASCII 不再作为启用成功条件。每个子进程有 3 秒硬超时，整个激活有 90 秒总预算；selection 不进入持久重试条件。Installer 不结束 `imklaunchagent`/`TextInputMenuAgent`；当前 GUI 会话未收敛时，写入用户 marker 与 one-shot Aqua LaunchAgent，下次登录重试并在成功后自清理。另一个系统级 one-shot Aqua LaunchAgent 在每次冷登录执行短命 guard：该登录用户后来又出现开发版 App 或任务时退出，否则才 `open -g` 系统 App；它不设 `KeepAlive`。由于系统包和 dev 包共用冻结的 bundle/source ID，preinstall 会在 payload 替换前按 DirectoryService 的本机普通账户记录审计每个准确 home，只允许当前 GUI 用户留下可验证且能由 postinstall 退休的 dev app/agent；其他账户有 dev 痕迹、home 路径含 symlink/不可用或账户记录不一致都直接失败。postinstall 退休当前用户 dev 安装后再次要求全机审计为空，登录 guard 只承担后来异常残留的防御，不作为重复 ID 的收敛机制。无 GUI 用户时也必须先通过该审计，TIS 激活留到 GUI 会话建立后处理。两种 LaunchAgent 都不把已成功落盘的 payload 转成 PackageKit Code 112。payload 自检、开发版 bootstrap 安全退休、重复路径收敛、旧进程退出、系统 bootstrap 事务发布或当前 GUI 会话 canonical 新进程验证失败时，pkg 都会 fail-closed；system agent 替换前按原始字节快照，后续失败时恢复（原来不存在则恢复为不存在）。只有 TIS 注册/启用的最终一致性延迟保持非致命并交给登录重试。开发安装把 companion 发布与新进程驻留验证放在 TIS 选择之前，任何后续 rollback 仍会先用尚在磁盘上的新 executable 切到安全 fallback，再移除 bundle。重装/更新的 fallback/deactivate 必须在 preinstall、即 payload 替换前，由包内当前版本的签名最小 helper 在 5 秒边界内执行，不能依赖旧 app 理解新参数。IMKServer 引用存顶层变量保活；为 nil 时大声记日志退出，不留僵尸输入源。
 - 日志 `~/rimebuffer.log`（IMELog）。**每个修复都要先能在日志里看见**（哪个键、哪个 client、走了哪条路径）——这是无 GUI 调试的生命线。
 
 ---
@@ -326,15 +357,17 @@ rime-buffer/
     ├── (FocusObserver)           ✅ 以 main.swift 的 NSWorkspace 观察器实现(forceCommit+藏窗)
     ├── BufferModel.swift          ✅ P2 缓冲模型(live块/成功消费/无历史/transient)
     ├── BufferDeliveryCoordinator.swift ✅ 精确焦点逐块投递/失败后缀保留
-    ├── BufferWindowController.swift ✅ 前置图标切换33+1pt工具栏、折叠44/78pt与展开78/112pt、工具栏空白拖动、1–5 alternative分页/插件刷新/多屏/隐私
+    ├── BufferWindowController.swift ✅ Buffer 全宽主轨/悬浮动作组、真实目标 App 被动状态/边缘提示、工具栏、1–5 alternative分页/插件刷新/多屏/隐私
+    ├── TargetAssociationCueController.swift ✅ caret 双括号短提示（nonactivating/click-through/Reduce Motion）
     ├── BufferInlineView.swift     ✅ 工作台块轨、来源徽标、source全选与多行target
     ├── GlobalHotKeyController.swift ✅ Command+Shift+B Buffer；Command+Shift+P Clipboard History；Command+Shift+M Mailbox；Command+Shift+C Capsule
-    ├── ClipboardHistoryWindowController.swift ✅ 独立底部 nonactivating 窗口、文本 exact-token 投递、富内容 pasteboard 恢复与会话保护
+    ├── ClipboardHistoryWindowController.swift ✅ 独立底部双模式窗口（RIMES nonactivating / 外部输入法 key-capable）、文本 exact-token 投递、富内容 pasteboard 恢复与会话保护
     ├── ClipboardHistoryModel.swift ✅ 后台受保护收录、持久元数据和惰性原始负载恢复
     ├── ClipboardHistoryStore.swift ✅ 本机私有 SQLite/WAL 持久库、幂等导入与完整性审计
     ├── ClipboardPasteboardArchive.swift ✅ 有界 raw-DEFLATE 归档验证与原始 NSPasteboard representation 重建
     ├── ClipboardRailView.swift ✅ 独立窗口横向卡片时间流、搜索与键盘交互（保留旧文件名）
-    ├── CapsuleWindowController.swift ✅ 八类条目 CRUD、图片/PDF 异步预览、iCloud 状态控件与独立管理窗口
+    ├── CapsuleWindowController.swift ✅ 八类条目 CRUD、图片/PDF 异步预览/复制、15 秒口令门禁明文与独立管理窗口
+    ├── CapsuleRevealPasscode.swift ✅ 四槽物理键码并击、当前凭据先验、单个加盐摘要凭据与设置配置视图
     ├── CapsuleCloudSync.swift ✅ 用户选择 iCloud Drive 镜像、双向 reconcile、媒体资产、冲突与 tombstone
     ├── CapsuleCloudSyncSmoke.swift ✅ fake cloud 双设备同步协议 smoke
     ├── AppleTranslationPlugin.swift ✅ 实时翻译双轨工作区（Apple 本地默认 / 当前 AI）
@@ -346,7 +379,7 @@ rime-buffer/
     ├── PluginConfiguration.swift ✅ 声明式 schema / 通用表单 / 普通与私有存储
     ├── RemarkablePlugin.swift    ✅ SSH 当前页稳定校验 / USB PDF 导出 / 前后复验 / 取消墓碑
     ├── RemarkableLocalOCR.swift  ✅ PDFKit 目标 300dpi 有界渲染 + Apple Vision 本地 OCR
-    ├── SettingsWindow.swift       ✅ 五个普通方案/可选并击/F4/部署/候选窗/缓冲与通用插件配置
+    ├── SettingsWindow.swift       ✅ 五个普通方案/可选并击/F4/部署/候选窗/缓冲、通用插件配置，以及 Mailbox/Capsule 纯配置状态页
     ├── InputSchemaCatalog.swift   ✅ 五个普通方案 + 可选飞耀方案目录及 schema_list 安全读写
     └── [P3+] 语音/CaretLocator/精细 Deploy
 
@@ -380,7 +413,7 @@ pkill -x RimeBuffer                # 系统会按需重新拉起
 
 已踩坑速查：本地 `build_install.sh` 仍用 ad-hoc；正式 tag 由一次性 keychain 完成 Developer ID + hardened runtime + app/pkg 公证，不可降级回未签名 · 我方 Bash 沙盒里 `open` GUI app 会假失败，装完由系统拉起或用户双击 · smoke 若 0 候选先查五个普通方案及已启用的可选飞耀方案是否部署，以及 userdb LOCK。
 
-不要用 `rm -rf ~/Library/RimeBuffer` 触发 reseed：该目录还包含 `ai/openai-compatible.json` 等用户凭据和产品持久状态。`build_install.sh` 自带安全重播种逻辑，会保留这些目录；若只想替换应用且完全跳过 userdb 重播种，使用 `RB_KEEP_USERDB=1 ./build_install.sh`。
+不要用 `rm -rf ~/Library/RIMES` 触发 reseed：该目录还包含 `ai/openai-compatible.json` 等用户凭据和产品持久状态。`build_install.sh` 自带安全重播种逻辑，会保留这些目录；若只想替换应用且完全跳过 userdb 重播种，使用 `RB_KEEP_USERDB=1 ./build_install.sh`。
 
 ---
 
@@ -420,7 +453,7 @@ pkill -x RimeBuffer                # 系统会按需重新拉起
 | chord 时序被改坏 | 逐字节移植 + schema 门控 + duration 读配置 + 日志每键可追 |
 | marked text 在个别敌意 App 仍坏 | per-app placeholder 模式表，逐个登记而非全局裸奔 |
 | 每控制器 session 割裂全局开关体感 | activateServer 镜像 + UserDefaults 记忆 |
-| userdb 双实例锁冲突 | 独立 ~/Library/RimeBuffer；转正后统一（§5.12） |
+| userdb 双实例锁冲突 | 独立 ~/Library/RIMES；转正后统一（§5.12） |
 | Squirrel 升级/卸载破坏 dylib 依赖 | 启动路径校验 + 明示错误；P4 考虑自带 librime |
 | Lua 脚本卡死输入线程 | watchdog 记录定位；用户改 Lua 先过 smoke |
 

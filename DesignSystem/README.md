@@ -50,7 +50,7 @@ npm run check
 ## 本分支已确认的产品决策
 
 - 输入源菜单保留「设置」「Buffer」「Clipboard History」「Mailbox」「Capsule」「维护」六个入口；Buffer、Clipboard History、Mailbox、Capsule 是四个同级独立窗口模块。
-- Clipboard History 不是 Buffer rail。`⌘⇧P` 只在当前输入源属于 RIMES 时打开屏幕底部的 nonactivating 独立窗口；切到其他输入法会立即撤销窗口权限。收录开启且无 Secure Input、锁屏、睡眠或会话失活保护时，同一 RIMES 进程将文本、链接、图片、文件及其他原始 representation 持久保存在本机私有 SQLite。图片记录与可解码的图片文件异步加载有界缩略图，卡片显示真实来源 App 图标，图片类别别名也参与搜索。交互借鉴 Paste 的横向卡片时间流：直接输入搜索、左右选择，Shift 加纵向滚轮按反向映射横向移动；单击卡片只改变选择，双击、Return 或 `⌘1`–`⌘9` 才激活。文本/链接经 exact-focus IMK 直接上屏并提升到历史首位；图片、RTF、HTML、文件等富内容只无损恢复到系统剪贴板、提升到首位并静默关闭，由用户自行按 `⌘V`。`⌘C` 复制所选原始表示并提升历史，但保持窗口；Delete 删除，Esc 先清搜索再关闭。历史、原始负载和预览不进仓库，也不做云端或跨设备同步。
+- Capsule 底栏（原 Clipboard History）不是 Buffer rail。`⌘⇧V` 打开屏幕底部的 nonactivating 独立窗口，头部标签在「最近」与只读的 Capsule 条目之间切换，管理窗口只从齿轮或所选卡片的画笔打开；切到其他输入法会立即撤销窗口权限。收录开启且无 Secure Input、锁屏、睡眠或会话失活保护时，同一 RIMES 进程将文本、链接、图片、文件及其他原始 representation 持久保存在本机私有 SQLite。图片记录与可解码的图片文件异步加载有界缩略图，卡片显示真实来源 App 图标，图片类别别名也参与搜索。交互借鉴 Paste 的横向卡片时间流：直接输入搜索、左右选择，Shift 加纵向滚轮按反向映射横向移动；单击卡片只改变选择，双击、Return 或 `⌘1`–`⌘9` 才激活。文本/链接经 exact-focus IMK 直接上屏并提升到历史首位；图片、RTF、HTML、文件等富内容只无损恢复到系统剪贴板、提升到首位并静默关闭，由用户自行按 `⌘V`。`⌘C` 复制所选原始表示并提升历史，但保持窗口；Delete 删除，Esc 先清搜索再关闭。历史、原始负载和预览不进仓库，也不做云端或跨设备同步。
 - 输入法核心设置只保留「输入方案」「词库」，不再显示「键入模式」。普通方案包括雾凇全拼、自然码双拼、小鹤双拼、五笔86和英文。`builtin.fly-chord-learning` 保留为兼容用内部 ID，对外显示为「并击」2.0 扩展，并提供设置、课程、练习、进度四页；扩展开关统一控制普通输入与意识流输入的并击能力。扩展启用时，意识流输入可把并击键序转换为连续全拼；停用时仍可使用顺序全拼。
 - Buffer 当前只展示 AI 生成 2.1、实时翻译 2.1 和意识流输入 1.3。Capsule 不再属于 Buffer 插件目录；Mailbox 也不属于 Buffer 生命周期，只有用户明确触发时才通过桥接把内容送到 Buffer。My Prompt、Remarkable 与 Marine Chrome 不再进入当前目录、配置或模式列表。
 - Buffer 结果数量契约为 1–5 项，当前设计默认 5 项，并使用轨道内 pager 切换。

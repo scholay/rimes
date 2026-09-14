@@ -5,17 +5,28 @@
 # System Settings and the input menu discover a newly installed source.
 set -u
 
-APP="/Library/Input Methods/ETInput.app"
-EXE="$APP/Contents/MacOS/ETInput"
+APP="/Library/Input Methods/RIMES.app"
+EXE="$APP/Contents/MacOS/RIMES"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 . "$SCRIPT_DIR/rimes-install-common.sh"
 USER_AGENT_HELPER="$SCRIPT_DIR/rimes-user-activation-agent.sh"
 USER_AGENT_HELPER_AVAILABLE=0
+COMPANION_AGENT_HELPER="$SCRIPT_DIR/rimes-companion-launch-agent.sh"
+COMPANION_USER_HELPER=""
+COMPANION_USER_HELPER_AVAILABLE=0
 USER_HELPER_STAGE=""
+SYSTEM_AGENT_TRANSACTION_ACTIVE=0
 system_scan=""
 user_scan=""
 
 cleanup_install_temporaries() {
+    if [ "$SYSTEM_AGENT_TRANSACTION_ACTIVE" -eq 1 ]; then
+        if ! /bin/bash "$COMPANION_AGENT_HELPER" \
+                rollback-system-update; then
+            echo "RIMES postinstall: companion LaunchAgent rollback failed"
+        fi
+        SYSTEM_AGENT_TRANSACTION_ACTIVE=0
+    fi
     [ -z "$system_scan" ] || /bin/rm -f "$system_scan"
     [ -z "$user_scan" ] || /bin/rm -f "$user_scan"
     case "$USER_HELPER_STAGE" in
@@ -27,10 +38,51 @@ cleanup_install_temporaries() {
 }
 trap cleanup_install_temporaries EXIT
 
+wait_for_canonical_app_process() {
+    local expected="$EXE"
+    local attempts=0
+    local stable_matches=0
+    local pids pid running_command found
+
+    while [ "$attempts" -lt 20 ]; do
+        pids="$(
+            rimes_run_bounded 2 /usr/bin/pgrep \
+                -U "$RIMES_LOGIN_UID" -x RIMES 2>/dev/null || true
+        )"
+        found=0
+        for pid in $pids; do
+            case "$pid" in
+                ""|*[!0-9]*) continue ;;
+            esac
+            running_command="$(
+                rimes_run_bounded 2 /bin/ps -p "$pid" -o command= \
+                    2>/dev/null || true
+            )"
+            case "$running_command" in
+                "$expected"|"$expected -psn_"*) found=1; break ;;
+            esac
+        done
+        if [ "$found" -eq 1 ]; then
+            stable_matches=$((stable_matches + 1))
+            [ "$stable_matches" -ge 2 ] && return 0
+        else
+            stable_matches=0
+        fi
+        attempts=$((attempts + 1))
+        rimes_run_bounded 1 /bin/sleep 0.25 || return 1
+    done
+    return 1
+}
+
 if [ ! -x "$RIMES_TIMEOUT_HELPER" ] \
     || ! rimes_run_bounded 5 /usr/bin/codesign --verify --strict \
         "$RIMES_TIMEOUT_HELPER"; then
     echo "RIMES postinstall: signed timeout helper is invalid"
+    exit 1
+fi
+if [ ! -x "$COMPANION_AGENT_HELPER" ] \
+    || ! rimes_run_bounded 3 /bin/bash -n "$COMPANION_AGENT_HELPER"; then
+    echo "RIMES postinstall: companion lifecycle helper is invalid"
     exit 1
 fi
 rimes_begin_budget 240 || {
@@ -41,7 +93,7 @@ if ! rimes_run_bounded 5 /bin/test -x "$EXE"; then
     echo "RIMES postinstall: canonical payload executable is missing"
     exit 1
 fi
-if [ "$(rimes_bundle_identifier "$APP")" != "com.isaac.inputmethod.RimeBuffer" ]; then
+if [ "$(rimes_bundle_identifier "$APP")" != "com.scholay.inputmethod.isaac" ]; then
     echo "RIMES postinstall: canonical payload has the wrong bundle identity"
     exit 1
 fi
@@ -51,6 +103,11 @@ if ! rimes_run_bounded 10 /usr/bin/codesign --verify --deep --strict "$APP"; the
 fi
 if ! rimes_run_bounded 5 "$EXE" --rimes-tis-validate-bundle; then
     echo "RIMES postinstall: input-source metadata is invalid"
+    exit 1
+fi
+if ! rimes_run_bounded 10 /bin/bash \
+        "$COMPANION_AGENT_HELPER" rollback-system-update; then
+    echo "RIMES postinstall: unfinished companion transaction could not be restored"
     exit 1
 fi
 
@@ -70,21 +127,28 @@ if [ "$HAS_CONSOLE_USER" -eq 1 ]; then
     case "$USER_HELPER_STAGE" in
         /private/tmp/rimes-postinstall.*)
             staged_agent="$USER_HELPER_STAGE/rimes-user-activation-agent.sh"
+            staged_companion="$USER_HELPER_STAGE/rimes-companion-launch-agent.sh"
             staged_timeout="$USER_HELPER_STAGE/rimes-timeout"
             if rimes_run_bounded 3 /bin/cp \
                     "$USER_AGENT_HELPER" "$staged_agent" \
                 && rimes_run_bounded 3 /bin/cp \
+                    "$COMPANION_AGENT_HELPER" "$staged_companion" \
+                && rimes_run_bounded 3 /bin/cp \
                     "$RIMES_TIMEOUT_HELPER" "$staged_timeout" \
                 && rimes_run_bounded 3 /bin/chmod 755 \
-                    "$staged_agent" "$staged_timeout" \
+                    "$staged_agent" "$staged_companion" "$staged_timeout" \
                 && rimes_run_bounded 3 /usr/bin/cmp -s \
                     "$USER_AGENT_HELPER" "$staged_agent" \
+                && rimes_run_bounded 3 /usr/bin/cmp -s \
+                    "$COMPANION_AGENT_HELPER" "$staged_companion" \
                 && rimes_run_bounded 5 /usr/bin/codesign --verify --strict \
                     "$staged_timeout" \
                 && rimes_run_bounded 3 /bin/chmod 755 \
                     "$USER_HELPER_STAGE"; then
                 USER_AGENT_HELPER="$staged_agent"
                 USER_AGENT_HELPER_AVAILABLE=1
+                COMPANION_USER_HELPER="$staged_companion"
+                COMPANION_USER_HELPER_AVAILABLE=1
             else
                 echo "RIMES postinstall: could not publish the verified user helper"
             fi
@@ -94,6 +158,27 @@ if [ "$HAS_CONSOLE_USER" -eq 1 ]; then
             USER_HELPER_STAGE=""
             ;;
     esac
+fi
+
+# A developer install uses a per-user agent with a different label and app
+# path. Remove it during the supported dev -> package migration so login does
+# not also attempt to open the duplicate that postinstall removes below.
+if [ "$HAS_CONSOLE_USER" -eq 1 ] \
+    && [ "$COMPANION_USER_HELPER_AVAILABLE" -ne 1 ]; then
+    # Without the user-side helper we cannot prove an earlier development
+    # bootstrap is absent. Publishing the system agent would allow two app
+    # paths with the same TIS identity to launch at the next login.
+    echo "RIMES postinstall: cannot verify retirement of the development bootstrap"
+    exit 1
+fi
+if [ "$COMPANION_USER_HELPER_AVAILABLE" -eq 1 ]; then
+    if rimes_run_login_user_bounded_with_timeout 10 \
+        /bin/bash "$COMPANION_USER_HELPER" remove-user; then
+        echo "RIMES postinstall: retired the per-user development bootstrap"
+    else
+        echo "RIMES postinstall: could not retire the per-user development bootstrap"
+        exit 1
+    fi
 fi
 
 # Remove every other immediate .app in the two supported Input Methods roots
@@ -243,12 +328,44 @@ if [ "$HAS_CONSOLE_USER" -eq 1 ]; then
 fi
 
 if [ "$DUPLICATE_CONFLICTS" -ne 0 ]; then
-    echo "RIMES postinstall: duplicate paths remain; remove the logged paths before retrying activation"
+    echo "RIMES postinstall: duplicate paths remain; refusing the companion bootstrap"
+    exit 1
+fi
+
+# Re-audit after retiring the console user's dev install. This closes the race
+# between preinstall and publication and proves that no local account still has
+# an exact per-user bundle or login agent with the package's frozen identity.
+if ! rimes_run_bounded 15 /bin/bash "$COMPANION_AGENT_HELPER" \
+        audit-system-conflicts none; then
+    echo "RIMES postinstall: a per-user development install still conflicts with the system package"
+    exit 1
+fi
+
+# Begin the cross-script transaction only after the development agent is absent
+# and both supported Input Methods roots have been reconciled. It runs
+# `open -g` once per Aqua login, has no KeepAlive policy, and never manipulates
+# Apple's input-method agents.
+if ! rimes_run_bounded 10 /bin/bash \
+        "$COMPANION_AGENT_HELPER" begin-system-update; then
+    echo "RIMES postinstall: companion login bootstrap snapshot failed"
+    exit 1
+fi
+SYSTEM_AGENT_TRANSACTION_ACTIVE=1
+if ! rimes_run_bounded 10 /bin/bash \
+        "$COMPANION_AGENT_HELPER" install-system; then
+    echo "RIMES postinstall: companion login bootstrap installation failed"
+    exit 1
 fi
 
 if [ "$HAS_CONSOLE_USER" -ne 1 ]; then
     # Never make PackageKit synchronously wait on a TIS call without a parent
     # watchdog. Activation is per-user and must be completed from a GUI login.
+    if ! rimes_run_bounded 10 /bin/bash \
+            "$COMPANION_AGENT_HELPER" commit-system-update; then
+        echo "RIMES postinstall: companion login bootstrap commit failed"
+        exit 1
+    fi
+    SYSTEM_AGENT_TRANSACTION_ACTIVE=0
     echo "RIMES postinstall: payload installed; activate RIMES after GUI login"
     exit 0
 fi
@@ -256,8 +373,20 @@ fi
 # Never kill imklaunchagent or TextInputMenuAgent here. They are Apple-owned
 # implementation details, and restarting them immediately before TIS calls is
 # exactly the race that made successful enable calls fail later verification.
-rimes_run_console_user_bounded 3 /usr/bin/killall ETInput 2>/dev/null || true
+for legacy_exe in RIMES ETInput RimeBuffer; do
+    rimes_run_console_user_bounded 3 /usr/bin/killall "$legacy_exe" 2>/dev/null || true
+done
 rimes_run_console_user_bounded 3 /usr/bin/killall RimeBuffer 2>/dev/null || true
+if ! rimes_run_bounded 5 /bin/bash "$COMPANION_AGENT_HELPER" \
+        wait-user-processes-stopped "$RIMES_LOGIN_UID"; then
+    echo "RIMES postinstall: old RIMES process did not stop; refusing to validate it as the new payload"
+    exit 1
+fi
+if ! rimes_run_bounded 3 /bin/bash "$COMPANION_AGENT_HELPER" \
+        audit-system-processes none; then
+    echo "RIMES postinstall: another RIMES process appeared during replacement"
+    exit 1
+fi
 
 ACTIVATION_READY=0
 if [ "$DUPLICATE_CONFLICTS" -eq 0 ] \
@@ -291,5 +420,16 @@ else
     fi
 fi
 
-rimes_run_console_user_bounded 5 /usr/bin/open "$APP" 2>/dev/null || true
+rimes_run_console_user_bounded 5 /usr/bin/open -g "$APP" 2>/dev/null || true
+if ! wait_for_canonical_app_process; then
+    echo "RIMES postinstall: canonical app did not remain running"
+    exit 1
+fi
+if ! rimes_run_bounded 10 /bin/bash \
+        "$COMPANION_AGENT_HELPER" commit-system-update; then
+    echo "RIMES postinstall: companion login bootstrap commit failed"
+    exit 1
+fi
+SYSTEM_AGENT_TRANSACTION_ACTIVE=0
+echo "RIMES postinstall: canonical app is running; companion shortcuts are resident"
 exit 0

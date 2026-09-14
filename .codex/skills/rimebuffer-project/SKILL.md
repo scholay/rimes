@@ -19,7 +19,7 @@ Before editing, read the relevant local source and `ARCHITECTURE.md`. For nontri
 - Keep marked text active while composing; this prevents raw-letter leaks and makes caret rect lookup reliable.
 - Keep one Rime session per `IMKInputController`; do not reintroduce a shared session.
 - Treat `CRimeBridge.cpp` vtable order as load-bearing; only append wrappers unless the ABI is revalidated.
-- Keep `~/Library/RimeBuffer` isolated from Squirrel's `~/Library/Rime` until a deliberate sync/direct-use migration is implemented.
+- Keep `~/Library/RIMES` isolated from Squirrel's `~/Library/Rime` until a deliberate sync/direct-use migration is implemented.
 - Do not run `build_install.sh` unless the user wants a live install/restart. It kills/replaces the running input method.
 
 ## Workflow
@@ -33,7 +33,7 @@ Before editing, read the relevant local source and `ARCHITECTURE.md`. For nontri
 
 ## Debugging
 
-Use `~/rimebuffer.log` for high-level behavior and `~/Library/RimeBuffer/*.log` for librime logs. For real typing issues, capture: active app bundle id, schema id, key path, Rime handled flag, commit path, composition mode, candidate window rect source, and whether buffer mode is enabled.
+Use `~/rimebuffer.log` for high-level behavior and `~/Library/RIMES/*.log` for librime logs. For real typing issues, capture: active app bundle id, schema id, key path, Rime handled flag, commit path, composition mode, candidate window rect source, and whether buffer mode is enabled.
 
 ## References
 

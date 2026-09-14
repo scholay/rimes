@@ -7,6 +7,14 @@ import Foundation
 enum Origin: Equatable {
     /// Local Rime commit — the only origin that exists before the workbench.
     case rime
+    /// Typed into the workbench's own field while another input method owned
+    /// the keyboard. Still the user typing locally — the distinction from
+    /// `.rime` is which input method composed it, which matters for a log
+    /// read weeks later and for nothing else.
+    case localInput(inputSourceID: String)
+    /// Text explicitly imported from the system pasteboard while the workbench
+    /// is operating without an IMK capture target.
+    case clipboard
     /// Marine local-agent draft (transitional; folds into `.mcp` once Marine
     /// moves onto the MCP gateway).
     case marine
@@ -47,6 +55,8 @@ enum Origin: Equatable {
     var tag: String {
         switch self {
         case .rime: return "rime"
+        case let .localInput(inputSourceID): return "local:\(inputSourceID)"
+        case .clipboard: return "clipboard"
         case .marine: return "marine"
         case let .plugin(id): return "plugin:\(id)"
         case let .processor(id, _): return "processor:\(id)"

@@ -59,6 +59,21 @@ func runTypingSpeedStoreSmokeTest() -> Bool {
             return fail("same-session aggregation")
         }
 
+        let separated = TypingSpeedStore(storageRoot: root.appendingPathComponent("boundaries"),
+                                         autosaveDelay: 60)
+        separated.consume(.commit(.init(characterCount: 2, timestamp: firstTimestamp,
+                                         source: .direct, schemaID: "smoke")))
+        separated.consume(.commit(.init(characterCount: 2, timestamp: firstTimestamp + 2,
+                                         source: .direct, schemaID: "smoke")))
+        separated.endCurrentSession()
+        separated.consume(.commit(.init(characterCount: 2, timestamp: firstTimestamp + 4,
+                                         source: .direct, schemaID: "smoke")))
+        guard separated.snapshot(for: firstDay).activeSeconds == 2,
+              separated.snapshot(for: firstDay).sessionCount == 2 else {
+            return fail("practice/disabled time bridged into daily active duration")
+        }
+        separated.saveNow()
+
         // More than the inactivity threshold creates another session without
         // adding idle time to either the session or its daily aggregate.
         store.consume(.key(.init(keyID: privateKeyID,

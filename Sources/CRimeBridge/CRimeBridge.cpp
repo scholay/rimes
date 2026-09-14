@@ -578,6 +578,9 @@ bool BBRimeGetContext(uint64_t session, BBRimeContext* out) {
     out->preedit = gCtxPreedit.c_str();
     out->input = gCtxInput.c_str();
     out->cursorPos = context.composition.cursor_pos;
+    out->inputCaretPos = gApi->get_caret_pos
+        ? static_cast<int>(gApi->get_caret_pos(static_cast<RimeSessionId>(session)))
+        : -1;
     out->selStart = context.composition.sel_start;
     out->selEnd = context.composition.sel_end;
     out->pageSize = context.menu.page_size;

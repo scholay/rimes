@@ -110,7 +110,7 @@ final class TypingSpeedStore {
         let root = storageRoot
             ?? environmentRoot.map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/RimeBuffer")
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)")
         url = root.appendingPathComponent("stats/typing_speed.json")
         self.autosaveDelay = autosaveDelay
         self.inactivityThreshold = max(1, inactivityThreshold)
@@ -255,6 +255,13 @@ final class TypingSpeedStore {
             recentSessions: sessions,
             bestCharactersPerMinute: sessions.map(\.charactersPerMinute).max() ?? 0
         )
+    }
+
+    /// Do not bridge an excluded practice session or a disabled collector
+    /// into the surrounding day's active-time denominator.
+    func endCurrentSession() {
+        currentSessionIndex = nil
+        lastEventAt = nil
     }
 
     func clearAll() {

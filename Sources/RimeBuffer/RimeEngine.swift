@@ -388,12 +388,12 @@ final class RimeEngine {
         return RimeEngine.squirrelFrameworks
     }()
 
-    // Its OWN user dir (~/Library/RimeBuffer). Separate from Squirrel's so the
+    // Its OWN user dir (~/Library/RIMES). Separate from Squirrel's so the
     // two never fight over the same userdb LevelDB lock — that lock conflict
     // silently kills candidates. First run deploys into it from sharedDataDir.
     // RIMEBUFFER_USER_DIR overrides it (used by the CLI smoke harness).
     private static let defaultUserDir = URL(fileURLWithPath: NSHomeDirectory())
-        .appendingPathComponent("Library/RimeBuffer").path
+        .appendingPathComponent("Library/\(RimesPaths.directoryName)").path
     private let userDataDir = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DIR"]
         ?? RimeEngine.defaultUserDir
     private let logDir = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DIR"]
@@ -698,6 +698,7 @@ final class RimeEngine {
         model.preedit = ctx.preedit.map { String(cString: $0) } ?? ""
         model.input = ctx.input.map { String(cString: $0) } ?? ""
         model.cursorPos = Int(ctx.cursorPos)
+        model.inputCaretPos = ctx.inputCaretPos >= 0 ? Int(ctx.inputCaretPos) : nil
         model.selStart = Int(ctx.selStart)
         model.selEnd = Int(ctx.selEnd)
         model.pageSize = Int(ctx.pageSize)

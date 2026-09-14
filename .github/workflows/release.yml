@@ -67,10 +67,10 @@ jobs:
           test "$PARENT_ID" = "$BUNDLE_ID"
           test "$PARENT_ID" != "$MODE_ID"
           test "$MODE_ID" = "$DECLARED_MODE_ID"
-          test "$CONNECTION" = 'RimeBuffer_1_Connection'
+          test "$CONNECTION" = 'RIMES_1_Connection'
           test "$DISPLAY_NAME" = 'RIMES'
           test "$MENU_TITLE" = 'RIMES'
-          test "$EXECUTABLE" = 'ETInput'
+          test "$EXECUTABLE" = 'RIMES'
           test "$CHILD_REPERTOIRE" = 'Array{HansHant}'
           # Freeze the input-source identity to exact literals. The structure
           # checks above still pass if the whole trio is renamed together, but
@@ -78,8 +78,8 @@ jobs:
           # orphans the old rows and stacks duplicate "RIMES" entries in
           # System Settings (this bit us across the 0.3–0.4 renames — see
           # RELEASE.md). Never change these without a migration story.
-          test "$BUNDLE_ID" = 'com.isaac.inputmethod.RimeBuffer'
-          test "$MODE_ID" = 'com.isaac.inputmethod.RimeBuffer.Hans'
+          test "$BUNDLE_ID" = 'com.scholay.inputmethod.isaac'
+          test "$MODE_ID" = 'com.scholay.inputmethod.isaac.Hans'
           test "$MODE_ID" = "${BUNDLE_ID}.Hans"
           for STRINGS in Resources/*.lproj/InfoPlist.strings; do
             plutil -lint "$STRINGS"
@@ -96,12 +96,12 @@ jobs:
             exit 1
           fi
           plutil -lint scripts/pkg/component.plist
-          test "$(/usr/libexec/PlistBuddy -c 'Print :0:RootRelativeBundlePath' scripts/pkg/component.plist)" = 'ETInput.app'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :0:RootRelativeBundlePath' scripts/pkg/component.plist)" = 'RIMES.app'
           test "$(/usr/libexec/PlistBuddy -c 'Print :0:BundleIsRelocatable' scripts/pkg/component.plist)" = 'false'
           test "$(/usr/libexec/PlistBuddy -c 'Print :0:BundleIsVersionChecked' scripts/pkg/component.plist)" = 'true'
           test "$(/usr/libexec/PlistBuddy -c 'Print :0:BundleOverwriteAction' scripts/pkg/component.plist)" = 'upgrade'
-          # false is deliberate: the same frozen ETInput.app path must migrate
-          # the pre-0.4.2 com.isaac.inputmethod.ETInput identity. preinstall
+          # false is deliberate: the RIMES.app path must migrate installs
+          # left under the retired identities. preinstall
           # rejects every unrelated occupant before payload replacement.
           test "$(/usr/libexec/PlistBuddy -c 'Print :0:BundleHasStrictIdentifier' scripts/pkg/component.plist)" = 'false'
           bash -n build_install.sh
@@ -113,6 +113,7 @@ jobs:
           bash -n scripts/fetch-rime.sh
           bash -n scripts/pkg/scripts/rimes-install-common.sh
           bash -n scripts/pkg/scripts/rimes-user-activation-agent.sh
+          bash -n scripts/pkg/scripts/rimes-companion-launch-agent.sh
           bash -n scripts/pkg/scripts/preinstall
           bash -n scripts/pkg/scripts/postinstall
           if /usr/bin/grep -REn '(/usr/bin/)?(killall|pkill)[[:space:]]+.*(TextInputMenuAgent|imklaunchagent|SystemUIServer)' \
@@ -240,13 +241,18 @@ jobs:
           # bytes are re-signed below for a formal release.
           RIMES_REQUIRE_SIGNING: 'false'
         run: |
-          APP="ETInput.app"
+          APP="RIMES.app"
           rm -rf "$APP"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" \
                    "$APP/Contents/Frameworks" "$APP/Contents/SharedSupport"
-          # SPM target is still "RimeBuffer"; ETInput is the frozen internal
+          # SPM product is still named RimeBuffer; the shipped executable is RIMES.
           # compatibility filename while the user-facing product is RIMES.
-          cp "$BIN_DIR/RimeBuffer" "$APP/Contents/MacOS/ETInput"
+          cp "$BIN_DIR/RimeBuffer" "$APP/Contents/MacOS/RIMES"
+          for resource_bundle in "$BIN_DIR/"*.bundle; do
+            [ -d "$resource_bundle" ] || continue
+            cp -R "$resource_bundle" "$APP/Contents/Resources/"
+          done
+          cp THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
           cp Info.plist "$APP/Contents/Info.plist"
           cp -R Vendor/rime/Frameworks/* "$APP/Contents/Frameworks/"
           cp -R Vendor/rime/SharedSupport/* "$APP/Contents/SharedSupport/"
@@ -263,7 +269,7 @@ jobs:
           # after every executable smoke test has completed successfully.
           ./scripts/sign-macos-app.sh "$APP"
           echo "----- assembled bundle -----"
-          file "$APP/Contents/MacOS/ETInput"
+          file "$APP/Contents/MacOS/RIMES"
           du -sh "$APP"
 
       # Unlike the stock debug CI runner, the assembled app now contains the
@@ -272,10 +278,12 @@ jobs:
       # disposable roots before packaging the release.
       - name: Verify bundled Rime runtime and user dictionary bridge
         run: |
-          APP="$GITHUB_WORKSPACE/ETInput.app"
-          BIN="$APP/Contents/MacOS/ETInput"
+          APP="$GITHUB_WORKSPACE/RIMES.app"
+          BIN="$APP/Contents/MacOS/RIMES"
           SHARED="$APP/Contents/SharedSupport"
           FRAMEWORKS="$APP/Contents/Frameworks"
+          "$BIN" buffer-music-smoke
+          "$BIN" buffer-music-audio-smoke
           ENGINE_ROOT="$RUNNER_TEMP/rimebuffer-engine-smoke"
           LEXICON_ROOT="$RUNNER_TEMP/rimebuffer-lexicon-smoke"
           mkdir -p "$ENGINE_ROOT" "$LEXICON_ROOT"
@@ -298,13 +306,13 @@ jobs:
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           set -euo pipefail
-          APP_ZIP="ETInput-${VERSION}.zip"
+          APP_ZIP="RIMES-${VERSION}.zip"
           PKG="RIMES-${VERSION}.pkg"
-          codesign --verify --deep --strict --verbose=2 ETInput.app
-          app_signature="$(codesign --display --verbose=4 ETInput.app 2>&1)"
+          codesign --verify --deep --strict --verbose=2 RIMES.app
+          app_signature="$(codesign --display --verbose=4 RIMES.app 2>&1)"
           printf '%s\n' "$app_signature" | grep -Fq 'Signature=adhoc'
-          ditto -c -k --sequesterRsrc --keepParent ETInput.app "$APP_ZIP"
-          ./scripts/make-pkg.sh "$VERSION" ETInput.app "$PKG"
+          ditto -c -k --sequesterRsrc --keepParent RIMES.app "$APP_ZIP"
+          ./scripts/make-pkg.sh "$VERSION" RIMES.app "$PKG"
 
           set +e
           pkg_signature="$(/usr/sbin/pkgutil --check-signature "$PKG" 2>&1)"
@@ -354,28 +362,28 @@ jobs:
             exit 1
           fi
 
-          app='/Library/Input Methods/ETInput.app'
+          app='/Library/Input Methods/RIMES.app'
           info="$app/Contents/Info.plist"
-          bin="$app/Contents/MacOS/ETInput"
+          bin="$app/Contents/MacOS/RIMES"
           [[ -d "$app" && ! -L "$app" && -f "$info" && -x "$bin" ]]
           plutil -lint "$info"
           bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")
           parent_id=$(/usr/libexec/PlistBuddy -c 'Print :TISInputSourceID' "$info")
           mode_id=$(/usr/libexec/PlistBuddy -c 'Print :ComponentInputModeDict:tsVisibleInputModeOrderedArrayKey:0' "$info")
           declared_mode_id=$(/usr/libexec/PlistBuddy -c "Print :ComponentInputModeDict:tsInputModeListKey:${mode_id}:TISInputSourceID" "$info")
-          [[ "$bundle_id" == com.isaac.inputmethod.RimeBuffer ]]
+          [[ "$bundle_id" == com.scholay.inputmethod.isaac ]]
           [[ "$parent_id" == "$bundle_id" ]]
-          [[ "$mode_id" == com.isaac.inputmethod.RimeBuffer.Hans ]]
+          [[ "$mode_id" == com.scholay.inputmethod.isaac.Hans ]]
           [[ "$declared_mode_id" == "$mode_id" ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")" == "$VERSION" ]]
-          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info")" == ETInput ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info")" == RIMES ]]
           codesign --verify --deep --strict --verbose=2 "$app"
           installed_signature="$(codesign --display --verbose=4 "$app" 2>&1)"
           printf '%s\n' "$installed_signature" | grep -Fq 'Signature=adhoc'
           lipo "$bin" -verify_arch arm64 x86_64
           "$bin" input-source-install-smoke
 
-          receipt="$(pkgutil --pkg-info com.isaac.inputmethod.RimeBuffer)"
+          receipt="$(pkgutil --pkg-info com.scholay.inputmethod.isaac)"
           printf '%s\n' "$receipt" | grep -Fq "version: $VERSION"
           printf '%s\n' "$receipt" | grep -Fq 'location: Library/Input Methods'
 
@@ -391,7 +399,7 @@ jobs:
           retention-days: 7
 
       # Build a dedicated, immutable handoff for the fresh public-preview job.
-      # ETInput-handoff.zip is an internal verification input only and is never
+      # RIMES-handoff.zip is an internal verification input only and is never
       # attached to the GitHub Release; end users receive the guided PKG.
       - name: Stage immutable unsigned-preview inputs
         if: steps.version.outputs.IS_UNSIGNED_PREVIEW == 'true'
@@ -404,9 +412,9 @@ jobs:
           handoff="$RUNNER_TEMP/rimes-unsigned-preview-inputs"
           [[ ! -e "$handoff" ]]
           mkdir -m 700 "$handoff"
-          app_archive='ETInput-handoff.zip'
+          app_archive='RIMES-handoff.zip'
           ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent \
-            "$GITHUB_WORKSPACE/ETInput.app" "$handoff/$app_archive"
+            "$GITHUB_WORKSPACE/RIMES.app" "$handoff/$app_archive"
           cp "$PKG" "$handoff/$PKG"
 
           {
@@ -475,7 +483,7 @@ jobs:
           # AppleDouble sidecars. The signing runner applies its own strict ZIP
           # member policy and never calls a general-purpose extractor here.
           ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent \
-            "$GITHUB_WORKSPACE/ETInput.app" "$handoff/ETInput-handoff.zip"
+            "$GITHUB_WORKSPACE/RIMES.app" "$handoff/RIMES-handoff.zip"
 
           {
             printf 'commit=%s\n' "$GITHUB_SHA"
@@ -516,7 +524,7 @@ jobs:
       github.repository == 'scholay/rimes'
     runs-on: macos-15
     # This fresh runner receives no Developer ID/App Store Connect secrets and
-    # never executes ETInput. Its only elevated capability is creating the
+    # never executes RIMES. Its only elevated capability is creating the
     # explicitly marked GitHub pre-release after passive byte/metadata checks.
     permissions:
       contents: write
@@ -586,7 +594,7 @@ jobs:
 
           handoff="$RUNNER_TEMP/rimes-unsigned-preview-inputs"
           pkg="RIMES-${VERSION}.pkg"
-          app_archive='ETInput-handoff.zip'
+          app_archive='RIMES-handoff.zip'
           context="$handoff/context.txt"
           [[ -d "$handoff" && ! -L "$handoff" ]]
           [[ -f "$context" && ! -L "$context" ]]
@@ -697,7 +705,7 @@ jobs:
           product_distribution="$expanded/Distribution"
           package_info="$component/PackageInfo"
           payload="$component/Payload"
-          payload_app="$payload/ETInput.app"
+          payload_app="$payload/RIMES.app"
 
           printf '%s\n' Distribution Resources component.pkg | LC_ALL=C sort \
             >"$verify_root/expected-product-members"
@@ -717,6 +725,7 @@ jobs:
           printf '%s\n' \
             postinstall preinstall rimes-install-common.sh \
             rimes-timeout rimes-update-handoff rimes-user-activation-agent.sh \
+            rimes-companion-launch-agent.sh \
             | LC_ALL=C sort >"$verify_root/expected-script-members"
           find "$component/Scripts" -mindepth 1 -maxdepth 1 -type f \
             -exec basename {} \; | LC_ALL=C sort >"$verify_root/actual-script-members"
@@ -728,10 +737,10 @@ jobs:
             exit 1
           fi
 
-          [[ "$(xmllint --xpath "count(/installer-gui-script/pkg-ref[@id='com.isaac.inputmethod.RimeBuffer' and @version='$VERSION' and text()='#component.pkg'])" "$product_distribution")" == 1 ]]
-          [[ "$(xmllint --xpath "count(/pkg-info[@identifier='com.isaac.inputmethod.RimeBuffer' and @version='$VERSION'])" "$package_info")" == 1 ]]
+          [[ "$(xmllint --xpath "count(/installer-gui-script/pkg-ref[@id='com.scholay.inputmethod.isaac' and @version='$VERSION' and text()='#component.pkg'])" "$product_distribution")" == 1 ]]
+          [[ "$(xmllint --xpath "count(/pkg-info[@identifier='com.scholay.inputmethod.isaac' and @version='$VERSION'])" "$package_info")" == 1 ]]
           [[ "$(xmllint --xpath 'count(/pkg-info/bundle)' "$package_info")" == 1 ]]
-          [[ "$(xmllint --xpath "count(/pkg-info/bundle[@id='com.isaac.inputmethod.RimeBuffer' and @path='./ETInput.app' and @CFBundleShortVersionString='$VERSION'])" "$package_info")" == 1 ]]
+          [[ "$(xmllint --xpath "count(/pkg-info/bundle[@id='com.scholay.inputmethod.isaac' and @path='./RIMES.app' and @CFBundleShortVersionString='$VERSION'])" "$package_info")" == 1 ]]
           [[ "$(xmllint --xpath 'count(/pkg-info/strict-identifier/bundle)' "$package_info")" == 0 ]]
           [[ "$(xmllint --xpath 'count(/pkg-info/relocate/bundle)' "$package_info")" == 0 ]]
           grep -Eq '<pkg-info[^>]*relocatable="false"' "$package_info"
@@ -739,19 +748,19 @@ jobs:
           grep -Fq '<postinstall file="./postinstall"' "$package_info"
 
           info="$payload_app/Contents/Info.plist"
-          bin="$payload_app/Contents/MacOS/ETInput"
+          bin="$payload_app/Contents/MacOS/RIMES"
           [[ -f "$info" && -x "$bin" ]]
           plutil -lint "$info"
           bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")
           parent_id=$(/usr/libexec/PlistBuddy -c 'Print :TISInputSourceID' "$info")
           mode_id=$(/usr/libexec/PlistBuddy -c 'Print :ComponentInputModeDict:tsVisibleInputModeOrderedArrayKey:0' "$info")
           declared_mode_id=$(/usr/libexec/PlistBuddy -c "Print :ComponentInputModeDict:tsInputModeListKey:${mode_id}:TISInputSourceID" "$info")
-          [[ "$bundle_id" == com.isaac.inputmethod.RimeBuffer ]]
+          [[ "$bundle_id" == com.scholay.inputmethod.isaac ]]
           [[ "$parent_id" == "$bundle_id" ]]
-          [[ "$mode_id" == com.isaac.inputmethod.RimeBuffer.Hans ]]
+          [[ "$mode_id" == com.scholay.inputmethod.isaac.Hans ]]
           [[ "$declared_mode_id" == "$mode_id" ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")" == "$VERSION" ]]
-          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info")" == ETInput ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info")" == RIMES ]]
           lipo "$bin" -verify_arch arm64 x86_64
           codesign --verify --deep --strict --verbose=2 "$payload_app"
           app_signature="$(codesign --display --verbose=4 "$payload_app" 2>&1)"
@@ -795,7 +804,7 @@ jobs:
           done
 
           # Compare the handoff ZIP directly against the package payload. No
-          # archive member is extracted and ETInput is never executed here.
+          # archive member is extracted and RIMES is never executed here.
           python3 - "$handoff/$app_archive" "$payload_app" <<'PY'
           import hashlib
           import os
@@ -918,7 +927,7 @@ jobs:
                       if archived_digest.digest() != source_digest.digest():
                           reject(label, f"bytes differ from source: {name!r}")
 
-          compare_archive(sys.argv[1], sys.argv[2], "ETInput handoff")
+          compare_archive(sys.argv[1], sys.argv[2], "RIMES handoff")
           PY
 
           publish_dir="$RUNNER_TEMP/rimes-unsigned-preview-assets"
@@ -1095,7 +1104,7 @@ jobs:
           [[ "$(sed -n '2p' "$context")" == "version=$VERSION" ]]
           [[ "$(sed -n '3p' "$context")" == "is_release=$IS_RELEASE" ]]
           [[ "$(find "$handoff" -mindepth 1 -maxdepth 1 | wc -l | tr -d '[:space:]')" == 3 ]]
-          [[ -f "$handoff/ETInput-handoff.zip" && ! -L "$handoff/ETInput-handoff.zip" ]]
+          [[ -f "$handoff/RIMES-handoff.zip" && ! -L "$handoff/RIMES-handoff.zip" ]]
           [[ -f "$handoff/SHA256SUMS" && ! -L "$handoff/SHA256SUMS" ]]
           if find "$handoff" -mindepth 1 \( -type l -o \( ! -type d ! -type f \) \) \
               -print -quit | grep -q .; then
@@ -1110,7 +1119,7 @@ jobs:
             }
             relative="${BASH_REMATCH[1]}"
             case "$relative" in
-              ETInput-handoff.zip|context.txt) ;;
+              RIMES-handoff.zip|context.txt) ;;
               *) echo "Unexpected handoff checksum path: $relative" >&2; exit 1 ;;
             esac
             checksum_count=$((checksum_count + 1))
@@ -1119,7 +1128,7 @@ jobs:
           [[ "$checksum_count" -eq "$regular_count" && "$checksum_count" -eq 2 ]]
           (cd "$handoff" && shasum -a 256 -c SHA256SUMS)
 
-          for bounded_input in "$handoff/ETInput-handoff.zip"; do
+          for bounded_input in "$handoff/RIMES-handoff.zip"; do
             bytes="$(stat -f%z "$bounded_input")"
             [[ "$bytes" -gt 0 && "$bytes" -le 536870912 ]] || {
               echo "Cross-runner input exceeds 512 MiB: $bounded_input" >&2
@@ -1130,7 +1139,7 @@ jobs:
           app_root="$RUNNER_TEMP/rimes-passive-app"
           [[ ! -e "$app_root" ]]
           mkdir -m 700 "$app_root"
-          python3 - "$handoff/ETInput-handoff.zip" "$app_root" <<'PY'
+          python3 - "$handoff/RIMES-handoff.zip" "$app_root" <<'PY'
           import os
           import stat
           import sys
@@ -1146,7 +1155,7 @@ jobs:
           read_chunk_bytes = 1024 * 1024
 
           def reject(reason: str) -> None:
-              raise SystemExit(f"unsafe ETInput handoff ZIP: {reason}")
+              raise SystemExit(f"unsafe RIMES handoff ZIP: {reason}")
 
           destination_metadata = os.lstat(destination)
           if (
@@ -1191,8 +1200,8 @@ jobs:
                   parts = tuple(stripped_name.split("/"))
                   if not stripped_name or any(part in ("", ".", "..") for part in parts):
                       reject(f"empty, dot, or parent path component: {name!r}")
-                  if parts[0] != "ETInput.app":
-                      reject(f"entry is outside ETInput.app: {name!r}")
+                  if parts[0] != "RIMES.app":
+                      reject(f"entry is outside RIMES.app: {name!r}")
                   if any(part == "__MACOSX" or part.startswith("._") for part in parts):
                       reject(f"AppleDouble/resource-fork entry: {name!r}")
                   if len(stripped_name.encode("utf-8")) > 4096 \
@@ -1254,9 +1263,9 @@ jobs:
                   entry_kinds[canonical_name] = kind
                   records.append((info, parts, kind, extracted_mode))
 
-              root_key = unicodedata.normalize("NFC", "ETInput.app").casefold()
+              root_key = unicodedata.normalize("NFC", "RIMES.app").casefold()
               if entry_kinds.get(root_key) != "directory":
-                  reject("ETInput.app root directory entry is missing")
+                  reject("RIMES.app root directory entry is missing")
               for _info, parts, _kind, _mode in records:
                   canonical_parts = []
                   for part in parts[:-1]:
@@ -1302,16 +1311,16 @@ jobs:
                   os.chmod(target, extracted_mode, follow_symlinks=False)
           PY
           [[ "$(find "$app_root" -mindepth 1 -maxdepth 1 | wc -l | tr -d '[:space:]')" == 1 ]]
-          app="$app_root/ETInput.app"
-          bin="$app/Contents/MacOS/ETInput"
+          app="$app_root/RIMES.app"
+          bin="$app/Contents/MacOS/RIMES"
           [[ -d "$app" && ! -L "$app" && -x "$bin" ]]
           if find "$app" -type l -print -quit | grep -q .; then
             echo 'Smoke-tested app contains an unexpected symlink.' >&2
             exit 1
           fi
-          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" == 'com.isaac.inputmethod.RimeBuffer' ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" == 'com.scholay.inputmethod.isaac' ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" == "$VERSION" ]]
-          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" == 'ETInput' ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" == 'RIMES' ]]
           lipo "$bin" -verify_arch arm64 x86_64
           codesign --verify --deep --strict --verbose=2 "$app"
           app_signature="$(codesign --display --verbose=4 "$app" 2>&1)"
@@ -1385,7 +1394,7 @@ jobs:
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
         run: |
           set -euo pipefail
-          ZIP="ETInput-${VERSION}.zip"
+          ZIP="RIMES-${VERSION}.zip"
           # Preserve the Developer ID signature and the already-stapled
           # notarization ticket. Manual artifacts are built in build_and_smoke.
           ditto -c -k --sequesterRsrc --keepParent "$RIMES_APP_PATH" "$ZIP"
@@ -1437,7 +1446,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$(basename "$PKG")" == "RIMES-${VERSION}.pkg" ]]
-          [[ "$(basename "$APP_ZIP")" == "ETInput-${VERSION}.zip" ]]
+          [[ "$(basename "$APP_ZIP")" == "RIMES-${VERSION}.zip" ]]
 
           for asset in "$PKG" "$APP_ZIP"; do
             [[ -f "$asset" && ! -L "$asset" && -s "$asset" ]] || {
@@ -1457,8 +1466,8 @@ jobs:
           verify_root="$(mktemp -d "$RUNNER_TEMP/rimes-macos-release.XXXXXX")"
           trap 'rm -rf "$verify_root"' EXIT
           ditto -x -k "$APP_ZIP" "$verify_root/app"
-          extracted_app="$verify_root/app/ETInput.app"
-          extracted_bin="$extracted_app/Contents/MacOS/ETInput"
+          extracted_app="$verify_root/app/RIMES.app"
+          extracted_bin="$extracted_app/Contents/MacOS/RIMES"
           [[ -x "$extracted_bin" ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$extracted_app/Contents/Info.plist")" == "$VERSION" ]]
           lipo "$extracted_bin" -verify_arch arm64 x86_64
@@ -1492,29 +1501,30 @@ jobs:
 
           xar -tf "$PKG" | grep -x 'Distribution' >/dev/null
           pkgutil --payload-files "$PKG" \
-            | grep -E '(^|/)ETInput\.app/Contents/MacOS/ETInput$' >/dev/null
+            | grep -E '(^|/)RIMES\.app/Contents/MacOS/RIMES$' >/dev/null
 
           expanded_pkg="$verify_root/pkg"
           pkgutil --expand-full "$PKG" "$expanded_pkg"
           product_distribution="$expanded_pkg/Distribution"
           component_dir="$expanded_pkg/component.pkg"
           package_info="$component_dir/PackageInfo"
-          payload_app="$component_dir/Payload/ETInput.app"
+          payload_app="$component_dir/Payload/RIMES.app"
           [[ -f "$product_distribution" ]]
           [[ -f "$package_info" ]]
           [[ -x "$component_dir/Scripts/preinstall" ]]
           [[ -x "$component_dir/Scripts/postinstall" ]]
           [[ -f "$component_dir/Scripts/rimes-install-common.sh" ]]
           [[ -f "$component_dir/Scripts/rimes-user-activation-agent.sh" ]]
+          [[ -x "$component_dir/Scripts/rimes-companion-launch-agent.sh" ]]
           [[ -x "$component_dir/Scripts/rimes-timeout" ]]
           [[ -x "$component_dir/Scripts/rimes-update-handoff" ]]
-          [[ "$(xmllint --xpath "count(/installer-gui-script/pkg-ref[@id='com.isaac.inputmethod.RimeBuffer' and @version='$VERSION' and text()='#component.pkg'])" "$product_distribution")" == '1' ]]
+          [[ "$(xmllint --xpath "count(/installer-gui-script/pkg-ref[@id='com.scholay.inputmethod.isaac' and @version='$VERSION' and text()='#component.pkg'])" "$product_distribution")" == '1' ]]
           grep -Eq '<pkg-info[^>]*relocatable="false"' "$package_info"
-          grep -Fq "identifier=\"com.isaac.inputmethod.RimeBuffer\"" "$package_info"
+          grep -Fq "identifier=\"com.scholay.inputmethod.isaac\"" "$package_info"
           grep -Fq "version=\"$VERSION\"" "$package_info"
           [[ "$(xmllint --xpath 'count(/pkg-info/bundle)' "$package_info")" == '1' ]]
           [[ "$(xmllint --xpath \
-            "count(/pkg-info/bundle[@id='com.isaac.inputmethod.RimeBuffer' and @path='./ETInput.app' and @CFBundleShortVersionString='$VERSION'])" \
+            "count(/pkg-info/bundle[@id='com.scholay.inputmethod.isaac' and @path='./RIMES.app' and @CFBundleShortVersionString='$VERSION'])" \
             "$package_info")" == '1' ]]
           grep -Fq '<bundle-version>' "$package_info"
           grep -Fq '<upgrade-bundle>' "$package_info"
@@ -1522,9 +1532,9 @@ jobs:
           [[ "$(xmllint --xpath 'count(/pkg-info/relocate/bundle)' "$package_info")" == '0' ]]
           grep -Fq '<preinstall file="./preinstall"' "$package_info"
           grep -Fq '<postinstall file="./postinstall"' "$package_info"
-          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$payload_app/Contents/Info.plist")" == 'com.isaac.inputmethod.RimeBuffer' ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$payload_app/Contents/Info.plist")" == 'com.scholay.inputmethod.isaac' ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$payload_app/Contents/Info.plist")" == "$VERSION" ]]
-          lipo "$payload_app/Contents/MacOS/ETInput" -verify_arch arm64 x86_64
+          lipo "$payload_app/Contents/MacOS/RIMES" -verify_arch arm64 x86_64
           codesign --verify --deep --strict --verbose=2 "$payload_app"
           for installer_helper in rimes-timeout rimes-update-handoff; do
             helper_path="$component_dir/Scripts/$installer_helper"

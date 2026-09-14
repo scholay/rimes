@@ -149,7 +149,7 @@ final class PresetBufferPluginInstallationStore {
             base = URL(fileURLWithPath: override, isDirectory: true)
         } else {
             base = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-                .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
         }
         return base.appendingPathComponent("preset-plugins", isDirectory: true)
     }

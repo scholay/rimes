@@ -36,6 +36,18 @@
       "defaultEnabled": true,
       "downloadAssetName": null,
       "sha256": null
+    },
+    {
+      "id": "builtin.music",
+      "nameZH": "电音演奏",
+      "nameEN": "Electronic Music",
+      "version": "0.2.3",
+      "summaryZH": "用 AudioKit 演奏四弦贝斯排列的 40 键电音，搭配真实采样架子鼓、八种加花和两轨 Loop；演奏键仅在音乐面板获焦时生效。",
+      "summaryEN": "Play 40 electronic notes in a four-string bass layout with AudioKit, a sampled acoustic drum kit, eight fills and two loop tracks. Performance keys are scoped to the focused music panel.",
+      "defaultInstalled": true,
+      "defaultEnabled": true,
+      "downloadAssetName": null,
+      "sha256": null
     }
   ]
 }

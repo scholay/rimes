@@ -1,6 +1,14 @@
 import Cocoa
 import CRimeBridge
 
+/// A value-only snapshot keeps menu construction independent of live stores.
+struct InputSourceMenuState {
+    let healthy: Bool
+    let bufferTitle: String
+    let clipboardTitle: String
+    let mailboxTitle: String
+}
+
 /// Builds ETInput's commands for the system input-source menu. The menu items
 /// target the live IMKInputController because InputMethodKit dispatches text
 /// input menu commands through that controller.
@@ -26,10 +34,22 @@ final class StatusMenu {
 
     /// InputMethodKit asks the active controller for a fresh menu whenever the
     /// system input menu opens, so every item reflects current engine state.
-    func makeInputSourceMenu(target: RimeBufferController) -> NSMenu {
+    func makeInputSourceMenu(target: RIMESController) -> NSMenu {
+        let clipboardShortcut = RimeShortcutPreferences
+            .shortcut(for: .toggleClipboardHistory)
+            .displayTitle
+        return Self.makeInputSourceMenu(target: target, state: InputSourceMenuState(
+            healthy: healthy,
+            bufferTitle: bufferTitle,
+            clipboardTitle: "Capsule…（\(clipboardShortcut)）",
+            mailboxTitle: mailboxTitle
+        ))
+    }
+
+    static func makeInputSourceMenu(target: NSObject, state: InputSourceMenuState) -> NSMenu {
         let menu = NSMenu()
 
-        if !healthy {
+        if !state.healthy {
             let health = NSMenuItem(
                 title: "⚠️ 输入引擎异常 — 已退化为英文直通",
                 action: nil,
@@ -41,108 +61,111 @@ final class StatusMenu {
 
         let settings = NSMenuItem(
             title: "设置…",
-            action: #selector(RimeBufferController.openSettingsFromInputMenu(_:)),
+            action: #selector(RIMESController.openSettingsFromInputMenu(_:)),
             keyEquivalent: "")
         settings.target = target
         menu.addItem(settings)
 
         let buffer = NSMenuItem(
-            title: bufferTitle,
-            action: #selector(RimeBufferController.toggleBufferWindowFromInputMenu(_:)),
+            title: state.bufferTitle,
+            action: #selector(RIMESController.toggleBufferWindowFromInputMenu(_:)),
             keyEquivalent: "")
         buffer.target = target
         menu.addItem(buffer)
 
-        let clipboardShortcut = RimeShortcutPreferences
-            .shortcut(for: .toggleClipboardHistory)
-            .displayTitle
         let clipboard = NSMenuItem(
-            title: "Clipboard History…（\(clipboardShortcut)）",
-            action: #selector(RimeBufferController.toggleClipboardHistoryFromInputMenu(_:)),
+            title: state.clipboardTitle,
+            action: #selector(RIMESController.toggleClipboardHistoryFromInputMenu(_:)),
             keyEquivalent: "")
         clipboard.target = target
         menu.addItem(clipboard)
 
         let mailbox = NSMenuItem(
-            title: mailboxTitle,
-            action: #selector(RimeBufferController.openMailboxFromInputMenu(_:)),
+            title: state.mailboxTitle,
+            action: #selector(RIMESController.openMailboxFromInputMenu(_:)),
             keyEquivalent: "")
         mailbox.target = target
         menu.addItem(mailbox)
 
-        let capsule = NSMenuItem(
-            title: capsuleTitle,
-            action: #selector(RimeBufferController.openCapsuleFromInputMenu(_:)),
+        let codexSession = NSMenuItem(
+            title: "Codex 会话…",
+            action: #selector(RIMESController.openCodexSessionFromInputMenu(_:)),
             keyEquivalent: "")
-        capsule.target = target
-        menu.addItem(capsule)
+        codexSession.target = target
+        menu.addItem(codexSession)
 
-        let maintenance = NSMenuItem(title: "维护…", action: nil, keyEquivalent: "")
-        let maintenanceMenu = NSMenu(title: "维护")
-
-        let pin = NSMenuItem(
-            title: "常显于所有桌面与全屏空间",
-            action: #selector(RimeBufferController.toggleBufferPinnedFromInputMenu(_:)),
+        // Keep one top-level IMK action. Nested items previously appeared in
+        // TextInputMenuAgent but did not dispatch; the controller opens the
+        // five-command AppKit menu inside this process instead.
+        menu.addItem(.separator())
+        let maintenance = NSMenuItem(
+            title: "维护…",
+            action: #selector(RIMESController.openMaintenanceFromInputMenu(_:)),
             keyEquivalent: "")
-        pin.target = target
-        pin.state = BufferWindowController.shared.pinned ? .on : .off
-        maintenanceMenu.addItem(pin)
-
-        let move = NSMenuItem(
-            title: "把缓冲工作台移到当前屏幕",
-            action: #selector(RimeBufferController.moveBufferWindowFromInputMenu(_:)),
-            keyEquivalent: "")
-        move.target = target
-        maintenanceMenu.addItem(move)
-        maintenanceMenu.addItem(.separator())
-
-        let updateManager = UpdateManager.shared
-        let updateTitle: String
-        if updateManager.isUpdateReady,
-           let pendingVersion = updateManager.pendingVersion {
-            updateTitle = "安装 RIMES v\(pendingVersion)…"
-        } else {
-            updateTitle = "检查更新…"
-        }
-        let checkUpdate = NSMenuItem(
-            title: updateTitle,
-            action: #selector(RimeBufferController.checkUpdateFromInputMenu(_:)),
-            keyEquivalent: "")
-        checkUpdate.target = target
-        maintenanceMenu.addItem(checkUpdate)
-
-        let log = NSMenuItem(
-            title: "打开日志 (~/rimebuffer.log)",
-            action: #selector(RimeBufferController.openLogFromInputMenu(_:)),
-            keyEquivalent: "")
-        log.target = target
-        maintenanceMenu.addItem(log)
-
-        let deploy = NSMenuItem(
-            title: "重新部署并重启",
-            action: #selector(RimeBufferController.deployAndRestartFromInputMenu(_:)),
-            keyEquivalent: "")
-        deploy.target = target
-        maintenanceMenu.addItem(deploy)
-
-        let reinstall = NSMenuItem(
-            title: "重新安装输入法…",
-            action: #selector(RimeBufferController.reinstallFromInputMenu(_:)),
-            keyEquivalent: "")
-        reinstall.target = target
-        maintenanceMenu.addItem(reinstall)
-
-        let restart = NSMenuItem(
-            title: "重启输入法进程",
-            action: #selector(RimeBufferController.restartFromInputMenu(_:)),
-            keyEquivalent: "")
-        restart.target = target
-        maintenanceMenu.addItem(restart)
-
-        maintenance.submenu = maintenanceMenu
+        maintenance.target = target
         menu.addItem(maintenance)
 
         return menu
+    }
+
+    static func makeMaintenanceMenu(target: NSObject, pendingVersion: String?) -> NSMenu {
+        let menu = NSMenu(title: "维护")
+        let updateTitle = pendingVersion.map { "安装 RIMES v\($0)…" } ?? "检查更新…"
+        let checkUpdate = NSMenuItem(
+            title: updateTitle,
+            action: #selector(RIMESController.checkUpdateFromInputMenu(_:)),
+            keyEquivalent: "")
+        checkUpdate.target = target
+        menu.addItem(checkUpdate)
+
+        let log = NSMenuItem(
+            title: "打开日志 (~/rimebuffer.log)",
+            action: #selector(RIMESController.openLogFromInputMenu(_:)),
+            keyEquivalent: "")
+        log.target = target
+        menu.addItem(log)
+
+        let deploy = NSMenuItem(
+            title: "重新部署并重启",
+            action: #selector(RIMESController.deployAndRestartFromInputMenu(_:)),
+            keyEquivalent: "")
+        deploy.target = target
+        menu.addItem(deploy)
+
+        let reinstall = NSMenuItem(
+            title: "重新安装输入法…",
+            action: #selector(RIMESController.reinstallFromInputMenu(_:)),
+            keyEquivalent: "")
+        reinstall.target = target
+        menu.addItem(reinstall)
+
+        let restart = NSMenuItem(
+            title: "重启输入法进程",
+            action: #selector(RIMESController.restartFromInputMenu(_:)),
+            keyEquivalent: "")
+        restart.target = target
+        menu.addItem(restart)
+
+        return menu
+    }
+
+    func showMaintenanceMenu(target: RIMESController) {
+        let location = NSEvent.mouseLocation
+        // Leave the system menu's command callback before tracking a menu in
+        // our process. The ellipsis intentionally means click-to-open, not a
+        // nonfunctional hover submenu forwarded through InputMethodKit.
+        DispatchQueue.main.async {
+            guard RimeInputSourceAuthority.currentSourceIsOwn() else { return }
+            let updateManager = UpdateManager.shared
+            let menu = Self.makeMaintenanceMenu(
+                target: target,
+                pendingVersion: updateManager.isUpdateReady ? updateManager.pendingVersion : nil
+            )
+            IMELog.write("input menu: maintenance opened")
+            withExtendedLifetime(target) {
+                _ = menu.popUp(positioning: nil, at: location, in: nil)
+            }
+        }
     }
 
     private var bufferTitle: String {
@@ -162,13 +185,6 @@ final class StatusMenu {
             : "Mailbox…（\(shortcut)）"
     }
 
-    private var capsuleTitle: String {
-        let shortcut = RimeShortcutPreferences
-            .shortcut(for: .openCapsule)
-            .displayTitle
-        return "Capsule…（\(shortcut)）"
-    }
-
     func openSettings() {
         SettingsWindowController.shared.show()
     }
@@ -181,22 +197,29 @@ final class StatusMenu {
         ClipboardHistoryWindowController.shared.toggleVisibility()
     }
 
-    func toggleBufferPinned() {
-        BufferWindowController.shared.pinned.toggle()
-    }
-
-    func moveBufferWindowToCurrentScreen() {
-        BufferWindowController.shared.show()
-        BufferWindowController.shared.moveToCurrentScreen()
-    }
-
     func openMailbox() {
         let threadID = MailboxStore.shared.selectLatestUnreadOrMostRecent()
         MailboxWindowController.shared.show(selecting: threadID)
     }
 
-    func openCapsule() {
-        CapsuleWindowController.shared.show()
+    /// Opens the split session pane on the frontmost Finder-visible working
+    /// directory, falling back to the home directory. Codex is launched in
+    /// that workspace and writes its rollout there for the right pane to read.
+    func openCodexSession() {
+        // Codex is workspace-bound: its sandbox, its edits and the `cwd` the
+        // right pane matches on all come from the launch directory, so the
+        // directory is asked for rather than assumed.
+        let picker = NSOpenPanel()
+        picker.canChooseDirectories = true
+        picker.canChooseFiles = false
+        picker.allowsMultipleSelection = false
+        picker.directoryURL = CodexSessionWorkspaceRules.preferredWorkspace()
+        picker.prompt = "在此启动 Codex"
+        picker.message = "选择 Codex 会话的工作目录"
+        NSApp.activate(ignoringOtherApps: true)
+        guard picker.runModal() == .OK, let workspace = picker.url else { return }
+        CodexSessionWorkspaceRules.remember(workspace)
+        CodexSessionWindowController.shared.present(workspace: workspace)
     }
 
     func checkUpdate() {
@@ -204,12 +227,13 @@ final class StatusMenu {
     }
 
     func openLog() {
+        IMELog.write("input menu: log requested")
         let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("rimebuffer.log")
         NSWorkspace.shared.open(url)
     }
 
     func deployAndRestart() {
-        RimeBufferController.active?.forceCommit()
+        RIMESController.active?.forceCommit()
         IMELog.write("input menu: deploy requested")
         DispatchQueue.global(qos: .userInitiated).async {
             _ = rimeEngine.start()
@@ -242,7 +266,7 @@ final class StatusMenu {
             return
         }
 
-        RimeBufferController.active?.forceCommit()
+        RIMESController.active?.forceCommit()
         InputMetricsPersistence.saveNow()
 
         let command = [
@@ -262,7 +286,7 @@ final class StatusMenu {
 
     func restart() {
         IMELog.write("input menu: restart requested")
-        RimeBufferController.active?.forceCommit()
+        RIMESController.active?.forceCommit()
         InputMetricsPersistence.saveNow()
         exit(0)
     }

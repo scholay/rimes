@@ -27,7 +27,6 @@ enum SettingsCoreRoute: String, CaseIterable, Codable {
     case inputMethod = "core.input-method"
     case appearance = "core.appearance"
     case buffer = "core.buffer"
-    case clipboard = "core.clipboard"
     case mailbox = "core.mailbox"
     case capsule = "core.capsule"
     case connectors = "core.connectors"
@@ -41,7 +40,6 @@ enum SettingsCoreRoute: String, CaseIterable, Codable {
         case .inputMethod: return "输入法"
         case .appearance: return "外观"
         case .buffer: return "Buffer"
-        case .clipboard: return "Clipboard"
         case .mailbox: return "Mailbox"
         case .capsule: return "Capsule"
         case .connectors: return "连接器"
@@ -55,7 +53,6 @@ enum SettingsCoreRoute: String, CaseIterable, Codable {
         case .inputMethod: return "keyboard"
         case .appearance: return "paintpalette"
         case .buffer: return "square.grid.2x2"
-        case .clipboard: return "clipboard"
         case .mailbox: return "tray.full"
         case .capsule: return "archivebox"
         case .connectors: return "link"
@@ -94,8 +91,6 @@ enum CoreSettingsSubpages {
             values = [("theme", "主题"), ("size", "尺寸")]
         case .buffer:
             values = [("buffer", "Buffer")]
-        case .clipboard:
-            values = [("clipboard", "Clipboard History")]
         case .mailbox:
             values = [("mailbox", "Mailbox")]
         case .capsule:
@@ -110,7 +105,9 @@ enum CoreSettingsSubpages {
                 SettingsSubpageDescriptor(id: $0.id, title: $0.title)
             }
         case .maintenance:
-            values = [("update-restart", "更新与重启"), ("logs-data", "日志与数据")]
+            values = [("update-restart", "更新与重启"),
+                      ("permissions", "系统权限"),
+                      ("logs-data", "日志与数据")]
         }
         return values.map {
             SettingsSubpageDescriptor(id: SettingsSubpageID(rawValue: $0.0), title: $0.1)
@@ -450,7 +447,7 @@ func runSettingsRoutingSmokeTest() -> Bool {
 
     do {
         let own = StandaloneWindowFocusIdentity(
-            bundleID: "com.isaac.inputmethod.RimeBuffer",
+            bundleID: RimesIdentity.bundleIdentifier,
             processIdentifier: 900
         )
         let external = StandaloneWindowFocusIdentity(
@@ -525,7 +522,6 @@ func runSettingsRoutingSmokeTest() -> Bool {
                     "输入法",
                     "外观",
                     "Buffer",
-                    "Clipboard",
                     "Mailbox",
                     "Capsule",
                     "连接器",
@@ -558,10 +554,6 @@ func runSettingsRoutingSmokeTest() -> Bool {
               catalog.route(for: SettingsCoreRoute.buffer.id)?.subpages.map(\.id)
                 == [
                     SettingsSubpageID(rawValue: "buffer"),
-                ],
-              catalog.route(for: SettingsCoreRoute.clipboard.id)?.subpages.map(\.id)
-                == [
-                    SettingsSubpageID(rawValue: "clipboard"),
                 ],
               catalog.route(for: SettingsCoreRoute.mailbox.id)?.subpages.map(\.id)
                 == [

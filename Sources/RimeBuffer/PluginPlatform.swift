@@ -398,6 +398,11 @@ final class PluginRegistry {
                          "Duplicate internal plugin ID: \(descriptor.key.rawID)")
             internalPlugins[descriptor.key.rawID] = plugin
         }
+        if internalPlugins[BuiltInPluginID.statistics] != nil,
+           internalPlugins[BuiltInPluginID.typingSpeed] != nil {
+            DailyMetricsPreferences.migrate(disabledIDs: &disabledInternalIDs,
+                                            defaults: defaults)
+        }
         // The former learning-only plugin ID is retained for routes and user
         // preferences, but enablement now belongs to the chord feature store.
         // Bootstrap the legacy schema/keying preferences, then retire this ID
@@ -412,7 +417,7 @@ final class PluginRegistry {
             legacyDisabledIDs: disabledInternalIDs
         )
         // A clean first run has no legacy preference. Catalog defaults are
-        // the sole authority: the three bundled Buffer presets start enabled,
+        // the sole authority: the bundled Buffer presets start enabled,
         // while optional presets remain absent and disabled until downloaded.
         if !hadLegacyEnablement, let presetInstallationStore {
             let managedIDs = Set(internalPlugins.keys).intersection(

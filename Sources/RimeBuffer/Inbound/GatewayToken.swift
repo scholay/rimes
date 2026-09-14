@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// Bearer token for the local gateway, stored 0600 at ~/Library/RimeBuffer/
+/// Bearer token for the local gateway, stored 0600 at ~/Library/RIMES/
 /// gateway-token. Not in the Keychain — ad-hoc signing makes Keychain ACLs
 /// re-prompt on every rebuild. The token only guards against OTHER users / the
 /// network; a same-user process in the trust domain can read the file, which is
@@ -11,7 +11,7 @@ enum GatewayToken {
         let dir = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DIR"].map {
             URL(fileURLWithPath: $0, isDirectory: true)
         } ?? URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+            .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("gateway-token")
     }

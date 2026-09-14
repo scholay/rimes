@@ -124,7 +124,7 @@ func runTranslationPluginSmokeTest() -> Bool {
     let sourceDefaultsKey = "plugins.appleTranslation.sourceLanguage.v1"
     let targetDefaultsKey = "plugins.appleTranslation.targetLanguage.v1"
     let configurationDefaultsKey =
-        "RimeBuffer.PluginConfiguration."
+        "\(RimesIdentity.preferenceKeyPrefix)PluginConfiguration."
             + BuiltInPluginID.appleTranslation
 
     let missingSourceWorkspace = AppleTranslationWorkspace(

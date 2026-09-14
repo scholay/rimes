@@ -47,7 +47,7 @@ enum ChordSettings {
             ].map {
                 URL(fileURLWithPath: $0, isDirectory: true)
             } ?? home.appendingPathComponent(
-                "Library/RimeBuffer",
+                "Library/\(RimesPaths.directoryName)",
                 isDirectory: true
             )
             return resolvedDuration(
@@ -204,14 +204,13 @@ enum FlyChordLayout {
     }
 }
 
-/// Product-level settlement policy layered over the same FlyYao key map.
+/// Internal settlement decisions, not selectable input modes. Unified 并击
+/// always permits compatible left-then-right split strokes. A completed
+/// syllable can still opt out of future pairing through `sameBatchOnly`.
 ///
-/// - `sameBatchOnly` is 并击: every key inside the current timer batch resolves
-///   together. Multi-key left-only/right-only mappings are useful chords, while
-///   a one-key batch remains literal. Separate batches are never recombined.
-/// - `independentHalves` is 互击: it has the same per-batch settlement, plus a
-///   settled left-only initial may pair with the next right-only final when at
-///   least one of those halves is a real multi-key chord.
+/// - `sameBatchOnly` closes the batch without recording a pairing candidate.
+/// - `independentHalves` settles the batch, then a settled left-only fragment
+///   may pair with the next right-only batch when at least one is multi-key.
 enum FlyChordSettlementPolicy: Equatable {
     case sameBatchOnly
     case independentHalves
@@ -223,7 +222,7 @@ enum FlyChordSettlementPolicy: Equatable {
 /// fires.
 enum FlyChordRoutingRules {
     static func shouldStage(schemaID: String, asciiMode: Bool) -> Bool {
-        schemaID == "my_combo" && !asciiMode
+        schemaID == ChordExtensionStore.schemaID && !asciiMode
     }
 
     static func shouldStage(schemaID: String,
@@ -255,12 +254,41 @@ enum FlyChordBoundaryRules {
 
     static func plan(for context: RimeContextModel) -> FlyChordBoundaryPlan {
         let bytes = Array(context.input.utf8)
-        let cursor = min(max(context.cursorPos, 0), bytes.count)
+        let cursor = min(max(context.inputCaretPos ?? context.cursorPos, 0), bytes.count)
         let delimiter = UInt8(delimiterKeycode)
         return FlyChordBoundaryPlan(
             before: cursor > 0 && bytes[cursor - 1] != delimiter,
             after: cursor < bytes.count && bytes[cursor] != delimiter
         )
+    }
+}
+
+/// Custom maps declare whether an output closes a pinyin syllable. Keep the
+/// legacy FlyYao delimiter contract while making that distinction explicit for
+/// new profiles, including complete syllables assigned wholly to one hand.
+enum ChordKeymapBoundaryRules {
+    static func shouldInsert(keys: [Int32], profile: ChordKeymapProfile) -> Bool {
+        if profile.boundaryPolicy == .legacyBatches {
+            return FlyChordBoundaryRules.shouldInsert(forKeyCount: keys.count)
+        }
+        return profile.entry(for: Set(keys))?.kind == .syllable
+    }
+
+    static func plan(for context: RimeContextModel,
+                     profile: ChordKeymapProfile) -> FlyChordBoundaryPlan {
+        let legacy = FlyChordBoundaryRules.plan(for: context)
+        // Close custom complete syllables at the end as well. Otherwise a
+        // following literal or fragment could silently join the previous one.
+        return FlyChordBoundaryPlan(before: legacy.before,
+                                    after: profile.boundaryPolicy == .legacyBatches ? legacy.after : true)
+    }
+
+    static func mayCombine(keys: [Int32], profile: ChordKeymapProfile) -> Bool {
+        profile.boundaryPolicy == .legacyBatches || profile.entry(for: Set(keys))?.kind == .syllable
+    }
+
+    static func mayAwaitComplement(keys: [Int32], profile: ChordKeymapProfile) -> Bool {
+        profile.boundaryPolicy == .legacyBatches || profile.entry(for: Set(keys))?.kind != .syllable
     }
 }
 
@@ -282,8 +310,11 @@ enum FlyChordBatchShape: Equatable {
     case rightOnly
     case bothHalves
 
-    init?(keys: [(keycode: Int32, mask: Int32)]) {
-        let halves = Set(keys.compactMap { FlyChordLayout.half(for: $0.keycode) })
+    init?(keys: [(keycode: Int32, mask: Int32)], layout: ChordKeymapProfile? = nil) {
+        let halves = Set(keys.compactMap { key in
+            if let layout { return layout.half(for: key.keycode) }
+            return FlyChordLayout.half(for: key.keycode)
+        })
         switch halves {
         case [.left]: self = .leftOnly
         case [.right]: self = .rightOnly
@@ -293,7 +324,7 @@ enum FlyChordBatchShape: Equatable {
     }
 }
 
-/// Tracks the one cross-batch relationship that 互击 must preserve: a settled
+/// Tracks the cross-batch relationship unified 并击 preserves: a settled
 /// left-only initial followed by a right-only final belongs to one syllable.
 /// The left batch is visible immediately; when its right complement arrives,
 /// the controller removes that one insertion and replays both physical halves
@@ -365,7 +396,7 @@ struct FlyChordMutualPairingState {
 }
 
 /// Pure batching state. Keeping this independent of Timer/IMK makes the
-/// important "same-batch chord vs cross-batch mutual pairing" contract
+/// important "same-batch settlement plus guarded cross-batch pairing" contract
 /// executable in the CLI smoke test.
 struct FlyChordBatchState {
     private(set) var pending: [FlyChordKeyEvent] = []
@@ -374,8 +405,12 @@ struct FlyChordBatchState {
     var hasPending: Bool { !pending.isEmpty }
 
     mutating func stage(_ key: FlyChordKeyEvent,
-                        policy: FlyChordSettlementPolicy) -> FlyChordPressDecision {
-        guard FlyChordLayout.half(for: key.keycode) != nil else { return .consume }
+                        policy: FlyChordSettlementPolicy,
+                        layout: ChordKeymapProfile? = nil) -> FlyChordPressDecision {
+        let half: FlyChordHalf?
+        if let layout { half = layout.half(for: key.keycode) }
+        else { half = FlyChordLayout.half(for: key.keycode) }
+        guard half != nil else { return .consume }
         guard !pending.contains(where: { $0.keycode == key.keycode }) else {
             return .consume
         }
@@ -384,8 +419,8 @@ struct FlyChordBatchState {
 
         switch policy {
         case .sameBatchOnly, .independentHalves:
-            // Both modes settle every current batch. Their only semantic
-            // difference is whether the owner later recombines two batches.
+            // Every batch settles normally. Whether it remains eligible for
+            // later pairing is a separate decision owned by the caller.
             return .process([key])
         }
     }
@@ -454,14 +489,15 @@ final class ChordController {
     var hasPending: Bool { batch.hasPending }
 
     /// Stage a physical chord press before it reaches Rime. All accepted keys
-    /// enter Rime together at settlement, so neither mode may discard a useful
-    /// one-sided mapping merely to distinguish 并击 from 互击.
+    /// enter Rime together at settlement, without discarding a useful
+    /// one-sided mapping while waiting for a possible right-hand complement.
     func stageChordKey(_ keycode: Int32,
                        mask: Int32,
                        client: any IMKTextInput,
-                       policy: FlyChordSettlementPolicy) -> FlyChordPressDecision {
+                       policy: FlyChordSettlementPolicy,
+                       layout: ChordKeymapProfile? = nil) -> FlyChordPressDecision {
         let decision = batch.stage(FlyChordKeyEvent(keycode: keycode, mask: mask),
-                                   policy: policy)
+                                   policy: policy, layout: layout)
         self.client = client
         guard batch.hasPending else { return decision }
         timer?.invalidate()

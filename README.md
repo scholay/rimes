@@ -2,7 +2,7 @@
 
 **[中文](README.md)** · **[English](README.en.md)**
 
-从零做的现代 macOS 输入法：**librime** 引擎 + 自绘候选窗 + 常驻缓冲区（buffer）。内置雾凇全拼、自然码双拼、小鹤双拼、五笔 86 与英文核心方案；飞耀并击 / 互击由默认关闭的“并击”扩展提供。**自包含**打包 librime 与词库，装一个就能用，无需单独安装 Squirrel。
+从零做的现代 macOS 输入法：**librime** 引擎 + 自绘候选窗 + 常驻缓冲区（buffer）。内置雾凇全拼、自然码双拼、小鹤双拼、五笔 86 与英文核心方案；默认关闭的“并击”扩展提供飞耀预设和自定义键位，统一支持同拍组合与左右分开击键。**自包含**打包 librime 与词库，装一个就能用，无需单独安装 Squirrel。
 
 > 仓库/内部代号仍是 **RimeBuffer**（SPM target、`Sources/RimeBuffer/`）；`ETInput.app` 为兼容旧安装与自动更新保留的内部路径。对外产品名统一为 **RIMES**（rime-scholay）。
 
@@ -25,14 +25,16 @@
 
 ## 主要能力
 
+安装完成并进入图形登录会话后，一次性后台任务会用 `open -g` 启动同一个 RIMES 进程，因此 Buffer、Clipboard History、Mailbox 与 Capsule 的全局快捷键可跨输入法使用。开发安装原子发布当前用户任务；发布包在替换系统 payload 前会审计全部本机普通账户，除可由 postinstall 退休的当前 GUI 用户开发版外，发现同 ID 开发版 App/任务或无法安全核验的 home 就直接失败。postinstall 退休开发版、再次审计后，才以可回滚事务更新系统任务；登录 guard 对后来出现的开发版痕迹只作防御性短路。两种任务都不设 `KeepAlive`，也不会启动第二个 UI/IME 服务。Mailbox 与 Capsule 是正常取得键盘焦点的管理窗口；这些周边功能在其他输入法下不会访问 IMK 客户端、主动切换输入源、注入粘贴或其他按键、调用 Accessibility/Post Event，也不会读取、提交或取消外部输入法的组字。设置窗口仍只在当前输入源为 RIMES 时打开，其中 Mailbox 与 Capsule 页面只展示配置和状态，实际会话与内容管理留在各自独立窗口。
+
 | 能力 | 说明 |
 |---|---|
 | 输入方案 | 雾凇全拼、自然码双拼、小鹤双拼、五笔 86、英文；可选并击扩展 |
-| 缓冲工作台 | `⌘⇧B` 开关；先暂存、再分块投递 |
-| Clipboard History | 与 Buffer 同级；仅在当前输入源属于 RIMES 时由 `⌘⇧P` 打开屏幕底部独立窗口。收录开启且无安全保护时在后台保存文本、链接、图片、文件与颜色，原始表示只落本机私有数据库。单击只选择，双击、Return 或 `⌘1`–`⌘9` 激活：文本/链接经 exact-focus IMK 直接上屏并提升到历史首位；图片、RTF、HTML、文件等只无损恢复到系统剪贴板、提升到首位并静默关闭，由用户自行按 `⌘V`。RIMES 不会自动 Paste、右键或发送 `⌘V`，也不请求 Accessibility/Post Event；`⌘C` 仍只复制所选内容 |
-| Mailbox | 与 Buffer 同级；`⌘⇧M` 打开/关闭，独立保存 AI 会话、备注与待审核外部推送。窗口内可“新建对话”并选择已配置的连接器/模型；CLI 只使用各自默认模型，OpenAI 使用本机配置模型，选择只绑定新会话且不改全局设置。草稿不创建空会话，首次 Return 才创建会话并发起生成 |
-| Capsule | 与 Buffer 同级；`⌘⇧C` 打开/关闭，逐条维护八类内容并预览图片/PDF；可选择 iCloud Drive 文件夹自动双向同步六类普通条目与媒体资产，Password、Skill 路径及主密钥保持本机 |
-| 设置 | `⌘⇧S` 随时打开设置页面 |
+| 缓冲工作台 | `⌘⇧B` 开关；RIMES 输入源下可捕获并分块投递，其他输入源下只允许显式从系统剪贴板导入或把结果复制到剪贴板，不访问 IMK 投递通道 |
+| Capsule 底栏 | 原 Clipboard History，与 Buffer 同级；`⌘⇧V` 跨输入法打开屏幕底部独立窗口。头部标签在「最近」（剪贴板历史）与只读的笔记、图片、PDF、技能、密码之间切换，`⌘S` 把「最近」中所选卡片收入 Capsule，齿轮与卡片悬停画笔打开 Capsule 管理。收录开启且无安全保护时在后台保存文本、链接、图片、文件与颜色，原始表示只落本机私有数据库。单击只选择，双击、Return 或 `⌘1`–`⌘9` 激活；使用其他输入法时，所有类型都只无损恢复到系统剪贴板、提升到历史首位并静默关闭，由用户自行按 `⌘V`。RIMES 不会自动 Paste、右键或发送 `⌘V`，也不请求 Accessibility/Post Event；`⌘C` 仍只复制所选内容 |
+| Mailbox | 与 Buffer 同级；`⌘⇧M` 跨输入法打开/关闭正常 key window，独立保存 AI 会话、备注与待审核外部推送。窗口内可“新建对话”并选择已配置的连接器/模型；CLI 只使用各自默认模型，OpenAI 使用本机配置模型，选择只绑定新会话且不改全局设置。草稿不创建空会话，首次 Return 才创建会话并发起生成 |
+| Capsule 管理 | 从底栏齿轮或卡片画笔打开，外观是底栏向上长高，齿轮或 Esc 返回底栏；逐条维护五类内容并预览、复制图片/PDF/文件。查看 Password 明文前须按顺序完成四组原生物理键并击；默认 `RH / WO / CVN / QU`，四个槽位显示进度，成功后最多展示 15 秒。更换或恢复口令都先验证当前口令；自定义原码不落盘、不进 iCloud，只保存单个本机加盐摘要凭据。可选择 iCloud Drive 文件夹自动双向同步六类普通条目与媒体资产，Password、Skill 路径、查看口令及主密钥保持本机 |
+| 设置 | `⌘⇧S` 仅在当前输入源属于 RIMES 时打开；Mailbox/Capsule 页面只提供快捷键、本机状态、同步与安全配置，不嵌入实际操作窗口 |
 | 实时翻译 | 默认 Apple 本地翻译（macOS 15+），也可走 AI 渠道 |
 | AI 生成 | Codex CLI / Claude Code CLI / OpenAI 兼容 API；结果只留在 Buffer 内，可选 Plain / Markdown / JSON，再由用户上屏 |
 | 意识流输入 | 拼音/并击 → 本地 Rime + Octagram 低延迟解码，复杂输入回退 AI → 最多 5 个互斥猜测 → 选定后投递 |
@@ -47,6 +49,7 @@
 | AI 生成 | `builtin.ai-text` | 2.1 | 随 RIMES 预装 | 启用 |
 | 实时翻译 | `builtin.apple-translation` | 2.1 | 随 RIMES 预装 | 启用 |
 | 意识流输入 | `builtin.stream-input` | 1.4 | 随 RIMES 预装 | 启用 |
+| 电音演奏 | `builtin.music` | 0.2.3 | 随 RIMES 预装 | 启用 |
 
 表中插件均随 RIMES 预装，并在全新安装后默认启用。
 <!-- END PRESET BUFFER PLUGINS -->
@@ -55,11 +58,11 @@
 
 | 扩展 | 稳定 ID | 版本 | 默认状态 |
 |---|---|---:|---|
-| 统计 | `builtin.statistics` | 1.0 | 启用 |
-| 打字测速 | `builtin.typing-speed` | 1.0 | 启用 |
+| 统计 | `builtin.statistics` | 2.0 | 启用 |
+| 打字测速 | `builtin.typing-speed` | 2.0 | 启用 |
 | 并击 | `builtin.fly-chord-learning` | 2.0 | 关闭 |
 
-“并击”2.0 保留旧 ID 与学习进度，但现在统一拥有飞耀并击 / 互击输入、组键间隔、课程、练习与进度；关闭后普通输入不再进入飞耀方案，意识流输入自动回到逐字连续全拼。
+“并击”保留旧 ID 与学习进度，只提供一种支持同拍组合及左右分开击键的输入行为，不再区分模式。扩展管理键位方案、组键间隔、课程、练习与进度，飞耀是可复制修改的内置预设；关闭后普通输入退回普通方案，意识流输入自动回到逐字连续全拼。自定义方案可把输出编码设为自然码双拼：映射表仍按全拼填写，应用时每个完整音节编成两个键，音节边界由位置决定，不再依赖隔音符；输入区照常显示全拼。详见[键位方案与迁移说明](CHORD-KEYMAPS.md)。
 
 ## 安装
 
@@ -114,7 +117,7 @@ Windows 11 实机验证。它目前仍是 commit-only 开发里程碑，尚无�
 登录启动、签名安装包，以及 macOS 缓冲区和工作台能力，因此没有进入公开 Release。
 
 公开的数据预览包不包含 macOS 版的缓冲工作台、AI/翻译/OCR、原生设置窗口，也不包含
-上述实验性 Windows TSF 或 Linux Fcitx5/IBus 前端。跨批互击是当前 macOS 前端能力，不能
+上述实验性 Windows TSF 或 Linux Fcitx5/IBus 前端。并击中的跨批分离击键配对是当前 macOS 前端能力，不能
 由数据包单独提供。请从 Releases 中标记为 **Pre-release** 的
 `RIMES-Windows-Data-Preview-*` / `RIMES-Linux-Data-Preview-*` 资产安装；完整边界、
 安全策略和验证方式见 [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)。

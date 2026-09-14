@@ -12,7 +12,7 @@ enum RimeInputSourceAuthority {
     static func isOwnInputSourceID(
         _ inputSourceID: String,
         ownBundleID: String = Bundle.main.bundleIdentifier
-            ?? "com.isaac.inputmethod.RimeBuffer"
+            ?? RimesIdentity.bundleIdentifier
     ) -> Bool {
         inputSourceID == ownBundleID
             || inputSourceID.hasPrefix(ownBundleID + ".")

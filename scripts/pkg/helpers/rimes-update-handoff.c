@@ -6,7 +6,7 @@
 
 // This tiny helper is built from the incoming package, signed, and executed by
 // preinstall before PackageKit replaces the old app. It deliberately has no
-// dependency on an old ETInput binary understanding a newly introduced flag.
+// dependency on an older binary understanding a newly introduced flag.
 
 static CFStringRef string_property(TISInputSourceRef source, CFStringRef key) {
     return (CFStringRef)TISGetInputSourceProperty(source, key);
@@ -20,11 +20,13 @@ static bool bool_property(TISInputSourceRef source, CFStringRef key) {
 }
 
 static bool is_rimes_source(TISInputSourceRef source) {
-    const CFStringRef current_id = CFSTR("com.isaac.inputmethod.RimeBuffer");
-    const CFStringRef legacy_id = CFSTR("com.isaac.inputmethod.ETInput");
+    const CFStringRef current_id = CFSTR("com.scholay.inputmethod.isaac");
+    const CFStringRef legacy_id = CFSTR("com.isaac.inputmethod.RimeBuffer");
+    const CFStringRef older_id = CFSTR("com.isaac.inputmethod.ETInput");
     CFStringRef bundle_id = string_property(source, kTISPropertyBundleID);
     if (bundle_id != NULL
-        && (CFEqual(bundle_id, current_id) || CFEqual(bundle_id, legacy_id))) {
+        && (CFEqual(bundle_id, current_id) || CFEqual(bundle_id, legacy_id)
+            || CFEqual(bundle_id, older_id))) {
         return true;
     }
     CFStringRef source_id = string_property(source, kTISPropertyInputSourceID);
@@ -33,6 +35,8 @@ static bool is_rimes_source(TISInputSourceRef source) {
     }
     return CFEqual(source_id, current_id)
         || CFEqual(source_id, legacy_id)
+        || CFEqual(source_id, older_id)
+        || CFStringHasPrefix(source_id, CFSTR("com.scholay.inputmethod.isaac."))
         || CFStringHasPrefix(source_id, CFSTR("com.isaac.inputmethod.RimeBuffer."))
         || CFStringHasPrefix(source_id, CFSTR("com.isaac.inputmethod.ETInput."));
 }

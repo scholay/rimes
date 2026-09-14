@@ -22,7 +22,7 @@ Fable's version turned the prototype into a real macOS input method instead of a
 5. **Rime first for bindings:** feed relevant modifier combinations to Rime before falling through, except Command-key app shortcuts, which force-commit then return `false`.
 6. **Chord is schema-gated:** release replay only runs for `my_combo`; sequential schemas must not see synthetic release events.
 7. **Bridge ABI is fragile:** `RimeApi` field order is memory layout. Do not reorder or prune fields. Add new exported wrappers at the C API boundary.
-8. **User data isolation:** keep `~/Library/RimeBuffer` as the active user dir while Squirrel is installed and running as fallback.
+8. **User data isolation:** keep `~/Library/RIMES` as the active user dir while Squirrel is installed and running as fallback.
 9. **Fallback cannot drop printable text:** if Rime is unhealthy or no session exists, printable keys and Return must still insert.
 
 ## Key Files
@@ -34,7 +34,7 @@ Fable's version turned the prototype into a real macOS input method instead of a
 - `Sources/RimeBuffer/RimeKey.swift`: X11 keysym mapping and modifier masks.
 - `Sources/RimeBuffer/RimeEngine.swift`: Swift wrapper over the bridge, per-session calls.
 - `Sources/CRimeBridge/CRimeBridge.cpp`: librime dlopen, vtable, context/status wrappers.
-- `build_install.sh`: seed `~/Library/RimeBuffer`, build, sign, install, register.
+- `build_install.sh`: seed `~/Library/RIMES` (copying pre-rename `~/Library/RimeBuffer` data first), build, sign, install, register.
 
 ## Validation Checklist
 

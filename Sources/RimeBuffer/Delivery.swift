@@ -21,6 +21,13 @@ enum Delivery {
     @discardableResult
     static func insert(_ text: String, into client: IMKTextInput) -> Bool {
         guard !text.isEmpty else { return true }
+        // TIS notifications can trail a real source switch. Recheck at the
+        // single client-write sink so a retired RIMES proxy can never receive
+        // text after another input method takes ownership.
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            IMELog.write("delivery blocked: RIMES is not the current input source")
+            return false
+        }
         guard !IsSecureEventInputEnabled() else {
             IMELog.write("delivery blocked: secure input active len=\(text.count)")
             return false

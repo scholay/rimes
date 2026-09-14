@@ -1,5 +1,5 @@
 /* 输入源显示名。键刻意保留旧的 RimeBuffer TIS id，避免 macOS 残留输入源偏好失效。 */
 "CFBundleDisplayName" = "RIMES";
 "CFBundleName" = "RIMES";
-"com.isaac.inputmethod.RimeBuffer" = "RIMES";
-"com.isaac.inputmethod.RimeBuffer.Hans" = "RIMES";
+"com.scholay.inputmethod.isaac" = "RIMES";
+"com.scholay.inputmethod.isaac.Hans" = "RIMES";

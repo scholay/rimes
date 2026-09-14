@@ -17,6 +17,7 @@ enum BufferInlineMetrics {
     static let pagerCountWidth: CGFloat = 28
     static let pagerButtonSize: CGFloat = 24
     static let maximumAlternativeCount = 5
+    static let trailingActionSafetyGap: CGFloat = 6
 
     /// Width used by repeated block chrome, excluding text and the rail edge.
     static func packedBlockChromeWidth(blockCount: Int,
@@ -279,6 +280,7 @@ private final class TranslationRailChipView: NSStackView {
     private var renderedSelected = false
     private var renderedStale = false
     private var renderedScale: CGFloat = 2
+    private var autoSendProgress: Double = 0
     private(set) var renderedRetainedTailStart: Int?
     var acceptsPointerActivation: Bool { activationHandler != nil }
 
@@ -434,9 +436,15 @@ private final class TranslationRailChipView: NSStackView {
         applySurfaceAppearance()
     }
 
+    func setAutoSendProgress(_ progress: Double) {
+        autoSendProgress = min(max(progress, 0), 1)
+        applySurfaceAppearance()
+    }
+
     private func applySurfaceAppearance() {
         let selectable = activationHandler != nil && !renderedStale
-        alphaValue = renderedStale ? 0.70 : (pointerPressed ? 0.82 : 1)
+        let stateOpacity: CGFloat = renderedStale ? 0.70 : (pointerPressed ? 0.82 : 1)
+        alphaValue = stateOpacity * (1 - 0.55 * CGFloat(autoSendProgress))
         layer?.cornerRadius = BufferInlineMetrics.chipCornerRadius
         let extraEmphasis: CGFloat
         if selectable, pointerPressed {
@@ -524,13 +532,34 @@ private final class TranslationTargetRail {
     let row = NSStackView()
     let leadingPlaceholder = NSView()
     let trailingSpacer = NSView()
+    /// Status text sits here rather than in the row. As a flow item it landed
+    /// wherever the content ended — at the far left in an empty box — and it
+    /// scrolled away with the content. Pinned to the scroll view itself, it
+    /// stays at the trailing edge and covers only the width it needs, so the
+    /// rest of the result stays readable underneath.
+    let statusOverlay = NSStackView()
+    private let trailingClearanceConstraint: NSLayoutConstraint
+    private var statusOverlayTrailingConstraint: NSLayoutConstraint?
 
     init(key: Int) {
         self.key = key
+        trailingClearanceConstraint = trailingSpacer.widthAnchor.constraint(
+            greaterThanOrEqualToConstant: 0
+        )
+        statusOverlay.orientation = .horizontal
+        statusOverlay.alignment = .centerY
+        statusOverlay.spacing = 5
+        statusOverlay.edgeInsets = NSEdgeInsets(top: 0, left: 8,
+                                                bottom: 0, right: 6)
+        statusOverlay.translatesAutoresizingMaskIntoConstraints = false
+        statusOverlay.wantsLayer = true
+        statusOverlay.layer?.cornerRadius = 5
         leadingPlaceholder.translatesAutoresizingMaskIntoConstraints = false
+        trailingSpacer.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             leadingPlaceholder.widthAnchor.constraint(equalToConstant: 14),
             leadingPlaceholder.heightAnchor.constraint(equalToConstant: 14),
+            trailingClearanceConstraint,
         ])
         leadingPlaceholder.setContentHuggingPriority(.required, for: .horizontal)
         leadingPlaceholder.setContentCompressionResistancePriority(.required,
@@ -538,6 +567,69 @@ private final class TranslationTargetRail {
         trailingSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         trailingSpacer.setContentCompressionResistancePriority(.defaultLow,
                                                                for: .horizontal)
+    }
+
+    func setTrailingClearance(_ width: CGFloat) {
+        trailingClearanceConstraint.constant = max(0, width)
+    }
+
+    /// Added to the scroll view rather than to its document, so it is drawn
+    /// above the content and stays put while the row scrolls beneath it.
+    /// Attached to the scroll view's *parent*, not the scroll view: NSScrollView
+    /// owns the layout of its own subviews and left an overlay added there at
+    /// zero size. Anchored to the scroll's edges it still reads as part of the
+    /// box, while staying outside the scrolling content so a long result
+    /// cannot carry the status off-screen.
+    func syncStatusOverlayAttachment(trailingInset: CGFloat) {
+        guard let container = scroll.superview else { return }
+        guard statusOverlay.superview !== container else {
+            statusOverlayTrailingConstraint?.constant = -max(3, trailingInset)
+            return
+        }
+        statusOverlay.removeFromSuperview()
+        container.addSubview(statusOverlay, positioned: .above, relativeTo: scroll)
+        let trailing = statusOverlay.trailingAnchor.constraint(
+            equalTo: scroll.trailingAnchor,
+            constant: -max(3, trailingInset)
+        )
+        statusOverlayTrailingConstraint = trailing
+        NSLayoutConstraint.activate([
+            trailing,
+            statusOverlay.centerYAnchor.constraint(
+                equalTo: scroll.centerYAnchor
+            ),
+            statusOverlay.leadingAnchor.constraint(
+                greaterThanOrEqualTo: scroll.leadingAnchor,
+                constant: 3
+            ),
+        ])
+    }
+
+    /// Keeps the status clear of the trailing action cluster, which floats
+    /// over the same corner of the box.
+    func setStatusOverlayInset(_ inset: CGFloat) {
+        syncStatusOverlayAttachment(trailingInset: inset)
+    }
+
+    func setStatusViews(_ views: [NSView], background: CGColor?) {
+        for view in statusOverlay.arrangedSubviews where !views.contains(view) {
+            statusOverlay.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for (index, view) in views.enumerated() {
+            if view.superview !== statusOverlay {
+                (view.superview as? NSStackView)?.removeArrangedSubview(view)
+                view.removeFromSuperview()
+                statusOverlay.insertArrangedSubview(view, at: index)
+            } else if statusOverlay.arrangedSubviews.firstIndex(of: view) != index {
+                statusOverlay.removeArrangedSubview(view)
+                statusOverlay.insertArrangedSubview(view, at: index)
+            }
+        }
+        statusOverlay.isHidden = views.isEmpty
+        // Opaque only while it actually overlaps content; an empty box needs
+        // no plate behind one line of grey text.
+        statusOverlay.layer?.backgroundColor = views.isEmpty ? nil : background
     }
 }
 
@@ -659,12 +751,10 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     var onDerivedTargetSelection: ((UUID) -> Void)?
     var onDerivedTargetStep: ((Int) -> Void)?
     var onCaptureRequested: ((Int) -> Void)?
-    var onToolbarToggleRequested: (() -> Void)?
-    var generatedResultCopyControl: NSView?
 
-    static let standardPreferredHeight: CGFloat = 34
-    static let translationPreferredHeight: CGFloat = 68
-    static let additionalTranslationTargetRowHeight: CGFloat = 31
+    static let standardPreferredHeight: CGFloat = 32
+    static let translationPreferredHeight: CGFloat = 64
+    static let additionalTranslationTargetRowHeight: CGFloat = 32
 
     static func translationPreferredHeight(targetRows: Int,
                                             showsSourceRail: Bool = true) -> CGFloat {
@@ -697,12 +787,24 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private let chipScroll = NSScrollView()
     private let chipRow = NSStackView()
     private let normalRailContainer = NSStackView()
+    /// Where another input method composes. An ordinary text field in a key
+    /// window is a normal text client, so whichever IME the user has active
+    /// composes into it with no interception on our side — which is the whole
+    /// reason this mode can exist at all.
+    private let composingField = NSTextField()
+    private var composingFieldEnabled = false
+    /// Fires when the user finishes a phrase in the field. The text becomes a
+    /// block through the same path a Rime commit takes.
+    var onComposingFieldCommit: ((String) -> Void)?
     private let translationContainer = NSStackView()
     private let translationSourceScroll = NSScrollView()
     private let translationSourceRow = NSStackView()
-    private let inputOptionsButton = FirstMouseButton(title: "", target: nil, action: nil)
     private let leadingSpacer = NSView()
     private let translationSourceSpacer = NSView()
+    private lazy var standardTrailingClearanceConstraint = leadingSpacer.widthAnchor
+        .constraint(greaterThanOrEqualToConstant: 0)
+    private lazy var sourceTrailingClearanceConstraint = translationSourceSpacer.widthAnchor
+        .constraint(greaterThanOrEqualToConstant: 0)
     private let caretView = NSView()
     private let preeditView = BufferInlinePreeditView(frame: .zero)
     private let emptyLabel = NSTextField(labelWithString: "等待暂存内容")
@@ -724,8 +826,12 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private var translationLoadingActive = false
     private var lastRenderSignature: RenderSignature?
     private var contentShielded = false
-    private var inputOptionsTitle = BufferPluginMenuCatalog.defaultTitle
-    private var toolbarExpanded = false
+    private var trailingActionExclusionWidth: CGFloat = 0
+    /// Auto-send dims chips in place through `standardBlockViews`; re-rendering
+    /// ten times a second just to change an alpha would fight the caret, the
+    /// scroll position, and the preedit projection.
+    private var autoSendFade: [UUID: Double] = [:]
+    private var sourceTrailingActionExclusionWidth: CGFloat = 0
     private var enterHoldProgress: CGFloat?
     private(set) var renderPassCount = 0
     private(set) var renderedSelectedStandardBlockCount = 0
@@ -733,9 +839,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private(set) var renderedAlternativeCount = 0
     private(set) var renderedAlternativeIndex = 0
     private(set) var renderedInputPlaceholderVisible = false
-    var renderedInputControlCount: Int {
-        inputOptionsButton.superview == nil ? 0 : 1
-    }
+    var renderedLeadingInputControlCount: Int { 0 }
     var renderedBlockCount: Int { renderedBlockIDs.count }
     var renderedInputCaretVisible: Bool {
         caretView.superview === chipRow
@@ -746,21 +850,130 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             translationTargetChipViews[$0].map(ObjectIdentifier.init)
         }
     }
+    var renderedTranslationTargetOpacities: [UUID: CGFloat] {
+        translationTargetChipViews.mapValues(\.alphaValue)
+    }
     var renderedTranslationRetainedTailStarts: [UUID: Int] {
         Dictionary(uniqueKeysWithValues: translationTargetChipViews.compactMap { id, chip in
             chip.renderedRetainedTailStart.map { (id, $0) }
         })
     }
+    /// Status placement, for assertions. A flow item cannot be distinguished
+    /// from an overlay by reading text alone, and placement is the whole point
+    /// of the change.
+    struct RenderedStatusPlacement: Equatable {
+        let texts: [String]
+        let isTrailingOverlay: Bool
+        let overlapsContent: Bool
+        /// Distance from the status's leading edge to the box's leading edge.
+        /// A left-aligned status reports ~0; a trailing one reports the width
+        /// it left clear.
+        let leadingClearance: CGFloat
+    }
+
+    var renderedStatusPlacement: RenderedStatusPlacement? {
+        guard let key = renderedTranslationTargetRowKeys.sorted().last,
+              let rail = translationTargetRails[key] else { return nil }
+        let overlay = rail.statusOverlay
+        guard !overlay.isHidden, overlay.superview != nil else { return nil }
+        // Geometry is the assertion here, so the whole subtree must settle
+        // first; a rail measured before layout reports a zero-width box.
+        layoutSubtreeIfNeeded()
+        rail.scroll.layoutSubtreeIfNeeded()
+        func collect(_ view: NSView) -> [String] {
+            let own = (view as? NSTextField).map { [$0.stringValue] } ?? []
+            return own + view.subviews.flatMap(collect)
+        }
+        let frame = overlay.convert(overlay.bounds, to: rail.scroll)
+        let trailingGap = rail.scroll.bounds.maxX - frame.maxX
+        return RenderedStatusPlacement(
+            texts: collect(overlay).filter { !$0.isEmpty },
+            isTrailingOverlay: trailingGap < frame.minX,
+            overlapsContent: rail.row.arrangedSubviews.contains {
+                $0 !== rail.trailingSpacer
+                    && $0.convert($0.bounds, to: rail.scroll).maxX > frame.minX
+            },
+            leadingClearance: frame.minX
+        )
+    }
+
+    /// Shows or hides the composing field. Focus is the caller's to move: the
+    /// panel has to be key first, and only the controller knows whether it is.
+    func setComposingFieldEnabled(_ enabled: Bool) {
+        guard composingFieldEnabled != enabled else { return }
+        composingFieldEnabled = enabled
+        composingField.isHidden = !enabled
+        if !enabled {
+            composingField.stringValue = ""
+            (composingField.superview as? NSStackView)?
+                .removeArrangedSubview(composingField)
+            composingField.removeFromSuperview()
+        }
+        needsLayout = true
+    }
+
+    @discardableResult
+    func focusComposingField() -> Bool {
+        guard composingFieldEnabled, let window, window.isKeyWindow else {
+            return false
+        }
+        return window.makeFirstResponder(composingField)
+    }
+
+    fileprivate var composingFieldControl: NSControl { composingField }
+
+    fileprivate func clearComposingField() {
+        composingField.stringValue = ""
+    }
+
+    /// True while the field owns first responder. A field editor stands in
+    /// for the field once editing starts, so the responder is not the field
+    /// itself and a naive comparison would report focus lost on every
+    /// keystroke.
+    var composingFieldHasFocus: Bool {
+        guard composingFieldEnabled, let window else { return false }
+        guard let responder = window.firstResponder else { return false }
+        if responder === composingField { return true }
+        return (responder as? NSTextView)?.delegate === composingField
+    }
+
+    /// Places the field without a full model render, so focus behaviour can
+    /// be asserted on its own.
+    func renderStandaloneFieldForPreview() {
+        guard composingFieldEnabled,
+              composingField.superview !== chipRow else { return }
+        chipRow.addArrangedSubview(composingField)
+        layoutSubtreeIfNeeded()
+    }
+
+    var renderedComposingFieldVisible: Bool { !composingField.isHidden }
+    var renderedComposingText: String { composingField.stringValue }
+
+    fileprivate func composingFieldCommitted() {
+        let text = composingField.stringValue
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        composingField.stringValue = ""
+        onComposingFieldCommit?(text)
+    }
+
     var isEnterHoldProgressVisible: Bool { enterHoldProgress != nil }
     var renderedTextFragments: [String] {
         func collect(_ view: NSView) -> [String] {
             let own = (view as? NSTextField).map { [$0.stringValue] } ?? []
             return own + view.subviews.flatMap(collect)
         }
+        // Status text is pinned beside the row rather than inside it, but it
+        // is still text the box is showing, so it belongs in this inventory.
         return collect(chipRow)
             + (renderedShowsSourceRail ? collect(translationSourceRow) : [])
-            + renderedTranslationTargetRowKeys.flatMap {
-                translationTargetRails[$0].map { collect($0.row) } ?? []
+            + renderedTranslationTargetRowKeys.flatMap { key -> [String] in
+                guard let rail = translationTargetRails[key] else { return [] }
+                return collect(rail.row)
+                    + (rail.statusOverlay.isHidden
+                        ? []
+                        : collect(rail.statusOverlay))
             }
     }
 
@@ -926,7 +1139,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         )
     }
 
-    static func runToolbarToggleInteractionProbe() -> Bool {
+    static func runNoLeadingControlProbe() -> Bool {
         let host = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 50))
         let view = BufferInlineView(
             frame: NSRect(x: 37, y: 8, width: 460, height: 34)
@@ -942,30 +1155,14 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         _ = view.renderStandardForPreview()
         host.layoutSubtreeIfNeeded()
         view.layoutSubtreeIfNeeded()
-
-        let buttonRect = view.inputOptionsButton.convert(
-            view.inputOptionsButton.bounds,
-            to: view
-        )
-        guard !buttonRect.isEmpty else { return false }
-        let buttonPoint = NSPoint(x: buttonRect.midX, y: buttonRect.midY)
         let ordinaryRailPoint = NSPoint(
-            x: min(view.bounds.maxX - 2, buttonRect.maxX + 12),
+            x: view.bounds.minX + 12,
             y: view.bounds.midY
         )
-        var requestedToggleCount = 0
-        view.onToolbarToggleRequested = {
-            requestedToggleCount += 1
-        }
-        view.inputOptionsButton.performClick(nil)
-        view.inputOptionsButton.performClick(nil)
-        let containsButton = view.inputOptionsContains(pointInSelf: buttonPoint)
-        let excludesButton = !view.shouldAttemptLogicalRailClick(at: buttonPoint)
         let acceptsRail = view.shouldAttemptLogicalRailClick(at: ordinaryRailPoint)
-        let standardPassed = containsButton
-            && excludesButton
-            && acceptsRail
-            && requestedToggleCount == 0
+        let standardHasNoLeadingControl = !view.chipRow.arrangedSubviews.contains {
+            $0 is NSButton
+        }
 
         let outputID = UUID()
         _ = view.renderTranslationForPreview(
@@ -982,6 +1179,11 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         )
         host.layoutSubtreeIfNeeded()
         view.layoutSubtreeIfNeeded()
+        let sourceHasNoLeadingControl = !view.translationSourceRow
+            .arrangedSubviews.contains { $0 is NSButton }
+        let targetHasNoLeadingControl = view.translationTargetRails.values.allSatisfy {
+            !$0.row.arrangedSubviews.contains { $0 is NSButton }
+        }
         let sourceChipAccepted: Bool
         if let sourceChip = view.translationSourceChipView {
             let rect = sourceChip.convert(sourceChip.bounds, to: view)
@@ -1008,23 +1210,28 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             )
         )
         interactiveChip.removeFromSuperview()
-        let passed = standardPassed && sourceChipAccepted && targetChipExcluded
+        let passed = view.renderedLeadingInputControlCount == 0
+            && standardHasNoLeadingControl
+            && sourceHasNoLeadingControl
+            && targetHasNoLeadingControl
+            && acceptsRail
+            && sourceChipAccepted
+            && targetChipExcluded
         if !passed {
             print(
-                "FAILED: buffer input-icon interaction probe",
-                "buttonRect=\(buttonRect)",
-                "contains=\(containsButton)",
-                "excluded=\(excludesButton)",
+                "FAILED: buffer rail must have no leading control",
+                "standard=\(standardHasNoLeadingControl)",
+                "source=\(sourceHasNoLeadingControl)",
+                "target=\(targetHasNoLeadingControl)",
                 "rail=\(acceptsRail)",
-                "toggles=\(requestedToggleCount)",
-                "source=\(sourceChipAccepted)",
-                "target=\(targetChipExcluded)"
+                "sourceClick=\(sourceChipAccepted)",
+                "targetClick=\(targetChipExcluded)"
             )
         }
         return passed
     }
 
-    static func runGeneratedResultCopyPlacementProbe() -> Bool {
+    static func runTrailingActionExclusionProbe() -> Bool {
         let host = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 80))
         let view = BufferInlineView(
             frame: NSRect(x: 8, y: 8, width: 504, height: 64)
@@ -1036,10 +1243,39 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             view.topAnchor.constraint(equalTo: host.topAnchor, constant: 8),
             view.bottomAnchor.constraint(equalTo: host.bottomAnchor, constant: -8),
         ])
-        let copy = FirstMouseButton(title: "", target: nil, action: nil)
-        copy.isHidden = false
-        view.generatedResultCopyControl = copy
         host.layoutSubtreeIfNeeded()
+        let longPreedit = String(repeating: "buffer-tail-", count: 32)
+        _ = view.renderStandardForPreview(
+            preedit: longPreedit,
+            preeditCursorPosUTF8: longPreedit.utf8.count
+        )
+        host.layoutSubtreeIfNeeded()
+        view.layoutSubtreeIfNeeded()
+        let railWidthBefore = view.bounds.width
+        let standardScrollWidthBefore = view.chipScroll.frame.width
+        let requestedWidth: CGFloat = 92
+        let expectedClearance = requestedWidth
+            + BufferInlineMetrics.trailingActionSafetyGap
+        view.setTrailingActionExclusion(width: requestedWidth)
+        host.layoutSubtreeIfNeeded()
+        view.layoutSubtreeIfNeeded()
+        let standardStable = abs(view.bounds.width - railWidthBefore) < 0.5
+            && abs(view.chipScroll.frame.width - standardScrollWidthBefore) < 0.5
+            && abs(view.standardTrailingClearanceConstraint.constant
+                - expectedClearance) < 0.5
+        let standardCaretClearsOverlay: Bool
+        if let caret = view.preeditView.caretRect(
+            convertedTo: view.chipScroll.contentView
+        ) {
+            let safeVisibleMaxX = view.chipScroll.contentView.bounds.maxX
+                - expectedClearance
+            standardCaretClearsOverlay = caret.minX
+                    >= view.chipScroll.contentView.bounds.minX - 1
+                && caret.maxX <= safeVisibleMaxX + 1
+        } else {
+            standardCaretClearsOverlay = false
+        }
+
         _ = view.renderTranslationForPreview(
             TranslationRailSnapshot(
                 sourceText: "原文",
@@ -1052,25 +1288,41 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         host.layoutSubtreeIfNeeded()
         view.layoutSubtreeIfNeeded()
         guard let rail = view.translationTargetRails.values.first else {
-            print("FAILED: generated-result copy placement missing target rail")
+            print("FAILED: trailing action exclusion missing target rail")
             return false
         }
-        let arranged = rail.row.arrangedSubviews
-        guard let copyIndex = arranged.firstIndex(where: { $0 === copy }) else {
-            print("FAILED: generated-result copy missing from target rail", arranged)
-            return false
-        }
-        let chipIndex = arranged.firstIndex { $0 is TranslationRailChipView }
-        let leading = copyIndex == 0
-            || (arranged.first === view.inputOptionsButton && copyIndex == 1)
-        let beforeText = chipIndex.map { copyIndex < $0 } ?? true
-        let passed = leading && beforeText && !copy.isHidden
+        let targetStable = abs(view.bounds.width - railWidthBefore) < 0.5
+            && view.sourceTrailingClearanceConstraint.constant == 0
+            && rail.trailingSpacer === rail.row.arrangedSubviews.last
+            && rail.trailingSpacer.frame.width + 0.5 >= expectedClearance
+            && !rail.row.arrangedSubviews.contains(where: { $0 is NSButton })
+        // A split source/target layout carries its own source-row overlay; its
+        // clearance is independent of the target one and must not resize either
+        // rail.
+        let sourceOverlayWidth: CGFloat = 22
+        let expectedSourceClearance = sourceOverlayWidth
+            + BufferInlineMetrics.trailingActionSafetyGap
+        view.setSourceTrailingActionExclusion(width: sourceOverlayWidth)
+        host.layoutSubtreeIfNeeded()
+        view.layoutSubtreeIfNeeded()
+        let sourceRowStable = abs(view.bounds.width - railWidthBefore) < 0.5
+            && abs(view.sourceTrailingClearanceConstraint.constant
+                - expectedSourceClearance) < 0.5
+            && rail.trailingSpacer.frame.width + 0.5 >= expectedClearance
+
+        let passed = standardStable && standardCaretClearsOverlay && targetStable
+            && sourceRowStable
         if !passed {
             print(
-                "FAILED: generated-result copy must lead the return rail",
-                "copyIndex=\(copyIndex)",
-                "chipIndex=\(String(describing: chipIndex))",
-                "arranged=\(arranged)"
+                "FAILED: trailing action exclusion must not shrink rail",
+                "standard=\(standardStable)",
+                "caretClear=\(standardCaretClearsOverlay)",
+                "target=\(targetStable)",
+                "sourceRow=\(sourceRowStable)",
+                "sourceClearance=\(view.sourceTrailingClearanceConstraint.constant)",
+                "expectedSource=\(expectedSourceClearance)",
+                "clearance=\(rail.trailingSpacer.frame.width)",
+                "expected=\(expectedClearance)"
             )
         }
         return passed
@@ -1094,15 +1346,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         inputClick.delegate = self
         addGestureRecognizer(inputClick)
 
-        configureIconButton(
-            inputOptionsButton,
-            symbolName: "keyboard",
-            toolTip: BufferPluginMenuCatalog.defaultTitle
-        )
-        inputOptionsButton.target = nil
-        inputOptionsButton.action = nil
-        inputOptionsButton.setAccessibilityLabel(BufferPluginMenuCatalog.defaultTitle)
-
         emptyLabel.font = .systemFont(ofSize: 12)
         emptyLabel.lineBreakMode = .byTruncatingTail
         for label in [translationSourceEmptyLabel, translationTargetEmptyLabel] {
@@ -1124,9 +1367,14 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         chipRow.alignment = .centerY
         chipRow.distribution = .fill
         for spacer in [leadingSpacer, translationSourceSpacer] {
+            spacer.translatesAutoresizingMaskIntoConstraints = false
             spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
             spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
+        NSLayoutConstraint.activate([
+            standardTrailingClearanceConstraint,
+            sourceTrailingClearanceConstraint,
+        ])
 
         caretView.wantsLayer = true
         caretView.layer?.cornerRadius = 1
@@ -1147,6 +1395,19 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             right: BufferInlineMetrics.railHorizontalInset
         )
         normalRailContainer.translatesAutoresizingMaskIntoConstraints = false
+
+        composingField.font = .systemFont(ofSize: 13)
+        composingField.placeholderString = "在此输入，回车加入缓冲"
+        composingField.isBordered = false
+        composingField.isBezeled = false
+        composingField.drawsBackground = false
+        composingField.focusRingType = .none
+        composingField.lineBreakMode = .byTruncatingTail
+        composingField.usesSingleLineMode = true
+        composingField.delegate = self
+        composingField.isHidden = true
+        composingField.translatesAutoresizingMaskIntoConstraints = false
+
         addSubview(normalRailContainer)
 
         configureHorizontalRail(translationSourceScroll, row: translationSourceRow)
@@ -1185,30 +1446,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     required init?(coder: NSCoder) { fatalError() }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    func updateInputOptions(symbolName: String,
-                            title: String,
-                            enabled: Bool = true,
-                            toolbarExpanded: Bool = false) {
-        inputOptionsTitle = title
-        self.toolbarExpanded = toolbarExpanded
-        inputOptionsButton.image = RimeUI.symbol(
-            symbolName,
-            pointSize: 12,
-            weight: .semibold
-        )
-        inputOptionsButton.image?.isTemplate = true
-        inputOptionsButton.toolTip = inputOptionsTitle
-        inputOptionsButton.setAccessibilityLabel(inputOptionsTitle)
-        inputOptionsButton.isEnabled = enabled
-        inputOptionsButton.refreshInteractionAppearance()
-    }
-
-    func setToolbarExpanded(_ expanded: Bool) {
-        toolbarExpanded = expanded
-        inputOptionsButton.toolTip = inputOptionsTitle
-        inputOptionsButton.setAccessibilityLabel(inputOptionsTitle)
-    }
 
     @objc private func logicalInputClicked(_ recognizer: NSClickGestureRecognizer) {
         guard recognizer.state == .ended, !contentShielded else { return }
@@ -1257,20 +1494,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         !contentShielded && !interactiveDescendantContains(pointInSelf: point)
     }
 
-    private func inputOptionsContains(pointInSelf point: NSPoint) -> Bool {
-        guard inputOptionsButton.superview != nil,
-              !inputOptionsButton.isHidden,
-              inputOptionsButton.alphaValue > 0 else { return false }
-        return inputOptionsButton.convert(
-            inputOptionsButton.bounds,
-            to: self
-        ).contains(point)
-    }
-
     private func interactiveDescendantContains(pointInSelf point: NSPoint) -> Bool {
-        if inputOptionsContains(pointInSelf: point) {
-            return true
-        }
         guard let superview else { return false }
         let pointForHitTest = convert(point, to: superview)
         var candidate = hitTest(pointForHitTest)
@@ -1345,6 +1569,87 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         guard !translationContainer.isHidden else { return }
         layoutSubtreeIfNeeded()
         updateTranslationDocumentSizes()
+    }
+
+    /// Keeps the logical rail full width while reserving scrollable tail room
+    /// beneath the sibling action overlay. The overlay never participates in
+    /// the rail's outer Auto Layout width; only the document tail changes, so
+    /// the caret and final chip can scroll clear of the buttons.
+    func setTrailingActionExclusion(width: CGFloat) {
+        let bounded = max(0, width) + (width > 0
+            ? BufferInlineMetrics.trailingActionSafetyGap
+            : 0)
+        guard abs(trailingActionExclusionWidth - bounded) >= 0.5 else { return }
+        trailingActionExclusionWidth = bounded
+        applyTrailingActionExclusion()
+        if translationContainer.isHidden {
+            updateChipDocumentSize()
+            if contentShielded {
+                scrollToStart(in: chipScroll)
+            } else if lastRenderSignature != nil {
+                // The copy action can appear without changing rail content.
+                // Reconcile the logical insertion point against the new safe
+                // width so the tail never remains underneath the overlay.
+                scrollChipsToInsertionPoint()
+            }
+        } else {
+            updateTranslationDocumentSizes()
+            if let phase = lastRenderSignature?.translation?.phase {
+                scrollTranslationRails(for: phase)
+            }
+        }
+    }
+
+    /// The split layout gives the source rail its own trailing overlay, so this
+    /// clearance is tracked separately from the target/standard one.
+    func setSourceTrailingActionExclusion(width: CGFloat) {
+        let bounded = max(0, width) + (width > 0
+            ? BufferInlineMetrics.trailingActionSafetyGap
+            : 0)
+        guard abs(sourceTrailingActionExclusionWidth - bounded) >= 0.5 else { return }
+        sourceTrailingActionExclusionWidth = bounded
+        applyTrailingActionExclusion()
+        guard !translationContainer.isHidden else { return }
+        updateTranslationDocumentSizes()
+        if let phase = lastRenderSignature?.translation?.phase {
+            scrollTranslationRails(for: phase)
+        }
+    }
+
+    private func applyTrailingActionExclusion() {
+        standardTrailingClearanceConstraint.constant = 0
+        sourceTrailingClearanceConstraint.constant = 0
+        translationTargetRails.values.forEach { $0.setTrailingClearance(0) }
+
+        for key in renderedTranslationTargetRowKeys {
+            translationTargetRails[key]?.setStatusOverlayInset(
+                trailingActionExclusionWidth + 3
+            )
+        }
+        if trailingActionExclusionWidth > 0 {
+            if translationContainer.isHidden {
+                standardTrailingClearanceConstraint.constant = trailingActionExclusionWidth
+            } else if renderedTranslationTargetRowKeys.isEmpty {
+                sourceTrailingClearanceConstraint.constant = trailingActionExclusionWidth
+            } else {
+                for key in renderedTranslationTargetRowKeys {
+                    translationTargetRails[key]?.setTrailingClearance(
+                        trailingActionExclusionWidth
+                    )
+                }
+            }
+        }
+
+        // Only a rendered target row means the source rail is a distinct row
+        // with its own overlay; otherwise the single visible row already owns
+        // the combined clearance above.
+        guard sourceTrailingActionExclusionWidth > 0,
+              !translationContainer.isHidden,
+              !renderedTranslationTargetRowKeys.isEmpty else { return }
+        sourceTrailingClearanceConstraint.constant = max(
+            sourceTrailingClearanceConstraint.constant,
+            sourceTrailingActionExclusionWidth
+        )
     }
 
     private func updateHairlineWidth() {
@@ -1431,8 +1736,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         let wasRenderingTranslation = !contentShielded
             && lastRenderSignature?.translation != nil
         contentShielded = false
-        inputOptionsButton.isEnabled = true
-
         let signature = RenderSignature(
             blocks: model.blocks.map {
                 RenderedBlock(id: $0.id,
@@ -1489,7 +1792,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         )
         normalRailContainer.isHidden = false
         translationContainer.isHidden = true
-        chipRow.addArrangedSubview(inputOptionsButton)
         renderedSelectedStandardBlockCount = signature.allContentSelected
             ? model.blocks.count
             : 0
@@ -1558,6 +1860,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             chipRow.addArrangedSubview(messageChip(text: message))
         }
         chipRow.addArrangedSubview(leadingSpacer)
+        applyTrailingActionExclusion()
 
         active ? startCaretBlinking() : stopCaretBlinking()
         applyAppearance()
@@ -1598,10 +1901,9 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         normalRailContainer.isHidden = false
         translationContainer.isHidden = true
         emptyLabel.stringValue = "内容已隐藏"
-        inputOptionsButton.isEnabled = false
-        chipRow.addArrangedSubview(inputOptionsButton)
         chipRow.addArrangedSubview(emptyLabel)
         chipRow.addArrangedSubview(leadingSpacer)
+        applyTrailingActionExclusion()
         stopCaretBlinking()
         isHidden = false
         applyAppearance()
@@ -1671,9 +1973,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         renderedAlternativeCount = showsTargetRail ? alternativeCount : 0
         renderedAlternativeIndex = showsTargetRail ? activeAlternativeIndex : 0
 
-        var sourceViews: [NSView] = renderedShowsSourceRail
-            ? [inputOptionsButton]
-            : []
+        var sourceViews: [NSView] = []
         if renderedShowsSourceRail,
            BufferInputPlaceholderRules.shouldShow(
             contentIsEmpty: snapshot.sourceText.isEmpty,
@@ -1706,6 +2006,9 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             } else if !snapshot.sourceSelected {
                 sourceViews.append(caretView)
             }
+        }
+        if composingFieldEnabled, renderedShowsSourceRail {
+            sourceViews.append(composingField)
         }
         sourceViews.append(translationSourceSpacer)
         reconcileArrangedSubviews(sourceViews, in: translationSourceRow)
@@ -1802,28 +2105,20 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         for (rowIndex, rowSnapshot) in rowSnapshots.enumerated() {
             guard let rail = translationTargetRails[rowSnapshot.key] else { continue }
             var targetViews: [NSView] = []
-            if rowIndex == 0, !renderedShowsSourceRail {
-                targetViews.append(inputOptionsButton)
-            }
-            if rowIndex == 0,
-               let copyControl = generatedResultCopyControl,
-               !copyControl.isHidden {
-                targetViews.append(copyControl)
-            }
             if alternativeCount > 1 {
                 targetViews.append(translationPagerView)
             }
             if snapshot.outputBlocks.isEmpty, rowIndex == 0 {
-                if !loading, message == nil {
-                    targetViews.append(translationTargetEmptyLabel)
-                }
+                // The placeholder is status, not content, so it joins the
+                // trailing overlay below rather than opening the row.
             } else {
-                let targetIsCurrent = snapshot.phase == .ready
                 for block in rowSnapshot.blocks {
+                    let targetIsCurrent = snapshot.phase == .ready || block.deliveryReady
                     renderedBlockIDs.append(block.id)
                     let chip = translationTargetChipViews[block.id]
                         ?? TranslationRailChipView(target: true)
                     translationTargetChipViews[block.id] = chip
+                    chip.setAutoSendProgress(autoSendFade[block.id] ?? 0)
                     chip.update(
                         text: block.text,
                         ordinal: alternativeCount > 1 ? nil : block.ordinal,
@@ -1838,12 +2133,28 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
                     targetViews.append(chip)
                 }
             }
+            // Status is pinned to the trailing edge instead of flowing after
+            // the result: as a flow item it sat at the far left of an empty
+            // box and scrolled out of sight once a long result arrived.
+            var statusViews: [NSView] = []
             if rowIndex == rowSnapshots.count - 1 {
-                if loading { targetViews.append(loadingIndicator) }
+                if loading { statusViews.append(loadingIndicator) }
                 if let messageView = translationMessageView, message != nil {
-                    targetViews.append(messageView)
+                    statusViews.append(messageView)
+                }
+                if statusViews.isEmpty, snapshot.outputBlocks.isEmpty {
+                    translationTargetEmptyLabel.stringValue =
+                        snapshot.targetEmptyText
+                    statusViews.append(translationTargetEmptyLabel)
                 }
             }
+            rail.syncStatusOverlayAttachment(trailingInset: 3)
+            rail.setStatusViews(
+                statusViews,
+                background: snapshot.outputBlocks.isEmpty
+                    ? nil
+                    : RimeUI.bufferTargetRail.withAlphaComponent(0.94).cgColor
+            )
             targetViews.append(rail.trailingSpacer)
             reconcileArrangedSubviews(targetViews, in: rail.row)
         }
@@ -1854,6 +2165,7 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             clearArrangedSubviews(of: rail.row)
             rail.scroll.removeFromSuperview()
         }
+        applyTrailingActionExclusion()
         renderedShowsSourceRail && active
             ? startCaretBlinking()
             : stopCaretBlinking()
@@ -1916,7 +2228,10 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private func originBadge(for origin: Origin) -> NSView? {
         let color: NSColor
         switch origin {
-        case .rime: return nil
+        // Local typing is ordinary use however it was composed, so it stays
+        // unbadged; the dots mark text that came from somewhere else.
+        case .rime, .localInput: return nil
+        case .clipboard: color = RimeUI.color(0x10B981)          // local pasteboard — green
         case .remotePeer: color = RimeUI.color(0x9B8CFF)        // paired Mac — violet
         case .marine, .plugin, .processor, .mcp:
             color = RimeUI.color(0xF59E0B) // local action/transform/agent — amber
@@ -1932,6 +2247,22 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             dot.heightAnchor.constraint(equalToConstant: BufferInlineMetrics.originBadgeSize),
         ])
         return dot
+    }
+
+    /// Dims each chip in proportion to how much of its life has passed, so an
+    /// automatic send is visibly imminent rather than sudden. Values are
+    /// clamped well short of invisible: a block the user can no longer read is
+    /// worse than one that simply looks stale.
+    func setAutoSendFade(_ fade: [UUID: Double]) {
+        guard autoSendFade != fade else { return }
+        autoSendFade = fade
+        for (id, view) in standardBlockViews {
+            let progress = fade[id] ?? 0
+            view.alphaValue = 1 - 0.55 * CGFloat(min(max(progress, 0), 1))
+        }
+        for (id, view) in translationTargetChipViews {
+            view.setAutoSendProgress(fade[id] ?? 0)
+        }
     }
 
     private func chip(for block: BufferModel.Block,
@@ -1984,6 +2315,9 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
             : 0
         box.toolTip = blockToolTip(block)
         standardBlockViews[block.id] = box
+        box.alphaValue = 1 - 0.55 * CGFloat(
+            min(max(autoSendFade[block.id] ?? 0, 0), 1)
+        )
         row.translatesAutoresizingMaskIntoConstraints = false
         box.addSubview(row)
         NSLayoutConstraint.activate([
@@ -2192,16 +2526,39 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
     private func scroll(rect: NSRect, row: NSView, in scrollView: NSScrollView) {
         let maxX = max(0, row.frame.width - scrollView.contentSize.width)
         let visible = scrollView.contentView.bounds
+        let exclusion = trailingActionExclusion(for: scrollView)
+        let safeVisibleWidth = max(1, visible.width - exclusion)
+        let safeVisibleMaxX = visible.minX + safeVisibleWidth
         var targetX = visible.minX
         if rect.minX < visible.minX {
             targetX = max(0, rect.minX)
-        } else if rect.maxX > visible.maxX {
-            targetX = max(0, min(maxX, rect.maxX - scrollView.contentSize.width))
+        } else if rect.maxX > safeVisibleMaxX {
+            targetX = max(0, min(maxX, rect.maxX - safeVisibleWidth))
         } else {
             targetX = min(max(0, visible.minX), maxX)
         }
         scrollView.contentView.scroll(to: NSPoint(x: targetX, y: 0))
         scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    private func trailingActionExclusion(for scrollView: NSScrollView) -> CGFloat {
+        if !translationContainer.isHidden,
+           !renderedTranslationTargetRowKeys.isEmpty,
+           scrollView === translationSourceScroll {
+            return sourceTrailingActionExclusionWidth
+        }
+        guard trailingActionExclusionWidth > 0 else { return 0 }
+        if translationContainer.isHidden {
+            return scrollView === chipScroll ? trailingActionExclusionWidth : 0
+        }
+        if renderedTranslationTargetRowKeys.isEmpty {
+            return scrollView === translationSourceScroll
+                ? trailingActionExclusionWidth
+                : 0
+        }
+        return renderedTranslationTargetRowKeys.contains { key in
+            translationTargetRails[key]?.scroll === scrollView
+        } ? trailingActionExclusionWidth : 0
     }
 
     private func scrollChipsToInsertionPoint() {
@@ -2244,10 +2601,6 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
         translationSourceEmptyLabel.textColor = RimeUI.textSecondary
         translationTargetEmptyLabel.textColor = RimeUI.textSecondary
         translationPagerView.applyAppearance()
-        inputOptionsButton.contentTintColor = RimeUI.isRasta
-            ? RimeUI.brandYellow
-            : RimeUI.textSecondary
-        inputOptionsButton.refreshInteractionAppearance()
     }
 
     private func startCaretBlinking() {
@@ -2278,17 +2631,20 @@ final class BufferInlineView: NSView, NSGestureRecognizerDelegate {
 
 }
 
-func runBufferInlineToolbarToggleInteractionProbe() -> Bool {
-    BufferInlineView.runToolbarToggleInteractionProbe()
+func runBufferInlineNoLeadingControlProbe() -> Bool {
+    BufferInlineView.runNoLeadingControlProbe()
 }
 
-func runBufferInlineGeneratedResultCopyPlacementProbe() -> Bool {
-    BufferInlineView.runGeneratedResultCopyPlacementProbe()
+func runBufferInlineTrailingActionExclusionProbe() -> Bool {
+    BufferInlineView.runTrailingActionExclusionProbe()
 }
 
 /// A button that works on the first click inside a never-key panel.
 class FirstMouseButton: NSButton {
     var usesPrimarySurface = false
+    var showsPersistentInteractionSurface = false {
+        didSet { refreshInteractionAppearance() }
+    }
     private var pointerTrackingArea: NSTrackingArea?
     private var pointerHovered = false
     private var pointerPressed = false
@@ -2392,6 +2748,26 @@ class FirstMouseButton: NSButton {
                 ? RimeUI.border
                 : RimeUI.accentBlue).cgColor
             layer?.borderWidth = 1 / max(window?.backingScaleFactor ?? 2, 1)
+        } else if showsPersistentInteractionSurface {
+            let background: NSColor
+            let border: NSColor
+            switch state {
+            case .idle:
+                background = RimeUI.surface2.withAlphaComponent(0.78)
+                border = RimeUI.border.withAlphaComponent(0.82)
+            case .hovered:
+                background = BufferWorkbenchPointerRules.backgroundColor(for: state)
+                border = BufferWorkbenchPointerRules.borderColor(for: state)
+            case .pressed:
+                background = BufferWorkbenchPointerRules.backgroundColor(for: state)
+                border = BufferWorkbenchPointerRules.borderColor(for: state)
+            case .disabled:
+                background = RimeUI.surface2.withAlphaComponent(0.34)
+                border = RimeUI.border.withAlphaComponent(0.40)
+            }
+            layer?.backgroundColor = background.cgColor
+            layer?.borderColor = border.cgColor
+            layer?.borderWidth = 1 / max(window?.backingScaleFactor ?? 2, 1)
         } else {
             layer?.backgroundColor = BufferWorkbenchPointerRules
                 .backgroundColor(for: state).cgColor
@@ -2417,7 +2793,7 @@ class FirstMouseButton: NSButton {
 }
 
 final class HoldProgressButton: FirstMouseButton {
-    var holdDuration: TimeInterval = 1.2
+    var holdDuration: TimeInterval = 0.6
 
     private var holdStartedAt: CFAbsoluteTime = 0
     private var completed = false
@@ -2596,5 +2972,27 @@ final class HoldProgressButton: FirstMouseButton {
         image.unlockFocus()
         image.isTemplate = false
         return image
+    }
+}
+
+
+extension BufferInlineView: NSTextFieldDelegate {
+    /// Return commits the phrase; Escape abandons it. Both are handled here
+    /// rather than through the field's action, which does not fire for Return
+    /// inside a nonactivating panel.
+    func control(_ control: NSControl,
+                 textView: NSTextView,
+                 doCommandBy commandSelector: Selector) -> Bool {
+        guard control === composingFieldControl else { return false }
+        switch commandSelector {
+        case #selector(NSResponder.insertNewline(_:)):
+            composingFieldCommitted()
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            clearComposingField()
+            return true
+        default:
+            return false
+        }
     }
 }

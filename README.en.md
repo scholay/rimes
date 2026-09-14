@@ -2,7 +2,7 @@
 
 **[中文](README.md)** · **[English](README.en.md)**
 
-A modern macOS input method built from scratch: **librime** engine + custom candidate UI + a persistent **buffer workbench**. Its core schemes are Rime Ice full Pinyin, Natural Code double Pinyin, Xiaohe double Pinyin, Wubi 86, and English; Feiyao chord/mutual typing is supplied by the disabled-by-default Chording extension. **Self-contained** — librime and Rime data are bundled; no separate Squirrel install required.
+A modern macOS input method built from scratch: **librime** engine + custom candidate UI + a persistent **buffer workbench**. Its core schemes are Rime Ice full Pinyin, Natural Code double Pinyin, Xiaohe double Pinyin, Wubi 86, and English; the disabled-by-default Chording extension supplies the Feiyao preset and custom keymaps, with one behavior supporting both combined and left-then-right split strokes. **Self-contained** — librime and Rime data are bundled; no separate Squirrel install required.
 
 > Internal codename remains **RimeBuffer** (SPM target, `Sources/RimeBuffer/`). `ETInput.app` is kept as a compatibility path for existing installs and in-app updates. The public product name is **RIMES** (rime-scholay).
 
@@ -25,14 +25,16 @@ Nothing auto-posts, and nothing silently edits the web page. Built for writing, 
 
 ## Highlights
 
+After installation and an Aqua login, a one-shot background job uses `open -g` to start the same RIMES process. Buffer, Clipboard History, Mailbox, and Capsule shortcuts therefore work regardless of the active input source. A development install atomically publishes a per-user job. Before replacing the system payload, the package audits every ordinary local account and fails closed on any same-ID development app/job except a verified current-GUI-user install that postinstall can retire, or when a home cannot be checked safely. Postinstall retires that development install, audits again, and only then updates the system job as a rollback-capable transaction; the login guard's check for development artifacts is only a later defensive stop. Neither job has a `KeepAlive` policy or starts a second UI/IME service. Mailbox and Capsule are ordinary key windows. Under another IME, these companion features never access an IMK client, switch the input source, inject paste or other keystrokes, use Accessibility/Post Event, or read, commit, or cancel that IME's composition. Settings remains available only while a RIMES input source is active; its Mailbox and Capsule pages show configuration and status only, while actual conversations and records stay in their standalone windows.
+
 | Capability | Notes |
 |---|---|
 | Input schemes | Rime Ice full Pinyin, Natural Code and Xiaohe double Pinyin, Wubi 86, English; optional Chording extension |
-| Buffer workbench | Toggle with `⌘⇧B`; stage first, deliver in chunks |
-| Clipboard History | A peer of Buffer; `⌘⇧P` opens its standalone bottom window only while the active input source belongs to RIMES. While capture is enabled and unprotected, it records text, links, images, files, colors, and their lossless representations in a private local database. A single click only selects; double-click, Return, or `⌘1`–`⌘9` activates. Text and links use exact-focus IMK insertion and move to the front of history. Images, RTF, HTML, files, and other rich records only restore the original system-pasteboard payload, move to the front, and close silently; the user then presses `⌘V`. RIMES never invokes Paste, a context menu, synthetic `⌘V`, Accessibility, or Post Event. `⌘C` still only copies the selection |
-| Mailbox | A peer of Buffer; toggle with `⌘⇧M` to retain conversations and reviews independently. “New Conversation” selects from configured connectors/models: each CLI exposes only its default model, while OpenAI uses the locally configured model. The selection is frozen per conversation without changing the global setting; the process-local draft creates no empty thread, and the first Return creates the conversation and starts generation |
-| Capsule | A peer of Buffer; toggle with `⌘⇧C`, manage eight local record kinds, and preview images/PDFs; an optional chosen iCloud Drive folder syncs six portable kinds and media assets while passwords, Skill paths, and the master key stay local |
-| Settings | Open Settings anywhere with `⌘⇧S` |
+| Buffer workbench | Toggle with `⌘⇧B`; with a RIMES input source it can capture text and deliver it in chunks, while under another input source it only allows explicit system-pasteboard import and result copying and never accesses IMK delivery |
+| Capsule rail | Formerly Clipboard History, a peer of Buffer; `⌘⇧V` opens its standalone bottom window across input sources. Header tabs switch between Recent (the clipboard history) and read-only Notes, Images, PDFs, Skills and Passwords; `⌘S` saves the selected Recent cards into Capsule, and the gear and a card's hover brush open the Capsule manager. While capture is enabled and unprotected, it records text, links, images, files, colors, and their lossless representations in a private local database. A single click only selects; double-click, Return, or `⌘1`–`⌘9` activates. With another input source active, every record type only restores the original system-pasteboard payload, moves to the front of history, and closes silently; the user then presses `⌘V`. RIMES never invokes Paste, a context menu, synthetic `⌘V`, Accessibility, or Post Event. `⌘C` still only copies the selection |
+| Mailbox | A peer of Buffer; `⌘⇧M` toggles its ordinary key window across input sources and retains conversations and reviews independently. “New Conversation” selects from configured connectors/models: each CLI exposes only its default model, while OpenAI uses the locally configured model. The selection is frozen per conversation without changing the global setting; the process-local draft creates no empty thread, and the first Return creates the conversation and starts generation |
+| Capsule manager | Opened from the rail's gear or a card's brush and drawn as the rail grown upward; the gear or Esc returns to the rail. It manages five local record kinds, and previews or copies images/PDFs/files. Revealing a Password requires four ordered native physical-key chords; the default is `RH / WO / CVN / QU`, four slots show progress, and plaintext is concealed after at most 15 seconds. Changing or resetting the code first requires the current credential; raw custom chords are never stored or synced, only one local salted-digest credential. An optional chosen iCloud Drive folder syncs six portable kinds and media assets while Passwords, Skill paths, the reveal credential, and the master key stay local |
+| Settings | Open Settings with `⌘⇧S` only while the active input source belongs to RIMES; the Mailbox and Capsule pages contain shortcut, local-status, sync, and security configuration rather than their operational panes |
 | Live translation | Apple on-device translation by default (macOS 15+); AI connector optional |
 | AI generate | Codex CLI / Claude Code CLI / OpenAI-compatible API; results stay in Buffer with Plain / Markdown / JSON output and are delivered only by the user |
 | Stream input | Pinyin/chords → low-latency local Rime + Octagram, with AI fallback for complex input → up to 5 mutually exclusive guesses → deliver the chosen one |
@@ -48,6 +50,7 @@ This table is generated from [`Catalog/buffer-plugins.json`](Catalog/buffer-plug
 | AI Generation | `builtin.ai-text` | 2.1 | Bundled with RIMES | Enabled |
 | Real-time Translation | `builtin.apple-translation` | 2.1 | Bundled with RIMES | Enabled |
 | Stream of Consciousness Input | `builtin.stream-input` | 1.4 | Bundled with RIMES | Enabled |
+| Electronic Music | `builtin.music` | 0.2.3 | Bundled with RIMES | Enabled |
 
 Every plug-in in the table is bundled with RIMES and enabled on a clean first run.
 <!-- END PRESET BUFFER PLUGINS -->
@@ -56,11 +59,11 @@ Every plug-in in the table is bundled with RIMES and enabled on a clean first ru
 
 | Extension | Stable ID | Version | Default state |
 |---|---|---:|---|
-| Statistics | `builtin.statistics` | 1.0 | Enabled |
-| Typing Speed | `builtin.typing-speed` | 1.0 | Enabled |
+| Statistics | `builtin.statistics` | 2.0 | Enabled |
+| Typing Speed | `builtin.typing-speed` | 2.0 | Enabled |
 | Chording | `builtin.fly-chord-learning` | 2.0 | Disabled |
 
-Chording 2.0 preserves the legacy ID and learning progress while taking ownership of Feiyao chord/mutual input, the chord window, lessons, practice, and progress. When disabled, ordinary input cannot enter the Feiyao schema and Stream Input returns to sequential full Pinyin.
+Chording preserves the legacy ID and learning progress, with a single behavior supporting combined and left-then-right split strokes instead of separate modes. It manages editable keymaps, the chord window, lessons, practice, and progress; Feiyao is a built-in preset that can be copied and customized. When disabled, ordinary input returns to an ordinary scheme and Stream Input returns to sequential full Pinyin. A custom keymap can set its output encoding to Natural Code (自然码) double Pinyin: mappings are still written in full Pinyin, and applying the keymap encodes every complete syllable as two keys, so syllable boundaries follow from position rather than apostrophes, while the preedit still shows full Pinyin. See the [keymap and migration guide](CHORD-KEYMAPS.md).
 
 ## Install
 
@@ -124,7 +127,7 @@ included in a public release.
 
 The public data preview does not include the macOS buffer workbench, AI/translation/OCR, native
 settings, the experimental Windows TSF described above, or a Linux Fcitx5/IBus frontend.
-Cross-batch mutual typing is a current macOS frontend feature and cannot be supplied by a data
+Cross-batch split-stroke pairing is a current macOS frontend feature and cannot be supplied by a data
 package alone. Use the
 **Pre-release** assets named `RIMES-Windows-Data-Preview-*` or
 `RIMES-Linux-Data-Preview-*`; see [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)

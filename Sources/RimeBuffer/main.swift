@@ -2,11 +2,30 @@ import Cocoa
 import InputMethodKit
 import Carbon
 import Darwin
+import CRimeBridge
 
 // OpenSSH invokes this same executable as a narrowly scoped SSH_ASKPASS
 // helper. Handle that request before any smoke, installer, AppKit, or IMK
 // startup so the helper can return the saved password and terminate without
 // creating a second input-method process.
+// The very first statement, deliberately. The data directory and the
+// preference domain both changed with the rename, and anything that resolves
+// either one first — the Rime engine bootstrap, a store, even a log file —
+// creates the new directory before the migration can fill it, after which the
+// migration sees an occupied destination and correctly refuses to merge two
+// histories. Ordering is the whole guarantee here; nothing else can supply it.
+RimesDataMigration.migrateIfNeeded(
+    from: RimesPaths.legacyUserDirectory(),
+    to: RimesPaths.userDirectory()
+)
+RimesPreferenceMigration.migrateIfNeeded(
+    from: RimesIdentity.unregistrableBundleIdentifier,
+    marker: "rimes.preferencesMigratedFromScholayIsaac.v1"
+)
+RimesPreferenceMigration.migrateIfNeeded(
+    from: RimesIdentity.legacyBundleIdentifier
+)
+
 if let status = RemarkableSSHAskPassHandler.handleIfRequested() {
     exit(status)
 }
@@ -59,10 +78,22 @@ private enum StandaloneRimeCommandRules {
         let candidateURL = URL(fileURLWithPath: path)
             .standardizedFileURL
             .resolvingSymlinksInPath()
-        let liveURL = URL(fileURLWithPath: homeDirectory, isDirectory: true)
-            .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
+        // Both names are live during and after the rename: the migration
+        // copies rather than moves, so the old directory still holds the
+        // user's dictionaries and Capsule records. A standalone process must
+        // be kept out of either one.
+        let liveURLs = [RimesPaths.directoryName, RimesPaths.legacyDirectoryName]
+            .map { name in
+                URL(fileURLWithPath: homeDirectory, isDirectory: true)
+                    .appendingPathComponent("Library/\(name)", isDirectory: true)
+                    .standardizedFileURL
+                    .resolvingSymlinksInPath()
+            }
+        return liveURLs.contains { matchesLiveDirectory(candidateURL, live: $0) }
+    }
+
+    private static func matchesLiveDirectory(_ candidateURL: URL,
+                                             live liveURL: URL) -> Bool {
 
         // macOS user volumes are commonly case-insensitive, and firmlinks or
         // symlinks can spell the same directory with a different path. Compare
@@ -326,7 +357,7 @@ private func standaloneIsolationAliasProbe(isolatedUserDir: String) -> Bool {
     defer { try? fileManager.removeItem(at: fixture) }
     let fakeHome = fixture.appendingPathComponent("home", isDirectory: true)
     let live = fakeHome.appendingPathComponent(
-        "Library/RimeBuffer",
+        "Library/\(RimesPaths.directoryName)",
         isDirectory: true
     )
     let alias = fixture.appendingPathComponent("profile-alias", isDirectory: true)
@@ -411,7 +442,9 @@ if StandaloneRimeCommandRules.requiresIsolatedUserDir(
         exit(1)
     }
     if (CommandLine.arguments.contains("smoke")
-        || CommandLine.arguments.contains("user-lexicon-bridge-smoke")),
+        || CommandLine.arguments.contains("user-lexicon-bridge-smoke")
+        || CommandLine.arguments.contains("chord-keymap-engine-smoke")
+        || CommandLine.arguments.contains("chord-ziranma-engine-smoke")),
        !configureEngineSmokeRuntime(isolatedUserDir: isolatedUserDir) {
         exit(1)
     }
@@ -533,6 +566,25 @@ private func installMarineChromeGatewayAvailabilityObserver(
 }
 
 // `swift run RimeBuffer smoke` validates the engine end-to-end without IMK.
+if CommandLine.arguments.contains("buffer-music-audio-smoke") {
+    exit(runBufferMusicAudioSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("buffer-music-smoke") {
+    let sessionPassed = runBufferMusicSessionSmokeTest()
+    let keyboardPassed = runBufferMusicKeyboardSmokeTest()
+    exit(sessionPassed && keyboardPassed ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "buffer-music-view-smoke") {
+    let outputURL = CommandLine.arguments.count > index + 1
+        ? URL(fileURLWithPath: CommandLine.arguments[index + 1]) : nil
+    exit(runBufferMusicViewSmokeTest(outputURL: outputURL) ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "buffer-music-panel-smoke") {
+    _ = NSApplication.shared
+    let outputURL = CommandLine.arguments.count > index + 1
+        ? URL(fileURLWithPath: CommandLine.arguments[index + 1]) : nil
+    exit(BufferWindowController.shared.exerciseMusicPresentationForSmoke(outputURL: outputURL) ? 0 : 1)
+}
 if CommandLine.arguments.contains("stats-smoke") {
     exit(runStatsSmokeTest() ? 0 : 1)
 }
@@ -609,7 +661,7 @@ if CommandLine.arguments.contains("plugin-configuration-smoke") {
     exit(runPluginConfigurationSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("translation-smoke") {
-    exit(runTranslationPluginSmokeTest() ? 0 : 1)
+    exit(runTranslationPluginSmokeTest() && runTranslationLifecycleSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("ai-text-smoke") {
     exit(runAITextPluginSmokeTest() ? 0 : 1)
@@ -629,6 +681,27 @@ if CommandLine.arguments.contains("mailbox-window-smoke") {
 if CommandLine.arguments.contains("capsule-window-smoke") {
     exit(runCapsuleWindowSmokeTest() ? 0 : 1)
 }
+if let previewIndex = CommandLine.arguments.firstIndex(of: "capsule-manager-preview"),
+   CommandLine.arguments.indices.contains(previewIndex + 1) {
+    _ = NSApplication.shared
+    let path = CommandLine.arguments[previewIndex + 1]
+    exit(MainActor.assumeIsolated {
+        CapsuleRailSmoke.renderManagerPreview(to: path)
+    } ? 0 : 1)
+}
+if let previewIndex = CommandLine.arguments.firstIndex(of: "capsule-rail-preview"),
+   CommandLine.arguments.indices.contains(previewIndex + 2) {
+    _ = NSApplication.shared
+    let path = CommandLine.arguments[previewIndex + 1]
+    let tab = CommandLine.arguments[previewIndex + 2]
+    exit(MainActor.assumeIsolated {
+        CapsuleRailSmoke.renderPreview(to: path, tabName: tab)
+    } ? 0 : 1)
+}
+if CommandLine.arguments.contains("capsule-rail-smoke") {
+    _ = NSApplication.shared
+    exit(MainActor.assumeIsolated { CapsuleRailSmoke.run() } ? 0 : 1)
+}
 if CommandLine.arguments.contains("capsule-sync-smoke") {
     exit(runCapsuleCloudSyncSmokeTest() ? 0 : 1)
 }
@@ -637,6 +710,161 @@ if CommandLine.arguments.contains("mailbox-toast-smoke") {
 }
 if CommandLine.arguments.contains("stream-input-smoke") {
     exit(runStreamInputPluginSmokeTest() ? 0 : 1)
+}
+// Reports how much of a real aggregator catalog this build can actually
+// route. Point it at a saved /api/models response to see recovery coverage
+// before trusting the request pane against a live account.
+if CommandLine.arguments.contains("aggregator-catalog"),
+   let pathIndex = CommandLine.arguments.firstIndex(of: "aggregator-catalog"),
+   CommandLine.arguments.count > pathIndex + 1 {
+    let path = CommandLine.arguments[pathIndex + 1]
+    guard let payload = try? Data(contentsOf: URL(fileURLWithPath: path)),
+          let models = try? AggregatorCatalogParser.models(from: payload) else {
+        print("could not read catalog at \(path)")
+        exit(1)
+    }
+    let usable = models.filter(\.isUsable)
+    var byAdapter: [AggregatorAdapter: Int] = [:]
+    for model in usable {
+        byAdapter[model.primaryAdapter, default: 0] += 1
+    }
+    print("models: \(models.count)  routable: \(usable.count)  "
+        + "unroutable: \(models.count - usable.count)")
+    for (adapter, count) in byAdapter.sorted(by: { $0.value > $1.value }) {
+        print(String(format: "  %-22s %d", (adapter.rawValue as NSString).utf8String!, count))
+    }
+    let stranded = models.filter { !$0.isUsable }.map(\.id).prefix(8)
+    if !stranded.isEmpty { print("unroutable sample: \(stranded.joined(separator: ", "))") }
+    exit(0)
+}
+// Replays a real rollout through the same parser the pane uses, so the item
+// vocabulary can be checked against sessions codex actually wrote.
+if CommandLine.arguments.contains("codex-rollout"),
+   let index = CommandLine.arguments.firstIndex(of: "codex-rollout"),
+   CommandLine.arguments.count > index + 1 {
+    let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+    guard var payload = try? Data(contentsOf: url) else {
+        print("could not read rollout at \(url.path)")
+        exit(1)
+    }
+    if let newline = payload.firstIndex(of: 0x0a),
+       let header = CodexRolloutParser.header(
+        from: payload[payload.startIndex..<newline]
+       ) {
+        print("session \(header.sessionID)  cwd=\(header.cwd ?? "?")  "
+            + "cli=\(header.cliVersion ?? "?")")
+    }
+    let events = CodexRolloutWatcher.drain(&payload)
+    var counts: [String: Int] = [:]
+    var translatable = 0
+    for event in events {
+        counts[event.item.kindLabel, default: 0] += 1
+        if CodexEventTranslationRules.isTranslatable(event.item) { translatable += 1 }
+    }
+    print("events: \(events.count)   translatable: \(translatable)   "
+        + "verbatim: \(events.count - translatable)")
+    for (kind, count) in counts.sorted(by: { $0.value > $1.value }) {
+        print("  \(kind): \(count)")
+    }
+    exit(0)
+}
+// Reports what the session pane would launch and where it would read from,
+// without opening a window. A GUI-launched agent does not inherit a shell
+// PATH, so "it works in my terminal" proves nothing about what the pane sees.
+if CommandLine.arguments.contains("codex-doctor") {
+    if let executable = CodexExecutableLocator.resolve() {
+        print("codex: \(executable.path)")
+        let probe = Process()
+        probe.executableURL = executable
+        probe.arguments = ["--version"]
+        // Probe through the same environment the pane spawns with, or this
+        // reports the bug the environment exists to fix.
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        var childEnvironment: [String: String] = [:]
+        for entry in CodexProcessEnvironment.variables(
+            base: [],
+            inheritedPath: ProcessInfo.processInfo.environment["PATH"],
+            executable: executable,
+            workspace: home,
+            homeDirectory: home,
+            shell: ProcessInfo.processInfo.environment["SHELL"]
+        ) {
+            guard let separator = entry.firstIndex(of: "=") else { continue }
+            childEnvironment[String(entry[entry.startIndex..<separator])] =
+                String(entry[entry.index(after: separator)...])
+        }
+        probe.environment = childEnvironment
+        let pipe = Pipe()
+        probe.standardOutput = pipe
+        probe.standardError = pipe
+        if (try? probe.run()) != nil {
+            probe.waitUntilExit()
+            let output = String(
+                decoding: pipe.fileHandleForReading.readDataToEndOfFile(),
+                as: UTF8.self
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            print("version: \(output)  exit=\(probe.terminationStatus)")
+        }
+    } else {
+        print("codex: NOT FOUND (checked ~/.codex/bin, /opt/homebrew/bin, "
+            + "/usr/local/bin, then PATH)")
+    }
+    let root = CodexRolloutWatcher.sessionsRoot
+    let exists = FileManager.default.fileExists(atPath: root.path)
+    print("sessions root: \(root.path) \(exists ? "(present)" : "(missing)")")
+    print("workspace default: \(CodexSessionWorkspaceRules.preferredWorkspace().path)")
+    if #available(macOS 15.0, *) {
+        print("translation: AppleTranslationStringService available")
+    } else {
+        print("translation: unavailable below macOS 15")
+    }
+    // Run from inside the bundle this reports on the app's own identity, which
+    // is the only way to see whether a recorded grant is actually in effect —
+    // System Settings shows the checkbox either way.
+    let identity = SystemPermissionAudit.identity()
+    print("identity: \(identity.bundleIdentifier)")
+    print("signing: \(SystemPermissionAudit.signingAuthority() ?? "ad-hoc (grants die on rebuild)")")
+    for report in SystemPermissionAudit.reportAll() {
+        print("permission \(report.permission.rawValue): \(report.status)")
+    }
+    exit(0)
+}
+if CommandLine.arguments.contains("codex-session-smoke") {
+    exit(runCodexSessionSmokeTest() ? 0 : 1)
+}
+// Runs the real migration against explicit paths, so it can be proven on the
+// actual data directory before a rename depends on it.
+if let i = CommandLine.arguments.firstIndex(of: "rimes-migrate-probe"),
+   i + 2 < CommandLine.arguments.count {
+    let legacy = URL(fileURLWithPath: CommandLine.arguments[i + 1],
+                     isDirectory: true)
+    let destination = URL(fileURLWithPath: CommandLine.arguments[i + 2],
+                          isDirectory: true)
+    let outcome = RimesDataMigration.migrateIfNeeded(from: legacy,
+                                                     to: destination)
+    print("migration: \(outcome)")
+    switch outcome {
+    case .copied, .alreadyMigrated, .notNeeded: exit(0)
+    case .destinationOccupied, .failed: exit(1)
+    }
+}
+if CommandLine.arguments.contains("presentation-mode-smoke") {
+    exit(runBufferPresentationModeSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("live-metrics-smoke") {
+    exit(runBufferLiveTypingMetricsSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("rimes-migration-smoke") {
+    exit(runRimesMigrationSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("clipboard-policy-smoke") {
+    exit(runClipboardActivationPolicySmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("buffer-capture-smoke") {
+    exit(runBufferCaptureRequestSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("aggregator-smoke") {
+    exit(runAggregatorSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("my-prompt-smoke") {
     exit(runMyPromptPluginSmokeTest() ? 0 : 1)
@@ -651,14 +879,69 @@ if CommandLine.arguments.contains("remarkable-plugin-smoke") {
 if CommandLine.arguments.contains("settings-routing-smoke") {
     exit(runSettingsRoutingSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("status-menu-smoke") {
+    exit(runStatusMenuSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("status-menu-preview-smoke") {
+    exit(runStatusMaintenanceMenuPreview() ? 0 : 1)
+}
 if CommandLine.arguments.contains("history-heatmap-smoke") {
     exit(runHistoryHeatmapSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("typing-speed-smoke") {
     exit(runTypingSpeedStoreSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("daily-metrics-migration-smoke") {
+    exit(runDailyMetricsMigrationSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("typing-test-smoke") {
+    exit(runTypingTestSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("typing-practice-telemetry-smoke") {
+    exit(runTypingPracticeTelemetrySmokeTest() ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "statistics-dashboard-smoke") {
+    let output = CommandLine.arguments.indices.contains(index + 1)
+        ? URL(fileURLWithPath: CommandLine.arguments[index + 1]) : nil
+    exit(runStatisticsDashboardSmokeTest(outputURL: output) ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "typing-test-ui-smoke") {
+    let output = CommandLine.arguments.indices.contains(index + 1)
+        ? URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true) : nil
+    exit(runTypingTestUISmokeTest(outputDirectory: output) ? 0 : 1)
+}
 if CommandLine.arguments.contains("fly-chord-learning-smoke") {
     exit(runFlyChordLearningSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("chord-keymap-smoke") {
+    exit(runChordKeymapSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("chord-keymap-engine-smoke") {
+    exit(runChordKeymapEngineSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("chord-ziranma-smoke") {
+    exit(runChordZiranmaSmokeTest() ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "chord-ziranma-engine-smoke") {
+    let report = CommandLine.arguments.indices.contains(index + 1)
+        ? URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true) : nil
+    exit(runChordZiranmaEngineSmokeTest(reportDirectory: report) ? 0 : 1)
+}
+if CommandLine.arguments.contains("chord-keymap-activation-smoke") {
+    exit(runChordKeymapActivationSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("chord-unification-smoke") {
+    exit(runChordUnificationSmokeTest() ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "chord-settings-smoke") {
+    let output = CommandLine.arguments.indices.contains(index + 1)
+        ? URL(fileURLWithPath: CommandLine.arguments[index + 1]) : nil
+    exit(runChordSettingsSmokeTest(outputURL: output) ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "chord-keymap-ui-smoke") {
+    let output = CommandLine.arguments.indices.contains(index + 1)
+        ? URL(fileURLWithPath: CommandLine.arguments[index + 1]) : nil
+    exit(runChordKeymapEditorSmokeTest(outputURL: output) ? 0 : 1)
 }
 if CommandLine.arguments.contains("input-telemetry-smoke") {
     exit(runInputTelemetrySmokeTest() ? 0 : 1)
@@ -714,8 +997,14 @@ if CommandLine.arguments.contains("--repair-pending-install") {
 if CommandLine.arguments.contains("--prepare-update") {
     exit(selectFallbackInputSourceForUpdate() ? 0 : 1)
 }
+// A misspelled smoke command must not fall through into a second IMK server.
+if CommandLine.arguments.dropFirst().contains(where: { $0.hasSuffix("-smoke") }) {
+    FileHandle.standardError.write(Data("unknown smoke command\n".utf8))
+    exit(2)
+}
+
 // A standalone SettingsWindowController spins up its OWN RimeEngine. If that
-// engine opened the live ~/Library/RimeBuffer userdb while the installed IME is
+// engine opened the live ~/Library/RIMES userdb while the installed IME is
 // running, the two librime instances would fight over the LevelDB lock and break
 // the user's live typing. So the dev GUI tools redirect to an isolated userdb
 // (unless the caller already pinned RIMEBUFFER_USER_DIR).
@@ -755,8 +1044,39 @@ if let i = CommandLine.arguments.firstIndex(of: "settings-render"),
         : "failed to render one or more settings routes")
     exit(rendered ? 0 : 1)
 }
-// Dev-only: `ETInput panel-render <path> [translation|marine|candidate|toolbar]
-// [hover=<control>]` renders the actual compact workbench.
+// Dev-only: `ETInput panel-render <path>
+// [translation|marine|candidate|linked|toolbar] [hover=<control>]
+// [width=<points>]` renders the actual compact workbench.
+if let i = CommandLine.arguments.firstIndex(of: "popup-menu-render"),
+   i + 1 < CommandLine.arguments.count {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    app.finishLaunching()
+    let rows: [BufferPopUpMenuRow] = [
+        BufferPopUpMenuRow(itemIndex: 0, title: "Codex CLI", isSeparator: false,
+                           isEnabled: true, isSelected: true),
+        BufferPopUpMenuRow(itemIndex: 1, title: "Claude Code CLI",
+                           isSeparator: false, isEnabled: true,
+                           isSelected: false),
+        BufferPopUpMenuRow(itemIndex: 2, title: "OpenAI 兼容 API",
+                           isSeparator: false, isEnabled: true,
+                           isSelected: false),
+        .separator(itemIndex: 3),
+        BufferPopUpMenuRow(itemIndex: 4, title: "未配置连接器",
+                           isSeparator: false, isEnabled: false,
+                           isSelected: false),
+    ]
+    // Auto-send no longer has a pull-down to preview here: the cycle button
+    // and its adjacent switch render through the ordinary `panel-render`
+    // workbench preview instead.
+    let ok = renderBufferPopUpMenuPreview(
+        to: CommandLine.arguments[i + 1],
+        rows: rows
+    )
+    print(ok ? "rendered pull-down menu preview" : "FAILED: menu preview")
+    exit(ok ? 0 : 1)
+}
+
 if let i = CommandLine.arguments.firstIndex(of: "panel-render"),
    i + 1 < CommandLine.arguments.count {
     let app = NSApplication.shared
@@ -772,10 +1092,14 @@ if let i = CommandLine.arguments.firstIndex(of: "panel-render"),
     let translation = options.contains("translation")
     let marine = options.contains("marine")
     let candidatePreview = options.contains("candidate")
+    let linkedPreview = options.contains("linked")
     let toolbarExpanded = options.contains("toolbar")
     if marine { model.discardForPrivacy() }
     let scaleValue = options.first { Double($0) != nil }.flatMap { Double($0) }
     let scale = CGFloat(scaleValue ?? 2)
+    let panelWidth = options.first { $0.hasPrefix("width=") }
+        .flatMap { Double($0.dropFirst("width=".count)) }
+        .map { CGFloat($0) } ?? 760
     let hoveredControl = options.compactMap { option -> BufferWorkbenchControl? in
         guard option.hasPrefix("hover=") else { return nil }
         return BufferWorkbenchControl(rawValue: String(option.dropFirst("hover=".count)))
@@ -816,11 +1140,17 @@ if let i = CommandLine.arguments.firstIndex(of: "panel-render"),
     let rendered = BufferWindowController.shared.renderForPreview(
         to: CommandLine.arguments[i + 1],
         scale: scale,
+        panelWidth: panelWidth,
         translationSnapshot: translationSnapshot,
         statusIndicators: previewStatuses,
         hoveredControl: hoveredControl,
         candidatePreview: candidatePreview,
-        toolbarExpanded: toolbarExpanded
+        targetAssociationPreviewAppName: linkedPreview ? "Safari" : nil,
+        toolbarExpanded: toolbarExpanded,
+        liveMetricsPreview: options.contains("metrics")
+            ? "42 字/分  ·  码长 1.83  ·  击键 3.2/秒  ·  回删 2"
+            : nil,
+        railFoldedPreview: options.contains("folded")
     )
     print(rendered
         ? "rendered \(candidatePreview ? "candidate " : (marine ? "marine " : (translation ? "translation " : "")))expanded workbench @\(scale)x"
@@ -852,7 +1182,7 @@ if CommandLine.arguments.contains("gateway-serve") {
 retryPendingInputSourceActivationIfNeeded()
 
 // IMK bootstrap. The connection name MUST match Info.plist; IMK finds our
-// controller via InputMethodServerControllerClass = RimeBufferController.
+// controller via InputMethodServerControllerClass = RIMESController.
 // Start enabled built-in observers before the first controller can receive a
 // key. The registry is discovery/enablement only; external Action Plugin
 // execution and revocation remain owned by ActionPluginHost/Manager.
@@ -867,7 +1197,8 @@ let bufferPluginSelectionObserver = NotificationCenter.default.addObserver(
 ) { notification in
     BufferWindowController.shared.notePluginSelectionChanged()
     BufferModel.shared.clearAllContentSelection()
-    if notification.userInfo?["current"] as? PluginKey
+    if RimeInputSourceAuthority.currentSourceIsOwn(),
+       notification.userInfo?["current"] as? PluginKey
         == StreamInputWorkspace.pluginKey {
         if let target = InputFocusCoordinator.shared.liveTarget(
             forceOverlayVisibilityRefresh: true
@@ -892,10 +1223,28 @@ let startupRimeUserDir = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DI
     .flatMap { $0.isEmpty ? nil : $0 }
     .map { URL(fileURLWithPath: $0, isDirectory: true) }
     ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-        .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+        .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
 let startupSchemaListURL = startupRimeUserDir.appendingPathComponent(
     "default.custom.yaml"
 )
+// Recreate only the active custom schema from the durable snapshot. Updating
+// the app or reseeding Rime data must never overwrite the user's keymap source.
+let startupChordProfile = ChordKeymapStore.shared.activeProfile
+if let error = ChordKeymapStore.shared.loadError {
+    ChordKeymapActivationCoordinator.shared.suspendChordAfterFailure(
+        "已应用键位方案无法读取，已暂停并击；文件未被覆盖。\(error.localizedDescription)"
+    )
+}
+do {
+    try ChordKeymapRuntimeFiles(root: startupRimeUserDir).writeSchema(
+        for: startupChordProfile
+    )
+} catch {
+    IMELog.write("startup: custom chord schema preparation failed \(error.localizedDescription)")
+    ChordKeymapActivationCoordinator.shared.suspendChordAfterFailure(
+        "无法恢复已应用的键位方案，已暂停并击并退回普通输入。请重新启用扩展重试。"
+    )
+}
 let desiredStartupSchemaIDs = InputSchemaCatalog.enabledIDs(
     chordExtensionEnabled: ChordExtensionStore.shared.isEnabled
 )
@@ -921,7 +1270,7 @@ if SchemaListStore.enabledIDs(at: startupSchemaListURL)
     }
 }
 let connectionName = (Bundle.main.infoDictionary?["InputMethodConnectionName"] as? String)
-    ?? "RimeBuffer_1_Connection"
+    ?? "\(RimesIdentity.productName)_1_Connection"
 
 NSApplication.shared.setActivationPolicy(.accessory)   // background app; panels can float above others
 CapsuleCloudSyncController.shared.start()
@@ -942,6 +1291,20 @@ _ = globalHotKeyController.setRuntimeEnabledForInputSource(
 )
 // Warm the engine so the first keystroke isn't slow / so failures surface early.
 _ = rimeEngine.start()
+if ChordExtensionStore.shared.isEnabled,
+   !ChordKeymapStore.shared.activeProfile.isBuiltIn {
+    if ChordKeymapActivationCoordinator.verify(ChordKeymapStore.shared.activeProfile, engine: rimeEngine) {
+        ChordKeymapActivationCoordinator.shared.clearRecoveryMessage()
+    } else {
+        ChordKeymapActivationCoordinator.shared.suspendChordAfterFailure(
+            "已应用键位与 Rime 部署不一致，已暂停并击并退回普通输入。请重新启用扩展重试。"
+        )
+        try? SchemaListStore.writeEnabledIDs(InputSchemaCatalog.defaultEnabledIDs,
+                                            to: startupSchemaListURL)
+        _ = BBRimeDeploy()
+        rimeEngine.invalidateSchemaListCacheAfterDeployment()
+    }
+}
 
 // Mouse-selection routes to whichever controller currently owns focus — the
 // shared window must never bind to one specific controller.
@@ -965,7 +1328,7 @@ BufferModel.shared.onChange = {
         // Model mutations can occur inside a commit/drain callback. Defer the
         // host-guard refresh to avoid re-entering getContext/setMarkedText.
         DispatchQueue.main.async {
-            RimeBufferController.refreshActiveUI()
+            RIMESController.refreshActiveUI()
         }
     }
 }
@@ -978,6 +1341,7 @@ InputFocusCoordinator.shared.onChange = {
 InputFocusCoordinator.shared.onInvalidated = { owner in
     BufferModel.shared.clearAllContentSelection()
     candidateWindow.hide(owner: owner)
+    BufferWindowController.shared.focusInvalidated(owner)
     ActionPluginHost.shared.focusInvalidated(owner)
     StreamInputWorkspace.shared.focusInvalidated(owner)
     ClipboardHistoryWindowController.shared.focusInvalidated(owner)
@@ -999,7 +1363,7 @@ InboundBus.shared.onChange = {
 LocalGateway.shared.startIfEnabled()
 
 // No standalone NSStatusItem: ETInput's commands are supplied by
-// RimeBufferController.menu() under the system input-source icon.
+// RIMESController.menu() under the system input-source icon.
 StatusMenu.shared.setHealthy(rimeEngine.isHealthy)
 
 // Auto-update: silently check GitHub Releases on launch + hourly, download in the
@@ -1055,6 +1419,11 @@ private func retireRimeInputSourceAuthority(observedSourceID: String?) {
             reason: "input source changed"
         )
     }
+    // `invalidateAll` and `routeDirectPreservingContent` can both be no-ops
+    // when there is no current lease and Buffer was already direct. The
+    // visible utility still has to enter detached clipboard presentation as
+    // soon as another input source becomes authoritative.
+    BufferWindowController.shared.refresh()
 }
 
 var lastObservedInputSourceID: String? = {
@@ -1086,15 +1455,15 @@ let inputSourceChangedObserver = DistributedNotificationCenter.default().addObse
         IMELog.write("TIS source changed: previous=\(previousID) current=unavailable deltaMs=\(elapsed) controlDown=\(controlDown) modifiers=\(modifierFlags.rawValue)")
         lastObservedInputSourceID = nil
         lastObservedInputSourceUptime = now
-        // TIS can briefly return no current source during a handoff. Fail
-        // closed immediately: keeping the old exclusive Carbon registrations
-        // would let ETInput observe shortcuts after another IME took over.
+        // TIS can briefly return no current source during a handoff. Retire IMK
+        // authority immediately; registration reconciliation keeps the four
+        // standalone utility shortcuts and removes only RIMES-owned actions.
         retireRimeInputSourceAuthority(observedSourceID: nil)
         return
     }
     let frontmostID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
     IMELog.write("TIS source changed: previous=\(previousID) current=\(currentID) deltaMs=\(elapsed) controlDown=\(controlDown) modifiers=\(modifierFlags.rawValue) frontmost=\(frontmostID)")
-    let ownID = Bundle.main.bundleIdentifier ?? "com.isaac.inputmethod.RimeBuffer"
+    let ownID = Bundle.main.bundleIdentifier ?? RimesIdentity.bundleIdentifier
     let currentIsOwn = RimeInputSourceAuthority.isOwnInputSourceID(
         currentID,
         ownBundleID: ownID
@@ -1103,12 +1472,16 @@ let inputSourceChangedObserver = DistributedNotificationCenter.default().addObse
     lastObservedInputSourceUptime = now
     if currentIsOwn {
         _ = globalHotKeyController.setRuntimeEnabledForInputSource(true)
+        // A detached Buffer can remain visible while no IMK client is active.
+        // Refresh directly from the authoritative TIS transition so its
+        // copy/send affordances do not keep the previous input source state.
+        BufferWindowController.shared.refresh()
     } else {
         retireRimeInputSourceAuthority(observedSourceID: currentID)
     }
 }
 
-let privacyOwnBundleID = Bundle.main.bundleIdentifier ?? "com.isaac.inputmethod.RimeBuffer"
+let privacyOwnBundleID = Bundle.main.bundleIdentifier ?? RimesIdentity.bundleIdentifier
 let privacyOwnProcessIdentifier = ProcessInfo.processInfo.processIdentifier
 let initialFrontmostApplication = NSWorkspace.shared.frontmostApplication
 var lastExternalForegroundIdentity = BufferPrivacyTransitionRules.externalIdentity(
@@ -1198,7 +1571,8 @@ private func tisBoolProperty(_ source: TISInputSource, _ key: CFString) -> Bool 
 func selectFallbackInputSourceForUpdate() -> Bool {
     let ownBundleIDs = Set([
         Bundle.main.bundleIdentifier ?? "",
-        "com.isaac.inputmethod.RimeBuffer",
+        RimesIdentity.bundleIdentifier,
+        RimesIdentity.legacyBundleIdentifier,
         "com.isaac.inputmethod.ETInput",
     ].filter { !$0.isEmpty })
 
@@ -1281,6 +1655,8 @@ func runEngineSmokeTest() -> Bool {
           !StandaloneRimeCommandRules.requiresIsolatedUserDir(
             arguments: ["ETInput", "--install"]
           ),
+          // The retired directory stays live: the migration copies rather
+          // than moves, so it still holds dictionaries and Capsule records.
           StandaloneRimeCommandRules.isLiveUserDir(
             "/Users/smoke/Library/RimeBuffer/../RimeBuffer",
             homeDirectory: "/Users/smoke"
@@ -1291,6 +1667,18 @@ func runEngineSmokeTest() -> Bool {
           ),
           StandaloneRimeCommandRules.isLiveUserDir(
             "/users/smoke/library/rimebuffer",
+            homeDirectory: "/Users/smoke"
+          ),
+          StandaloneRimeCommandRules.isLiveUserDir(
+            "/Users/smoke/Library/RIMES",
+            homeDirectory: "/Users/smoke"
+          ),
+          StandaloneRimeCommandRules.isLiveUserDir(
+            "/Users/smoke/Library/RIMES/smoke-child",
+            homeDirectory: "/Users/smoke"
+          ),
+          StandaloneRimeCommandRules.isLiveUserDir(
+            "/users/smoke/library/rimes",
             homeDirectory: "/Users/smoke"
           ),
           standaloneIsolationAliasProbe(
@@ -1597,7 +1985,9 @@ func runEngineSmokeTest() -> Bool {
     func typeFlyChordStrokes(
         _ strokes: [String],
         clearComposition: Bool = true,
-        policy: FlyChordSettlementPolicy = .independentHalves
+        policy: FlyChordSettlementPolicy = ChordExtensionConfiguration(
+            isEnabled: true, duration: 0.1
+        ).settlementPolicy
     )
         -> (context: RimeContextModel, allPressesHandled: Bool) {
         if clearComposition {
@@ -1695,13 +2085,12 @@ func runEngineSmokeTest() -> Bool {
         return (contexts, texts, pagingWorked)
     }
 
-    // 并击 settles every current timer batch, including a useful one-sided
-    // initial/final. It differs from 互击 only by refusing to recombine two
-    // already-settled batches into one syllable.
+    // Keep the internal no-pair primitive covered, while proving the single
+    // product policy gives split strokes the same result as a combined chord.
     let sameBatchOneSided = typeFlyChordStrokes(["dv"], policy: .sameBatchOnly)
     let sameBatchCombined = typeFlyChordStrokes(["qkm"], policy: .sameBatchOnly)
     let sameBatchSplit = typeFlyChordStrokes(["q", "km"], policy: .sameBatchOnly)
-    let mutualSplit = typeFlyChordStrokes(["q", "km"], policy: .independentHalves)
+    let unifiedSplit = typeFlyChordStrokes(["q", "km"])
     guard sameBatchOneSided.allPressesHandled,
           !sameBatchOneSided.context.input.isEmpty,
           !sameBatchOneSided.context.candidates.isEmpty,
@@ -1709,15 +2098,15 @@ func runEngineSmokeTest() -> Bool {
           sameBatchSplit.allPressesHandled,
           !sameBatchSplit.context.candidates.isEmpty,
           sameBatchSplit.context.input != sameBatchCombined.context.input,
-          mutualSplit.context.input == sameBatchCombined.context.input,
-          mutualSplit.context.candidates.map(\.text)
+          unifiedSplit.context.input == sameBatchCombined.context.input,
+          unifiedSplit.context.candidates.map(\.text)
             == sameBatchCombined.context.candidates.map(\.text) else {
-        print("FAILED: FlyYao same-batch/mutual settlement distinction",
+        print("FAILED: unified chord split equivalence or internal no-pair guard",
               sameBatchOneSided.context.input,
               sameBatchOneSided.context.candidates.map(\.text),
               sameBatchCombined.context.input,
               sameBatchSplit.context.input,
-              mutualSplit.context.input)
+              unifiedSplit.context.input)
         return false
     }
 
@@ -2111,9 +2500,9 @@ func runSchemaListStoreSmokeTest() -> Bool {
     guard chordSelection == .init(encoding: .fullPinyin, keyingMode: .chord),
           naturalSelection == .init(encoding: .naturalDoublePinyin,
                                     keyingMode: .sequential),
-          mutualSelection == .init(encoding: .fullPinyin, keyingMode: .mutual),
+          mutualSelection == .init(encoding: .fullPinyin, keyingMode: .chord),
           InputConfigurationResolver.profile(schemaID: "my_combo")?.configuration
-            == .init(encoding: .fullPinyin, keyingMode: .mutual) else {
+            == .init(encoding: .fullPinyin, keyingMode: .chord) else {
         print("FAILED: input configuration reducer")
         return false
     }
@@ -2457,7 +2846,7 @@ func runSchemaListStoreSmokeTest() -> Bool {
     // residue, not interpret it as a new request to enable the extension.
     defaults.removePersistentDomain(forName: defaultsName)
     defaults.set(false, forKey: "chord.extension.enabled.v1")
-    defaults.set(ChordExtensionMode.mutual.rawValue,
+    defaults.set("mutual",
                  forKey: "chord.extension.mode.v1")
     defaults.set("my_combo", forKey: "input.configuration.schemaID.v2")
     defaults.set("my_combo", forKey: "preferredSchema")
@@ -2480,7 +2869,7 @@ func runSchemaListStoreSmokeTest() -> Bool {
 
     defaults.removePersistentDomain(forName: defaultsName)
     defaults.set(false, forKey: "chord.extension.enabled.v1")
-    defaults.set(ChordExtensionMode.mutual.rawValue,
+    defaults.set("mutual",
                  forKey: "chord.extension.mode.v1")
     defaults.set(InputEncoding.fullPinyin.rawValue,
                  forKey: "input.configuration.encoding.v1")
@@ -2545,8 +2934,8 @@ func runSchemaListStoreSmokeTest() -> Bool {
         }
     }
 
-    // A v1 FlyYao selection was necessarily labelled chord. It migrates once
-    // to mutual; an explicit same-batch chord choice made under v2 is retained.
+    // Every legacy FlyYao mode now migrates to unified 并击. A previous strict
+    // v2 setting must not resurrect the removed same-batch-only product mode.
     defaults.removePersistentDomain(forName: defaultsName)
     defaults.set(InputEncoding.fullPinyin.rawValue,
                  forKey: "input.configuration.encoding.v1")
@@ -2561,11 +2950,11 @@ func runSchemaListStoreSmokeTest() -> Bool {
         chordExtensionStore: migratedFlyYaoChordStore
     )
     guard migratedFlyYaoStore.configuration
-            == .init(encoding: .fullPinyin, keyingMode: .mutual),
+            == .init(encoding: .fullPinyin, keyingMode: .chord),
           migratedFlyYaoStore.selectedSchemaID == "my_combo",
           migratedFlyYaoChordStore.isEnabled,
-          migratedFlyYaoChordStore.mode == .mutual else {
-        print("FAILED: legacy FlyYao chord-to-mutual migration")
+          migratedFlyYaoChordStore.settlementPolicy == .independentHalves else {
+        print("FAILED: legacy FlyYao unified chord migration")
         return false
     }
 
@@ -2593,7 +2982,7 @@ func runSchemaListStoreSmokeTest() -> Bool {
     )
     weakExplicitStore = explicitChordStore
     guard safeExplicitChordExtension.isEnabled,
-          safeExplicitChordExtension.mode == .chord,
+          safeExplicitChordExtension.settlementPolicy == .independentHalves,
           explicitChordStore.configuration
             == .init(encoding: .fullPinyin, keyingMode: .chord),
           explicitChordStore.adoptRuntimeSchema("my_combo"),
@@ -5411,16 +5800,16 @@ func runBufferSmokeTest() -> Bool {
     print("== \(ProductIdentity.displayName) buffer smoke test ==")
     guard RimeKey.fromVirtualKeyCode(22) == 0x36,
           RimeKey.fromVirtualKeyCode(27) == 0x2d,
-          RimeBufferController.shouldConsumeCodexBufferControlText(
+          RIMESController.shouldConsumeCodexBufferControlText(
               [0x1e, 0x1f], bundleId: "com.openai.codex", bufferActive: true
           ),
-          !RimeBufferController.shouldConsumeCodexBufferControlText(
+          !RIMESController.shouldConsumeCodexBufferControlText(
               [0x1e], bundleId: "com.apple.Terminal", bufferActive: true
           ),
-          !RimeBufferController.shouldConsumeCodexBufferControlText(
+          !RIMESController.shouldConsumeCodexBufferControlText(
               [0x1f], bundleId: "com.openai.codex", bufferActive: false
           ),
-          !RimeBufferController.shouldConsumeCodexBufferControlText(
+          !RIMESController.shouldConsumeCodexBufferControlText(
               [0x01], bundleId: "com.openai.codex", bufferActive: true
           ),
           BufferClipboardShortcutRules.shortcut(
@@ -5865,6 +6254,16 @@ func runBufferSmokeTest() -> Bool {
         return false
     }
     model.discardForPrivacy()
+    let detachedClipboardModel = BufferModel()
+    guard detachedClipboardModel.insertPastedText(
+            "detached clipboard",
+            origin: .clipboard
+          ),
+          detachedClipboardModel.blocks.allSatisfy({ $0.origin == .clipboard }),
+          detachedClipboardModel.inputRoute == .directToHost else {
+        print("FAILED: detached clipboard provenance or input route")
+        return false
+    }
 
     // Accepted delivery attempts disappear from the live workbench without
     // retaining a plaintext delivery history.
@@ -6021,9 +6420,14 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
 
     let flexibleSpace = NSView()
     let statusIndicators = NSStackView()
+    let functionMenu = NSView()
     let exchangeEdit = NSView()
+    let targetAssociation = NSView()
+    let autoSend = NSView()
+    let autoSendCloseAfterLast = NSView()
     let close = NSView()
-    for control in [exchangeEdit, close] {
+    for control in [functionMenu, exchangeEdit, autoSend,
+                    autoSendCloseAfterLast, targetAssociation, close] {
         control.translatesAutoresizingMaskIntoConstraints = false
         control.widthAnchor.constraint(equalToConstant: 22).isActive = true
         control.heightAnchor.constraint(equalToConstant: 22).isActive = true
@@ -6031,10 +6435,14 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
     BufferWorkbenchShelfLayout.configure(
         shelf,
         status: status,
+        functionMenu: functionMenu,
         pluginActions: pluginActions,
         flexibleSpace: flexibleSpace,
         statusIndicators: statusIndicators,
         exchangeEdit: exchangeEdit,
+        autoSend: autoSend,
+        autoSendCloseAfterLast: autoSendCloseAfterLast,
+        targetAssociation: targetAssociation,
         close: close
     )
     NSLayoutConstraint.activate([
@@ -6044,10 +6452,16 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
         shelf.bottomAnchor.constraint(equalTo: host.bottomAnchor),
     ])
 
-    func geometry() -> (selector: CGFloat, close: CGFloat, pluginWidth: CGFloat) {
+    func geometry() -> (
+        selector: CGFloat,
+        targetAssociation: CGFloat,
+        close: CGFloat,
+        pluginWidth: CGFloat
+    ) {
         host.layoutSubtreeIfNeeded()
         return (
             selector.convert(selector.bounds, to: host).minX,
+            targetAssociation.convert(targetAssociation.bounds, to: host).maxX,
             close.convert(close.bounds, to: host).minX,
             pluginActions.bounds.width
         )
@@ -6096,16 +6510,16 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
 
     let epsilon: CGFloat = 0.5
     let expectedEmptySelectorX = BufferWorkbenchMetrics.shelfHorizontalInset
+        + 22
+        + BufferWorkbenchMetrics.shelfSpacing
         + pluginActions.edgeInsets.left
     let expectedEmptyPluginWidth = selectorWidth.constant
         + pluginActions.edgeInsets.left
         + pluginActions.edgeInsets.right
-    let expectedStatusShift = BufferWorkbenchMetrics.shelfStatusWidth
-        + BufferWorkbenchMetrics.shelfSpacing
     let stable = abs(baseline.selector - expectedEmptySelectorX) <= epsilon
         && abs(loadingOnly.selector - baseline.selector) <= epsilon
         && abs(actionsOnly.selector - baseline.selector) <= epsilon
-        && abs(dynamic.selector - baseline.selector - expectedStatusShift) <= epsilon
+        && abs(dynamic.selector - baseline.selector) <= epsilon
         && abs(restoredEmpty.selector - baseline.selector) <= epsilon
         && abs(baseline.pluginWidth - expectedEmptyPluginWidth) <= epsilon
         && abs(baselineTrailingGap - pluginActions.edgeInsets.right) <= epsilon
@@ -6120,6 +6534,16 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
         && abs(baseline.close - actionsOnly.close) <= epsilon
         && abs(baseline.close - dynamic.close) <= epsilon
         && abs(baseline.close - restoredEmpty.close) <= epsilon
+        && abs(baseline.close - baseline.targetAssociation
+            - BufferWorkbenchMetrics.shelfSpacing) <= epsilon
+        && abs(loadingOnly.targetAssociation
+            - baseline.targetAssociation) <= epsilon
+        && abs(actionsOnly.targetAssociation
+            - baseline.targetAssociation) <= epsilon
+        && abs(dynamic.targetAssociation
+            - baseline.targetAssociation) <= epsilon
+        && abs(restoredEmpty.targetAssociation
+            - baseline.targetAssociation) <= epsilon
     if !stable {
         print("FAILED: workbench shelf alignment moved",
               "baseline=\(baseline)",
@@ -6129,8 +6553,238 @@ private func runWorkbenchShelfAlignmentProbe() -> Bool {
     return stable
 }
 
+/// Blocks age on their own clocks: a newcomer starts at zero while its
+/// elders keep their progress, a pause preserves every age rather than
+/// resetting it, and only the head block can leave.
+func runBufferAutoSendLifecycleProbe() -> Bool {
+    runBufferAutoSendClockSmoke()
+}
+
 func runBufferWindowSmokeTest() -> Bool {
     print("== \(ProductIdentity.displayName) buffer window smoke test ==")
+
+    guard BufferTargetAssociationRules.state(
+            rimeOwnsInput: true,
+            contentProtected: false,
+            captureActive: true,
+            capturedTargetIsLive: true,
+            hasLiveTarget: true,
+            targetBox: .locked
+          ) == .capturing,
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: true,
+            contentProtected: false,
+            captureActive: true,
+            capturedTargetIsLive: false,
+            hasLiveTarget: true,
+            targetBox: .locked
+          ) == .targetChanged,
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: true,
+            contentProtected: false,
+            captureActive: false,
+            capturedTargetIsLive: false,
+            hasLiveTarget: true,
+            targetBox: .locked
+          ) == .ready,
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: true,
+            contentProtected: false,
+            captureActive: false,
+            capturedTargetIsLive: false,
+            hasLiveTarget: false,
+            targetBox: .unidentified
+          ) == .unavailable,
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: false,
+            contentProtected: false,
+            captureActive: true,
+            capturedTargetIsLive: true,
+            hasLiveTarget: true,
+            targetBox: .locked
+          ) == .detached,
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: false,
+            contentProtected: true,
+            captureActive: true,
+            capturedTargetIsLive: true,
+            hasLiveTarget: true,
+            targetBox: .locked
+          ) == .protected,
+          // Lock = application + box. A live application whose box cannot be
+          // named is never presented as a send target, and a capture whose
+          // box has lost focus reads as a focus change.
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: true,
+            contentProtected: false,
+            captureActive: true,
+            capturedTargetIsLive: true,
+            hasLiveTarget: true,
+            targetBox: .unidentified
+          ) == .capturingWithoutBox,
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: true,
+            contentProtected: false,
+            captureActive: true,
+            capturedTargetIsLive: true,
+            hasLiveTarget: true,
+            targetBox: .changed
+          ) == .targetChanged,
+          BufferTargetAssociationRules.state(
+            rimeOwnsInput: true,
+            contentProtected: false,
+            captureActive: false,
+            capturedTargetIsLive: false,
+            hasLiveTarget: true,
+            targetBox: .unidentified
+          ) == .boxUnidentified,
+          BufferTargetAssociationRules.shouldClearCue(
+            state: .capturingWithoutBox,
+            hasPresentedCue: true,
+            cueMatchesLiveTarget: true
+          ),
+          BufferTargetAssociationRules.shouldClearCue(
+            state: .boxUnidentified,
+            hasPresentedCue: true,
+            cueMatchesLiveTarget: true
+          ),
+          // Capturing: only the box capture was granted for counts. Not
+          // capturing: any identified box, and no box means no target.
+          BufferTargetBoxRules.state(capturing: true, lockedBox: 1,
+                                     currentBox: 1) == .locked,
+          BufferTargetBoxRules.state(capturing: true, lockedBox: 1,
+                                     currentBox: 2) == .changed,
+          BufferTargetBoxRules.state(capturing: true, lockedBox: 1,
+                                     currentBox: nil as Int?) == .changed,
+          BufferTargetBoxRules.state(capturing: true, lockedBox: nil as Int?,
+                                     currentBox: 1) == .unidentified,
+          BufferTargetBoxRules.state(capturing: false, lockedBox: nil as Int?,
+                                     currentBox: 1) == .locked,
+          BufferTargetBoxRules.state(capturing: false, lockedBox: 1,
+                                     currentBox: nil as Int?) == .unidentified,
+          // A send needs a locked box vouched for by a recent sample; a stale
+          // or missing sample refuses rather than assuming nothing moved.
+          BufferTargetBoxRules.deliveryAllowed(state: .locked, sampleAge: 0.2),
+          !BufferTargetBoxRules.deliveryAllowed(state: .locked, sampleAge: 5),
+          !BufferTargetBoxRules.deliveryAllowed(state: .locked, sampleAge: nil),
+          !BufferTargetBoxRules.deliveryAllowed(state: .locked, sampleAge: -1),
+          !BufferTargetBoxRules.deliveryAllowed(state: .unidentified, sampleAge: 0.1),
+          // An app that exposes no boxes locks to its input session; a box
+          // appearing in it later is a change, not the same lock.
+          BufferTargetBoxRules.state(capturing: true,
+                                     lockedBox: BufferTargetBox.wholeSession,
+                                     currentBox: .wholeSession) == .locked,
+          BufferTargetBoxRules.state(capturing: true,
+                                     lockedBox: BufferTargetBox.wholeSession,
+                                     currentBox: .element(AXUIElementCreateApplication(getpid()))) == .changed,
+          BufferTargetBoxRules.state(capturing: false,
+                                     lockedBox: nil as BufferTargetBox?,
+                                     currentBox: .wholeSession) == .locked,
+          BufferTargetBox.element(AXUIElementCreateApplication(getpid()))
+            == .element(AXUIElementCreateApplication(getpid())),
+          !BufferTargetAssociationRules.shouldClearCue(
+            state: .capturing,
+            hasPresentedCue: true,
+            cueMatchesLiveTarget: true
+          ),
+          BufferTargetAssociationRules.shouldClearCue(
+            state: .ready,
+            hasPresentedCue: true,
+            cueMatchesLiveTarget: false
+          ),
+          !BufferTargetAssociationRules.shouldClearCue(
+            state: .ready,
+            hasPresentedCue: false,
+            cueMatchesLiveTarget: false
+          ),
+          BufferTargetAssociationRules.shouldClearCue(
+            state: .targetChanged,
+            hasPresentedCue: false,
+            cueMatchesLiveTarget: false
+          ) else {
+        print("FAILED: Buffer target-association state contract")
+        return false
+    }
+
+    let associationPanel = NSRect(x: 100, y: 100, width: 200, height: 80)
+    let topMarker = BufferTargetAssociationGeometry.marker(
+        panelFrame: associationPanel,
+        targetRect: NSRect(x: 199, y: 220, width: 2, height: 20)
+    )
+    let bottomMarker = BufferTargetAssociationGeometry.marker(
+        panelFrame: associationPanel,
+        targetRect: NSRect(x: 199, y: 40, width: 2, height: 20)
+    )
+    let leftMarker = BufferTargetAssociationGeometry.marker(
+        panelFrame: associationPanel,
+        targetRect: NSRect(x: 20, y: 139, width: 2, height: 2)
+    )
+    let rightMarker = BufferTargetAssociationGeometry.marker(
+        panelFrame: associationPanel,
+        targetRect: NSRect(x: 379, y: 139, width: 2, height: 2)
+    )
+    let clampedTopMarker = BufferTargetAssociationGeometry.marker(
+        panelFrame: associationPanel,
+        targetRect: NSRect(x: 100, y: 220, width: 2, height: 20)
+    )
+    guard topMarker == BufferTargetAssociationMarker(edge: .top, position: 0.5),
+          bottomMarker == BufferTargetAssociationMarker(edge: .bottom, position: 0.5),
+          leftMarker == BufferTargetAssociationMarker(edge: .left, position: 0.5),
+          rightMarker == BufferTargetAssociationMarker(edge: .right, position: 0.5),
+          clampedTopMarker?.edge == .top,
+          abs((clampedTopMarker?.position ?? 0) - 0.07) < 0.0001,
+          BufferTargetAssociationGeometry.marker(
+            panelFrame: associationPanel,
+            targetRect: NSRect(x: 180, y: 120, width: 10, height: 10)
+          ) == nil,
+          BufferTargetAssociationGeometry.marker(
+            panelFrame: NSRect(x: CGFloat.nan, y: 0, width: 200, height: 80),
+            targetRect: NSRect(x: 0, y: 0, width: 2, height: 20)
+          ) == nil else {
+        print("FAILED: Buffer target-association geometry contract")
+        return false
+    }
+
+    let targetCue = TargetAssociationCueController()
+    guard targetCue.hasSafeWindowContractForSmokeTest(),
+          !targetCue.show(
+            caretScreenRect: NSRect(x: CGFloat.nan, y: 0, width: 1, height: 20),
+            accentColor: .systemBlue,
+            level: .popUpMenu,
+            reduceMotion: false
+          ) else {
+        print("FAILED: target-association cue window contract")
+        return false
+    }
+
+    guard BufferDetachedClipboardRules.acceptedText("clipboard text")
+            == "clipboard text",
+          BufferDetachedClipboardRules.acceptedText(nil) == nil,
+          BufferDetachedClipboardRules.acceptedText("") == nil,
+          BufferDetachedClipboardRules.acceptedText("unsafe\0text") == nil,
+          BufferDetachedClipboardRules.acceptedText(
+            String(
+                repeating: "a",
+                count: BufferDetachedClipboardRules.maximumUTF8Bytes + 1
+            )
+          ) == nil else {
+        print("FAILED: detached Buffer clipboard validation")
+        return false
+    }
+
+    let pasteboard = NSPasteboard(
+        name: .init("com.rimes.buffer-window-smoke.\(UUID().uuidString)")
+    )
+    defer { pasteboard.releaseGlobally() }
+    pasteboard.clearContents()
+    guard pasteboard.setString("preserve me", forType: .string),
+          !BufferTextPasteboardWriter.write("", to: pasteboard),
+          pasteboard.string(forType: .string) == "preserve me",
+          BufferTextPasteboardWriter.write("detached result", to: pasteboard),
+          pasteboard.string(forType: .string) == "detached result" else {
+        print("FAILED: detached Buffer pasteboard write contract")
+        return false
+    }
 
     let preferenceSuiteName = "RimeBuffer.BufferWindowSmoke.\(UUID().uuidString)"
     guard let preferenceDefaults = UserDefaults(suiteName: preferenceSuiteName) else {
@@ -6198,20 +6852,26 @@ func runBufferWindowSmokeTest() -> Bool {
           InputSourceChangeDiagnosticRules.controlIsDown([.control, .shift]),
           !InputSourceChangeDiagnosticRules.controlIsDown([.option]),
           RimeInputSourceAuthority.isOwnInputSourceID(
-            "com.isaac.inputmethod.RimeBuffer",
-            ownBundleID: "com.isaac.inputmethod.RimeBuffer"
+            RimesIdentity.bundleIdentifier,
+            ownBundleID: RimesIdentity.bundleIdentifier
           ),
           RimeInputSourceAuthority.isOwnInputSourceID(
-            "com.isaac.inputmethod.RimeBuffer.Hans",
-            ownBundleID: "com.isaac.inputmethod.RimeBuffer"
+            RimesIdentity.inputSourceID,
+            ownBundleID: RimesIdentity.bundleIdentifier
+          ),
+          // The retired identifier must still be recognised as ours: an
+          // installation left under the old name is still this app.
+          RimeInputSourceAuthority.isOwnInputSourceID(
+            RimesIdentity.legacyBundleIdentifier + ".Hans",
+            ownBundleID: RimesIdentity.legacyBundleIdentifier
           ),
           !RimeInputSourceAuthority.isOwnInputSourceID(
             "im.rime.inputmethod.Squirrel.Hans",
-            ownBundleID: "com.isaac.inputmethod.RimeBuffer"
+            ownBundleID: RimesIdentity.bundleIdentifier
           ),
           !RimeInputSourceAuthority.isOwnInputSourceID(
             "com.apple.keylayout.ABC",
-            ownBundleID: "com.isaac.inputmethod.RimeBuffer"
+            ownBundleID: RimesIdentity.bundleIdentifier
           ) else {
         print("FAILED: input-source transition diagnostics")
         return false
@@ -6281,15 +6941,15 @@ func runBufferWindowSmokeTest() -> Bool {
     }
     defer { hotKeyDefaults.removePersistentDomain(forName: hotKeyDefaultsSuite) }
 
-    // Upgrade fixture: preserve a pre-existing custom Command-Shift-P binding
-    // and give Clipboard the deterministic first free fallback, while reserving
-    // Command-Shift-C for Capsule, instead of registering a duplicate hot key.
+    // Upgrade fixture: preserve a pre-existing custom binding on Capsule's
+    // default Command-Shift-V and give the rail the deterministic first free
+    // fallback instead of registering a duplicate hot key.
     let migrationDefaultsSuite =
         "RimeBuffer.ClipboardShortcutMigrationSmoke.\(UUID().uuidString)"
     guard let migrationDefaults = UserDefaults(suiteName: migrationDefaultsSuite),
-          let legacyCommandShiftP = try? JSONEncoder().encode(
+          let customCommandShiftV = try? JSONEncoder().encode(
             RimeKeyboardShortcut(
-                keyCode: UInt16(kVK_ANSI_P),
+                keyCode: UInt16(kVK_ANSI_V),
                 modifiers: [.command, .shift]
             )
           ) else {
@@ -6300,7 +6960,7 @@ func runBufferWindowSmokeTest() -> Bool {
         migrationDefaults.removePersistentDomain(forName: migrationDefaultsSuite)
     }
     migrationDefaults.set(
-        legacyCommandShiftP,
+        customCommandShiftV,
         forKey: "keyboardShortcut.v1.\(RimeShortcutAction.openSettings.rawValue)"
     )
     let migratedClipboardShortcut = RimeShortcutPreferences.shortcut(
@@ -6311,18 +6971,20 @@ func runBufferWindowSmokeTest() -> Bool {
         for: .toggleClipboardHistory,
         defaults: migrationDefaults
     )
+    // With Capsule's manager shortcut retired, Command-Shift-C is free again
+    // and is the first fallback.
     guard migratedClipboardShortcut == RimeKeyboardShortcut(
-            keyCode: UInt16(kVK_ANSI_D),
+            keyCode: UInt16(kVK_ANSI_C),
             modifiers: [.command, .shift]
           ),
           RimeShortcutPreferences.shortcut(
             for: .openSettings,
             defaults: migrationDefaults
           ) == RimeKeyboardShortcut(
-            keyCode: UInt16(kVK_ANSI_P),
+            keyCode: UInt16(kVK_ANSI_V),
             modifiers: [.command, .shift]
           ),
-          migratedClipboardHotKey.keyCode == UInt32(kVK_ANSI_D),
+          migratedClipboardHotKey.keyCode == UInt32(kVK_ANSI_C),
           migratedClipboardHotKey.modifiers == UInt32(cmdKey | shiftKey) else {
         print("FAILED: Clipboard shortcut migration overwrote an existing binding")
         return false
@@ -6368,93 +7030,20 @@ func runBufferWindowSmokeTest() -> Bool {
         return false
     }
 
-    let capsuleMigrationSuite =
-        "RimeBuffer.CapsuleShortcutMigrationSmoke.\(UUID().uuidString)"
-    guard let capsuleMigrationDefaults = UserDefaults(suiteName: capsuleMigrationSuite),
-          let legacyCommandShiftC = try? JSONEncoder().encode(
-            RimeKeyboardShortcut(
-                keyCode: UInt16(kVK_ANSI_C),
-                modifiers: [.command, .shift]
-            )
-          ) else {
-        print("FAILED: could not create Capsule shortcut migration fixture")
-        return false
-    }
-    defer {
-        capsuleMigrationDefaults.removePersistentDomain(
-            forName: capsuleMigrationSuite
-        )
-    }
-    capsuleMigrationDefaults.set(
-        legacyCommandShiftC,
-        forKey: "keyboardShortcut.v1.\(RimeShortcutAction.toggleClipboardHistory.rawValue)"
+    let externalUtilityActions = GlobalHotKeyRouting.registeredActions(
+        currentSourceIsOwn: false
     )
-    // Match production cold start: materialize the whole Carbon batch before
-    // reading any individual shortcut. The old ordering returned Clipboard=C
-    // and Capsule=C in this array even though Capsule migration persisted
-    // Clipboard=D later in the same call.
-    let coldStartDefinitions = GlobalHotKeyRouting.definitions(
-        defaults: capsuleMigrationDefaults
+    let rimeUtilityActions = GlobalHotKeyRouting.registeredActions(
+        currentSourceIsOwn: true
     )
-    let coldStartDefinitionsByAction = Dictionary(
-        uniqueKeysWithValues: coldStartDefinitions.map { ($0.action, $0) }
-    )
-    let coldStartPhysicalShortcuts = coldStartDefinitions.map {
-        "\($0.keyCode)/\($0.modifiers)"
-    }
-    guard coldStartDefinitionsByAction[.openCapsule]?.keyCode
-            == UInt32(kVK_ANSI_C),
-          coldStartDefinitionsByAction[.toggleClipboardHistory]?.keyCode
-            == UInt32(kVK_ANSI_D),
-          Set(coldStartPhysicalShortcuts).count == coldStartDefinitions.count,
-          RimeShortcutPreferences.shortcut(
-            for: .openCapsule,
-            defaults: capsuleMigrationDefaults
-          ) == RimeKeyboardShortcut(
-            keyCode: UInt16(kVK_ANSI_C),
-            modifiers: [.command, .shift]
-          ),
-          RimeShortcutPreferences.shortcut(
-            for: .toggleClipboardHistory,
-            defaults: capsuleMigrationDefaults
-          ) == RimeKeyboardShortcut(
-            keyCode: UInt16(kVK_ANSI_D),
-            modifiers: [.command, .shift]
-          ) else {
-        print("FAILED: Capsule shortcut migration overwrote an existing binding")
-        return false
-    }
-
-    let capsuleDefinitionMigrationSuite =
-        "RimeBuffer.CapsuleDefinitionMigrationSmoke.\(UUID().uuidString)"
-    guard let capsuleDefinitionMigrationDefaults = UserDefaults(
-        suiteName: capsuleDefinitionMigrationSuite
-    ) else {
-        print("FAILED: could not create Capsule definition migration fixture")
-        return false
-    }
-    defer {
-        capsuleDefinitionMigrationDefaults.removePersistentDomain(
-            forName: capsuleDefinitionMigrationSuite
-        )
-    }
-    capsuleDefinitionMigrationDefaults.set(
-        legacyCommandShiftC,
-        forKey: "keyboardShortcut.v1.\(RimeShortcutAction.toggleClipboardHistory.rawValue)"
-    )
-    let migratedClipboardDefinition = GlobalHotKeyRouting.definition(
-        for: .toggleClipboardHistory,
-        defaults: capsuleDefinitionMigrationDefaults
-    )
-    let migratedCapsuleDefinition = GlobalHotKeyRouting.definition(
-        for: .openCapsule,
-        defaults: capsuleDefinitionMigrationDefaults
-    )
-    guard migratedClipboardDefinition.keyCode == UInt32(kVK_ANSI_D),
-          migratedClipboardDefinition.modifiers == UInt32(cmdKey | shiftKey),
-          migratedCapsuleDefinition.keyCode == UInt32(kVK_ANSI_C),
-          migratedCapsuleDefinition.modifiers == UInt32(cmdKey | shiftKey) else {
-        print("FAILED: individual hot key definition skipped Capsule migration")
+    guard externalUtilityActions == [
+            .toggleWorkbench,
+            .toggleClipboardHistory,
+            .openMailbox,
+          ],
+          !externalUtilityActions.contains(.openSettings),
+          rimeUtilityActions == Set(GlobalHotKeyAction.allCases) else {
+        print("FAILED: global utility registration scope")
         return false
     }
 
@@ -6474,15 +7063,10 @@ func runBufferWindowSmokeTest() -> Bool {
         for: .openMailbox,
         defaults: hotKeyDefaults
     )
-    let capsuleHotKey = GlobalHotKeyRouting.definition(
-        for: .openCapsule,
-        defaults: hotKeyDefaults
-    )
     let workbenchHotKeyID = workbenchHotKey.identifier
     let clipboardHotKeyID = clipboardHotKey.identifier
     let settingsHotKeyID = settingsHotKey.identifier
     let mailboxHotKeyID = mailboxHotKey.identifier
-    let capsuleHotKeyID = capsuleHotKey.identifier
     let unrelatedHotKeyID = EventHotKeyID(
         signature: GlobalHotKeyRouting.signature,
         id: UInt32.max
@@ -6632,7 +7216,7 @@ func runBufferWindowSmokeTest() -> Bool {
     guard workbenchHotKey.keyCode == UInt32(kVK_ANSI_B),
           workbenchHotKey.modifiers == UInt32(cmdKey | shiftKey),
           workbenchHotKey.registrationOptions == OptionBits(kEventHotKeyNoOptions),
-          clipboardHotKey.keyCode == UInt32(kVK_ANSI_P),
+          clipboardHotKey.keyCode == UInt32(kVK_ANSI_V),
           clipboardHotKey.modifiers == UInt32(cmdKey | shiftKey),
           clipboardHotKey.registrationOptions
             == OptionBits(kEventHotKeyExclusive),
@@ -6642,19 +7226,12 @@ func runBufferWindowSmokeTest() -> Bool {
           mailboxHotKey.keyCode == UInt32(kVK_ANSI_M),
           mailboxHotKey.modifiers == UInt32(cmdKey | shiftKey),
           mailboxHotKey.registrationOptions == OptionBits(kEventHotKeyExclusive),
-          capsuleHotKey.keyCode == UInt32(kVK_ANSI_C),
-          capsuleHotKey.modifiers == UInt32(cmdKey | shiftKey),
-          capsuleHotKey.registrationOptions == OptionBits(kEventHotKeyExclusive),
           workbenchHotKeyID.id != settingsHotKeyID.id,
           clipboardHotKeyID.id != workbenchHotKeyID.id,
           clipboardHotKeyID.id != settingsHotKeyID.id,
           mailboxHotKeyID.id != workbenchHotKeyID.id,
           mailboxHotKeyID.id != clipboardHotKeyID.id,
           mailboxHotKeyID.id != settingsHotKeyID.id,
-          capsuleHotKeyID.id != workbenchHotKeyID.id,
-          capsuleHotKeyID.id != clipboardHotKeyID.id,
-          capsuleHotKeyID.id != settingsHotKeyID.id,
-          capsuleHotKeyID.id != mailboxHotKeyID.id,
           reloadedSettingsHotKey.keyCode == UInt32(kVK_ANSI_G),
           reloadedSettingsHotKey.modifiers == UInt32(controlKey | optionKey),
           reloadedClipboardHotKey.keyCode == UInt32(kVK_ANSI_H),
@@ -6695,11 +7272,6 @@ func runBufferWindowSmokeTest() -> Bool {
           ) == .openMailbox,
           GlobalHotKeyRouting.route(
             eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed),
-            identifier: capsuleHotKeyID
-          ) == .openCapsule,
-          GlobalHotKeyRouting.route(
-            eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyReleased),
             identifier: workbenchHotKeyID
           ) == .ignore,
@@ -6708,7 +7280,7 @@ func runBufferWindowSmokeTest() -> Bool {
             eventKind: UInt32(kEventHotKeyPressed),
             identifier: unrelatedHotKeyID
           ) == .ignore else {
-        print("FAILED: global workbench/Clipboard/Mailbox/Capsule/settings hotkey routing")
+        print("FAILED: global workbench/Capsule/Mailbox/settings hotkey routing")
         return false
     }
 
@@ -6809,13 +7381,17 @@ func runBufferWindowSmokeTest() -> Bool {
         outputBlocks: [TranslationOutputBlock(id: UUID(), text: "独立结果")],
         phase: .ready
     )
-    guard BufferWorkbenchLayout.mainBar
-            == [.bufferRail, .send],
+    guard BufferWorkbenchLayout.mainBar == [.bufferRail],
+          BufferWorkbenchLayout.railOverlay
+            == [.clipboardImport, .copyResult, .send],
           BufferWorkbenchLayout.toolbar
-            == [.status, .pluginActions, .exchangeEdit, .close],
+            == [.functionMenu, .pluginActions, .status, .exchangeEdit,
+                .autoSend, .autoSendCloseAfterLast, .targetAssociation, .close],
           BufferWorkbenchLayout.hoverControls
-            == [.copyResult, .send, .pluginActions, .exchangeEdit, .close],
-          BufferWorkbenchLayout.passiveControls == [.bufferRail, .status],
+            == [.copyResult, .send, .clipboardImport, .functionMenu,
+                .pluginActions, .exchangeEdit, .autoSend, .close],
+          BufferWorkbenchLayout.passiveControls
+            == [.bufferRail, .status, .targetAssociation],
           BufferWorkbenchLayout.toolbarInitiallyExpanded,
           BufferWorkbenchLayout.toolbarEmptySpaceDraggable,
           BufferWorkbenchToolbarDragRules.disposition(
@@ -6825,8 +7401,26 @@ func runBufferWindowSmokeTest() -> Bool {
             hitIsInteractiveControl: true
           ) == .interactWithControl,
           runBufferWorkbenchToolbarHitTestProbe(),
-          runBufferInlineToolbarToggleInteractionProbe(),
-          runBufferInlineGeneratedResultCopyPlacementProbe(),
+          runBufferPopUpMenuGeometryProbe(),
+          BufferWindowController.defaultAutoSendLifetime == 1,
+          BufferWindowController.autoSendLifetimeChoices == [1, 2, 3, 5],
+          // Automatic delivery is the Default buffer's alone: any selected
+          // plugin, and the music surface, own their own delivery rhythm.
+          BufferAutoSendAvailabilityRules.isAvailable(
+            pluginSelected: false, musicSelected: false
+          ),
+          !BufferAutoSendAvailabilityRules.isAvailable(
+            pluginSelected: true, musicSelected: false
+          ),
+          !BufferAutoSendAvailabilityRules.isAvailable(
+            pluginSelected: false, musicSelected: true
+          ),
+          !BufferAutoSendAvailabilityRules.isAvailable(
+            pluginSelected: true, musicSelected: true
+          ),
+          runBufferAutoSendLifecycleProbe(),
+          runBufferInlineNoLeadingControlProbe(),
+          runBufferInlineTrailingActionExclusionProbe(),
           BufferWorkbenchPointerRules.state(
             enabled: true, hovered: false, pressed: false
           ) == .idle,
@@ -6971,13 +7565,13 @@ func runBufferWindowSmokeTest() -> Bool {
           standardSourceOffset == 0,
           standardTargetOffset == 0,
           compactDerivedTargetOffset == 0,
-          translationSourceOffset == -15.5,
-          translationTargetOffset == 15.5,
+          translationSourceOffset == -16,
+          translationTargetOffset == 16,
           translationSourceOffset < 0,
           translationTargetOffset > 0,
           translationSourceOffset == -translationTargetOffset,
-          streamSourceOffset == -15.5,
-          streamTargetOffset == 15.5,
+          streamSourceOffset == -16,
+          streamTargetOffset == 16,
           streamSourceOffset == -streamTargetOffset,
           !BufferWorkbenchLayout.windowBackgroundDraggable,
           FirstMouseButton(frame: .zero).acceptsFirstMouse(for: nil),
@@ -7099,10 +7693,28 @@ func runBufferWindowSmokeTest() -> Bool {
     overlappingShift.noteModifierUse()
     var cancelledShift = shortShiftTap
     cancelledShift.cancelForFocusChange()
+    let physicalLeftShift = ShiftModifierEventRules.rimeKeycode(
+        forHardwareKeyCode: UInt16(kVK_Shift)
+    )
+    let physicalRightShift = ShiftModifierEventRules.rimeKeycode(
+        forHardwareKeyCode: UInt16(kVK_RightShift)
+    )
+    let commandReleaseWithShiftMask = ShiftModifierEventRules.rimeKeycode(
+        forHardwareKeyCode: UInt16(kVK_Command)
+    )
+    let primaryHotKeyReleaseWithShiftMask = ShiftModifierEventRules.rimeKeycode(
+        forHardwareKeyCode: UInt16(kVK_ANSI_V)
+    )
+    var shiftInterruptedByAggregateDelta = shortShiftTap
+    if commandReleaseWithShiftMask == nil {
+        // Mirror handleFlags' fail-closed path: an aggregate Shift delta on a
+        // non-Shift callback must make an existing gesture non-replayable.
+        shiftInterruptedByAggregateDelta.noteModifierUse()
+    }
     // The real Carbon/IMK failure is not limited to one optional gesture. A
-    // process-wide tombstone must also catch a gesture rebuilt after the hot
+    // process-wide tombstone must catch a real Shift gesture spanning the hot
     // key callback and releases delivered to multiple controller instances,
-    // while leaving the next physical Shift tap untouched.
+    // while non-Shift modifier callbacks cannot synthesize a replacement.
     var hotKeyShiftTombstone = GlobalHotKeyShiftTombstone()
     let armedHotKeyShiftTombstone = hotKeyShiftTombstone.record(
         route: .toggleWorkbench,
@@ -7456,7 +8068,57 @@ func runBufferWindowSmokeTest() -> Bool {
             eventTimestamp: 90.0,
             eventIdentity: ordinaryVAfterMissingReleaseIdentity
         )
-    guard ShiftModifierGesture.standaloneTapLimit == 0.5,
+    guard physicalLeftShift == RimeKey.shiftL,
+          physicalRightShift == RimeKey.shiftR,
+          commandReleaseWithShiftMask == nil,
+          primaryHotKeyReleaseWithShiftMask == nil,
+          shiftInterruptedByAggregateDelta.releaseDecision(
+            at: 10.2,
+            currentSession: 7,
+            currentSchemaID: "rime_ice"
+          ) == .discard,
+          ShiftModifierGesture.standaloneTapLimit == 0.5,
+          // macOS redelivers flagsChanged for one physical Shift press: same
+          // key, no aggregate delta. Only the *other* Shift key is a real
+          // second transition. Reading a redelivery as one voided the gesture
+          // its own press had just created, so no standalone tap ever reached
+          // librime and Chinese/English could not be switched at all.
+          !ShiftModifierEventRules.isSecondShiftTransition(
+            aggregateDeltaIsEmpty: true,
+            shiftIsDown: true,
+            hardwareKeyCode: 56,
+            inFlightGestureKeycode: RimeKey.shiftL
+          ),
+          ShiftModifierEventRules.isSecondShiftTransition(
+            aggregateDeltaIsEmpty: true,
+            shiftIsDown: true,
+            hardwareKeyCode: 60,
+            inFlightGestureKeycode: RimeKey.shiftL
+          ),
+          ShiftModifierEventRules.isSecondShiftTransition(
+            aggregateDeltaIsEmpty: true,
+            shiftIsDown: true,
+            hardwareKeyCode: 56,
+            inFlightGestureKeycode: nil
+          ),
+          !ShiftModifierEventRules.isSecondShiftTransition(
+            aggregateDeltaIsEmpty: false,
+            shiftIsDown: true,
+            hardwareKeyCode: 60,
+            inFlightGestureKeycode: RimeKey.shiftL
+          ),
+          !ShiftModifierEventRules.isSecondShiftTransition(
+            aggregateDeltaIsEmpty: true,
+            shiftIsDown: false,
+            hardwareKeyCode: 60,
+            inFlightGestureKeycode: RimeKey.shiftL
+          ),
+          !ShiftModifierEventRules.isSecondShiftTransition(
+            aggregateDeltaIsEmpty: true,
+            shiftIsDown: true,
+            hardwareKeyCode: 55,
+            inFlightGestureKeycode: RimeKey.shiftL
+          ),
           shortShiftTap.releaseDecision(
             at: 10.499,
             currentSession: 7,
@@ -7632,8 +8294,8 @@ func runBufferWindowSmokeTest() -> Bool {
 
     let halfHoldDecision = BufferEnterGestureRules.pollDecision(
         isPhysicalDown: true,
-        elapsed: 0.6,
-        holdDelay: 1.2
+        elapsed: 0.3,
+        holdDelay: 0.6
     )
     let halfHoldProgress: Double
     if case let .wait(progress) = halfHoldDecision {
@@ -7644,20 +8306,20 @@ func runBufferWindowSmokeTest() -> Bool {
     guard BufferEnterGestureRules.pollDecision(
             isPhysicalDown: false,
             elapsed: 0.2,
-            holdDelay: 1.2
+            holdDelay: 0.6
           ) == .sendNext,
           // A delayed poll after a quick release must remain a tap, never an
           // accidental send-all just because wall time crossed the threshold.
           BufferEnterGestureRules.pollDecision(
             isPhysicalDown: false,
             elapsed: 2.0,
-            holdDelay: 1.2
+            holdDelay: 0.6
           ) == .sendNext,
           abs(halfHoldProgress - 0.5) < 0.000_001,
           BufferEnterGestureRules.pollDecision(
             isPhysicalDown: true,
-            elapsed: 1.2,
-            holdDelay: 1.2
+            elapsed: 0.6,
+            holdDelay: 0.6
           ) == .sendAll else {
         print("FAILED: buffer Enter tap/hold poll decision")
         return false
@@ -9311,7 +9973,7 @@ func runBufferWindowSmokeTest() -> Bool {
     _ = rail.renderStandardForPreview()
     let renderedPassiveEmptyPlaceholder = rail.renderedInputPlaceholderVisible
         && !rail.renderedInputCaretVisible
-        && rail.renderedInputControlCount == 1
+        && rail.renderedLeadingInputControlCount == 0
         && rail.renderedTextFragments.contains("等待暂存内容")
     model.enabled = true
     _ = rail.renderStandardForPreview()
@@ -9348,7 +10010,7 @@ func runBufferWindowSmokeTest() -> Bool {
     _ = rail.renderStandardForPreview(shielded: true)
     let scrubbedByShield = !rail.isHidden
         && rail.renderedBlockCount == 0
-        && rail.renderedInputControlCount == 1
+        && rail.renderedLeadingInputControlCount == 0
         && rail.renderedTextFragments == ["内容已隐藏"]
         && !rail.isEnterHoldProgressVisible
     model.enabled = oldEnabled
@@ -9551,11 +10213,11 @@ func runBufferWindowSmokeTest() -> Bool {
     let pagerFrames = pagerProbe.rails
         .map(\.viewportFrame)
         .sorted { $0.minY < $1.minY }
-    let renderedPagerGeometry = pagerProbe.boundsHeight == 68
-        && pagerProbe.containerHeight == 58
+    let renderedPagerGeometry = pagerProbe.boundsHeight == 64
+        && pagerProbe.containerHeight == 54
         && pagerProbe.rails.count == 2
         && pagerProbe.rails.allSatisfy {
-            abs($0.viewportHeight - 27) < 0.5
+            abs($0.viewportHeight - 25) < 0.5
                 && abs($0.documentHeight - $0.viewportHeight) < 0.5
         }
         && zip(pagerFrames, pagerFrames.dropFirst()).allSatisfy {
@@ -9673,7 +10335,7 @@ func runBufferWindowSmokeTest() -> Bool {
     _ = translationRail.refresh(shielded: true)
     let translationShielded = translationRail.translationRailCount == 0
         && !translationRail.isHidden
-        && translationRail.renderedInputControlCount == 1
+        && translationRail.renderedLeadingInputControlCount == 0
         && translationRail.renderedTextFragments == ["内容已隐藏"]
         && !translationRail.renderedTextFragments.contains(sourcePreview)
         && !translationRail.renderedTextFragments.contains("方案")
@@ -10054,6 +10716,120 @@ func runBufferWindowSmokeTest() -> Bool {
         visibleFrames: [primary, secondary, leftSecondary],
         fallback: primary
     )
+    // Box-aligned openings: left edge follows the field, width adopts it, and
+    // the top edge sits one gap under the field's bottom edge.
+    let chatBox = NSRect(x: 300, y: 460, width: 760, height: 44)
+    let chatCaret = NSRect(x: 420, y: 468, width: 0, height: 22)
+    let boxAlignedOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: chatCaret,
+        boxRect: chatBox,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    // A field narrower than the readable minimum clamps up and keeps its left
+    // edge rather than shrinking the workbench.
+    let searchBox = NSRect(x: 240, y: 600, width: 220, height: 28)
+    let searchCaret = NSRect(x: 260, y: 604, width: 0, height: 20)
+    let narrowBoxOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: searchCaret,
+        boxRect: searchBox,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    // A document-sized text area still frames the workbench horizontally, but
+    // must not push it to the bottom of the editor.
+    let editorBox = NSRect(x: 120, y: 80, width: 900, height: 700)
+    let editorCaret = NSRect(x: 300, y: 700, width: 0, height: 22)
+    let tallBoxOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: editorCaret,
+        boxRect: editorBox,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    // A field wider than the workbench maximum clamps down, still left-aligned.
+    let wideBox = NSRect(x: 140, y: 300, width: 1200, height: 40)
+    let wideCaret = NSRect(x: 200, y: 308, width: 0, height: 22)
+    let wideBoxOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: wideCaret,
+        boxRect: wideBox,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    // A stale box that no longer surrounds the caret is rejected outright.
+    let staleBoxOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: chatCaret,
+        boxRect: NSRect(x: 20, y: 40, width: 300, height: 30),
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    let caretOnlyOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: chatCaret,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    // A box near the bottom has no room below, so it flips above while keeping
+    // its left edge and width.
+    let bottomBox = NSRect(x: 360, y: 30, width: 700, height: 40)
+    let bottomBoxCaret = NSRect(x: 400, y: 38, width: 0, height: 22)
+    let flippedBoxOpening = BufferWindowGeometry.openingPlacement(
+        currentFrame: openingFrame,
+        targetRect: bottomBoxCaret,
+        boxRect: bottomBox,
+        visibleFrames: [primary],
+        fallback: primary
+    )
+    guard boxAlignedOpening.side == .belowTarget,
+          boxAlignedOpening.frame.minX == chatBox.minX,
+          boxAlignedOpening.frame.width == chatBox.width,
+          boxAlignedOpening.frame.maxY
+            == chatBox.minY - BufferWindowGeometry.inputAnchorGap,
+          narrowBoxOpening.frame.minX == searchBox.minX,
+          narrowBoxOpening.frame.width
+            == BufferWindowGeometry.standardMinimumWidth,
+          narrowBoxOpening.frame.maxY
+            == searchBox.minY - BufferWindowGeometry.inputAnchorGap,
+          tallBoxOpening.frame.minX == editorBox.minX,
+          tallBoxOpening.frame.width == editorBox.width,
+          wideBoxOpening.frame.minX == wideBox.minX,
+          wideBoxOpening.frame.width
+            == BufferWindowGeometry.standardMaximumWidth,
+          tallBoxOpening.frame.maxY
+            == editorCaret.minY - BufferWindowGeometry.inputAnchorGap,
+          staleBoxOpening == caretOnlyOpening,
+          // Caret-anchored openings compensate the workbench's content inset;
+          // a box anchor is a frame, so those edges stay flush.
+          caretOnlyOpening.frame.minX
+            == chatCaret.minX - BufferWorkbenchMetrics.contentLeadingInset,
+          flippedBoxOpening.side == .aboveTarget,
+          flippedBoxOpening.frame.minX == bottomBox.minX,
+          flippedBoxOpening.frame.width == bottomBox.width,
+          flippedBoxOpening.frame.minY
+            == bottomBox.maxY + BufferWindowGeometry.inputAnchorGap,
+          BufferWindowGeometry.isPlausibleInputBox(chatBox,
+                                                   caret: chatCaret,
+                                                   visibleFrames: [primary]),
+          !BufferWindowGeometry.isPlausibleInputBox(
+            NSRect(x: 300, y: 460, width: 0, height: 44),
+            caret: chatCaret,
+            visibleFrames: [primary]
+          ),
+          !BufferWindowGeometry.isPlausibleInputBox(
+            chatBox,
+            caret: NSRect(x: 4000, y: 468, width: 0, height: 22),
+            visibleFrames: [primary]
+          ) else {
+        print("FAILED: input-box aligned workbench opening geometry",
+              boxAlignedOpening, narrowBoxOpening, tallBoxOpening,
+              wideBoxOpening, staleBoxOpening, flippedBoxOpening)
+        return false
+    }
+
     let manualOrigin = NSPoint(x: 160, y: 240)
     let transientPersistence = BufferWindowGeometry.canonicalPersistedFrame(
         belowCaret.frame,
@@ -10082,7 +10858,11 @@ func runBufferWindowSmokeTest() -> Bool {
               $0.maxY == middleCaret.minY - BufferWindowGeometry.inputAnchorGap
                   && !$0.intersects(middleCaret)
           }),
-          belowCaret.frame.midX == middleCaret.midX,
+          // The workbench's first character lands on the caret, so its window
+          // starts one content inset to the left of it.
+          belowCaret.frame.minX
+            == middleCaret.minX - BufferWorkbenchMetrics.contentLeadingInset,
+          BufferWorkbenchMetrics.contentLeadingInset == 12,
           aboveCaret.side == .aboveTarget,
           aboveCaret.frame.minY
             == bottomCaret.maxY + BufferWindowGeometry.inputAnchorGap,
@@ -10234,11 +11014,11 @@ func runBufferWindowSmokeTest() -> Bool {
           streamCandidatesExpanded.minY == streamCandidatesTwoExpanded.minY,
           standardAfterTranslation.height == BufferWindowGeometry.expandedHeight,
           standardAfterTranslation.minY == translationExpanded.minY,
-          BufferWindowGeometry.height(expanded: false) == 44,
-          BufferWindowGeometry.height(expanded: false, mode: .translation) == 78,
-          BufferWindowGeometry.height(expanded: true) == 78,
-          BufferWindowGeometry.height(expanded: true, mode: .translation) == 112,
-          floatingCandidateInvariant.height == 112,
+          BufferWindowGeometry.height(expanded: false) == 42,
+          BufferWindowGeometry.height(expanded: false, mode: .translation) == 74,
+          BufferWindowGeometry.height(expanded: true) == 73,
+          BufferWindowGeometry.height(expanded: true, mode: .translation) == 105,
+          floatingCandidateInvariant.height == 105,
           floatingCandidateInvariant.minY == migratedOldCompact.minY,
           canonicalFrame.height == BufferWindowGeometry.collapsedHeight,
           clampedCandidate.x + candidateSize.width <= primary.maxX - 6,
@@ -10326,6 +11106,35 @@ func runBufferWindowSmokeTest() -> Bool {
             try? FileManager.default.removeItem(at: transitionRoot)
         }
     }
+    for width: CGFloat in [400, 520, 760] {
+        let overlay = BufferWindowController.shared
+            .exerciseRailActionOverlayForSmoke(panelWidth: width)
+        guard overlay.passed else {
+            print(
+                "FAILED: live Buffer rail action overlay",
+                "width=\(overlay.panelWidth)",
+                "rail2=\(overlay.railFrameWithTwoActions)",
+                "rail3=\(overlay.railFrameWithThreeActions)",
+                "overlay=\(overlay.overlayFrame)",
+                "actions=\(overlay.actionFrames)",
+                "sibling=\(overlay.overlayIsNonArrangedSibling)",
+                "contained=\(overlay.overlayContainedByRail)",
+                "ordered=\(overlay.actionsOrderedOnOneRow)",
+                "hits=\(overlay.actionHitTestingWorks)",
+                "passThrough=\(overlay.fadeAreaPassesThrough)",
+                "surface=\(overlay.interactiveSurfaceVisibleAtIdle)",
+                "a11y=\(overlay.interactiveAccessibilityLabelsAreReadable)",
+                "functionIcon=\(overlay.functionMenuOwnsOnlyPluginIcon)",
+                "appIcon=\(overlay.targetApplicationIconIsReal)",
+                "passive=\(overlay.targetApplicationIndicatorIsPassive)",
+                "beforeClose=\(overlay.targetApplicationIconPrecedesClose)",
+                "scrubbed=\(overlay.protectedStateScrubsApplicationIdentity)",
+                "ambiguous=\(overlay.hasAmbiguousLayout)"
+            )
+            return false
+        }
+    }
+
     let transition = BufferWindowController.shared
         .exerciseLayoutTransitionForSmoke(
             standardBeforePath: transitionRoot

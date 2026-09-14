@@ -23,6 +23,14 @@ protocol BufferDeliveryContentSource: AnyObject {
     var deliveryWorkspaceID: String { get }
     var deliveryGeneration: UInt64 { get }
     var hasIncompleteDeliveryBlocks: Bool { get }
+    /// Opt in only when pending blocks form a valid, ordered ready prefix that
+    /// is independent of the unfinished tail. Copy and terminal-drain checks
+    /// still require the entire workspace to be complete.
+    var supportsIncrementalDelivery: Bool { get }
+    /// A derived source may retain an explicitly active workbench session after
+    /// retiring its final source text while translated target children remain.
+    /// Explicit pause/protection must revoke this independently of readiness.
+    var automaticDeliverySessionActive: Bool { get }
     var deliveryPendingBlocks: [BufferModel.Block] { get }
     /// Final mutable preflight immediately before the coordinator freezes a
     /// generation. Most sources are already committed; candidate workspaces
@@ -42,6 +50,13 @@ protocol BufferDeliveryContentSource: AnyObject {
 }
 
 extension BufferDeliveryContentSource {
+    var supportsIncrementalDelivery: Bool { false }
+    var automaticDeliverySessionActive: Bool { BufferModel.shared.processingActive }
+
+    var blocksDeliveryForIncompleteResult: Bool {
+        hasIncompleteDeliveryBlocks && !supportsIncrementalDelivery
+    }
+
     @discardableResult
     func prepareForDelivery() -> Bool { true }
 
@@ -76,6 +91,7 @@ extension BufferModel: BufferDeliveryContentSource {
     var deliveryGeneration: UInt64 { UInt64(changeCount) }
     var hasIncompleteDeliveryBlocks: Bool { hasIncompletePluginBlocks }
     var deliveryPendingBlocks: [Block] { pendingDeliveryBlocks }
+    var automaticDeliverySessionActive: Bool { processingActive }
 
     func deliveryBlock(id: UUID, generation: UInt64) -> Block? {
         guard deliveryGeneration == generation else { return nil }
@@ -128,9 +144,13 @@ final class BufferDeliveryCoordinator {
         case pluginUnavailable
         case pluginResultIncomplete
         case contentChanged
+        /// The target application is known but its box is not: nothing is
+        /// sent, and the Buffer offers copy instead.
+        case targetBoxUnverified
 
         var message: String {
             switch self {
+            case .targetBoxUnverified: return "未确认目标输入框，不会发送；可复制后自行粘贴"
             case .noFocusedField: return "请先点选要接收文字的外部文本框"
             case .composing: return "正在组字，结束组字后才能发送"
             case .secureInput: return "安全输入已开启，发送被保护性禁用"
@@ -224,6 +244,19 @@ final class BufferDeliveryCoordinator {
         let deliver: (BufferModel.Block) -> Bool
     }
 
+    /// A short-lived automatic-send lease. Composition may postpone insertion
+    /// while these already-ready blocks continue aging, but the exact source,
+    /// head and focus token must still match when the timer attempts delivery.
+    struct AutomaticDeliverySnapshot {
+        let sourceIdentity: ObjectIdentifier
+        let workspaceID: String
+        let generation: UInt64
+        let blocks: [BufferModel.Block]
+        let targetToken: FocusToken
+        let canSendWithoutResolvingComposition: Bool
+        let workbenchSessionEpoch: UInt64
+    }
+
     struct Dependencies {
         let resolveTarget: (FocusToken?) -> DeliveryTarget?
         let secureInputEnabled: () -> Bool
@@ -235,6 +268,10 @@ final class BufferDeliveryCoordinator {
         let refreshUI: () -> Void
         let workbenchSessionEpoch: () -> UInt64
         let terminalDrainDelivered: (TerminalDrainContext) -> Void
+        /// Whether the box behind this token is identified — and, while
+        /// capturing, still the box capture was granted for. It answers the
+        /// UI; the live `deliver` re-checks it exactly before every block.
+        let targetBoxPermitsDelivery: (FocusToken) -> Bool
 
         init(resolveTarget: @escaping (FocusToken?) -> DeliveryTarget?,
              secureInputEnabled: @escaping () -> Bool,
@@ -247,18 +284,23 @@ final class BufferDeliveryCoordinator {
              workbenchSessionEpoch: @escaping () -> UInt64 = { 0 },
              terminalDrainDelivered: @escaping (
                 TerminalDrainContext
-             ) -> Void = { _ in }) {
+             ) -> Void = { _ in },
+             targetBoxPermitsDelivery: @escaping (FocusToken) -> Bool = { _ in true }) {
             self.resolveTarget = resolveTarget
             self.secureInputEnabled = secureInputEnabled
             self.validatePlugin = validatePlugin
             self.refreshUI = refreshUI
             self.workbenchSessionEpoch = workbenchSessionEpoch
             self.terminalDrainDelivered = terminalDrainDelivered
+            self.targetBoxPermitsDelivery = targetBoxPermitsDelivery
         }
 
         static var live: Dependencies {
             Dependencies(
                 resolveTarget: { expectedToken in
+                    guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+                        return nil
+                    }
                     let lease = expectedToken.flatMap {
                         InputFocusCoordinator.shared.liveTarget(expected: $0)
                     } ?? (expectedToken == nil
@@ -270,12 +312,19 @@ final class BufferDeliveryCoordinator {
                         token: lease.token,
                         compositionActive: lease.compositionActive,
                         resolveComposition: {
+                            guard RimeInputSourceAuthority.currentSourceIsOwn()
+                            else { return }
                             controller.resolveCompositionForBufferDelivery(target: lease)
                         },
                         deliver: { block in
-                            guard let current = InputFocusCoordinator.shared.liveTarget(
+                            // One client can front many boxes: send only into
+                            // the box the lock names, re-read right now.
+                            guard RimeInputSourceAuthority.currentSourceIsOwn(),
+                                  let current = InputFocusCoordinator.shared.liveTarget(
                                 expected: lease.token
-                            ), current === lease else { return false }
+                            ), current === lease,
+                                  BufferTargetBoxLock.shared.permitsDelivery(to: current)
+                            else { return false }
                             return controller.deliverBufferedBlock(block.text,
                                                                   origin: block.origin,
                                                                   target: current)
@@ -290,13 +339,18 @@ final class BufferDeliveryCoordinator {
                         completion: completion
                     )
                 },
-                refreshUI: { RimeBufferController.refreshActiveUI() },
+                refreshUI: { RIMESController.refreshActiveUI() },
                 workbenchSessionEpoch: {
                     BufferWindowController.shared.workbenchSessionEpoch
                 },
                 terminalDrainDelivered: { context in
                     BufferWindowController.shared
                         .closeAfterTerminalDrain(context)
+                },
+                targetBoxPermitsDelivery: { token in
+                    InputFocusCoordinator.shared.lease(for: token).map {
+                        BufferTargetBoxLock.shared.state(for: $0) == .locked
+                    } ?? false
                 }
             )
         }
@@ -306,6 +360,7 @@ final class BufferDeliveryCoordinator {
     private let dependencies: Dependencies
     private let contentSourceResolver: () -> any BufferDeliveryContentSource
     private var activeOperationID: UUID?
+    private var activeAutomaticSessionEpoch: UInt64?
     private(set) var lastBlockedReason: BlockedReason?
 
     init(model: BufferModel = .shared,
@@ -338,17 +393,61 @@ final class BufferDeliveryCoordinator {
             return .blocked(.secureInput)
         }
         let source = contentSourceResolver()
-        if source.hasIncompleteDeliveryBlocks {
+        if source.blocksDeliveryForIncompleteResult {
             return .blocked(.pluginResultIncomplete)
         }
         let pending = source.deliveryPendingBlocks
         if pending.isEmpty {
             return .blocked(.nothingPending)
         }
+        if pending.contains(where: { $0.pluginMetadata?.incomplete == true }) {
+            return .blocked(.pluginResultIncomplete)
+        }
         if pending.contains(where: { invalidPluginMetadata(in: $0) || $0.pluginMetadata?.stale == true }) {
             return .blocked(.stalePluginResult)
         }
+        guard dependencies.targetBoxPermitsDelivery(target.token) else {
+            return .blocked(.targetBoxUnverified)
+        }
         return .ready
+    }
+
+    func automaticDeliverySnapshot() -> AutomaticDeliverySnapshot? {
+        guard activeOperationID == nil,
+              !dependencies.secureInputEnabled(),
+              let target = dependencies.resolveTarget(nil),
+              dependencies.targetBoxPermitsDelivery(target.token) else { return nil }
+        let source = contentSourceResolver()
+        guard source.automaticDeliverySessionActive,
+              !source.blocksDeliveryForIncompleteResult else { return nil }
+        let blocks = source.deliveryPendingBlocks
+        guard !blocks.isEmpty,
+              !blocks.contains(where: {
+                  invalidPluginMetadata(in: $0)
+                    || $0.pluginMetadata?.stale == true
+                    || $0.pluginMetadata?.incomplete == true
+              }) else { return nil }
+        return AutomaticDeliverySnapshot(
+            sourceIdentity: ObjectIdentifier(source),
+            workspaceID: source.deliveryWorkspaceID,
+            generation: source.deliveryGeneration,
+            blocks: blocks,
+            targetToken: target.token,
+            canSendWithoutResolvingComposition: !target.compositionActive,
+            workbenchSessionEpoch: dependencies.workbenchSessionEpoch()
+        )
+    }
+
+    @discardableResult
+    func sendNextAutomatically(
+        _ snapshot: AutomaticDeliverySnapshot,
+        completion: ((SendResult) -> Void)? = nil
+    ) -> SendResult {
+        send(all: false,
+             resolveCompositionIfNeeded: false,
+             expectedToken: snapshot.targetToken,
+             automaticSnapshot: snapshot,
+             completion: completion)
     }
 
     @discardableResult
@@ -374,6 +473,7 @@ final class BufferDeliveryCoordinator {
     private func send(all: Bool,
                       resolveCompositionIfNeeded: Bool,
                       expectedToken: FocusToken?,
+                      automaticSnapshot: AutomaticDeliverySnapshot? = nil,
                       completion: ((SendResult) -> Void)?) -> SendResult {
         dispatchPrecondition(condition: .onQueue(.main))
         let workbenchSessionEpoch = dependencies.workbenchSessionEpoch()
@@ -413,6 +513,17 @@ final class BufferDeliveryCoordinator {
         }
 
         let source = contentSourceResolver()
+        if let automaticSnapshot {
+            guard ObjectIdentifier(source) == automaticSnapshot.sourceIdentity,
+                  source.deliveryWorkspaceID == automaticSnapshot.workspaceID,
+                  source.deliveryGeneration == automaticSnapshot.generation,
+                  source.automaticDeliverySessionActive,
+                  workbenchSessionEpoch == automaticSnapshot.workbenchSessionEpoch else {
+                return finishImmediate(.init(sentCount: 0,
+                                             blockedReason: .contentChanged),
+                                       completion: completion)
+            }
+        }
         guard source.prepareForDelivery() else {
             return finishImmediate(.init(sentCount: 0,
                                          blockedReason: .contentChanged),
@@ -420,18 +531,37 @@ final class BufferDeliveryCoordinator {
         }
         let sourceGeneration = source.deliveryGeneration
         let sourceWorkspaceID = source.deliveryWorkspaceID
-        guard !source.hasIncompleteDeliveryBlocks else {
+        guard !source.blocksDeliveryForIncompleteResult else {
             return finishImmediate(.init(sentCount: 0,
                                          blockedReason: .pluginResultIncomplete),
                                    completion: completion)
         }
 
         let pending = source.deliveryPendingBlocks
+        if let automaticSnapshot {
+            // prepareForDelivery may confirm a candidate, but it must not
+            // substitute a different block for the one whose lifetime elapsed.
+            guard let expected = automaticSnapshot.blocks.first,
+                  let head = pending.first,
+                  head.id == expected.id,
+                  head.text == expected.text,
+                  source.automaticDeliverySessionActive,
+                  dependencies.workbenchSessionEpoch() == automaticSnapshot.workbenchSessionEpoch else {
+                return finishImmediate(.init(sentCount: 0,
+                                             blockedReason: .contentChanged),
+                                       completion: completion)
+            }
+        }
         guard !pending.isEmpty else {
             return finishImmediate(.init(sentCount: 0, blockedReason: .nothingPending),
                                    completion: completion)
         }
         let selected = all ? pending : Array(pending.prefix(1))
+        guard !selected.contains(where: { $0.pluginMetadata?.incomplete == true }) else {
+            return finishImmediate(.init(sentCount: 0,
+                                         blockedReason: .pluginResultIncomplete),
+                                   completion: completion)
+        }
         if let invalid = selected.first(where: {
             invalidPluginMetadata(in: $0) || $0.pluginMetadata?.stale == true
         }) {
@@ -451,11 +581,13 @@ final class BufferDeliveryCoordinator {
                                      workbenchSessionEpoch: workbenchSessionEpoch,
                                      targetToken: target.token,
                                      attemptID: attemptID,
+                                     automaticSessionEpoch: automaticSnapshot?.workbenchSessionEpoch,
                                      completion: completion)
         }
 
         let operationID = attemptID
         activeOperationID = operationID
+        activeAutomaticSessionEpoch = automaticSnapshot == nil ? nil : workbenchSessionEpoch
         lastBlockedReason = nil
         dependencies.refreshUI()
         continueAsync(operationID: operationID,
@@ -478,6 +610,7 @@ final class BufferDeliveryCoordinator {
                                    workbenchSessionEpoch: UInt64,
                                    targetToken: FocusToken,
                                    attemptID: UUID,
+                                   automaticSessionEpoch: UInt64?,
                                    completion: ((SendResult) -> Void)?) -> SendResult {
         var deliveredIDs: [UUID] = []
         var blockedReason: BlockedReason?
@@ -496,6 +629,12 @@ final class BufferDeliveryCoordinator {
             }
             guard !current.compositionActive else {
                 blockedReason = .composing
+                break
+            }
+            if let automaticSessionEpoch,
+               (!source.automaticDeliverySessionActive
+                || dependencies.workbenchSessionEpoch() != automaticSessionEpoch) {
+                blockedReason = .contentChanged
                 break
             }
             guard !dependencies.secureInputEnabled() else {
@@ -557,7 +696,7 @@ final class BufferDeliveryCoordinator {
                             completion: completion)
                 return
             }
-            guard !source.hasIncompleteDeliveryBlocks else {
+            guard !source.blocksDeliveryForIncompleteResult else {
                 finishAsync(operationID: operationID,
                             deliveredIDs: accepted,
                             source: source,
@@ -728,6 +867,19 @@ final class BufferDeliveryCoordinator {
                                         deliveredIDs: [UUID],
                                         completion: ((SendResult) -> Void)?) {
         guard activeOperationID == operationID else { return }
+        guard automaticSessionIsCurrent(source) else {
+            finishAsync(operationID: operationID,
+                        deliveredIDs: deliveredIDs,
+                        source: source,
+                        sourceWorkspaceID: sourceWorkspaceID,
+                        sourceGeneration: sourceGeneration,
+                        workbenchSessionEpoch: workbenchSessionEpoch,
+                        targetToken: targetToken,
+                        reason: .contentChanged,
+                        staleBlockID: nil,
+                        completion: completion)
+            return
+        }
         switch decision {
         case .allowed:
             guard let current = dependencies.resolveTarget(targetToken),
@@ -736,7 +888,7 @@ final class BufferDeliveryCoordinator {
                   sourceIsCurrent(source,
                                   workspaceID: sourceWorkspaceID,
                                   generation: sourceGeneration),
-                  !source.hasIncompleteDeliveryBlocks,
+                  !source.blocksDeliveryForIncompleteResult,
                   let liveBlock = source.deliveryBlock(id: blockID,
                                                        generation: sourceGeneration),
                   pluginMetadata(in: liveBlock) == metadata,
@@ -822,6 +974,7 @@ final class BufferDeliveryCoordinator {
                              completion: ((SendResult) -> Void)?) {
         guard activeOperationID == operationID else { return }
         activeOperationID = nil
+        activeAutomaticSessionEpoch = nil
         // Capture diagnostic metadata under the frozen generation before any
         // model mutation advances it. When sendAll accepts an earlier block
         // and rejects a later plugin block, consumption and stale marking are
@@ -879,10 +1032,17 @@ final class BufferDeliveryCoordinator {
                                  workspaceID: String,
                                  generation: UInt64) -> Bool {
         let current = contentSourceResolver()
-        return ObjectIdentifier(current) == ObjectIdentifier(source)
+        return automaticSessionIsCurrent(source)
+            && ObjectIdentifier(current) == ObjectIdentifier(source)
             && current.deliveryWorkspaceID == workspaceID
             && source.deliveryWorkspaceID == workspaceID
             && source.deliveryGeneration == generation
+    }
+
+    private func automaticSessionIsCurrent(_ source: any BufferDeliveryContentSource) -> Bool {
+        guard let epoch = activeAutomaticSessionEpoch else { return true }
+        return source.automaticDeliverySessionActive
+            && dependencies.workbenchSessionEpoch() == epoch
     }
 
     private func consumeDeliveredAndResolveTerminalDrain(

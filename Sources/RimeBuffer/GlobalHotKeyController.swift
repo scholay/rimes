@@ -6,7 +6,6 @@ enum GlobalHotKeyRoute: Equatable {
     case toggleWorkbench
     case toggleClipboardHistory
     case openMailbox
-    case openCapsule
     case openSettings
     case ignore
 }
@@ -16,16 +15,21 @@ enum GlobalHotKeyAction: UInt32, CaseIterable, Hashable {
     case openSettings = 2
     case toggleClipboardHistory = 3
     case openMailbox = 4
-    case openCapsule = 5
 
     var shortcutAction: RimeShortcutAction {
         switch self {
         case .toggleWorkbench: return .toggleWorkbench
         case .toggleClipboardHistory: return .toggleClipboardHistory
         case .openMailbox: return .openMailbox
-        case .openCapsule: return .openCapsule
         case .openSettings: return .openSettings
         }
+    }
+
+    /// Utility surfaces keep working while another input method is selected.
+    /// Settings still belongs to the live RIMES session because several of its
+    /// actions deploy or mutate the active input method.
+    var requiresRimeInputSource: Bool {
+        self == .openSettings
     }
 }
 
@@ -35,12 +39,11 @@ struct GlobalHotKeyDefinition {
     let modifiers: UInt32
 
     /// Content-window visibility is a deliberate global command. Register
-    /// Clip, Mailbox, and Capsule exclusively so another Carbon listener cannot
+    /// Capsule and Mailbox exclusively so another Carbon listener cannot
     /// observe the same chord; ordinary AppKit editing remains outside here.
     var registrationOptions: OptionBits {
         action == .toggleClipboardHistory
             || action == .openMailbox
-            || action == .openCapsule
             ? OptionBits(kEventHotKeyExclusive)
             : OptionBits(kEventHotKeyNoOptions)
     }
@@ -69,6 +72,13 @@ enum GlobalHotKeyRouting {
     /// FourCC `ETBW`; the original workbench namespace now owns all RIMES
     /// process-global shortcuts while preserving its stable Carbon signature.
     static let signature: OSType = 0x4554_4257
+
+    static func registeredActions(currentSourceIsOwn: Bool)
+        -> Set<GlobalHotKeyAction> {
+        Set(GlobalHotKeyAction.allCases.filter {
+            currentSourceIsOwn || !$0.requiresRimeInputSource
+        })
+    }
 
     static func definitions(defaults: UserDefaults = .standard)
         -> [GlobalHotKeyDefinition] {
@@ -119,7 +129,6 @@ enum GlobalHotKeyRouting {
         case .toggleWorkbench: return .toggleWorkbench
         case .toggleClipboardHistory: return .toggleClipboardHistory
         case .openMailbox: return .openMailbox
-        case .openCapsule: return .openCapsule
         case .openSettings: return .openSettings
         }
     }
@@ -165,7 +174,8 @@ final class GlobalHotKeyController {
     private var hotKeyRefs: [GlobalHotKeyAction: EventHotKeyRef] = [:]
     private var registeredDefinitions: [GlobalHotKeyAction: GlobalHotKeyDefinition] = [:]
     private var shortcutPreferencesObserver: NSObjectProtocol?
-    private var runtimeEnabled = false
+    private var rimeInputSourceIsActive = false
+    private var lastReconciledInputSourceState: Bool?
 
     private init() {
         shortcutPreferencesObserver = NotificationCenter.default.addObserver(
@@ -178,7 +188,6 @@ final class GlobalHotKeyController {
                action != .toggleWorkbench,
                action != .toggleClipboardHistory,
                action != .openMailbox,
-               action != .openCapsule,
                action != .openSettings {
                 return
             }
@@ -192,6 +201,15 @@ final class GlobalHotKeyController {
 
     @discardableResult
     func install(defaults: UserDefaults = .standard) -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+
+        return install(
+            definitions: GlobalHotKeyRouting.definitions(defaults: defaults)
+        )
+    }
+
+    @discardableResult
+    private func install(definitions: [GlobalHotKeyDefinition]) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
 
         if eventHandlerRef == nil {
@@ -223,7 +241,6 @@ final class GlobalHotKeyController {
             eventHandlerRef = installedHandler
         }
 
-        let definitions = GlobalHotKeyRouting.definitions(defaults: defaults)
         for definition in definitions
         where hotKeyRefs[definition.action] == nil {
             var registeredHotKey: EventHotKeyRef?
@@ -261,38 +278,60 @@ final class GlobalHotKeyController {
     func reloadFromPreferences() -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
         unregisterAllHotKeys()
-        guard runtimeEnabled else { return true }
-        return install()
+        return reconcileRegistrations(
+            currentSourceIsOwn: rimeInputSourceIsActive
+        )
     }
 
-    /// Utility shortcuts are registered only while RIMES is the selected input
-    /// source. Unregistering them lets other input methods and host applications
-    /// keep the same chords without ETInput observing or consuming them.
+    /// Four utility shortcuts remain process-global across input-source changes.
+    /// Only RIMES-owned actions are added or removed with IMK authority.
     @discardableResult
     func setRuntimeEnabledForInputSource(_ enabled: Bool) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard runtimeEnabled != enabled else {
-            guard enabled else { return true }
-            let registrationIsComplete = hotKeyRefs.count
-                == GlobalHotKeyAction.allCases.count
-            guard !registrationIsComplete else { return true }
-            let installed = install()
-            IMELog.write(
-                "global hotkey incomplete registration retried complete=\(installed)"
+        // Every ordinary IMK callback reconfirms source authority. Once the
+        // source state has been reconciled, that hot path must not reread
+        // preferences, retry a permanently conflicting shortcut, or append a
+        // failure log per key. Preferences explicitly call reload; a real
+        // source transition performs the next retry.
+        if lastReconciledInputSourceState == enabled {
+            let desiredActions = GlobalHotKeyRouting.registeredActions(
+                currentSourceIsOwn: enabled
             )
-            return installed
+            return eventHandlerRef != nil
+                && Set(hotKeyRefs.keys) == desiredActions
+                && Set(registeredDefinitions.keys) == desiredActions
         }
-        runtimeEnabled = enabled
-        unregisterAllHotKeys()
-        if enabled {
-            let installed = install()
-            IMELog.write(
-                "global hotkeys enabled for RIMES source complete=\(installed)"
-            )
-            return installed
+        return reconcileRegistrations(currentSourceIsOwn: enabled)
+    }
+
+    @discardableResult
+    private func reconcileRegistrations(
+        currentSourceIsOwn: Bool,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        rimeInputSourceIsActive = currentSourceIsOwn
+        lastReconciledInputSourceState = currentSourceIsOwn
+        let desiredActions = GlobalHotKeyRouting.registeredActions(
+            currentSourceIsOwn: currentSourceIsOwn
+        )
+        for action in Array(hotKeyRefs.keys)
+        where !desiredActions.contains(action) {
+            if let hotKeyRef = hotKeyRefs.removeValue(forKey: action) {
+                _ = UnregisterEventHotKey(hotKeyRef)
+            }
+            registeredDefinitions.removeValue(forKey: action)
         }
-        IMELog.write("global hotkeys disabled for non-RIMES source")
-        return true
+        let desiredDefinitions = GlobalHotKeyRouting.definitions(defaults: defaults)
+            .filter { desiredActions.contains($0.action) }
+        let complete = install(definitions: desiredDefinitions)
+            && Set(hotKeyRefs.keys) == desiredActions
+        let sourceLabel = currentSourceIsOwn ? "RIMES" : "external"
+        IMELog.write(
+            "global hotkeys reconciled source=\(sourceLabel) "
+                + "actions=\(desiredActions.count) complete=\(complete)"
+        )
+        return complete
     }
 
     private func unregisterAllHotKeys() {
@@ -313,7 +352,7 @@ final class GlobalHotKeyController {
         modifierFlags: NSEvent.ModifierFlags
     ) -> GlobalHotKeyPrimaryKeyMatch? {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard runtimeEnabled else { return nil }
+        guard rimeInputSourceIsActive else { return nil }
         return GlobalHotKeyRouting.primaryKeyMatch(
             definitions: Array(registeredDefinitions.values),
             eventType: eventType,
@@ -382,21 +421,34 @@ final class GlobalHotKeyController {
                 IMELog.write("global hotkey ignored without registered definition")
                 return false
             }
+            let hasAuthorityAtMainBoundary = RimeInputSourceAuthority
+                .currentSourceIsOwn()
+            // A distributed TIS notification may be delayed or omitted. Any
+            // Carbon event is still a live boundary: reconcile the cached
+            // registration scope before routing, including when the pressed
+            // action is one of the four source-independent utilities.
+            if self.rimeInputSourceIsActive != hasAuthorityAtMainBoundary {
+                _ = self.setRuntimeEnabledForInputSource(
+                    hasAuthorityAtMainBoundary
+                )
+            }
             let primaryKeyEventIdentity = Self.primaryKeyEventIdentity(
                 event,
                 eventKind: eventKind,
                 keyCode: primaryKeyCode
             )
             if eventKind == UInt32(kEventHotKeyReleased) {
-                guard hadAuthorityBeforeMainHop,
-                      RimeInputSourceAuthority.currentSourceIsOwn() else {
-                    return false
+                if hadAuthorityBeforeMainHop,
+                   hasAuthorityAtMainBoundary {
+                    _ = RIMESController.globalHotKeyDidRelease(
+                        action,
+                        eventTimestamp: carbonTimestamp,
+                        primaryKeyEventIdentity: primaryKeyEventIdentity
+                    )
                 }
-                _ = RimeBufferController.globalHotKeyDidRelease(
-                    action,
-                    eventTimestamp: carbonTimestamp,
-                    primaryKeyEventIdentity: primaryKeyEventIdentity
-                )
+                // A release belongs to a Carbon registration that already
+                // consumed its press. Never leak that half-event into the newly
+                // selected input method during a source transition.
                 return true
             }
 
@@ -406,16 +458,11 @@ final class GlobalHotKeyController {
                 identifier: identifier
             )
             guard route != .ignore else { return false }
-            let hasAuthorityAtMainBoundary = RimeInputSourceAuthority
-                .currentSourceIsOwn()
-            guard hadAuthorityBeforeMainHop, hasAuthorityAtMainBoundary else {
-                if !hasAuthorityAtMainBoundary {
-                    _ = self.setRuntimeEnabledForInputSource(false)
-                }
-                IMELog.write(
-                    "global hotkey ignored because RIMES is not selected"
-                )
-                return false
+            if action.requiresRimeInputSource
+                && (!hadAuthorityBeforeMainHop || !hasAuthorityAtMainBoundary) {
+                _ = self.setRuntimeEnabledForInputSource(false)
+                IMELog.write("RIMES-only global hotkey ignored for external source")
+                return true
             }
             // Consult the definition that actually owns this Carbon
             // registration. Preferences can change immediately before a
@@ -423,28 +470,27 @@ final class GlobalHotKeyController {
             // from the event currently being dispatched.
             let shortcutUsesShift = registeredDefinition.modifiers
                 & UInt32(shiftKey) != 0
-            RimeBufferController.globalHotKeyWillPerform(
-                action,
-                route,
-                eventTimestamp: routingTimestamp,
-                primaryKeyEventTimestamp: carbonTimestamp,
-                primaryKeyCode: primaryKeyCode,
-                primaryKeyEventIdentity: primaryKeyEventIdentity,
-                shortcutUsesShift: shortcutUsesShift
-            )
+            if hadAuthorityBeforeMainHop, hasAuthorityAtMainBoundary {
+                RIMESController.globalHotKeyWillPerform(
+                    action,
+                    route,
+                    eventTimestamp: routingTimestamp,
+                    primaryKeyEventTimestamp: carbonTimestamp,
+                    primaryKeyCode: primaryKeyCode,
+                    primaryKeyEventIdentity: primaryKeyEventIdentity,
+                    shortcutUsesShift: shortcutUsesShift
+                )
+            }
             switch route {
             case .toggleWorkbench:
                 BufferWindowController.shared.toggleVisibility()
                 IMELog.write("global hotkey toggled buffer workbench")
             case .toggleClipboardHistory:
                 ClipboardHistoryWindowController.shared.toggleVisibility()
-                IMELog.write("global hotkey toggled clipboard history")
+                IMELog.write("global hotkey toggled Capsule rail")
             case .openMailbox:
                 let action = MailboxWindowController.shared.toggleVisibility()
                 IMELog.write("global hotkey toggled Mailbox action=\(action)")
-            case .openCapsule:
-                let action = CapsuleWindowController.shared.toggleVisibility()
-                IMELog.write("global hotkey toggled Capsule action=\(action)")
             case .openSettings:
                 SettingsWindowController.shared.show()
                 IMELog.write("global hotkey opened settings")

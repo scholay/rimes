@@ -654,7 +654,7 @@ final class BufferModel {
     /// behavior aligned with AI/translation/plugin output while preserving the
     /// exact concatenated text, including whitespace-only input.
     @discardableResult
-    func insertPastedText(_ text: String) -> Bool {
+    func insertPastedText(_ text: String, origin: Origin = .rime) -> Bool {
         guard !text.isEmpty else { return false }
         var segments = SemanticBlockSegmenter.segments(from: text)
         guard !segments.isEmpty else { return false }
@@ -678,11 +678,14 @@ final class BufferModel {
         directInputRun = nil
         var insertion = clampedInsertionIndex()
         for segment in segments {
-            blocks.insert(Block(text: segment), at: insertion)
+            blocks.insert(Block(text: segment, origin: origin), at: insertion)
             insertion += 1
         }
         insertionIndex = insertion
-        IMELog.write("buffer pasted chars=\(text.count) fragments=\(segments.count)")
+        IMELog.write(
+            "buffer pasted chars=\(text.count) fragments=\(segments.count) "
+                + "origin=\(origin.tag)"
+        )
         notifyChange()
         return true
     }
@@ -954,6 +957,48 @@ final class BufferModel {
         settleTransientIfIdle()
         IMELog.write("buffer delivery consumed blocks=\(deliveredIndexes.count) remaining=\(blocks.count)")
         notifyChange()
+    }
+
+    /// Transfer a fully translated unit's exact source ownership out of the
+    /// editable rail after its first target child was accepted by Delivery.
+    /// Remaining target children stay in their workspace, not in this model.
+    /// Validation is all-or-nothing, including same-UUID tails that have grown
+    /// since translation. No source history or translated text is retained.
+    @discardableResult
+    func consumeTranslatedSource(_ slices: [BufferSourceSlice]) -> Bool {
+        guard BufferSourceSlice.matches(slices, in: blocks) else { return false }
+        let grouped = Dictionary(grouping: slices, by: \.blockID)
+        var removedIDs: Set<UUID> = []
+        var removedBeforeInsertion = 0
+        for index in blocks.indices {
+            guard let removals = grouped[blocks[index].id] else { continue }
+            let remaining = NSMutableString(string: blocks[index].text)
+            for slice in removals.sorted(by: { $0.range.location > $1.range.location }) {
+                remaining.deleteCharacters(in: slice.range)
+            }
+            blocks[index].text = remaining as String
+            if remaining.length == 0 {
+                removedIDs.insert(blocks[index].id)
+                if index < insertionIndex { removedBeforeInsertion += 1 }
+            }
+        }
+        blocks.removeAll { removedIDs.contains($0.id) }
+        insertionIndex -= removedBeforeInsertion
+        clampInsertionIndexInPlace()
+        if var run = directInputRun {
+            if let tailID = run.tailID, removedIDs.contains(tailID) {
+                // An older closed phrase must not become the editable tail
+                // merely because the most recent phrase was consumed.
+                directInputRun = nil
+            } else {
+                run.blockIDs.removeAll { removedIDs.contains($0) }
+                directInputRun = run.blockIDs.isEmpty ? nil : run
+            }
+        }
+        settleTransientIfIdle()
+        IMELog.write("buffer translated source consumed slices=\(slices.count) emptied=\(removedIDs.count) remaining=\(blocks.count)")
+        notifyChange()
+        return true
     }
 
     /// Non-recoverable privacy cleanup used by automatic safety transitions.

@@ -882,7 +882,7 @@ final class OpenAICompatibleConfigurationStore {
             selectedRoot = URL(fileURLWithPath: override, isDirectory: true)
         } else {
             selectedRoot = fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
         }
         self.rootDirectory = selectedRoot.standardizedFileURL
         configurationURL = self.rootDirectory
@@ -2013,7 +2013,7 @@ final class AITextCodexHomeStore {
             selectedRoot = URL(fileURLWithPath: override, isDirectory: true)
         } else {
             selectedRoot = fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
         }
         self.rootDirectory = selectedRoot.standardizedFileURL
         homeDirectory = self.rootDirectory

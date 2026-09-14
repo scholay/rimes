@@ -152,10 +152,17 @@ Installer 身份/Team、公证票据，以及四个 universal dylib 的独立 SH
 任何一项漂移都会在展开和 RIMES 重签之前 fail-closed。正式 workflow 总是 `--force` 下载，
 不信任 runner 上已有的 `Vendor/` 缓存。升级 Squirrel 必须在 PR 中重新审计并更新 allowlist。
 
+简体 Octagram 模型保持为已审计的 40,925,228-byte compact 字节。获取时先复用
+`RB_OCTAGRAM_MODEL_PATH` 指定文件或 `Vendor/.cache`（两者都重新校验长度和 SHA-256），
+再以官方 `rime-octagram-data` 20260712 Release 资产为主源、固定 revision 的 raw 文件为
+备源；每个网络源都有有界重试和超时。所有模型来源在写入缓存和替换现有
+`Vendor/rime` 之前完成最终校验，因此失败不会破坏上一次可用 runtime。`--force` 会跳过
+本地来源，正式发布仍只接受从已审计网络源重新取得的完全相同字节。
+
 - **`Vendor/` 是 gitignore 的**——二进制不进 git，构建时按锁定版本拉取，可复现。
 - 运行时 `CRimeBridge` 优先 `dlopen` app bundle 内的 librime（找不到才回退系统 Squirrel），
   `shared_data_dir` 指向 bundle 的 `SharedSupport`；首启自动 `start_maintenance` 部署词库到
-  `~/Library/RimeBuffer`。因此 CI 与终端用户机器都无需预装 Squirrel。
+  `~/Library/RIMES`。因此 CI 与终端用户机器都无需预装 Squirrel。
 
 ## 三、持续集成（CI）
 
@@ -176,11 +183,35 @@ ASCII fallback，不再要求 v0.4.1 等旧 binary 理解新参数。所有可�
 GUI 用户的 Aqua 会话中按独立子进程分阶段执行 `register → enable parent →
 enable child → best-effort select`。注册/启用在 90 秒总预算内未收敛时，pkg 仍成功，
 并为当前用户安排一个仅在下次 Aqua 登录执行的 one-shot repair LaunchAgent；
-成功后 marker 与 LaunchAgent 会自删除。无 GUI 用户的安装只安装 payload，下次登录
-后由用户在系统设置中激活。任何路径都不结束 `imklaunchagent`/`TextInputMenuAgent`。
+成功后 marker 与 LaunchAgent 会自删除。开发安装另用一个不带 `KeepAlive` 的用户级
+companion LaunchAgent：新定义在同一目录完成构造、lint 与字段校验后原子替换，只执行一次
+`open -g` 用户 App。系统包在替换 payload 前枚举所有本机普通账户的
+准确 home 记录：只允许当前 GUI 用户存在可验证、可由 postinstall 退休的 dev app/agent；
+任何其他账户存在同 ID dev 安装、home 无法安全遍历或记录不一致都会在 payload 改动前
+fail-closed。postinstall 退休当前用户的 dev 安装后再次全量审计，再发布另一个系统级 Aqua
+LaunchAgent。它在每次冷登录时只运行一次短命 guard：若后来又出现用户级 dev 痕迹则直接
+退出，否则执行 `/usr/bin/open -g /Library/Input Methods/ETInput.app`；它不设 `KeepAlive`，
+也不承载第二份 UI/IME 服务。这个登录 guard 只是对安装后异常残留的防御，不能代替包安装前
+的全账户冲突审计。postinstall 在替换这个 system agent 前保存原始字节，后续
+旧进程退出或新进程启动检查失败会恢复旧 agent（原来不存在则恢复为不存在）。这样即使
+登录后选用其他输入法，Buffer、Clipboard、Mailbox 与 Capsule 的 Carbon 快捷键仍由同一
+个 RIMES 进程提供。无 GUI 用户时仅在所有本机账户都无 dev 冲突后安装 payload 与冷登录
+bootstrap；TIS 激活留到 GUI 会话建立后处理。任何路径都不结束
+`imklaunchagent`/`TextInputMenuAgent`。
 
-输入法 bundle id 刻意保留 `com.isaac.inputmethod.RimeBuffer`，即使对外产品名已经是 RIMES；
-可选择的输入模式使用独立 id `com.isaac.inputmethod.RimeBuffer.Hans`。父输入法与
+发布回归还必须固定周边窗口的权限边界：在其他输入法下，四个全局快捷键仍可开关对应窗口，
+但不得访问外部 IMK client、切换输入源、合成粘贴/其他按键、调用 Accessibility/Post Event，
+或读取、提交、取消外部输入法组字。设置窗口只在 RIMES 输入源下打开；其中 Mailbox 与 Capsule
+必须是配置/状态页，不能嵌入实际会话或内容管理 pane。Capsule Password 的查看入口必须显示
+四个槽位，并用原生物理键事件验证四组 chord（默认 `RH / WO / CVN / QU`）；更换和恢复默认
+都先验证当前凭据，自定义原码不落盘或同步，只保留一个加盐摘要凭据，验证成功后的明文最多
+显示 15 秒。
+
+输入法 bundle id 为 `com.scholay.inputmethod.isaac`，可选择的输入模式使用独立 id
+`com.scholay.inputmethod.isaac.Hans`。必须保留 `.inputmethod.` 段：改名期间的
+`com.scholay.isaac` 虽然签名校验及注册调用成功，却无法进入 TIS 输入源列表。
+签名证书与 Bundle ID 是两个独立设置；更换证书不要求更换 Bundle ID。旧标识的
+偏好按独立迁移标记复制，现有 `~/Library/RIMES` 数据目录保持不变。父输入法与
 子 mode 不能共用同一个 TIS id，否则父项无法启用、`TISSelectInputSource` 会返回 `paramErr`。
 macOS 会把这些 id 写入受保护的 TIS 偏好，因此后续不要随意改动。
 

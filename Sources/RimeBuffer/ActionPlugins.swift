@@ -255,7 +255,7 @@ enum ActionPluginManifestLoader {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
         return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/RimeBuffer/plugins", isDirectory: true)
+            .appendingPathComponent("Library/\(RimesPaths.directoryName)/plugins", isDirectory: true)
     }
 
     static func load(from rootURL: URL = defaultRootURL,

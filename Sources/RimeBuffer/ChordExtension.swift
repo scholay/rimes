@@ -1,38 +1,12 @@
 import Foundation
 
-/// The two settlement behaviours supplied by the optional chord extension.
-/// Ordinary Rime schemas are sequential by definition and therefore do not
-/// participate in this model.
-enum ChordExtensionMode: String, CaseIterable, Codable {
-    case chord
-    case mutual
-
-    var title: String {
-        switch self {
-        case .chord: return "并击"
-        case .mutual: return "互击"
-        }
-    }
-
-    var implementationName: String {
-        switch self {
-        case .chord: return "飞耀并击"
-        case .mutual: return "飞耀互击"
-        }
-    }
-
-    var settlementPolicy: FlyChordSettlementPolicy {
-        switch self {
-        case .chord: return .sameBatchOnly
-        case .mutual: return .independentHalves
-        }
-    }
-}
-
+/// One public chord behavior: settle a batch, then allow its compatible next
+/// half to complete it. Sequential schemas never participate in this policy.
 struct ChordExtensionConfiguration: Equatable {
     let isEnabled: Bool
-    let mode: ChordExtensionMode
     let duration: TimeInterval
+
+    var settlementPolicy: FlyChordSettlementPolicy { .independentHalves }
 }
 
 enum ChordExtensionChangeSource: String {
@@ -48,8 +22,6 @@ enum ChordExtensionChangeSource: String {
 enum ChordExtensionNotificationKey {
     static let previousEnabled = "previousEnabled"
     static let currentEnabled = "currentEnabled"
-    static let previousMode = "previousMode"
-    static let currentMode = "currentMode"
     static let source = "source"
 }
 
@@ -67,7 +39,10 @@ extension Notification.Name {
 /// learning-page switch was not an input-feature switch and is deliberately
 /// ignored; mappings, duration, and learning progress remain untouched.
 final class ChordExtensionStore {
-    static let schemaID = "my_combo"
+    static var schemaID: String { ChordKeymapStore.shared.activeProfile.schemaID }
+    static func isChordSchema(_ id: String) -> Bool {
+        id == "my_combo" || id.hasPrefix("rimes_chord_")
+    }
     static let pluginID = "builtin.fly-chord-learning"
 
     static let shared = ChordExtensionStore(
@@ -79,15 +54,19 @@ final class ChordExtensionStore {
 
     private enum Key {
         static let enabled = "chord.extension.enabled.v1"
-        static let mode = "chord.extension.mode.v1"
+        // Retained only for old builds: their "mutual" value denotes today's
+        // one unified behavior. No live API reads a user-selectable mode.
+        static let legacyExtensionMode = "chord.extension.mode.v1"
+        static let unifiedSemantics = "chord.extension.unifiedSemantics.v1"
+        static let duration = "chord.duration"
+        static let durationMigration = "chord.duration.legacyConfigMigrated.v1"
 
         // Migration-only keys. Keep their spelling stable until every shipped
         // profile has crossed the v1 extension boundary.
         static let legacyEncoding = "input.configuration.encoding.v1"
         static let legacyKeyingMode = "input.configuration.keyingMode.v1"
-        static let legacyKeyingModeSemantics =
-            "input.configuration.keyingMode.semantics.v2"
         static let legacyPreferredSchema = "preferredSchema"
+        static let selectedSchema = "input.configuration.schemaID.v2"
     }
 
     private let defaults: UserDefaults
@@ -111,20 +90,31 @@ final class ChordExtensionStore {
         return defaults.bool(forKey: Key.enabled)
     }
 
-    var mode: ChordExtensionMode {
-        migrateIfNeeded()
-        return defaults.string(forKey: Key.mode)
-            .flatMap(ChordExtensionMode.init(rawValue:)) ?? .mutual
+    var settlementPolicy: FlyChordSettlementPolicy { .independentHalves }
+
+    var implementationName: String {
+        "\(ChordKeymapStore.shared.activeProfile.name) · 并击"
     }
 
     var duration: TimeInterval {
-        get { ChordSettings.duration }
-        set { ChordSettings.duration = newValue }
+        get {
+            if defaults === UserDefaults.standard { return ChordSettings.duration }
+            // Isolated stores must not read or migrate live standard defaults.
+            guard defaults.object(forKey: Key.duration) != nil else { return ChordSettings.defaultDuration }
+            return Self.clampedDuration(defaults.double(forKey: Key.duration))
+        }
+        set {
+            if defaults === UserDefaults.standard {
+                ChordSettings.duration = newValue
+            } else {
+                defaults.set(Self.clampedDuration(newValue), forKey: Key.duration)
+                defaults.set(true, forKey: Key.durationMigration)
+            }
+        }
     }
 
     var configuration: ChordExtensionConfiguration {
         ChordExtensionConfiguration(isEnabled: isEnabled,
-                                    mode: mode,
                                     duration: duration)
     }
 
@@ -137,8 +127,6 @@ final class ChordExtensionStore {
                     source: ChordExtensionChangeSource = .user) -> Bool {
         migrateIfNeeded()
         let previousEnabled = defaults.bool(forKey: Key.enabled)
-        let previousMode = mode
-
         if !enabled {
             fallbackBeforeDisable?()
         }
@@ -148,31 +136,22 @@ final class ChordExtensionStore {
         IMELog.write("chord_extension enabled=\(enabled) source=\(source.rawValue)")
         postChange(previousEnabled: previousEnabled,
                    currentEnabled: enabled,
-                   previousMode: previousMode,
-                   currentMode: previousMode,
-                   source: source)
-        return true
-    }
-
-    @discardableResult
-    func setMode(_ mode: ChordExtensionMode,
-                 source: ChordExtensionChangeSource = .user) -> Bool {
-        migrateIfNeeded()
-        let previousMode = self.mode
-        guard previousMode != mode else { return false }
-        let enabled = isEnabled
-        defaults.set(mode.rawValue, forKey: Key.mode)
-        IMELog.write("chord_extension mode=\(mode.rawValue) source=\(source.rawValue)")
-        postChange(previousEnabled: enabled,
-                   currentEnabled: enabled,
-                   previousMode: previousMode,
-                   currentMode: mode,
                    source: source)
         return true
     }
 
     func resetDuration() {
-        ChordSettings.resetToDefault()
+        if defaults === UserDefaults.standard {
+            ChordSettings.resetToDefault()
+        } else {
+            defaults.removeObject(forKey: Key.duration)
+            defaults.set(true, forKey: Key.durationMigration)
+        }
+    }
+
+    private static func clampedDuration(_ duration: TimeInterval) -> TimeInterval {
+        guard duration.isFinite else { return ChordSettings.defaultDuration }
+        return min(max(duration, ChordSettings.range.lowerBound), ChordSettings.range.upperBound)
     }
 
     private func migrateIfNeeded() {
@@ -180,31 +159,31 @@ final class ChordExtensionStore {
         bootstrapped = true
 
         let hadExplicitEnabled = defaults.object(forKey: Key.enabled) != nil
-        let hadExplicitMode = defaults.object(forKey: Key.mode) != nil
-
         let legacyMode = defaults.string(forKey: Key.legacyKeyingMode)
             .flatMap(KeyingMode.init(rawValue:))
-        let migratedMode: ChordExtensionMode
-        switch legacyMode {
-        case .chord where defaults.integer(
-            forKey: Key.legacyKeyingModeSemantics
-        ) >= 2:
-            migratedMode = .chord
-        case .chord:
-            // In the first shipped model `.chord` named the only FlyYao
-            // behaviour, which already supported independent halves. Preserve
-            // that historical meaning exactly once.
-            migratedMode = .mutual
-        case .mutual, .sequential, .none: migratedMode = .mutual
+
+        // Both the old strict "chord" and the old "mutual" preference now
+        // resolve to the same independent-halves behavior. Keep the legacy
+        // wire value compatible with downgrade, including a later old-build
+        // write, without recreating an independently selectable runtime mode.
+        if defaults.string(forKey: Key.legacyExtensionMode) != "mutual" {
+            defaults.set("mutual", forKey: Key.legacyExtensionMode)
         }
-        if !hadExplicitMode {
-            defaults.set(migratedMode.rawValue, forKey: Key.mode)
+        if defaults.integer(forKey: Key.unifiedSemantics) < 1 {
+            defaults.set(1, forKey: Key.unifiedSemantics)
         }
 
         if !hadExplicitEnabled {
-            let preferredIsChord = defaults.string(
-                forKey: Key.legacyPreferredSchema
-            ) == Self.schemaID
+            let selectedSchema = defaults.string(forKey: Key.selectedSchema)
+            let authoritativeSchema = selectedSchema.flatMap { schemaID -> String? in
+                // A replaced custom chord ID is still a valid chord-family
+                // selection; the configuration store retargets it separately.
+                Self.isChordSchema(schemaID)
+                    || InputConfigurationResolver.profile(schemaID: schemaID) != nil
+                    ? schemaID : nil
+            }
+            let preferredIsChord = defaults.string(forKey: Key.legacyPreferredSchema)
+                .map(Self.isChordSchema) == true
             let legacyConfigurationIsChord =
                 defaults.string(forKey: Key.legacyEncoding)
                     == InputEncoding.fullPinyin.rawValue
@@ -214,8 +193,12 @@ final class ChordExtensionStore {
             // feature. The former learning page was enabled by default for
             // many ordinary users, so treating that UI switch as authority
             // would accidentally opt almost every upgrade into chord input.
-            let enabled = preferredIsChord
-                || legacyConfigurationIsChord
+            // v2 is authoritative over stale v1 tuples. Otherwise bootstrap
+            // order could enable an ordinary user when the extension reads
+            // first, but disable them when the configuration projection reads
+            // first and replaces that stale tuple with "sequential".
+            let enabled = authoritativeSchema.map(Self.isChordSchema)
+                ?? (preferredIsChord || legacyConfigurationIsChord)
             defaults.set(enabled, forKey: Key.enabled)
             IMELog.write(
                 "chord_extension bootstrap enabled=\(enabled) "
@@ -227,8 +210,6 @@ final class ChordExtensionStore {
 
     private func postChange(previousEnabled: Bool,
                             currentEnabled: Bool,
-                            previousMode: ChordExtensionMode,
-                            currentMode: ChordExtensionMode,
                             source: ChordExtensionChangeSource) {
         NotificationCenter.default.post(
             name: .chordExtensionDidChange,
@@ -236,8 +217,6 @@ final class ChordExtensionStore {
             userInfo: [
                 ChordExtensionNotificationKey.previousEnabled: previousEnabled,
                 ChordExtensionNotificationKey.currentEnabled: currentEnabled,
-                ChordExtensionNotificationKey.previousMode: previousMode.rawValue,
-                ChordExtensionNotificationKey.currentMode: currentMode.rawValue,
                 ChordExtensionNotificationKey.source: source.rawValue,
             ]
         )

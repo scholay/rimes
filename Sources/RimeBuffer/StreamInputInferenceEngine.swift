@@ -140,8 +140,6 @@ private final class StreamInputInferenceAttemptGate {
 
 /// Runs modules in priority order. A module may decline an input with an
 /// ordinary failure; the next module then gets the same immutable request.
-/// Local Rime is first and the configured AI connector is the compatibility
-/// fallback for typos, Latin fragments, long input, or unavailable data.
 final class StreamInputModularInferenceEngine: StreamInputInferenceEngine {
     private let modules: [any StreamInputInferenceEngine]
 
@@ -256,6 +254,14 @@ final class StreamInputModularInferenceEngine: StreamInputInferenceEngine {
 /// Fast, fully local sentence decoder backed by a private librime session.
 /// The hidden schema enables Octagram when its model is bundled. Queries are
 /// bounded and serialized so they cannot pile up behind the bridge mutex.
+/// On-device decoding over a hidden `stream_input_local` schema ranked by the
+/// official simplified Octagram model.
+///
+/// Consciousness-stream guessing no longer runs through this: that path is the
+/// connector's alone. It is kept because ordinary typing and its candidate
+/// window are what this model is for, which is where it belongs next — the
+/// schema, grammar, and audited model ship with the app and its decode path is
+/// already covered by `smoke`. Do not delete it as dead code.
 final class RimeOctagramStreamInputEngine: StreamInputInferenceEngine {
     static let shared = RimeOctagramStreamInputEngine()
 
@@ -354,11 +360,12 @@ final class RimeOctagramStreamInputEngine: StreamInputInferenceEngine {
         _ request: StreamInputInferenceRequest
     ) -> Result<[AITextProviderBlock], AITextProviderError> {
         guard request.sourceText.utf8.count <= Self.maximumInputBytes,
-              let clauses = Self.rimeClauses(
+              let split = Self.clauseSplit(
                 rawInput: request.sourceText,
                 automaticSyllableSpaceOffsets:
                     request.automaticSyllableSpaceOffsets
               ),
+              case let clauses = split.clauses,
               clauses.count <= Self.maximumClauseCount,
               ensureSession() else {
             return .failure(.invalidResult)
@@ -390,6 +397,7 @@ final class RimeOctagramStreamInputEngine: StreamInputInferenceEngine {
         let excluded = Set(request.excludedGuesses)
         let combined = Self.combine(
             candidatesByClause,
+            separators: split.separators,
             maximumCount: limit
         ).filter { !excluded.contains($0) }
         guard !combined.isEmpty else { return .failure(.invalidResult) }
@@ -404,21 +412,45 @@ final class RimeOctagramStreamInputEngine: StreamInputInferenceEngine {
         rawInput: String,
         automaticSyllableSpaceOffsets: Set<Int>
     ) -> [String]? {
+        clauseSplit(rawInput: rawInput,
+                    automaticSyllableSpaceOffsets: automaticSyllableSpaceOffsets)?
+            .clauses
+    }
+
+    /// Clauses plus the separator that closed each one. A Space contributes no
+    /// text of its own; an explicit comma is the only boundary that writes a
+    /// character into the result.
+    static func clauseSplit(
+        rawInput: String,
+        automaticSyllableSpaceOffsets: Set<Int>
+    ) -> (clauses: [String], separators: [String])? {
         let bytes = Array(rawInput.utf8)
         guard !bytes.isEmpty,
               bytes.allSatisfy({ byte in
-                (0x61...0x7A).contains(byte) || byte == 0x20
+                (0x61...0x7A).contains(byte) || byte == 0x20 || byte == 0x2C
               }) else { return nil }
         var clauses: [String] = []
+        // `separators[i]` joins clause i to clause i + 1.
+        var separators: [String] = []
         var current: [UInt8] = []
-        func flushCurrent() {
+        var pendingSeparator: String?
+        @discardableResult
+        func flushCurrent() -> Bool {
             while current.last == 0x27 { current.removeLast() }
-            guard !current.isEmpty else { return }
+            guard !current.isEmpty else { return false }
+            if !clauses.isEmpty { separators.append(pendingSeparator ?? "") }
+            pendingSeparator = nil
             clauses.append(String(decoding: current, as: UTF8.self))
             current.removeAll(keepingCapacity: true)
+            return true
         }
         for (offset, byte) in bytes.enumerated() {
-            if byte == 0x20 {
+            if byte == 0x2C {
+                flushCurrent()
+                // A comma survives even when it follows another boundary, so
+                // the punctuation the user asked for is never dropped.
+                pendingSeparator = clauses.isEmpty ? nil : "，"
+            } else if byte == 0x20 {
                 if automaticSyllableSpaceOffsets.contains(offset) {
                     if !current.isEmpty, current.last != 0x27 {
                         current.append(0x27)
@@ -431,11 +463,12 @@ final class RimeOctagramStreamInputEngine: StreamInputInferenceEngine {
             }
         }
         flushCurrent()
-        return clauses.isEmpty ? nil : clauses
+        return clauses.isEmpty ? nil : (clauses, separators)
     }
 
     static func combine(
         _ candidatesByClause: [[String]],
+        separators: [String] = [],
         maximumCount: Int
     ) -> [String] {
         struct Path {
@@ -445,14 +478,19 @@ final class RimeOctagramStreamInputEngine: StreamInputInferenceEngine {
         }
         let limit = min(max(maximumCount, 1), 5)
         var paths = [Path(text: "", rank: 0, order: 0)]
-        for candidates in candidatesByClause {
+        for (clauseIndex, candidates) in candidatesByClause.enumerated() {
+            let separator = clauseIndex > 0 && clauseIndex - 1 < separators.count
+                ? separators[clauseIndex - 1]
+                : ""
             var next: [Path] = []
             for path in paths {
                 for (candidateRank, candidate) in candidates.enumerated() {
+                    // A user pause is a segmentation boundary, not punctuation:
+                    // its separator is empty and the host segmenter chunks the
+                    // bare concatenation for delivery. Only a comma the user
+                    // typed contributes a character of its own.
                     next.append(Path(
-                        text: path.text.isEmpty
-                            ? candidate
-                            : path.text + "，" + candidate,
+                        text: path.text + separator + candidate,
                         rank: path.rank + candidateRank,
                         order: next.count
                     ))

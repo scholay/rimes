@@ -11,16 +11,21 @@ final class FlyChordLearningSettingsViewController: NSViewController {
     private let subpageID: String
     private let schemaResult: Result<FlyChordSchema, Error>
     private let progressStoreResult: Result<FlyChordProgressStore, Error>
+    private var keymapEditor: ChordKeymapEditorViewController?
+
+    func confirmCanLeave() -> Bool { keymapEditor?.confirmCanLeave() ?? true }
 
     init(subpageID: String) {
         self.subpageID = subpageID
         do {
-            schemaResult = .success(try FlyChordSchemaParser.loadDefault())
+            schemaResult = .success(try FlyChordSchemaParser.loadActive())
         } catch {
             schemaResult = .failure(error)
         }
         do {
-            progressStoreResult = .success(try FlyChordProgressStore())
+            progressStoreResult = .success(try FlyChordProgressStore(
+                schemaID: ChordKeymapStore.shared.activeProfile.schemaID
+            ))
         } catch {
             progressStoreResult = .failure(error)
         }
@@ -30,6 +35,13 @@ final class FlyChordLearningSettingsViewController: NSViewController {
     required init?(coder: NSCoder) { nil }
 
     override func loadView() {
+        if subpageID == "keymap" {
+            let editor = ChordKeymapEditorViewController()
+            keymapEditor = editor
+            addChild(editor)
+            view = editor.view
+            return
+        }
         if subpageID == "settings" {
             view = FlyChordConfigurationPageView()
             return
@@ -58,7 +70,6 @@ final class FlyChordLearningSettingsViewController: NSViewController {
         default: message = "并击学习数据暂不可用"
         }
         return FlyChordPageStyle.column([
-            FlyChordPageStyle.title("并击"),
             FlyChordPageStyle.caption(message, color: .systemRed),
             FlyChordPageStyle.caption("为保护已有进度，损坏的数据文件不会被自动覆盖。"),
         ])
@@ -73,13 +84,6 @@ private enum FlyChordPageStyle {
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 0, left: 24, bottom: 22, right: 24)
         return stack
-    }
-
-    static func title(_ value: String) -> NSTextField {
-        let label = NSTextField(labelWithString: value)
-        label.font = .systemFont(ofSize: 12, weight: .semibold)
-        label.textColor = RimeUI.textSecondary
-        return label
     }
 
     static func section(_ value: String) -> NSTextField {
@@ -141,242 +145,107 @@ private final class FlyChordCardStackView: NSStackView {
     }
 }
 
-private final class FlyChordModeCardView: NSView {
-    private let choice: RimeFixedAccentChoiceButton
-    private var pointerTrackingArea: NSTrackingArea?
-    private var pointerInside = false
-
-    init(choice: RimeFixedAccentChoiceButton,
-         title: String,
-         detail: String,
-         symbolName: String) {
-        self.choice = choice
-        super.init(frame: .zero)
-        choice.managesPointingHandCursor = false
-        choice.showsTitle = false
-        choice.removeFromSuperview()
-
-        let icon = NSImageView()
-        icon.image = NSImage(
-            systemSymbolName: symbolName,
-            accessibilityDescription: title
-        )?.withSymbolConfiguration(.init(pointSize: 18, weight: .medium))
-        icon.imageScaling = .scaleProportionallyDown
-        icon.contentTintColor = RimeUI.textSecondary
-        icon.setAccessibilityElement(false)
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.widthAnchor.constraint(equalToConstant: 24).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 24).isActive = true
-
-        let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
-        titleLabel.textColor = RimeUI.textPrimary
-        let detailLabel = NSTextField(labelWithString: detail)
-        detailLabel.font = .systemFont(ofSize: 9)
-        detailLabel.textColor = RimeUI.textMuted
-        detailLabel.lineBreakMode = .byTruncatingTail
-        detailLabel.toolTip = detail
-        let copy = NSStackView(views: [titleLabel, detailLabel])
-        copy.orientation = .vertical
-        copy.alignment = .leading
-        copy.spacing = 3
-        copy.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        let row = NSStackView(views: [icon, copy, flexibleSpacer(), choice])
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 9
-        row.edgeInsets = NSEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
-        row.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(row)
-        translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(equalToConstant: 68).isActive = true
-        NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(equalTo: leadingAnchor),
-            row.trailingAnchor.constraint(equalTo: trailingAnchor),
-            row.topAnchor.constraint(equalTo: topAnchor),
-            row.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
-        choice.onVisualStateChange = { [weak self] in self?.needsDisplay = true }
-        setAccessibilityElement(false)
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    func choiceEnabledDidChange() {
-        RimePointingHandCursorRules.enabledDidChange(
-            for: self,
-            pointerInside: pointerInside,
-            enabled: choice.isEnabled
-        )
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        RimePointingHandCursorRules.updateTrackingArea(
-            &pointerTrackingArea,
-            for: self
-        )
-    }
-
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        RimePointingHandCursorRules.resetCursorRect(
-            for: self,
-            enabled: choice.isEnabled
-        )
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        super.mouseEntered(with: event)
-        pointerInside = true
-        RimePointingHandCursorRules.mouseEntered(enabled: choice.isEnabled)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        pointerInside = false
-        RimePointingHandCursorRules.mouseExited()
-        super.mouseExited(with: event)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        guard choice.isEnabled else { return }
-        choice.performClick(self)
-        needsDisplay = true
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0, frame.contains(point) else { return nil }
-        let localPoint = convert(point, from: superview)
-        let choiceRect = convert(choice.bounds, from: choice)
-        return choiceRect.contains(localPoint) ? super.hitTest(point) : self
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        let path = NSBezierPath(
-            roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
-            xRadius: 8,
-            yRadius: 8
-        )
-        (choice.state == .on
-            ? RimeUI.surface2.blended(withFraction: 0.10, of: RimeUI.accentGreen)
-                ?? RimeUI.surface2
-            : RimeUI.surface2).setFill()
-        path.fill()
-        (choice.state == .on
-            ? RimeUI.accentTextColor.withAlphaComponent(0.60)
-            : RimeUI.border).setStroke()
-        path.lineWidth = choice.state == .on ? 1.2 : 1
-        path.stroke()
-    }
+struct FlyChordConfigurationState {
+    let isEnabled: Bool
+    let implementationName: String
+    let isCurrent: Bool
+    let duration: TimeInterval
 }
 
-private final class FlyChordConfigurationPageView: NSView, NSTextFieldDelegate {
-    private var modeButtons: [ChordExtensionMode: RimeFixedAccentChoiceButton] = [:]
-    private var modeCards: [ChordExtensionMode: FlyChordModeCardView] = [:]
+/// A single product behavior with injectable state/actions for isolated UI QA.
+/// This page has no selector for historical same-batch-only behavior.
+final class FlyChordConfigurationPageView: NSView, NSTextFieldDelegate {
+    private let stateProvider: () -> FlyChordConfigurationState
+    private let onDuration: (Double) -> Void
+    private let onReset: () -> Void
+    private let onMakeCurrent: () -> Bool
+    private let implementationLabel = NSTextField(labelWithString: "")
     private let availabilityLabel = NSTextField(labelWithString: "")
     private let availabilityDetail = NSTextField(wrappingLabelWithString: "")
     private let makeCurrentButton = RimePointingHandButton(
-        title: "设为当前输入方案",
-        target: nil,
-        action: nil
+        title: "设为当前输入方案", target: nil, action: nil
     )
     private let durationField = NSTextField(string: "")
     private let durationStepper = NSStepper()
-    private var extensionObserver: NSObjectProtocol?
-    private var inputConfigurationObserver: NSObjectProtocol?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        build()
-        observeChanges()
-        refresh()
-    }
+    private var observations: [NSObjectProtocol] = []
 
     convenience init() {
-        self.init(frame: .zero)
+        self.init(
+            stateProvider: {
+                let store = ChordExtensionStore.shared
+                return FlyChordConfigurationState(
+                    isEnabled: store.isEnabled,
+                    implementationName: store.implementationName,
+                    isCurrent: InputConfigurationStore.shared.selectedSchemaID
+                        == ChordExtensionStore.schemaID,
+                    duration: store.duration
+                )
+            },
+            onDuration: { ChordExtensionStore.shared.duration = $0 },
+            onReset: { ChordExtensionStore.shared.resetDuration() },
+            onMakeCurrent: {
+                guard ChordExtensionStore.shared.isEnabled,
+                      InputConfigurationStore.shared.select(schemaID: ChordExtensionStore.schemaID)
+                else { return false }
+                RIMESController.applyStoredInputConfiguration()
+                return true
+            }
+        )
+    }
+
+    init(stateProvider: @escaping () -> FlyChordConfigurationState,
+         onDuration: @escaping (Double) -> Void,
+         onReset: @escaping () -> Void,
+         onMakeCurrent: @escaping () -> Bool,
+         observesChanges: Bool = true) {
+        self.stateProvider = stateProvider
+        self.onDuration = onDuration
+        self.onReset = onReset
+        self.onMakeCurrent = onMakeCurrent
+        super.init(frame: .zero)
+        build()
+        if observesChanges { observeChanges() }
+        refresh()
     }
 
     required init?(coder: NSCoder) { nil }
 
     deinit {
-        if let extensionObserver {
-            NotificationCenter.default.removeObserver(extensionObserver)
-        }
-        if let inputConfigurationObserver {
-            NotificationCenter.default.removeObserver(inputConfigurationObserver)
-        }
+        observations.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     private func build() {
-        let cards = ChordExtensionMode.allCases.enumerated().map { index, mode -> NSView in
-            let button = RimeFixedAccentChoiceButton.radio(
-                title: mode.title,
-                target: self,
-                action: #selector(modeSelected(_:))
-            )
-            button.tag = index
-            button.translatesAutoresizingMaskIntoConstraints = false
-            modeButtons[mode] = button
-            let detail: String
-            let symbol: String
-            switch mode {
-            case .chord:
-                detail = "只结算同一时间窗内的按键"
-                symbol = "rectangle.3.group"
-            case .mutual:
-                detail = "允许左右手相邻击跨批配对"
-                symbol = "arrow.left.arrow.right"
-            }
-            let card = FlyChordModeCardView(
-                choice: button,
-                title: mode.implementationName,
-                detail: detail,
-                symbolName: symbol
-            )
-            modeCards[mode] = card
-            return card
-        }
-        let modeGrid = NSStackView(views: cards)
-        modeGrid.orientation = .horizontal
-        modeGrid.alignment = .centerY
-        modeGrid.distribution = .fillEqually
-        modeGrid.spacing = 8
-        modeGrid.translatesAutoresizingMaskIntoConstraints = false
-        modeGrid.widthAnchor.constraint(equalToConstant: 650).isActive = true
-
         availabilityLabel.font = .systemFont(ofSize: 11, weight: .semibold)
         availabilityLabel.textColor = RimeUI.textPrimary
         availabilityLabel.setContentHuggingPriority(.required, for: .horizontal)
         availabilityDetail.font = .systemFont(ofSize: 10)
         availabilityDetail.textColor = RimeUI.textSecondary
+        availabilityDetail.preferredMaxLayoutWidth = 425
         makeCurrentButton.target = self
         makeCurrentButton.action = #selector(makeCurrent)
         makeCurrentButton.controlSize = .small
+        makeCurrentButton.setAccessibilityIdentifier("chord-settings.make-current")
         makeCurrentButton.setContentHuggingPriority(.required, for: .horizontal)
-        let availabilityCopy = NSStackView(
-            views: [availabilityLabel, availabilityDetail]
-        )
+        let availabilityCopy = NSStackView(views: [availabilityLabel, availabilityDetail])
         availabilityCopy.orientation = .vertical
         availabilityCopy.alignment = .leading
         availabilityCopy.spacing = 4
-        availabilityCopy.setContentCompressionResistancePriority(
-            .defaultLow,
-            for: .horizontal
-        )
+        availabilityCopy.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let availabilityRow = NSStackView(
             views: [availabilityCopy, flexibleSpacer(), makeCurrentButton]
         )
         availabilityRow.orientation = .horizontal
+        availabilityRow.distribution = .fill
         availabilityRow.alignment = .centerY
         availabilityRow.spacing = 8
-        let availabilityCard = FlyChordPageStyle.card([availabilityRow])
+
+        implementationLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        implementationLabel.textColor = RimeUI.textPrimary
+        implementationLabel.setAccessibilityIdentifier("chord-settings.implementation")
+        implementationLabel.toolTip =
+            "同一批按键可一起结算，也支持先左后右分开敲。至少一侧为多键时，优先按合并后的整组键位映射为音节。"
+            + "单独字母保留原字符，两次单键不会跨批合并。“按映射类型”方案的合并项须为完整音节。"
+            + "停顿本身不会取消左右配对；分隔符、编辑、焦点或方案变化会结束配对。"
 
         let formatter = NumberFormatter()
         formatter.minimumFractionDigits = 2
@@ -390,6 +259,8 @@ private final class FlyChordConfigurationPageView: NSView, NSTextFieldDelegate {
         durationField.target = self
         durationField.action = #selector(durationFieldChanged)
         durationField.delegate = self
+        durationField.setAccessibilityLabel("并击组键间隔，秒")
+        durationField.setAccessibilityIdentifier("chord-settings.duration")
         durationField.translatesAutoresizingMaskIntoConstraints = false
         durationField.widthAnchor.constraint(equalToConstant: 64).isActive = true
         durationStepper.minValue = ChordSettings.range.lowerBound
@@ -398,80 +269,73 @@ private final class FlyChordConfigurationPageView: NSView, NSTextFieldDelegate {
         durationStepper.valueWraps = false
         durationStepper.target = self
         durationStepper.action = #selector(durationStepperChanged)
+        durationStepper.setAccessibilityLabel("调整并击组键间隔")
         let unit = NSTextField(labelWithString: "秒")
         unit.font = .systemFont(ofSize: 10)
         unit.textColor = RimeUI.textMuted
-        let reset = RimePointingHandButton(
-            title: "恢复默认",
-            target: self,
-            action: #selector(resetDuration)
-        )
+        let reset = RimePointingHandButton(title: "恢复默认", target: self,
+                                          action: #selector(resetDuration))
         reset.controlSize = .small
+        reset.setAccessibilityIdentifier("chord-settings.reset-duration")
         let durationRow = NSStackView(
             views: [durationField, durationStepper, unit, reset, flexibleSpacer()]
         )
         durationRow.orientation = .horizontal
+        durationRow.distribution = .fill
         durationRow.alignment = .centerY
         durationRow.spacing = 8
 
+        let sectionDuration = FlyChordPageStyle.section("组键间隔")
+        sectionDuration.toolTip =
+            "此间隔决定哪些按键属于同一批，不是左右配对的超时。修改后立即作用于普通输入与意识流输入。"
         let column = FlyChordPageStyle.column([
-            FlyChordPageStyle.title("并击设置"),
-            FlyChordPageStyle.caption(
-                "扩展启用后提供飞耀输入方案；启用本身不会打断当前输入方案。"
-            ),
-            availabilityCard,
-            FlyChordPageStyle.section("飞耀模式"),
-            modeGrid,
-            FlyChordPageStyle.section("组键间隔"),
-            durationRow,
-            FlyChordPageStyle.caption(
-                "并击只结算当前时间窗；互击还允许相邻的左手声母与右手韵母跨击配对。修改后立即作用于普通输入与意识流输入。"
-            ),
+            configurationCard([availabilityRow]),
+            configurationCard([implementationLabel]),
+            configurationCard([sectionDuration, durationRow]),
         ])
         addPinned(column)
     }
 
-    private func observeChanges() {
-        extensionObserver = NotificationCenter.default.addObserver(
-            forName: .chordExtensionDidChange,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.refresh()
+    private func configurationCard(_ views: [NSView]) -> NSStackView {
+        let card = FlyChordPageStyle.card(views)
+        card.alignment = .leading
+        for view in views {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            view.widthAnchor.constraint(equalTo: card.widthAnchor, constant: -24).isActive = true
+            if let label = view as? NSTextField {
+                label.alignment = .left
+                label.preferredMaxLayoutWidth = 626
+            }
         }
-        inputConfigurationObserver = NotificationCenter.default.addObserver(
-            forName: .inputConfigurationDidChange,
-            object: InputConfigurationStore.shared,
-            queue: .main
-        ) { [weak self] _ in
-            self?.refresh()
+        return card
+    }
+
+    private func observeChanges() {
+        for name in [Notification.Name.chordExtensionDidChange, .inputConfigurationDidChange,
+                     .chordKeymapDidChange, .chordDurationDidChange] {
+            observations.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in self?.refresh() })
         }
     }
 
     private func refresh() {
-        let store = ChordExtensionStore.shared
-        let current = InputConfigurationStore.shared.selectedSchemaID
-            == ChordExtensionStore.schemaID
-        for mode in ChordExtensionMode.allCases {
-            modeButtons[mode]?.state = store.mode == mode ? .on : .off
-            modeButtons[mode]?.isEnabled = store.isEnabled
-            modeCards[mode]?.choiceEnabledDidChange()
-        }
-        durationField.stringValue = String(format: "%.2f", store.duration)
-        durationField.isEnabled = store.isEnabled
-        durationStepper.doubleValue = store.duration
-        durationStepper.isEnabled = store.isEnabled
-
-        if current {
+        let state = stateProvider()
+        implementationLabel.stringValue = "当前键位方案：\(state.implementationName)"
+        durationField.stringValue = String(format: "%.2f", state.duration)
+        durationField.isEnabled = state.isEnabled
+        durationStepper.doubleValue = state.duration
+        durationStepper.isEnabled = state.isEnabled
+        if state.isCurrent && state.isEnabled {
             availabilityLabel.stringValue = "正在使用"
             availabilityLabel.textColor = RimeUI.accentTextColor
-            availabilityDetail.stringValue = "飞耀方案正作为当前输入方案；普通输入与意识流输入共享此模式。"
+            availabilityDetail.stringValue = "普通输入与意识流输入使用同一套并击规则和已应用的键位方案。"
             makeCurrentButton.title = "当前输入方案"
             makeCurrentButton.isEnabled = false
-        } else if store.isEnabled {
+        } else if state.isEnabled {
             availabilityLabel.stringValue = "可用"
             availabilityLabel.textColor = RimeUI.accentTextColor
-            availabilityDetail.stringValue = "扩展已启用，但不会自动替换你当前使用的输入方案。"
+            availabilityDetail.stringValue = "扩展已启用。需要在普通输入中使用时，可设为当前输入方案。"
             makeCurrentButton.title = "设为当前输入方案"
             makeCurrentButton.isEnabled = true
         } else {
@@ -483,42 +347,25 @@ private final class FlyChordConfigurationPageView: NSView, NSTextFieldDelegate {
         }
     }
 
-    @objc private func modeSelected(_ sender: RimeFixedAccentChoiceButton) {
-        guard ChordExtensionMode.allCases.indices.contains(sender.tag),
-              ChordExtensionStore.shared.isEnabled else { return }
-        ChordExtensionStore.shared.setMode(ChordExtensionMode.allCases[sender.tag])
-        refresh()
-    }
-
     @objc private func makeCurrent() {
-        guard ChordExtensionStore.shared.isEnabled,
-              InputConfigurationStore.shared.select(
-                schemaID: ChordExtensionStore.schemaID
-              ) else {
+        guard stateProvider().isEnabled, onMakeCurrent() else {
             NSSound.beep()
             refresh()
             return
         }
-        RimeBufferController.applyStoredInputConfiguration()
         refresh()
     }
 
-    @objc private func durationFieldChanged() {
-        applyDuration(durationField.doubleValue)
-    }
-
-    @objc private func durationStepperChanged() {
-        applyDuration(durationStepper.doubleValue)
-    }
-
+    @objc private func durationFieldChanged() { applyDuration(durationField.doubleValue) }
+    @objc private func durationStepperChanged() { applyDuration(durationStepper.doubleValue) }
     @objc private func resetDuration() {
         window?.makeFirstResponder(nil)
-        ChordExtensionStore.shared.resetDuration()
+        onReset()
         refresh()
     }
 
     private func applyDuration(_ value: Double) {
-        ChordExtensionStore.shared.duration = value
+        onDuration(value)
         refresh()
     }
 
@@ -532,12 +379,7 @@ private final class FlyChordLessonsPageView: NSView {
     init(curriculum: FlyChordCurriculum, progressStore: FlyChordProgressStore) {
         super.init(frame: .zero)
         let snapshot = progressStore.snapshot
-        var rows: [NSView] = [
-            FlyChordPageStyle.title("课程"),
-            FlyChordPageStyle.caption(
-                "课程从当前飞耀方案的精确映射自动生成；方案更新后无需维护第二份键位表。"
-            ),
-        ]
+        var rows: [NSView] = []
         for course in curriculum.courses {
             let progress = snapshot.progress(for: course)
             let name = NSTextField(labelWithString: course.title)
@@ -553,9 +395,6 @@ private final class FlyChordLessonsPageView: NSView {
             )
             rows.append(FlyChordPageStyle.card([header, detail]))
         }
-        rows.append(FlyChordPageStyle.caption(
-            "练习进度只保存映射的匿名 ID、正确次数和时间戳，不保存按键文本或输入内容。"
-        ))
         let column = FlyChordPageStyle.column(rows)
         addPinned(column)
     }
@@ -592,7 +431,6 @@ private final class FlyChordProgressPageView: NSView {
         let total = all.reduce(0) { $0 + $1.totalItems }
         let attempted = all.reduce(0) { $0 + $1.attemptedItems }
         let mastered = all.reduce(0) { $0 + $1.masteredItems }
-        rows.addArrangedSubview(FlyChordPageStyle.title("学习进度"))
         rows.addArrangedSubview(FlyChordPageStyle.caption(
             "全部 \(total) 项 · 已练 \(attempted) · 已掌握 \(mastered)"
         ))
@@ -700,18 +538,17 @@ private final class FlyChordPracticePageView: NSView {
             self?.captureButton.title = active ? "停止练习" : "开始练习"
         }
 
+        controls.toolTip = "选择课程后点击“开始练习”。只有下方练习区域获得焦点时才会捕获按键；离开页面即停止。"
         let targetCard = FlyChordPageStyle.card([
             targetLabel,
             chordHint,
             captureView,
             statusLabel,
         ])
+        targetCard.toolTip = "目标显示为方案输出音节。按错后才显示正确键位，连续正确 3 次会标记为已掌握。"
         let column = FlyChordPageStyle.column([
-            FlyChordPageStyle.title("专项练习"),
-            FlyChordPageStyle.caption("选择课程后点击“开始练习”。只有下方练习区域获得焦点时才会捕获按键；离开页面即停止。"),
             controls,
             targetCard,
-            FlyChordPageStyle.caption("目标显示为方案输出音节。按错后才显示正确键位，连续正确 3 次会标记为已掌握。"),
         ])
         addPinned(column)
     }

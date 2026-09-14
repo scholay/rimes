@@ -15,6 +15,9 @@ struct RimeContextModel {
     var preedit = ""
     var input = ""
     var cursorPos = 0
+    /// Caret within `input`. `cursorPos` indexes the formatted preedit, which
+    /// differs from raw input whenever preedit_format rewrites codes.
+    var inputCaretPos: Int?
     var selStart = 0
     var selEnd = 0
     var pageSize = 0

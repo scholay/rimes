@@ -1,14 +1,13 @@
 #!/bin/bash
-# Builds RIMES as a SELF-CONTAINED IMK input method. ETInput.app remains the
-# frozen internal compatibility path used by existing installs and updates:
-# librime + the Rime shared data are packaged inside, so no separate Squirrel
-# install is needed. Installs into the per-user Input Methods folder and
+# Builds RIMES as a SELF-CONTAINED IMK input method: librime + the Rime shared
+# data are packaged inside, so no separate Squirrel install is needed. Installs into the per-user Input Methods folder and
 # registers + enables + selects it so it shows in System Settings / the input menu.
 #
 # IMPORTANT invariants (learned the hard way — see RELEASE.md):
-#   * The .app directory remains ETInput.app. The RIMES product name lives in
-#     CFBundleName/CFBundleDisplayName + InfoPlist.strings. Renaming the path
-#     would strand old updaters and duplicate the same TIS identity.
+#   * Bundle, executable, identifier and display name are all RIMES. Older
+#     installs under ETInput.app / RimeBuffer.app advertise the same input
+#     source, so they are deregistered and removed here rather than left to
+#     compete for the same TIS identity.
 #   * There must be EXACTLY ONE bundle with this id on disk. A stray copy (e.g.
 #     left in the repo working tree) registers the same input-source id at a
 #     second path and poisons TIS/LaunchServices → blank/greyed picker row. So
@@ -21,30 +20,57 @@ cd "$(dirname "$0")"
 source scripts/lib/rime-user-state.sh
 
 CONFIG="${1:-release}"
-APP="ETInput.app"                   # Frozen compatibility path; display name is RIMES.
-EXE="ETInput"
+APP="RIMES.app"                     # One name everywhere: bundle, executable, display.
+EXE="RIMES"
+LEGACY_APPS=("ETInput.app" "RimeBuffer.app")
 STAGE=".build/stage"                # assemble here, not in the repo root
 APP_PATH="$STAGE/$APP"
 DEST="$HOME/Library/Input Methods/$APP"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+COMPANION_AGENT_HELPER="scripts/pkg/scripts/rimes-companion-launch-agent.sh"
+SYSTEM_COMPANION_AGENT="/Library/LaunchAgents/com.scholay.rimes.companion-start.plist"
+USER_COMPANION_AGENT="$HOME/Library/LaunchAgents/com.scholay.rimes.dev-companion-start.plist"
+COMPANION_AGENT_BACKUP=""
+COMPANION_AGENT_HAD_PREVIOUS=0
+COMPANION_AGENT_CHANGED=0
+
+if [ ! -r "$COMPANION_AGENT_HELPER" ] \
+    || ! /bin/bash -n "$COMPANION_AGENT_HELPER"; then
+    echo "!! companion LaunchAgent helper is missing or invalid"
+    exit 1
+fi
 
 # A system-wide release copy and this per-user dev copy would advertise the
 # same bundle/input-source IDs. Stop before creating that poisoned duplicate;
 # remove the pkg-installed copy explicitly before returning to dev installs.
-for system_copy in "/Library/Input Methods/ETInput.app" \
+for system_copy in "/Library/Input Methods/RIMES.app" \
+                   "/Library/Input Methods/ETInput.app" \
                    "/Library/Input Methods/RimeBuffer.app" \
                    "/Library/Input Methods/Enter输入法.app" \
                    "/Library/Input Methods/恩特输入法.app"; do
     [ -e "$system_copy" ] || continue
     system_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$system_copy/Contents/Info.plist" 2>/dev/null || true)"
     case "$system_id" in
-        com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
+        com.scholay.inputmethod.isaac|com.scholay.isaac|com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
             echo "!! found system-wide duplicate: $system_copy"
             echo "   remove it first: sudo rm -rf '$system_copy'"
             exit 1
             ;;
     esac
 done
+if [ -e "$SYSTEM_COMPANION_AGENT" ] || [ -L "$SYSTEM_COMPANION_AGENT" ]; then
+    echo "!! found the release-package companion LaunchAgent: $SYSTEM_COMPANION_AGENT"
+    echo "   remove the system package and its agent before returning to a per-user dev install"
+    echo "   sudo /bin/bash '$COMPANION_AGENT_HELPER' remove-system"
+    exit 1
+fi
+
+# IMK discovery requires an inputmethod segment even when code signing succeeds.
+BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' Info.plist)"
+case "$BUNDLE_ID" in
+    *.inputmethod.*) ;;
+    *) echo "!! input-method bundle identifier must contain .inputmethod.: $BUNDLE_ID"; exit 1 ;;
+esac
 
 # Fetch the bundled librime runtime (cached in Vendor/, not committed to git).
 ./scripts/fetch-rime.sh
@@ -57,10 +83,25 @@ done
 # 并击 schema is added only when its extension is enabled. Everything else you
 # have is preserved. With no ~/Library/Rime, the app deploys from the bundled
 # schemas instead. RB_KEEP_USERDB=1 skips reseeding.
-RB_USER="$HOME/Library/RimeBuffer"
+RB_USER="$HOME/Library/RIMES"
+RB_LEGACY_USER="$HOME/Library/RimeBuffer"
 if [ -L "$RB_USER" ]; then
-    echo "!! refusing to update symlinked RimeBuffer user directory: $RB_USER"
+    echo "!! refusing to update symlinked RIMES user directory: $RB_USER"
     exit 1
+fi
+# Data from before the RIMES rename moves the way the app's first launch moves
+# it (RimesDataMigration): copied once into an absent or empty directory,
+# marked, original left in place. It has to happen here, because seeding below
+# creates $RB_USER and the app then refuses to merge into an occupied one.
+RB_MIGRATION_MARKER="$RB_USER/.rimes-migrated-from-rimebuffer"
+if [ -d "$RB_LEGACY_USER" ] && [ ! -L "$RB_LEGACY_USER" ] && [ ! -e "$RB_MIGRATION_MARKER" ]; then
+    if [ ! -e "$RB_USER" ] || [ -z "$(ls -A "$RB_USER")" ]; then
+        echo "==> copying pre-rename data $RB_LEGACY_USER -> $RB_USER (original left in place)"
+        /usr/bin/ditto "$RB_LEGACY_USER" "$RB_USER"
+        : > "$RB_MIGRATION_MARKER"
+    else
+        echo "!! $RB_USER already holds data; pre-rename data stays in $RB_LEGACY_USER"
+    fi
 fi
 if [ "${RB_KEEP_USERDB:-0}" != "1" ]; then
     if [ -d "$HOME/Library/Rime" ]; then
@@ -153,6 +194,12 @@ rm -rf "$APP_PATH"
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources" \
          "$APP_PATH/Contents/Frameworks" "$APP_PATH/Contents/SharedSupport"
 cp "$BIN" "$APP_PATH/Contents/MacOS/$EXE"
+# Ship the music sample bank and dependency privacy manifests inside the signed
+# Resources directory; the installed instrument resolves its asset here.
+for resource_bundle in ".build/$CONFIG/"*.bundle; do
+    [ -d "$resource_bundle" ] || continue
+    cp -R "$resource_bundle" "$APP_PATH/Contents/Resources/"
+done
 cp Info.plist "$APP_PATH/Contents/Info.plist"
 
 # Bump CFBundleVersion on the installed copy each build so LaunchServices/TIS
@@ -192,8 +239,30 @@ cp Resources/menubar-template.png "$APP_PATH/Contents/Resources/" 2>/dev/null ||
 cp THIRD_PARTY_NOTICES.md "$APP_PATH/Contents/Resources/"
 
 # Ad-hoc sign. --deep now that we have nested dylibs (librime + plugins).
-echo "==> ad-hoc signing (deep)"
-codesign --force --deep --sign - "$APP_PATH"
+# Signing identity decides whether permissions survive a rebuild, which is
+# not obvious from the outside. An ad-hoc signature's designated requirement
+# is a cdhash — a new value every build — so macOS stops matching the recorded
+# Accessibility grant while System Settings still shows the checkbox ticked.
+# A real identity produces a requirement naming the certificate instead, with
+# no cdhash in it, and the grant persists across rebuilds.
+SIGN_IDENTITY="${RIMES_SIGN_IDENTITY:-}"
+if [ -z "$SIGN_IDENTITY" ]; then
+    SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+        | /usr/bin/awk 'NR == 1 && $2 ~ /^[0-9A-F]{40}$/ { print $2 }')"
+fi
+if [ -n "$SIGN_IDENTITY" ]; then
+    echo "==> signing (deep) with $SIGN_IDENTITY"
+    if ! codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_PATH"; then
+        echo "!! signing with $SIGN_IDENTITY failed; falling back to ad-hoc"
+        echo "   Accessibility will need re-granting after every rebuild."
+        codesign --force --deep --sign - "$APP_PATH"
+    fi
+else
+    echo "==> ad-hoc signing (deep) — no code-signing identity found"
+    echo "   Accessibility grants will not survive a rebuild. Set"
+    echo "   RIMES_SIGN_IDENTITY, or add any code-signing certificate."
+    codesign --force --deep --sign - "$APP_PATH"
+fi
 
 echo "==> handing active clients to a safe fallback input source"
 if ! /bin/launchctl asuser "$(id -u)" "$APP_PATH/Contents/MacOS/$EXE" --prepare-update; then
@@ -205,12 +274,25 @@ sleep 0.5
 echo "==> purging stray/duplicate registrations (same id at other paths poisons the picker)"
 pkill -x "$EXE" 2>/dev/null || true
 pkill -x RimeBuffer 2>/dev/null || true
-sleep 0.5
+# The previous install runs under its old executable name and is respawned by
+# the text-input system while its input source is still selected, so it has to
+# be stopped here too rather than only detected.
+for legacy_exe in "${LEGACY_APPS[@]}"; do
+    pkill -x "${legacy_exe%.app}" 2>/dev/null || true
+done
+sleep 1
+if /usr/bin/pgrep -U "$(id -u)" -x "$EXE" >/dev/null 2>&1 \
+    || /usr/bin/pgrep -U "$(id -u)" -x RimeBuffer >/dev/null 2>&1 \
+    || /usr/bin/pgrep -U "$(id -u)" -x ETInput >/dev/null 2>&1; then
+    echo "!! existing RIMES process did not stop; refusing a live bundle replacement"
+    exit 1
+fi
 # Any leftover copies in the repo tree or a previous CJK-named install.
 for stray in "Enter输入法.app" "恩特输入法.app" "ETInput.app" "RimeBuffer.app" \
              "$HOME/Library/Input Methods/Enter输入法.app" \
              "$HOME/Library/Input Methods/恩特输入法.app" \
              "$HOME/Library/Input Methods/RimeBuffer.app" \
+             "$HOME/Library/Input Methods/ETInput.app" \
              "$HOME/Documents/05-dev/apps/rime-buffer/RimeBuffer.app"; do
     if [ -e "$stray" ]; then
         "$LSREGISTER" -u "$stray" 2>/dev/null || true
@@ -232,6 +314,31 @@ rm -rf "$STAGE/$APP"                 # don't leave a staging copy lying around
 
 restore_previous_install() {
     echo "!! restoring the previous RIMES installation"
+    # The new bundle may already have registered or selected its TIS mode if a
+    # later shell/runtime failure interrupted the install. While its executable
+    # still exists, hand the session to a safe fallback before removing it.
+    if [ -x "$DEST/Contents/MacOS/$EXE" ]; then
+        if ! /bin/launchctl asuser "$(id -u)" \
+                "$DEST/Contents/MacOS/$EXE" --prepare-update \
+                >>"$HOME/rimebuffer-install.log" 2>&1; then
+            echo "!! could not move TIS to a safe fallback; keeping the valid new bundle in place"
+            return 1
+        fi
+    fi
+    if [ "$COMPANION_AGENT_CHANGED" -eq 1 ]; then
+        if [ "$COMPANION_AGENT_HAD_PREVIOUS" -eq 1 ] \
+            && [ -n "$COMPANION_AGENT_BACKUP" ]; then
+            if ! /bin/mv -f "$COMPANION_AGENT_BACKUP" \
+                    "$USER_COMPANION_AGENT" 2>/dev/null; then
+                echo "!! failed to restore the previous companion LaunchAgent"
+            fi
+            COMPANION_AGENT_BACKUP=""
+        else
+            /bin/bash "$COMPANION_AGENT_HELPER" remove-user \
+                2>/dev/null || true
+        fi
+        COMPANION_AGENT_CHANGED=0
+    fi
     pkill -x "$EXE" 2>/dev/null || true
     "$LSREGISTER" -u "$DEST" 2>/dev/null || true
     rm -rf "$DEST"
@@ -239,9 +346,69 @@ restore_previous_install() {
         mv "$DEST_BACKUP" "$DEST"
         "$LSREGISTER" -f "$DEST" 2>/dev/null || true
         /bin/launchctl asuser "$(id -u)" "$DEST/Contents/MacOS/$EXE" --install >> "$HOME/rimebuffer-install.log" 2>&1 || true
-        open "$DEST" 2>/dev/null || true
+        open -g "$DEST" 2>/dev/null || true
     fi
     rm -rf "$DEST_NEW"
+}
+
+snapshot_companion_agent() {
+    local agent_dir snapshot
+
+    agent_dir="$(dirname "$USER_COMPANION_AGENT")"
+    if [ -L "$USER_COMPANION_AGENT" ]; then
+        echo "!! refusing a symlinked development companion LaunchAgent"
+        return 1
+    fi
+    if [ -e "$USER_COMPANION_AGENT" ]; then
+        [ -f "$USER_COMPANION_AGENT" ] || return 1
+        snapshot="$(
+            /usr/bin/mktemp "$agent_dir/.rimes-companion-build-backup.XXXXXX"
+        )" || return 1
+        if ! /bin/cp -p "$USER_COMPANION_AGENT" "$snapshot"; then
+            /bin/rm -f "$snapshot"
+            return 1
+        fi
+        if ! /usr/bin/cmp -s "$USER_COMPANION_AGENT" "$snapshot"; then
+            /bin/rm -f "$snapshot"
+            return 1
+        fi
+        COMPANION_AGENT_BACKUP="$snapshot"
+        COMPANION_AGENT_HAD_PREVIOUS=1
+    fi
+}
+
+wait_for_installed_app_process() {
+    local expected="$DEST/Contents/MacOS/$EXE"
+    local attempts=0
+    local stable_matches=0
+    local pids pid running_command found
+
+    while [ "$attempts" -lt 20 ]; do
+        pids="$(
+            /usr/bin/pgrep -U "$(id -u)" -x "$EXE" 2>/dev/null || true
+        )"
+        found=0
+        for pid in $pids; do
+            case "$pid" in
+                ""|*[!0-9]*) continue ;;
+            esac
+            running_command="$(
+                /bin/ps -p "$pid" -o command= 2>/dev/null || true
+            )"
+            case "$running_command" in
+                "$expected"|"$expected -psn_"*) found=1; break ;;
+            esac
+        done
+        if [ "$found" -eq 1 ]; then
+            stable_matches=$((stable_matches + 1))
+            [ "$stable_matches" -ge 2 ] && return 0
+        else
+            stable_matches=0
+        fi
+        attempts=$((attempts + 1))
+        /bin/sleep 0.25
+    done
+    return 1
 }
 
 echo "==> atomically swapping the installed bundle"
@@ -260,17 +427,42 @@ fi
 echo "==> registering the single installed copy with Launch Services"
 "$LSREGISTER" -f "$DEST" || true
 
+echo "==> installing one-shot login bootstrap for companion shortcuts"
+if ! snapshot_companion_agent; then
+    echo "!! could not snapshot the existing companion LaunchAgent"
+    restore_previous_install
+    exit 1
+fi
+COMPANION_AGENT_CHANGED=1
+if ! /bin/bash "$COMPANION_AGENT_HELPER" install-user; then
+    echo "!! could not install the RIMES companion LaunchAgent"
+    restore_previous_install
+    exit 1
+fi
+open -g "$DEST" 2>/dev/null || true  # LaunchServices can report late success.
+if ! wait_for_installed_app_process; then
+    echo "!! installed RIMES did not remain running from the canonical bundle"
+    restore_previous_install
+    exit 1
+fi
+
+# Do not select the new TIS source until every later fail-closed lifecycle check
+# has passed. A failed fresh install can then restore/remove the bundle without
+# ever leaving the user's current input source pointing at deleted bytes.
 echo "==> self-install: register + enable + select inside the login session"
 INSTALL_LOG="$HOME/rimebuffer-install.log"
 ACTIVATION_READY=1
-if ! /bin/launchctl asuser "$(id -u)" "$DEST/Contents/MacOS/$EXE" --install 2>&1 | tee "$INSTALL_LOG"; then
-    # The bundle is already valid and atomically installed. Recent macOS
-    # releases can require a login-session refresh before TIS exposes a newly
-    # registered source; do not roll back good payload bytes for that condition.
+if ! /bin/launchctl asuser "$(id -u)" \
+        "$DEST/Contents/MacOS/$EXE" --install 2>&1 | tee "$INSTALL_LOG"; then
+    # The bundle is already valid, resident, and has its login bootstrap.
+    # Recent macOS releases can require a session refresh before TIS exposes a
+    # newly registered source, so activation remains an explicit nonfatal tail.
     ACTIVATION_READY=0
     echo "!! input-source activation is pending a logout/login session refresh"
 fi
-open "$DEST" || true                 # start the IMK server (candidate/settings UI ready)
+[ -z "$COMPANION_AGENT_BACKUP" ] || /bin/rm -f "$COMPANION_AGENT_BACKUP"
+COMPANION_AGENT_BACKUP=""
+COMPANION_AGENT_CHANGED=0
 rm -rf "$DEST_BACKUP"
 
 if [ "$ACTIVATION_READY" -eq 1 ]; then

@@ -905,7 +905,7 @@ final class MailboxStore {
                 .standardizedFileURL
         }
         return fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+            .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
             .standardizedFileURL
     }
 

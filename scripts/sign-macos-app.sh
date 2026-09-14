@@ -17,9 +17,9 @@ parse_boolean() {
     esac
 }
 
-app="${1:?usage: sign-macos-app.sh <ETInput.app>}"
+app="${1:?usage: sign-macos-app.sh <RIMES.app>}"
 [[ -d "$app" ]] || die "app bundle not found: $app"
-main_executable="$app/Contents/MacOS/ETInput"
+main_executable="$app/Contents/MacOS/RIMES"
 frameworks="$app/Contents/Frameworks"
 [[ -f "$main_executable" && -x "$main_executable" ]] \
     || die "missing executable: $main_executable"
@@ -103,7 +103,7 @@ verify_one "$main_executable"
 verify_one "$app"
 
 if [[ "$formal" == true ]]; then
-    echo "Signed $mach_o_count bundled Mach-O files and ETInput.app with $application_identity."
+    echo "Signed $mach_o_count bundled Mach-O files and RIMES.app with $application_identity."
 else
-    echo "Ad-hoc signed $mach_o_count bundled Mach-O files and ETInput.app (manual build only)."
+    echo "Ad-hoc signed $mach_o_count bundled Mach-O files and RIMES.app (manual build only)."
 fi

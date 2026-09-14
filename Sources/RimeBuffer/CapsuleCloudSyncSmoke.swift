@@ -312,11 +312,7 @@ func runCapsuleCloudSyncSmokeTest() -> Bool {
         )
         let password = try passwordStore.put(CapsulePasswordWriteRequest(
             title: "Sync exclusion credential fixture",
-            url: "https://credential-sync-smoke.invalid/login",
-            app: "Fixture Browser",
-            username: "credential-sync-smoke-user",
-            password: "credential-sync-smoke-current-secret",
-            previousPasswords: ["credential-sync-smoke-old-secret"]
+            body: "- 密码：credential-sync-smoke-current-secret"
         ))
         guard fileManager.fileExists(atPath: password.fileURL.path),
               fileManager.fileExists(atPath: passwordStore.masterKeyURL.path),
@@ -357,7 +353,7 @@ func runCapsuleCloudSyncSmokeTest() -> Bool {
 
         clockA.value = baseDate.addingTimeInterval(20)
         let concurrent = try storeA.put(CapsuleContentWriteRequest(
-            type: .memory,
+            type: .note,
             title: "Concurrent fixture",
             content: "concurrent-base"
         ))
@@ -373,14 +369,14 @@ func runCapsuleCloudSyncSmokeTest() -> Bool {
         clockA.value = Date(timeIntervalSince1970: 100)
         _ = try storeA.put(CapsuleContentWriteRequest(
             id: concurrent.id,
-            type: .memory,
+            type: .note,
             title: "Concurrent fixture from A",
             content: "edit-from-device-a"
         ))
         clockB.value = Date(timeIntervalSince1970: 4_102_444_800)
         _ = try storeB.put(CapsuleContentWriteRequest(
             id: concurrent.id,
-            type: .memory,
+            type: .note,
             title: "Concurrent fixture from B",
             content: "edit-from-device-b"
         ))
@@ -500,7 +496,7 @@ func runCapsuleCloudSyncSmokeTest() -> Bool {
         clockA.value = baseDate.addingTimeInterval(80)
         _ = try storeA.put(CapsuleContentWriteRequest(
             id: CapsuleContentStore.defaultEntryID,
-            type: .memory,
+            type: .note,
             title: "Customized remote default",
             content: "custom-default-from-cloud"
         ))
@@ -604,7 +600,7 @@ func runCapsuleCloudSyncSmokeTest() -> Bool {
         let cloudDefaultAfterTags = try storeB.record(
             id: CapsuleContentStore.defaultEntryID
         )
-        guard taggedDefaultRecord.summary.type == .memory,
+        guard taggedDefaultRecord.summary.type == .note,
               taggedDefaultRecord.summary.title
                 == CapsuleContentStore.defaultEntryTitle,
               taggedDefaultRecord.content
@@ -617,7 +613,7 @@ func runCapsuleCloudSyncSmokeTest() -> Bool {
                     contentsOf: url,
                     encoding: .utf8
                   ) else { return false }
-                  return text.contains("capsule: memory")
+                  return text.contains("capsule: note")
                     && text.contains("tags: [custom]")
                     && text.contains(CapsuleContentStore.defaultEntryTitle)
                     && text.contains(CapsuleContentStore.defaultEntryContent)

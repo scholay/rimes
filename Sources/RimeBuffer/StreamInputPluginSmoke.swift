@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 private final class StreamInputSmokeTask: AITextCancellable {
@@ -155,9 +156,50 @@ func runStreamInputPluginSmokeTest() -> Bool {
         maximumCount: 3
     )
     guard localCombined.count == 3,
-          localCombined.first == "我，知道",
+          localCombined.first == "我知道",
           Set(localCombined).count == localCombined.count else {
         return fail("local engine bounded alternative beam")
+    }
+    // The local decoder must not answer a pause with punctuation either; that
+    // was invisible to the model prompt and reached the user's text field.
+    guard !localCombined.contains(where: {
+        $0.contains("，") || $0.contains(",")
+    }) else {
+        return fail("local clause join must not insert punctuation")
+    }
+    // The comma key is the explicit way to ask for one, and it is the only
+    // boundary that writes a character.
+    guard let commaSplit = RimeOctagramStreamInputEngine.clauseSplit(
+        rawInput: "wo,zhidao ta",
+        automaticSyllableSpaceOffsets: []
+    ) else {
+        return fail("comma clause split")
+    }
+    guard commaSplit.clauses == ["wo", "zhidao", "ta"],
+          commaSplit.separators == ["，", ""] else {
+        return fail(
+            "comma must close a clause and a pause must not: "
+                + commaSplit.clauses.joined(separator: "/")
+                + " sep=" + commaSplit.separators.joined(separator: "|")
+        )
+    }
+    let commaCombined = RimeOctagramStreamInputEngine.combine(
+        [["我"], ["知道"], ["他"]],
+        separators: ["，", ""],
+        maximumCount: 1
+    )
+    guard commaCombined == ["我，知道他"] else {
+        return fail(
+            "explicit comma must survive the join: "
+                + commaCombined.joined(separator: "/")
+        )
+    }
+    guard StreamInputPasteRules.appending(
+        "ni hao, shi jie",
+        to: "",
+        maximumBytes: 64
+    ) == "ni hao,shi jie" else {
+        return fail("pasted comma must normalize to the comma boundary")
     }
     guard RimeOctagramStreamInputEngine.usableCandidate("你好像") == "你好像",
           RimeOctagramStreamInputEngine.usableCandidate("  修复一个问题  ")
@@ -165,6 +207,33 @@ func runStreamInputPluginSmokeTest() -> Bool {
           RimeOctagramStreamInputEngine.usableCandidate("你好x") == nil,
           RimeOctagramStreamInputEngine.usableCandidate("你好abc") == nil else {
         return fail("local engine must decline unconverted ASCII tails")
+    }
+
+    // Guessing belongs to the connector alone now: the on-device decoder is
+    // kept in the build for ordinary typing, not offered here.
+    do {
+        let defaults = UserDefaults(
+            suiteName: "RimeBuffer.StreamInputEngineSelection.\(UUID())"
+        )
+        guard let defaults,
+              let model = try? PluginConfigurationCatalog.makeStreamInputModel(
+                defaults: defaults
+              ) else {
+            return fail("stream input configuration model")
+        }
+        let connectorField = model.schema.fields.first {
+            $0.id == StreamInputPluginConfigurationFieldID.connector
+        }
+        guard case let .choice(options)? = connectorField?.kind else {
+            return fail("stream input connector field")
+        }
+        guard options.allSatisfy({ AITextProviderKind(rawValue: $0.value) != nil }),
+              !model.schema.fields.contains(where: { $0.id == "localFirst" }) else {
+            return fail(
+                "stream input must offer connectors only: "
+                    + options.map(\.value).joined(separator: ",")
+            )
+        }
     }
 
     // A module may decline synchronously. The returned root task must still
@@ -227,15 +296,17 @@ func runStreamInputPluginSmokeTest() -> Bool {
         workspace.stop()
     }
 
-    let letter = StreamInputCaptureRules.letter(
+    // The raw line is an ordinary input surface now: printable keys go to
+    // Rime so pinyin composes with its candidate window, and what Rime commits
+    // is what lands in the raw line.
+    guard StreamInputCaptureRules.disposition(
         keycode: 0x61,
         mask: 0,
         bufferEnabled: true,
         pluginSelected: true,
         secureInput: false,
         exactExternalFocus: true
-    )
-    guard letter == "a" else { return fail("valid letter capture") }
+    ) == .passThrough else { return fail("letters must reach Rime") }
 
     let chordConfiguration = InputConfiguration(
         encoding: .fullPinyin,
@@ -247,17 +318,10 @@ func runStreamInputPluginSmokeTest() -> Bool {
     )
     let disabledChordExtension = ChordExtensionConfiguration(
         isEnabled: false,
-        mode: .mutual,
         duration: ChordSettings.defaultDuration
     )
     let enabledChordExtension = ChordExtensionConfiguration(
         isEnabled: true,
-        mode: .chord,
-        duration: ChordSettings.defaultDuration
-    )
-    let enabledMutualExtension = ChordExtensionConfiguration(
-        isEnabled: true,
-        mode: .mutual,
         duration: ChordSettings.defaultDuration
     )
     guard InputConfigurationResolver.profile(
@@ -276,7 +340,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
         for: chordConfiguration
     ) == StreamInputChordRoute(
         schemaID: FlyChordLearningIdentity.schemaID,
-        policy: .sameBatchOnly
+        policy: .independentHalves
     ),
     StreamInputChordRoutingRules.route(
         for: mutualConfiguration
@@ -289,19 +353,15 @@ func runStreamInputPluginSmokeTest() -> Bool {
         for: enabledChordExtension
     ) == StreamInputChordRoute(
         schemaID: FlyChordLearningIdentity.schemaID,
-        policy: .sameBatchOnly
-    ),
-    StreamInputChordRoutingRules.route(
-        for: enabledMutualExtension
-    ) == StreamInputChordRoute(
-        schemaID: FlyChordLearningIdentity.schemaID,
         policy: .independentHalves
     ),
     StreamInputChordRoutingRules.schemaID(
         for: .init(encoding: .fullPinyin, keyingMode: .sequential)
     ) == nil else {
-        return fail("extension gate must preserve both FlyYao settlement modes")
+        return fail("extension gate and both legacy names must use the unified chord policy")
     }
+    // Chords are Rime's business again: stream input no longer stages them
+    // itself, because it no longer owns the keystream.
     for keycode: Int32 in [0x61, 0x7a, 0x2c, 0x2e] {
         guard StreamInputCaptureRules.disposition(
             keycode: keycode,
@@ -311,8 +371,8 @@ func runStreamInputPluginSmokeTest() -> Bool {
             secureInput: false,
             exactExternalFocus: true,
             chordSchemaID: FlyChordLearningIdentity.schemaID
-        ) == .stageChordKey(keycode) else {
-            return fail("FlyYao alphabet must enter stream chord staging")
+        ) == .passThrough else {
+            return fail("FlyYao alphabet must reach Rime")
         }
     }
     guard StreamInputCaptureRules.disposition(
@@ -325,6 +385,16 @@ func runStreamInputPluginSmokeTest() -> Bool {
         chordSchemaID: FlyChordLearningIdentity.schemaID
     ) == .consumeOwned,
     StreamInputCaptureRules.disposition(
+        keycode: 0x20,
+        mask: 0,
+        bufferEnabled: true,
+        pluginSelected: true,
+        secureInput: false,
+        exactExternalFocus: true,
+        hasLiveComposition: true,
+        chordSchemaID: FlyChordLearningIdentity.schemaID
+    ) == .passThrough,
+    StreamInputCaptureRules.disposition(
         keycode: 0x61,
         mask: RimeKey.controlMask,
         bufferEnabled: true,
@@ -333,7 +403,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
         exactExternalFocus: true,
         chordSchemaID: FlyChordLearningIdentity.schemaID
     ) == .passThrough else {
-        return fail("stream chord staging must preserve separators and shortcuts")
+        return fail("Space is the divider only while nothing is composing")
     }
 
     let rejectedGates: [(Bool, Bool, Bool, Bool)] = [
@@ -353,15 +423,17 @@ func runStreamInputPluginSmokeTest() -> Bool {
         ) == nil else { return fail("authority gate") }
     }
 
+    // Shift and Caps are Rime's to interpret, so a shifted letter is passed
+    // on exactly like an unshifted one rather than being normalised here.
     for mask in [RimeKey.shiftMask, RimeKey.lockMask] {
-        guard StreamInputCaptureRules.letter(
+        guard StreamInputCaptureRules.disposition(
             keycode: 0x61,
             mask: mask,
             bufferEnabled: true,
             pluginSelected: true,
             secureInput: false,
             exactExternalFocus: true
-        ) == "a" else { return fail("shift and caps normalization") }
+        ) == .passThrough else { return fail("shift and caps reach Rime") }
     }
     for mask in [RimeKey.controlMask,
                  RimeKey.altMask,
@@ -375,7 +447,21 @@ func runStreamInputPluginSmokeTest() -> Bool {
             exactExternalFocus: true
         ) == nil else { return fail("modifier ownership") }
     }
-    for keycode: Int32 in [0x20, 0x27, 0x30, 0x60] {
+    // Printable keys belong to Rime; only an idle Space is taken as the
+    // divider before it gets there.
+    for keycode: Int32 in [0x27, 0x30, 0x60, 0x2c] {
+        guard StreamInputCaptureRules.disposition(
+            keycode: keycode,
+            mask: 0,
+            bufferEnabled: true,
+            pluginSelected: true,
+            secureInput: false,
+            exactExternalFocus: true
+        ) == .passThrough else {
+            return fail("printable keys must reach Rime: \(keycode)")
+        }
+    }
+    for keycode: Int32 in [0x20] {
         guard StreamInputCaptureRules.disposition(
             keycode: keycode,
             mask: 0,
@@ -425,21 +511,23 @@ func runStreamInputPluginSmokeTest() -> Bool {
     ) == nil else {
         return fail("plain vertical alternative navigation ownership")
     }
+    // Pasted text arrives as written now: case survives, other scripts are
+    // accepted, and only whitespace is normalised into the Space boundary.
     guard StreamInputPasteRules.appending(
         "NI   HAO\nMA",
         to: "",
         maximumBytes: 64
-    ) == "ni hao ma",
+    ) == "NI HAO MA",
     StreamInputPasteRules.appending(
         " HAO ",
         to: "ni ",
         maximumBytes: 64
-    ) == "ni hao ",
+    ) == "ni HAO ",
     StreamInputPasteRules.appending(
         "ni好hao",
         to: "",
         maximumBytes: 64
-    ) == nil,
+    ) == "ni好hao",
     StreamInputPasteRules.appending(
         "abcd",
         to: "",
@@ -455,6 +543,55 @@ func runStreamInputPluginSmokeTest() -> Bool {
     guard forcedSpaceSegments.count >= 2,
           forcedSpaceSegments.map(\.text).joined() == "这是第一段这是第二段" else {
         return fail("Space clauses must enforce visible and deliverable segmentation")
+    }
+    // A hard Space is a pause, not a comma. The result must carry no
+    // punctuation the sentence did not need, and the chips must land on the
+    // clauses the user actually paused between.
+    let pauseAlignedSegments = StreamInputOutputSegmenter.fragments(
+        text: "这个就是我的什么呢就是",
+        sourceIndex: 0,
+        rawInput: "zhege jiu shi wodeshenmenejiushi"
+    )
+    guard pauseAlignedSegments.map(\.text)
+            == ["这个", "就", "是", "我的什么呢就是"] else {
+        return fail(
+            "hard Space clauses must segment where the user paused: "
+                + pauseAlignedSegments.map(\.text).joined(separator: "/")
+        )
+    }
+    guard !pauseAlignedSegments.contains(where: {
+        $0.text.contains(",") || $0.text.contains("，")
+    }) else {
+        return fail("pause segmentation must not introduce punctuation")
+    }
+    // The same input as it actually arrives: chord-inserted syllable spaces
+    // between the letters, user pauses only after `ge`, `jiu`, and `shi`.
+    let chordPauseSegments = StreamInputOutputSegmenter.fragments(
+        text: "这个就是我的什么呢就是",
+        sourceIndex: 0,
+        rawInput: "zhe ge jiu shi wo de shen me ne jiu shi",
+        automaticSyllableSpaceOffsets: [3, 17, 20, 25, 28, 31, 35]
+    )
+    guard chordPauseSegments.map(\.text)
+            == ["这个", "就", "是", "我的什么呢就是"] else {
+        return fail(
+            "chord syllable spaces must not count as pauses: "
+                + chordPauseSegments.map(\.text).joined(separator: "/")
+        )
+    }
+    // The local decoder concatenates its per-clause results bare, so the
+    // pause alignment is what restores the user's chunks.
+    let localPauseSegments = StreamInputOutputSegmenter.fragments(
+        text: "你好我的朋友我的左右名师",
+        sourceIndex: 0,
+        rawInput: "nihaowodepengyou wodezuoyou mingsh"
+    )
+    guard localPauseSegments.map(\.text)
+            == ["你好我的朋友", "我的左右", "名师"] else {
+        return fail(
+            "local clause concatenation must re-chunk at the pauses: "
+                + localPauseSegments.map(\.text).joined(separator: "/")
+        )
     }
     let whitespaceSegments = StreamInputOutputSegmenter.fragments(
         text: "你好 世界",
@@ -505,13 +642,13 @@ func runStreamInputPluginSmokeTest() -> Bool {
 
     let raw = "xiufuyigewenti"
     let prompt = StreamInputPrompt.request(for: raw)
-    guard prompt.contains("\"rawPinyin\":\"\(raw)\""),
+    guard prompt.contains("\"rawInput\":\"\(raw)\""),
           prompt.contains("\"syllableHints\""),
           prompt.contains("\"minimumGuessCount\":"),
           prompt.contains("xiu'fu'yi'ge'wen'ti"),
           prompt.contains("ASCII Space"),
           prompt.contains("竖线表示用户输入的 Space 短句边界"),
-          prompt.contains("无论用户当前启用哪一种输入方案"),
+          prompt.contains("不限字符集"),
           prompt.contains("English"),
           prompt.contains("不可信的数据"),
           prompt.contains("完整正文"),
@@ -675,7 +812,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
           chordPrompt.contains(
               "\"automaticSyllableSpaceOffsets\":[4,7]"
           ),
-          chordPrompt.contains("\"rawPinyin\":\"qing ni \""),
+          chordPrompt.contains("\"rawInput\":\"qing ni \""),
           chordProtectedSegments.map(\.text) == ["RimeBuffer"],
           StreamInputSourcePresentation.displayText(
               for: chordRaw,
@@ -843,6 +980,404 @@ func runStreamInputPluginSmokeTest() -> Bool {
     }
     let chordMapping = StreamInputChordMapping(schema: chordSchema)
 
+    // The one public route treats a simultaneous chord and a split left/right
+    // chord identically, without changing literal singles or the directional
+    // and fragment boundaries of the existing independent-halves algorithm.
+    let unifiedBatchCases: [(batches: [String], raw: String, soft: Set<Int>)] = [
+        (["qkm"], "qiong ", [5]),
+        (["q", "km"], "qiong ", [5]),
+        (["dv", "i"], "ni ", [2]),
+        (["q", "y"], "qy", []),
+        (["km", "q"], "ongq", []),
+        (["dv"], "n", []),
+        (["km"], "ong", []),
+    ]
+    for item in unifiedBatchCases {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let workspace = StreamInputWorkspace(
+            provider: StreamInputSmokeProvider(),
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+        guard let route = StreamInputChordRoutingRules.route(for: enabledChordExtension),
+              route.policy == .independentHalves else {
+            return fail("unified chord route fixture")
+        }
+        for batch in item.batches {
+            for key in batch.unicodeScalars {
+                guard workspace.captureChordKey(Int32(key.value),
+                                                schemaID: route.schemaID,
+                                                policy: route.policy,
+                                                focusToken: focus) else {
+                    return fail("unified batch staging: \(item.batches)")
+                }
+            }
+            workspace.settlePendingChordForTesting()
+        }
+        guard workspace.rawInput == item.raw,
+              workspace.automaticSyllableSpaceOffsets == item.soft else {
+            return fail("unified same/split/single/directional result: \(item.batches)")
+        }
+    }
+
+    // Boundary actions retire pairing even if an edit restores the exact same
+    // raw spelling. Disabling the extension preserves settled raw while its
+    // next letters use the ordinary sequential capture route.
+    for boundary in ["space", "edit", "focus", "disabled"] {
+        var epochs = FocusEpochState()
+        var focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let workspace = StreamInputWorkspace(
+            provider: StreamInputSmokeProvider(),
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in chordMapping }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+        func stage(_ batch: String) -> Bool {
+            batch.unicodeScalars.allSatisfy {
+                workspace.captureChordKey(Int32($0.value),
+                                          schemaID: chordMapping.schemaID,
+                                          focusToken: focus)
+            }
+        }
+        guard stage("q") else { return fail("unified boundary left staging") }
+        workspace.settlePendingChordForTesting()
+        let expectedRaw: String
+        switch boundary {
+        case "space":
+            guard workspace.consumeIgnoredKey(keycode: 0x20, focusToken: focus) else {
+                return fail("unified hard-space boundary")
+            }
+            expectedRaw = "q ong"
+        case "edit":
+            guard workspace.capture(letter: "x", focusToken: focus),
+                  workspace.deleteBackward(focusToken: focus),
+                  workspace.rawInput == "q" else {
+                return fail("unified restored-raw edit boundary")
+            }
+            expectedRaw = "qong"
+        case "focus":
+            workspace.focusInvalidated(focus)
+            focus = epochs.activate()
+            guard workspace.rawInput.isEmpty else {
+                return fail("unified focus change must retire old raw")
+            }
+            expectedRaw = "ong"
+        default:
+            guard stage("k"), workspace.hasPendingChordForTesting else {
+                return fail("unified disable pending staging")
+            }
+            workspace.chordExtensionDidChangeForTesting()
+            let disabledRoute = StreamInputChordRoutingRules.route(for: disabledChordExtension)
+            guard disabledRoute == nil, workspace.rawInput == "q",
+                  !workspace.hasPendingChordForTesting else {
+                return fail("disabled chord must preserve raw but retire pending input")
+            }
+            // Even re-enabling before another source edit cannot resurrect
+            // the retired left half from the previous enabled interval.
+            guard StreamInputChordRoutingRules.route(for: enabledChordExtension) != nil,
+                  stage("km") else {
+                return fail("re-enabled chord boundary staging")
+            }
+            workspace.settlePendingChordForTesting()
+            guard workspace.rawInput == "qong",
+                  workspace.automaticSyllableSpaceOffsets.isEmpty else {
+                return fail("re-enabled chord must not recover pre-disable pairing")
+            }
+            workspace.chordExtensionDidChangeForTesting()
+            // With the extension off, letters are no longer staged here at
+            // all: they reach Rime like any other printable key and return as
+            // committed text, appended to the raw the chord interval settled.
+            for key in "km".unicodeScalars {
+                guard StreamInputCaptureRules.disposition(
+                    keycode: Int32(key.value), mask: 0,
+                    bufferEnabled: true, pluginSelected: true,
+                    secureInput: false, exactExternalFocus: true,
+                    chordSchemaID: disabledRoute?.schemaID
+                ) == .passThrough,
+                      workspace.insertTypedText(String(key),
+                                                focusToken: focus) else {
+                    return fail("disabled extension letters must reach Rime")
+                }
+            }
+            guard workspace.rawInput == "qongkm",
+                  workspace.automaticSyllableSpaceOffsets.isEmpty else {
+                return fail("disabled extension must not map sequential letters")
+            }
+            continue
+        }
+        guard stage("km") else { return fail("unified boundary right staging") }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == expectedRaw,
+              workspace.automaticSyllableSpaceOffsets.isEmpty else {
+            return fail("unified chord must not merge across \(boundary)")
+        }
+    }
+
+    // The custom profile controls both mapping kind and physical-half
+    // ownership. In this layout Y is left and W/R are right, opposite FlyYao.
+    let customProfile = ChordKeymapProfile(
+        id: "d0f6b1a4-2a8b-4cab-b524-b4c28187c130",
+        name: "自定义并击测试",
+        leftKeys: "qyi",
+        rightKeys: "wertuopasdfghjklzxcvbnm,.",
+        mappings: [
+            ChordKeymapEntry(keys: "qy", output: "ni", kind: .syllable),
+            ChordKeymapEntry(keys: "qw", output: "n", kind: .fragment),
+            ChordKeymapEntry(keys: "wr", output: "uan", kind: .fragment),
+            ChordKeymapEntry(keys: "ywr", output: "yuan", kind: .syllable),
+            ChordKeymapEntry(keys: "qywr", output: "xiang", kind: .syllable),
+        ]
+    )
+    let customMapping = StreamInputChordMapping(profile: customProfile)
+    func customEvents(_ keys: String) -> [FlyChordKeyEvent] {
+        keys.unicodeScalars.map { FlyChordKeyEvent(keycode: Int32($0.value), mask: 0) }
+    }
+
+    // Keys outside a custom participating subset remain sequential letters.
+    // They are physical boundaries: settle the existing chord and close mutual
+    // pairing before appending the omitted letter in its original position.
+    do {
+        let subsetProfile = ChordKeymapProfile(
+            id: "e2a8f749-5cba-4b9f-b514-1237d90880af", name: "参与键子集",
+            leftKeys: "q,", rightKeys: "w.",
+            mappings: [
+                ChordKeymapEntry(keys: "qw", output: "ni", kind: .syllable),
+                ChordKeymapEntry(keys: "q,", output: "n", kind: .fragment),
+                ChordKeymapEntry(keys: "q,w", output: "nan", kind: .syllable),
+                ChordKeymapEntry(keys: "q.", output: "que", kind: .syllable),
+            ]
+        )
+        let mapping = StreamInputChordMapping(profile: subsetProfile)
+        func disposition(_ key: Int32) -> StreamInputCaptureRules.Disposition {
+            StreamInputCaptureRules.disposition(
+                keycode: key, mask: 0, bufferEnabled: true, pluginSelected: true,
+                secureInput: false, exactExternalFocus: true,
+                chordSchemaID: subsetProfile.schemaID, chordProfile: subsetProfile
+            )
+        }
+        // The profile still says which physical keys a chord uses, but that
+        // no longer changes who owns the key: every printable key is Rime's.
+        guard disposition(0x71) == .passThrough,
+              disposition(0x61) == .passThrough,
+              disposition(0x7a) == .passThrough,
+              mapping.decode(customEvents(".q"))?.text == "que",
+              mapping.decode(customEvents("q.w"))
+                == StreamInputChordMapping.DecodedBatch(
+                    text: "qw", insertsAutomaticSyllableSpace: false,
+                    usedMappedOutput: false),
+              mapping.decode(customEvents(",.")) == nil,
+              mapping.decode(customEvents(".")) == nil else {
+            return fail("custom subset routing and unmapped punctuation contract")
+        }
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let workspace = StreamInputWorkspace(
+            provider: StreamInputSmokeProvider(), runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in mapping }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+        func stage(_ keys: String) -> Bool {
+            customEvents(keys).allSatisfy {
+                workspace.captureChordKey($0.keycode,
+                    schemaID: subsetProfile.schemaID,
+                    policy: .independentHalves, focusToken: focus)
+            }
+        }
+        guard stage("qw"), workspace.hasPendingChordForTesting,
+              workspace.capture(letter: "a", focusToken: focus),
+              workspace.rawInput == "ni a",
+              workspace.automaticSyllableSpaceOffsets == [2],
+              !workspace.hasPendingChordForTesting,
+              stage("q,"),
+              workspace.capture(letter: "z", focusToken: focus),
+              workspace.rawInput == "ni anz", stage("w") else {
+            return fail("omitted sequential letters must settle rather than erase pending chords")
+        }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "ni anzw",
+              workspace.automaticSyllableSpaceOffsets == [2] else {
+            return fail("omitted letter must close mutual pairing between participating batches")
+        }
+    }
+    guard customMapping.decode(customEvents("yq"))
+            == StreamInputChordMapping.DecodedBatch(
+                text: "ni", insertsAutomaticSyllableSpace: true,
+                usedMappedOutput: true),
+          customMapping.decode(customEvents("wq"))
+            == StreamInputChordMapping.DecodedBatch(
+                text: "n", insertsAutomaticSyllableSpace: false,
+                usedMappedOutput: true),
+          StreamInputChordRoutingRules.route(
+            for: enabledChordExtension, profile: customProfile
+          )?.schemaID == customProfile.schemaID else {
+        return fail("custom profile must own route, unordered mapping and explicit syllable kind")
+    }
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let workspace = StreamInputWorkspace(
+            provider: StreamInputSmokeProvider(), runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in customMapping }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+        func stage(_ keys: String) -> Bool {
+            customEvents(keys).allSatisfy {
+                workspace.captureChordKey(
+                    $0.keycode, schemaID: customProfile.schemaID,
+                    policy: .independentHalves, focusToken: focus
+                )
+            }
+        }
+        guard stage("y") else { return fail("custom left capture") }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "y", stage("rw") else {
+            return fail("custom half layout must permit left-to-right mutual capture")
+        }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "yuan ",
+              workspace.automaticSyllableSpaceOffsets == [4],
+              stage("yq") else { return fail("custom mutual mapping") }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "yuan ni ",
+              workspace.automaticSyllableSpaceOffsets == [4, 7],
+              stage("wr") else { return fail("same-half complete syllable boundary") }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "yuan ni uan",
+              workspace.automaticSyllableSpaceOffsets == [4, 7],
+              stage("wq") else {
+            return fail("complete left syllable must not reopen mutual pairing")
+        }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "yuan ni uann",
+              workspace.automaticSyllableSpaceOffsets == [4, 7] else {
+            return fail("cross-half fragment must not gain a soft boundary")
+        }
+    }
+
+    // Editing a profile, including one with the same schema ID, retires its
+    // raw, ready leases, pending timer and late inference callbacks together.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        var activeMapping = customMapping
+        let workspace = StreamInputWorkspace(
+            provider: provider, runtime: runtime.runtime,
+            observesRuntimeNotifications: false,
+            chordMappingLoader: { _ in activeMapping }
+        )
+        workspace.start()
+        defer { workspace.stop() }
+        for event in customEvents("qy") {
+            guard workspace.captureChordKey(event.keycode,
+                    schemaID: customProfile.schemaID, focusToken: focus) else {
+                return fail("profile switch capture setup")
+            }
+        }
+        workspace.settlePendingChordForTesting()
+        workspace.fireDebounceForTesting()
+        guard provider.pending.count == 1 else { return fail("profile switch inference setup") }
+        provider.complete(.success([
+            AITextProviderBlock(index: 0, text: "你", title: nil),
+        ]), at: 0)
+        guard workspace.prepareForDelivery(),
+              let oldBlock = workspace.deliveryPendingBlocks.first else {
+            return fail("profile switch ready lease setup")
+        }
+        let oldGeneration = workspace.deliveryGeneration
+        workspace.chordKeymapDidChange()
+        guard workspace.rawInput.isEmpty,
+              workspace.deliveryBlock(id: oldBlock.id, generation: oldGeneration) == nil,
+              workspace.outputBlocks.isEmpty else {
+            return fail("profile switch must revoke an already-ready delivery lease")
+        }
+        guard workspace.capture(letter: "n", focusToken: focus),
+              workspace.capture(letter: "i", focusToken: focus) else {
+            return fail("profile switch late request setup")
+        }
+        workspace.fireDebounceForTesting()
+        guard provider.pending.count == 2,
+              workspace.captureChordKey(0x71,
+                  schemaID: customProfile.schemaID, focusToken: focus),
+              workspace.hasPendingChordForTesting else {
+            return fail("profile switch pending timer setup")
+        }
+        var revisedProfile = customProfile
+        revisedProfile.mappings[0].output = "hao"
+        activeMapping = StreamInputChordMapping(profile: revisedProfile)
+        workspace.chordKeymapDidChange()
+        workspace.settlePendingChordForTesting()
+        provider.complete(.success([
+            AITextProviderBlock(index: 0, text: "旧映射迟到结果", title: nil),
+        ]), at: 1)
+        guard !workspace.hasPendingChordForTesting,
+              workspace.rawInput.isEmpty,
+              workspace.outputBlocks.isEmpty,
+              workspace.deliveryPendingBlocks.isEmpty,
+              provider.pending[1].task.isCancelled else {
+            return fail("profile switch must tombstone timer and late inference")
+        }
+        for event in customEvents("yq") {
+            guard workspace.captureChordKey(event.keycode,
+                    schemaID: revisedProfile.schemaID, focusToken: focus) else {
+                return fail("profile edit reload setup")
+            }
+        }
+        workspace.settlePendingChordForTesting()
+        guard workspace.rawInput == "hao " else {
+            return fail("same-profile edit must evict the old mapping cache")
+        }
+    }
+
+    // Custom courses and progress share stable schema-specific IDs, while the
+    // built-in keeps its historical path and cannot accept custom item IDs.
+    do {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rimes-chord-learning-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let schema = try FlyChordSchemaParser.loadActive(profile: customProfile)
+        let curriculum = FlyChordCurriculum(schema: schema)
+        let progress = try FlyChordProgressStore(storageRoot: root,
+                                                schemaID: schema.schemaID)
+        let legacy = try FlyChordProgressStore(storageRoot: root)
+        guard let item = curriculum.mappings.first,
+              curriculum.displayName == customProfile.name,
+              curriculum.schemaID == customProfile.schemaID,
+              curriculum.mappings.count == customProfile.mappings.count,
+              legacy.storageURL.lastPathComponent == "my_combo_progress.json",
+              progress.storageURL != legacy.storageURL else {
+            return fail("active custom learning curriculum/progress identity")
+        }
+        _ = try progress.recordAttempt(mappingID: item.id, correct: true)
+        let reloaded = try FlyChordProgressStore(storageRoot: root,
+                                                schemaID: schema.schemaID)
+        guard reloaded.snapshot.items[item.id]?.attempts == 1,
+              legacy.snapshot.items.isEmpty else {
+            return fail("custom progress must persist independently from built-in")
+        }
+        do {
+            _ = try legacy.recordAttempt(mappingID: item.id, correct: true)
+            return fail("built-in progress must reject another profile's mapping ID")
+        } catch FlyChordProgressStoreError.invalidMappingID { }
+    } catch {
+        return fail("custom learning smoke: \(error.localizedDescription)")
+    }
+
     // Same-batch FlyYao keys are mapped atomically. The inserted ASCII Space is
     // a soft syllable separator: it waits for the ordinary debounce and does
     // not render as a hard-boundary middle dot.
@@ -938,7 +1473,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
 
     // One-sided mapped batches are pinyin fragments, not complete syllables.
     // They map immediately but do not gain an automatic separator, so a later
-    // singleton can finish the spelling just as it does in normal chord mode.
+    // singleton can complete the exact combined mapping in unified chord mode.
     do {
         var epochs = FocusEpochState()
         let focus = epochs.activate()
@@ -978,9 +1513,9 @@ func runStreamInputPluginSmokeTest() -> Bool {
             return fail("one-sided mapped fragment must not force a separator")
         }
         workspace.settlePendingChordForTesting()
-        guard workspace.rawInput == "ni",
-              workspace.automaticSyllableSpaceOffsets.isEmpty,
-              workspace.railSnapshot.sourceText == "ni",
+        guard workspace.rawInput == "ni ",
+              workspace.automaticSyllableSpaceOffsets == [2],
+              workspace.railSnapshot.sourceText == "ni ",
               workspace.maximumWaitTimerForTesting === burstDeadline,
               provider.pending.isEmpty else {
             return fail("chord batches must preserve the original burst deadline")
@@ -1047,9 +1582,9 @@ func runStreamInputPluginSmokeTest() -> Bool {
         }
     }
 
-    // Mutual mode preserves the normal FlyYao cross-batch contract. A visible
+    // Unified chord input preserves FlyYao's cross-batch contract. A visible
     // left initial is atomically replaced when the next right final completes
-    // it; same-batch mode keeps those timer batches independent.
+    // it; complete syllables and explicit boundaries remain independent.
     do {
         var epochs = FocusEpochState()
         let focus = epochs.activate()
@@ -1275,6 +1810,8 @@ func runStreamInputPluginSmokeTest() -> Bool {
         }
     }
 
+    // Retain an explicit low-level isolation probe. This policy is no longer
+    // selected by a live route or exposed as a separate input mode.
     do {
         var epochs = FocusEpochState()
         let focus = epochs.activate()
@@ -1314,7 +1851,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
         chordWorkspace.settlePendingChordForTesting()
         guard chordWorkspace.rawInput == "qong",
               chordWorkspace.automaticSyllableSpaceOffsets.isEmpty else {
-            return fail("same-batch mode must not recombine separate halves")
+            return fail("explicit low-level same-batch policy must not recombine halves")
         }
 
         // Two singleton timer batches stay literal in both policies.
@@ -1574,7 +2111,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
                                           focusToken: focus),
               workspace.rawInput == "qing ",
               workspace.automaticSyllableSpaceOffsets.isEmpty,
-              workspace.railSnapshot.sourceText == "qing · ",
+              workspace.railSnapshot.sourceText == "qing ",
               provider.pending.count == 1,
               provider.pending[0].request.preparedPrompt?.contains(
                 "\"automaticSyllableSpaceOffsets\":["
@@ -1713,6 +2250,134 @@ func runStreamInputPluginSmokeTest() -> Bool {
         }
     }
 
+    // The routing rule saying a key is capturable is not enough: the workspace
+    // has its own gate, and a mismatch silently swallows the key. Exercise the
+    // real capture path with the characters that used to be rejected.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let workspace = StreamInputWorkspace(
+            provider: StreamInputSmokeProvider(),
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false
+        )
+        workspace.start()
+        defer { workspace.stop() }
+
+        // Any script the framework can hand us belongs in the raw line too.
+        guard workspace.insertTypedText("中文", focusToken: focus),
+              workspace.rawInput == "中文",
+              workspace.insertTypedText("é", focusToken: focus),
+              workspace.rawInput == "中文é" else {
+            return fail("raw must accept other scripts: \(workspace.rawInput)")
+        }
+        guard workspace.selectAllInput(focusToken: focus),
+              workspace.insertTypedText("", focusToken: focus) else {
+            return fail("typed-text reset")
+        }
+        guard workspace.selectAllInput(focusToken: focus),
+              workspace.insertTypedText("w5@N-'", focusToken: focus),
+              workspace.rawInput == "w5@N-'" else {
+            return fail("free-form raw content: \(workspace.rawInput)")
+        }
+
+        // English and punctuation never reach Rime's committed text: librime
+        // declines them in ASCII mode and hands them back to the frontend.
+        // That fallback is the only way they can arrive, so it has to accept
+        // the whole printable range and then reach this same raw line — the
+        // route that used to drop them into hidden Default-buffer blocks.
+        let fallbackPrintables = (0x20...0x7e).map {
+            String(UnicodeScalar(UInt8($0)))
+        }
+        // Primed with a letter: a boundary cannot lead the raw line, so a
+        // leading Space would be dropped for a reason unrelated to routing.
+        guard workspace.selectAllInput(focusToken: focus),
+              workspace.insertTypedText("x", focusToken: focus) else {
+            return fail("fallback fixture reset")
+        }
+        for character in fallbackPrintables {
+            guard let captured = BufferUnhandledPrintableRules.capturedText(
+                characters: character,
+                modifierFlags: [],
+                bufferEnabled: true,
+                exactExternalFocus: true,
+                secureInputEnabled: false
+            ), captured == character,
+                  workspace.insertTypedText(captured, focusToken: focus) else {
+                return fail("ASCII fallback must carry \(character) to raw")
+            }
+        }
+        guard workspace.rawInput == "x" + fallbackPrintables.joined() else {
+            return fail("ASCII fallback raw content: \(workspace.rawInput)")
+        }
+        // Shortcuts, secure fields and an unowned target keep host handling.
+        for gate in [
+            (NSEvent.ModifierFlags.command, true, true, false),
+            (NSEvent.ModifierFlags.control, true, true, false),
+            (NSEvent.ModifierFlags.option, true, true, false),
+            ([], false, true, false),
+            ([], true, false, false),
+            ([], true, true, true),
+        ] as [(NSEvent.ModifierFlags, Bool, Bool, Bool)] {
+            guard BufferUnhandledPrintableRules.capturedText(
+                characters: "a",
+                modifierFlags: gate.0,
+                bufferEnabled: gate.1,
+                exactExternalFocus: gate.2,
+                secureInputEnabled: gate.3
+            ) == nil else {
+                return fail("ASCII fallback authority gate")
+            }
+        }
+        // Shift is how the user writes capitals and the shifted symbols, so
+        // it must not be read as a shortcut.
+        guard BufferUnhandledPrintableRules.capturedText(
+            characters: "A",
+            modifierFlags: .shift,
+            bufferEnabled: true,
+            exactExternalFocus: true,
+            secureInputEnabled: false
+        ) == "A" else {
+            return fail("shifted capitals must survive the ASCII fallback")
+        }
+    }
+
+    // The comma key is the explicit request for punctuation a pause no longer
+    // provides. It writes one comma, replaces a pending pause rather than
+    // standing beside it, and refuses to lead or repeat.
+    do {
+        var epochs = FocusEpochState()
+        let focus = epochs.activate()
+        let runtime = StreamInputSmokeRuntimeBox()
+        let provider = StreamInputSmokeProvider()
+        let workspace = StreamInputWorkspace(
+            provider: provider,
+            runtime: runtime.runtime,
+            observesRuntimeNotifications: false
+        )
+        workspace.start()
+        defer { workspace.stop() }
+
+        guard workspace.consumeIgnoredKey(keycode: 0x2c, focusToken: focus),
+              workspace.rawInput.isEmpty,
+              workspace.capture(letter: "a", focusToken: focus),
+              workspace.consumeIgnoredKey(keycode: 0x2c, focusToken: focus),
+              workspace.rawInput == "a,",
+              workspace.railSnapshot.sourceText == "a,",
+              workspace.consumeIgnoredKey(keycode: 0x2c, focusToken: focus),
+              workspace.rawInput == "a," else {
+            return fail("comma key must write exactly one explicit comma")
+        }
+        guard workspace.capture(letter: "b", focusToken: focus),
+              workspace.consumeIgnoredKey(keycode: 0x20, focusToken: focus),
+              workspace.rawInput == "a,b ",
+              workspace.consumeIgnoredKey(keycode: 0x2c, focusToken: focus),
+              workspace.rawInput == "a,b," else {
+            return fail("comma must supersede a pending pause")
+        }
+    }
+
     // Space ends a short sentence and immediately requests the complete raw
     // snapshot. Leading/repeated spaces do not create revisions or requests.
     // Continuing to type creates a fresh trailing debounce for the complete
@@ -1737,11 +2402,11 @@ func runStreamInputPluginSmokeTest() -> Bool {
               workspace.capture(letter: "b", focusToken: focus),
               workspace.consumeIgnoredKey(keycode: 0x20, focusToken: focus),
               workspace.rawInput == "ab ",
-              workspace.railSnapshot.sourceText == "ab · ",
+              workspace.railSnapshot.sourceText == "ab ",
               provider.pending.count == 1,
               provider.pending[0].request.sourceText == "ab ",
               provider.pending[0].request.preparedPrompt?.contains(
-                "\"rawPinyin\":\"ab \""
+                "\"rawInput\":\"ab \""
               ) == true,
               workspace.maximumWaitTimerForTesting == nil else {
             return fail("Space must create one visible immediate whole-raw boundary")
@@ -1752,7 +2417,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
               workspace.capture(letter: "c", focusToken: focus),
               workspace.capture(letter: "d", focusToken: focus),
               workspace.rawInput == "ab cd",
-              workspace.railSnapshot.sourceText == "ab · cd",
+              workspace.railSnapshot.sourceText == "ab cd",
               provider.pending.count == 1,
               workspace.maximumWaitTimerForTesting != nil else {
             return fail("repeated Space must coalesce and later typing must debounce")
@@ -1761,7 +2426,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
         guard provider.pending.count == 2,
               provider.pending[1].request.sourceText == "ab cd",
               provider.pending[1].request.preparedPrompt?.contains(
-                "\"rawPinyin\":\"ab cd\""
+                "\"rawInput\":\"ab cd\""
               ) == true,
               provider.pending.allSatisfy({ !$0.task.isCancelled }) else {
             return fail("trailing debounce must request the latest complete raw")
@@ -1817,21 +2482,18 @@ func runStreamInputPluginSmokeTest() -> Bool {
         workspace.start()
         defer { workspace.stop() }
 
+        // The raw line takes any script now, so a paste is accepted as typed
+        // and Select All still replaces the whole thing atomically.
         guard workspace.insertPastedText("中文", focusToken: focus),
-              workspace.statusText.contains("只接受英文字母和空格"),
-              workspace.deleteBackward(focusToken: focus),
-              !workspace.statusText.contains("只接受英文字母和空格"),
-              workspace.capture(letter: "a", focusToken: focus),
-              workspace.capture(letter: "b", focusToken: focus),
+              workspace.rawInput == "中文",
               workspace.selectAllInput(focusToken: focus),
-              workspace.rawInputAllSelected,
-              workspace.railSnapshot.sourceSelected,
               workspace.insertPastedText("NI  HAO", focusToken: focus),
-              workspace.rawInput == "ni hao",
+              workspace.rawInput == "NI HAO",
               !workspace.rawInputAllSelected,
-              workspace.railSnapshot.sourceText == "ni · hao",
-              provider.pending.count == 1,
-              provider.pending[0].request.sourceText == "ni hao" else {
+              workspace.railSnapshot.sourceText == "NI HAO",
+              provider.pending.contains(where: {
+                  $0.request.sourceText == "NI HAO"
+              }) else {
             return fail("stream select-all paste replacement")
         }
         guard workspace.selectAllInput(focusToken: focus) else {
@@ -1839,18 +2501,12 @@ func runStreamInputPluginSmokeTest() -> Bool {
         }
         let generationBeforeInvalidPaste = workspace.deliveryGeneration
         let pendingBeforeInvalidPaste = provider.pending.count
-        guard workspace.insertPastedText("wo中文", focusToken: focus),
-              workspace.rawInput == "ni hao",
-              workspace.rawInputAllSelected,
-              workspace.deliveryGeneration == generationBeforeInvalidPaste,
-              provider.pending.count == pendingBeforeInvalidPaste,
-              workspace.statusText.contains("只接受英文字母和空格") else {
-            return fail("invalid stream paste must be atomic")
-        }
+        // Script is no longer a rejection reason; the size cap still is, and it
+        // must leave raw, the selection, and the request queue untouched.
         let oversized = String(repeating: "a",
                                count: StreamInputWorkspace.maximumRawBytes + 1)
         guard workspace.insertPastedText(oversized, focusToken: focus),
-              workspace.rawInput == "ni hao",
+              workspace.rawInput == "NI HAO",
               workspace.rawInputAllSelected,
               workspace.deliveryGeneration == generationBeforeInvalidPaste,
               provider.pending.count == pendingBeforeInvalidPaste,
@@ -1877,7 +2533,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
         guard workspace.capture(letter: "a", focusToken: focus),
               workspace.consumeIgnoredKey(keycode: 0x20, focusToken: focus),
               workspace.rawInput == "a ",
-              workspace.railSnapshot.sourceText == "a · ",
+              workspace.railSnapshot.sourceText == "a ",
               workspace.deleteBackward(focusToken: focus),
               workspace.rawInput == "a",
               workspace.railSnapshot.sourceText == "a",
@@ -2239,11 +2895,17 @@ func runStreamInputPluginSmokeTest() -> Bool {
         let partialRaw = workspace.rawInput
         let partialGeneration = workspace.deliveryGeneration
         let partialRemainingIDs = workspace.deliveryPendingBlocks.map(\.id)
-        guard workspace.insertPastedText("中文", focusToken: focus),
+        // Only an over-limit paste is rejected now, and it must still leave a
+        // partially delivered tail exactly as it was.
+        let oversizedTailPaste = String(
+            repeating: "a",
+            count: StreamInputWorkspace.maximumRawBytes + 1
+        )
+        guard workspace.insertPastedText(oversizedTailPaste, focusToken: focus),
               workspace.rawInput == partialRaw,
               workspace.deliveryGeneration == partialGeneration,
               workspace.deliveryPendingBlocks.map(\.id) == partialRemainingIDs,
-              workspace.statusText.contains("只接受英文字母和空格") else {
+              workspace.statusText.contains("超过") else {
             return fail("invalid paste after partial delivery must preserve the tail")
         }
         guard workspace.consumeIgnoredKey(keycode: 0x20, focusToken: focus),
@@ -2272,13 +2934,16 @@ func runStreamInputPluginSmokeTest() -> Bool {
         workspace.start()
         defer { workspace.stop() }
 
+        // Space carries structural meaning and never arrives through capture;
+        // every other printable character is literal raw text.
         guard !workspace.capture(letter: " ", focusToken: focus),
-              !workspace.capture(letter: "A", focusToken: focus),
               workspace.rawInput.isEmpty,
+              workspace.capture(letter: "A", focusToken: focus),
+              workspace.rawInput == "A",
               workspace.capture(letter: "a", focusToken: focus),
               workspace.settleForReturn(focusToken: focus),
               provider.pending.count == 1 else {
-            return fail("raw input must accept lowercase ASCII letters only")
+            return fail("raw input must accept any printable character")
         }
         let oldAnswer = "First useful phrase and a second useful phrase."
         provider.complete(.success([
@@ -2363,7 +3028,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
               provider.pending.count == 2,
               provider.pending[1].request.sourceText == "ab",
               provider.pending[1].request.preparedPrompt?.contains(
-                "\"rawPinyin\":\"ab\""
+                "\"rawInput\":\"ab\""
               ) == true,
               provider.pending[1].request.preparedPrompt?.contains("修复一个问题") == false else {
             return fail("latest request must contain only complete current raw input")
@@ -2487,7 +3152,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
         guard provider.pending.count == 2,
               provider.pending[1].request.sourceText == "abc",
               provider.pending[1].request.preparedPrompt?.contains(
-                "\"rawPinyin\":\"abc\""
+                "\"rawInput\":\"abc\""
               ) == true,
               provider.pending[1].request.preparedPrompt?.contains(
                 "旧请求的完整猜测"
@@ -2675,7 +3340,7 @@ func runStreamInputPluginSmokeTest() -> Bool {
               provider.pending.count == 3,
               provider.pending[2].request.sourceText == "abcd",
               provider.pending[2].request.preparedPrompt?.contains(
-                "\"rawPinyin\":\"abcd\""
+                "\"rawInput\":\"abcd\""
               ) == true,
               provider.pending[2].request.preparedPrompt?.contains(
                 "较慢中间猜测"

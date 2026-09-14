@@ -277,18 +277,10 @@ private final class SettingsChoiceCardView: NSView {
         titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
         titleLabel.textColor = RimeUI.textPrimary
         titleLabel.lineBreakMode = .byTruncatingTail
-        let detailLabel = NSTextField(labelWithString: detail)
-        detailLabel.font = .systemFont(ofSize: 9)
-        detailLabel.textColor = RimeUI.textMuted
-        detailLabel.lineBreakMode = .byTruncatingTail
-        detailLabel.toolTip = detail
-        let copy = NSStackView(views: [titleLabel, detailLabel])
-        copy.orientation = .vertical
-        copy.alignment = .leading
-        copy.spacing = 3
-        copy.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        titleLabel.toolTip = detail
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let row = NSStackView(views: [icon, copy, NSView(), choice])
+        let row = NSStackView(views: [icon, titleLabel, NSView(), choice])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 9
@@ -444,15 +436,8 @@ private final class SettingsThemeCardButton: SettingsPointingButton {
         let name = NSTextField(labelWithString: mode.title)
         name.font = .systemFont(ofSize: 11, weight: .semibold)
         name.textColor = RimeUI.color(palette.textPrimary)
-        let detail = NSTextField(labelWithString: detailText)
-        detail.font = .systemFont(ofSize: 9)
-        detail.textColor = RimeUI.color(palette.textMuted)
-        detail.lineBreakMode = .byTruncatingTail
-        let copy = NSStackView(views: [name, detail])
-        copy.orientation = .vertical
-        copy.alignment = .leading
-        copy.spacing = 3
-        copy.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        name.toolTip = detailText
+        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let status = NSTextField(labelWithString: selected ? "正在使用" : "可用")
         status.font = .systemFont(ofSize: 9, weight: .semibold)
@@ -461,7 +446,7 @@ private final class SettingsThemeCardButton: SettingsPointingButton {
             : RimeUI.color(palette.textMuted)
         status.setContentHuggingPriority(.required, for: .horizontal)
 
-        let row = NSStackView(views: [icon, copy, NSView(), status])
+        let row = NSStackView(views: [icon, name, NSView(), status])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 11
@@ -539,8 +524,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private lazy var navigation = SettingsNavigationState(catalog: routeCatalog)
     private var navButtons: [SettingsRouteID: NSButton] = [:]
     private var activePluginSettingsController: NSViewController?
-    private var activeMailboxController: MailboxPaneViewController?
-    private var activeCapsuleController: CapsulePaneViewController?
     private var statsObserver: NSObjectProtocol?
     private var pluginObserver: NSObjectProtocol?
     private var registryObserver: NSObjectProtocol?
@@ -549,17 +532,37 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private var aiConnectorObserver: NSObjectProtocol?
     private var aiConnectorAvailabilityObserver: NSObjectProtocol?
     private var appearanceObserver: NSObjectProtocol?
+    private var capsuleSyncSettingsObserver: NSObjectProtocol?
+    private var mailboxSettingsObservation: MailboxStoreObservation?
+    private weak var mailboxSettingsStatusBadge: NSTextField?
+    private weak var mailboxSettingsSummaryLabel: NSTextField?
+    private weak var mailboxSettingsStorageButton: NSButton?
+    private weak var capsuleSyncSettingsStatusBadge: NSTextField?
+    private weak var capsuleSyncSettingsDetailLabel: NSTextField?
+    private weak var capsuleSyncSettingsSyncButton: NSButton?
+    private weak var capsuleSyncSettingsChooseButton: NSButton?
+    private weak var capsuleSyncSettingsDisableButton: NSButton?
 
     private var encodingRadios: [InputEncoding: RimeFixedAccentChoiceButton] = [:]
     private var chordSchemaStatusRow: NSView?
     private let appearancePopUp = RimeFixedAccentPopUpButton()
-    private let bufferCheck = RimeFixedAccentSwitch(frame: .zero)
-    private let bufferWindowVisibleCheck = RimeFixedAccentSwitch(frame: .zero)
+    private let alignToInputBoxCheck = RimeFixedAccentSwitch(frame: .zero)
+    private let alignToInputBoxStatusLabel = NSTextField(wrappingLabelWithString: "")
     private let clipboardHistoryCheck = RimeFixedAccentSwitch(frame: .zero)
+    private let clipboardAutoPasteCheck = RimeFixedAccentSwitch(frame: .zero)
+    private let clipboardAutoPasteStatusLabel =
+        NSTextField(wrappingLabelWithString: "")
     private let closeAfterLastDeliveryCheck = RimeFixedAccentSwitch(frame: .zero)
-    private let bufferPinnedCheck = RimeFixedAccentSwitch(frame: .zero)
     private let moveBufferWindowButton = SettingsPointingButton(
         title: "移到当前屏幕",
+        target: nil,
+        action: nil
+    )
+    /// The alignment and auto-paste features default to on but stay inert
+    /// without the grant, and the probe deliberately never prompts on its own.
+    /// This is the explicit user action that asks for it.
+    private let accessibilityGrantButton = SettingsPointingButton(
+        title: "请求辅助功能权限",
         target: nil,
         action: nil
     )
@@ -638,7 +641,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private let heatmapView = KeyboardHeatmapView()
     private let pluginRowsStack = NSStackView()
     private let pluginStatusLabel = NSTextField(labelWithString: "")
-    private let settingsStatusLabel = NSTextField(labelWithString: "设置会立即应用并保存在本机")
+    private let settingsStatusLabel = NSTextField(labelWithString: "")
     private let settingsRouteLabel = NSTextField(labelWithString: "")
     private var pluginDownloadInProgress = false
     private var pluginRefreshScheduled = false
@@ -651,7 +654,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             return URL(fileURLWithPath: override, isDirectory: true)
         }
         return URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+            .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
     }
 
     private var installLogURL: URL {
@@ -1135,6 +1138,60 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             print("settings render sidebar content width drifted")
             return false
         }
+        if selectedCoreRoute == .mailbox || selectedCoreRoute == .capsule {
+            let routeName = selectedCoreRoute == .mailbox ? "mailbox" : "capsule"
+            let configurationID = NSUserInterfaceItemIdentifier(
+                "settings.\(routeName)-configuration"
+            )
+            let legacyPaneID = NSUserInterfaceItemIdentifier(
+                "settings.\(routeName)-pane"
+            )
+            guard let configuration = descendant(
+                identifiedBy: configurationID,
+                in: content
+            ), descendant(identifiedBy: legacyPaneID, in: content) == nil else {
+                print("settings render \(routeName) embedded a management pane")
+                return false
+            }
+            guard let scroll = descendant(
+                identifiedBy: NSUserInterfaceItemIdentifier("settings.page-scroll"),
+                in: content
+            ) as? NSScrollView else {
+                print("settings render \(routeName) configuration is not scrollable")
+                return false
+            }
+            let configurationRect = configuration.convert(
+                configuration.bounds,
+                to: content
+            )
+            let viewportRect = scroll.contentView.convert(
+                scroll.contentView.bounds,
+                to: content
+            )
+            guard configurationRect.minX >= viewportRect.minX - 0.5,
+                  configurationRect.maxX <= viewportRect.maxX + 0.5,
+                  scroll.hasHorizontalScroller == false else {
+                print("settings render \(routeName) overflows 980pt preview width")
+                return false
+            }
+            let routeSpecificIDs: [String] = selectedCoreRoute == .mailbox
+                ? [
+                    "settings.mailbox-actions",
+                    "settings.utility-shortcut.openMailbox",
+                ]
+                : [
+                    "settings.capsule-passcode-configuration",
+                    "settings.capsule-cloud-actions",
+                    "settings.utility-shortcut.toggleClipboardHistory",
+                ]
+            for identifier in routeSpecificIDs where descendant(
+                identifiedBy: NSUserInterfaceItemIdentifier(identifier),
+                in: configuration
+            ) == nil {
+                print("settings render \(routeName) missing configuration: \(identifier)")
+                return false
+            }
+        }
         return true
     }
 
@@ -1456,6 +1513,26 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             }
         }
 
+        capsuleSyncSettingsObserver = NotificationCenter.default.addObserver(
+            forName: .capsuleCloudSyncStatusDidChange,
+            object: CapsuleCloudSyncController.shared,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self,
+                  self.window?.isVisible == true,
+                  self.selectedCoreRoute == .capsule else { return }
+            self.refreshCapsuleSyncSettingsControls()
+        }
+
+        mailboxSettingsObservation = MailboxStore.shared.observe(
+            deliverInitial: false
+        ) { [weak self] _ in
+            guard let self,
+                  self.window?.isVisible == true,
+                  self.selectedCoreRoute == .mailbox else { return }
+            self.refreshMailboxSettingsStatus()
+        }
+
         window = win
     }
 
@@ -1474,16 +1551,19 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         window.contentView?.needsDisplay = true
         refreshSidebarSelection()
         guard rebuildVisibleRoute, window.isVisible else { return }
-        if activeCapsuleController?.hasUnsavedChanges == true {
-            activeCapsuleController?.applyAppearance()
-            return
-        }
         reload()
         showCurrentRoute()
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        activeCapsuleController?.confirmDiscardChangesIfNeeded() ?? true
+        confirmLeavingChordEditor()
+    }
+
+    private func confirmLeavingChordEditor() -> Bool {
+        guard !ChordKeymapActivationCoordinator.shared.isApplying,
+              !chordExtensionDeploymentInProgress else { return false }
+        return (activePluginSettingsController as? FlyChordLearningSettingsViewController)?
+            .confirmCanLeave() ?? true
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -1511,11 +1591,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         // pages must not be: they observe high-frequency metric stores. Drop
         // the hosted view/controller so a closed Settings window does no
         // hidden AppKit work on the IME main thread.
+        activePluginSettingsController?.viewWillDisappear()
         contentHost.subviews.forEach { $0.removeFromSuperview() }
         activePluginSettingsController = nil
-        activeMailboxController = nil
-        activeCapsuleController?.discardEditorForClose()
-        activeCapsuleController = nil
         candidatePreview = nil
         StandaloneWindowFocusCoordinator.shared.windowWillClose(closingWindow)
     }
@@ -1570,21 +1648,24 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         claudeLoginStatusLabel.textColor = RimeUI.textMuted
         claudeLoginStatusLabel.translatesAutoresizingMaskIntoConstraints = false
         claudeLoginStatusLabel.widthAnchor.constraint(equalToConstant: 626).isActive = true
-        bufferCheck.target = self
-        bufferCheck.action = #selector(bufferToggled)
-        bufferCheck.setAccessibilityLabel("启用缓冲模式")
-        bufferWindowVisibleCheck.target = self
-        bufferWindowVisibleCheck.action = #selector(bufferWindowVisibilityToggled)
-        bufferWindowVisibleCheck.setAccessibilityLabel("显示独立缓冲工作台")
+        alignToInputBoxCheck.target = self
+        alignToInputBoxCheck.action = #selector(alignToInputBoxToggled)
+        alignToInputBoxCheck.setAccessibilityLabel("工作台对齐目标输入框")
+        alignToInputBoxStatusLabel.font = .systemFont(ofSize: 11)
+        alignToInputBoxStatusLabel.textColor = RimeUI.textMuted
         clipboardHistoryCheck.target = self
         clipboardHistoryCheck.action = #selector(clipboardHistoryToggled)
         clipboardHistoryCheck.setAccessibilityLabel("允许独立 Clipboard History 收录剪贴板内容")
+        accessibilityGrantButton.target = self
+        accessibilityGrantButton.action = #selector(requestAccessibilityGrant)
+        clipboardAutoPasteCheck.target = self
+        clipboardAutoPasteCheck.action = #selector(clipboardAutoPasteToggled)
+        clipboardAutoPasteCheck.setAccessibilityLabel("回车后自动粘贴")
+        clipboardAutoPasteStatusLabel.font = .systemFont(ofSize: 11)
+        clipboardAutoPasteStatusLabel.textColor = RimeUI.textMuted
         closeAfterLastDeliveryCheck.target = self
         closeAfterLastDeliveryCheck.action = #selector(closeAfterLastDeliveryToggled)
         closeAfterLastDeliveryCheck.setAccessibilityLabel("最后一块上屏后关闭工作台")
-        bufferPinnedCheck.target = self
-        bufferPinnedCheck.action = #selector(bufferPinnedToggled)
-        bufferPinnedCheck.setAccessibilityLabel("常显于所有桌面与全屏空间")
         moveBufferWindowButton.target = self
         moveBufferWindowButton.action = #selector(moveBufferWindow)
         resetOnAppSwitchCheck.target = self
@@ -1851,17 +1932,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
     private func showCurrentRoute() {
         guard let route = selectedRoute else { return }
-        if activeCapsuleController?.hasUnsavedChanges == true,
-           route.id == SettingsCoreRoute.capsule.id {
-            activeCapsuleController?.applyAppearance()
-            refreshSidebarSelection()
-            return
-        }
         refreshSidebarSelection()
+        // Plugin views are embedded directly, not as child controllers. Notify
+        // the page before releasing its owner so active practice can freeze and
+        // save an interrupted result before its editor disappears.
+        activePluginSettingsController?.viewWillDisappear()
         activePluginSettingsController = nil
-        activeMailboxController = nil
-        activeCapsuleController?.discardEditorForClose()
-        activeCapsuleController = nil
         contentHost.subviews.forEach { $0.removeFromSuperview() }
 
         let subpageID = navigation.selectedSubpage()?.rawValue
@@ -1878,10 +1954,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 activePluginSettingsController = controller
                 body = controller.view
             } else {
-                body = contentColumn([
-                    title(route.title),
-                    caption("扩展页面当前不可用，可在“插件”中重新启用。"),
-                ])
+                body = contentColumn([])
             }
         }
 
@@ -1910,7 +1983,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         case .inputMethod: return inputPage(subpageID: subpageID ?? "encoding")
         case .appearance: return appearancePage(subpageID: subpageID ?? "theme")
         case .buffer: return bufferPage(subpageID: subpageID ?? "buffer")
-        case .clipboard: return clipSettingsPage()
         case .mailbox: return mailboxPage()
         case .capsule: return capsulePage()
         case .connectors: return connectionsPage(subpageID: subpageID ?? "ai-model")
@@ -1956,26 +2028,15 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         headingTitle.font = .systemFont(ofSize: 20, weight: .bold)
         headingTitle.textColor = RimeUI.textPrimary
         headingTitle.lineBreakMode = .byTruncatingTail
-        let headingDescription = NSTextField(
-            wrappingLabelWithString: routeDescription(route)
-        )
-        headingDescription.font = .systemFont(ofSize: 11)
-        headingDescription.textColor = RimeUI.textSecondary
-        headingDescription.maximumNumberOfLines = 2
-        headingDescription.lineBreakMode = .byWordWrapping
-        let headingCopy = NSStackView(views: [headingTitle, headingDescription])
-        headingCopy.orientation = .vertical
-        headingCopy.alignment = .leading
-        headingCopy.spacing = 7
-        headingCopy.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        headingTitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        var headingViews: [NSView] = [headingCopy, flexSpacer()]
+        var headingViews: [NSView] = [headingTitle, flexSpacer()]
         if let configure = headerConfigurationButton(for: route) {
             headingViews.append(configure)
         }
         let headingRow = NSStackView(views: headingViews)
         headingRow.orientation = .horizontal
-        headingRow.alignment = .top
+        headingRow.alignment = .centerY
         headingRow.spacing = 16
         headingRow.translatesAutoresizingMaskIntoConstraints = false
         let headingBar = SettingsChromeView(fill: .settings, border: .none)
@@ -1986,15 +2047,13 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             headingBar.heightAnchor.constraint(equalToConstant: 84),
             headingRow.leadingAnchor.constraint(equalTo: headingBar.leadingAnchor, constant: 24),
             headingRow.trailingAnchor.constraint(equalTo: headingBar.trailingAnchor, constant: -24),
-            headingRow.topAnchor.constraint(equalTo: headingBar.topAnchor, constant: 18),
-            headingCopy.widthAnchor.constraint(lessThanOrEqualToConstant: 650),
+            headingRow.centerYAnchor.constraint(equalTo: headingBar.centerYAnchor),
+            headingTitle.widthAnchor.constraint(lessThanOrEqualToConstant: 650),
         ])
 
         let bodyHost: NSView
-        if body is NSScrollView
-            || body.identifier?.rawValue == "settings.mailbox-pane"
-            || body.identifier?.rawValue == "settings.capsule-pane" {
-            // Page-owned controllers may preserve their own scroll positions;
+        if body is NSScrollView {
+            // Page-owned plugin controllers may preserve their own scroll positions;
             // do not nest them in another scroll view with zero intrinsic height.
             bodyHost = body
         } else {
@@ -2025,18 +2084,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         settingsStatusLabel.removeFromSuperview()
         settingsRouteLabel.removeFromSuperview()
         settingsRouteLabel.stringValue = "\(route.id.rawValue) · \(navigation.selectedSubpage()?.rawValue ?? "")"
-        let statusIcon = NSImageView()
-        statusIcon.image = NSImage(systemSymbolName: "info.circle",
-                                   accessibilityDescription: "设置状态")?
-            .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
-        statusIcon.imageScaling = .scaleProportionallyDown
-        statusIcon.contentTintColor = RimeUI.accentTextColor
-        statusIcon.setAccessibilityElement(false)
-        statusIcon.translatesAutoresizingMaskIntoConstraints = false
-        statusIcon.widthAnchor.constraint(equalToConstant: 15).isActive = true
-        statusIcon.heightAnchor.constraint(equalToConstant: 15).isActive = true
         let statusRow = NSStackView(
-            views: [statusIcon, settingsStatusLabel, flexSpacer(), settingsRouteLabel]
+            views: [settingsStatusLabel, flexSpacer(), settingsRouteLabel]
         )
         statusRow.orientation = .horizontal
         statusRow.alignment = .centerY
@@ -2065,44 +2114,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         bodyHost.setContentHuggingPriority(.defaultLow, for: .vertical)
         bodyHost.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         return root
-    }
-
-    private func routeDescription(_ route: SettingsRouteDescriptor) -> String {
-        switch route.source {
-        case let .core(core):
-            switch core {
-            case .inputMethod:
-                return "管理输入方案、词库与本地学习数据；并击能力由扩展单独提供。"
-            case .appearance:
-                return "主题同时作用于候选框、缓冲工作台与设置页预览。"
-            case .buffer:
-                return "管理缓冲输入工作台。"
-            case .clipboard:
-                return "管理独立、仅在本机持久保存的 Clipboard History。"
-            case .mailbox:
-                return "独立管理本地保存的 AI 会话与待审核外部推送。"
-            case .capsule:
-                return "独立管理本机 Prompt、Memory、Password、Skill、Note、URL、Image 与 PDF。"
-            case .connectors:
-                return "管理 AI 模型与本地网关。"
-            case .plugins:
-                return "管理工作台可用的缓冲插件与随应用提供的内部扩展。"
-            case .maintenance:
-                return "检查更新、重启输入法，以及查看本地日志和数据。"
-            }
-        case let .builtInPlugin(pluginKey):
-            switch pluginKey.rawID {
-            case BuiltInPluginID.typingSpeed:
-                return "查看当前活跃输入速度和本地历史趋势。"
-            case BuiltInPluginID.statistics:
-                return "查看按键分布、每日计数与全部历史。"
-            case BuiltInPluginID.flyChordLearning:
-                return "配置飞耀并击或互击输入，并进行课程与专项练习。"
-            default:
-                return PluginRegistry.shared.internalPlugin(pluginKey: pluginKey)?
-                    .descriptor.summary ?? "管理这个扩展的本地设置与状态。"
-            }
-        }
     }
 
     private func headerConfigurationButton(
@@ -2146,21 +2157,11 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             target: self,
             action: #selector(openDir)
         )
-        let note = NSTextField(wrappingLabelWithString:
-            "配置目录是 ~/Library/RimeBuffer。未显示的方案文件仅作为词典或反查依赖保留，不会出现在 F4。")
-        note.font = .systemFont(ofSize: 11)
-        note.textColor = RimeUI.textMuted
+        openDirBtn.toolTip = "配置目录是 ~/Library/\(RimesPaths.directoryName)。未显示的方案文件仅作为词典或反查依赖保留，不会出现在 F4。"
 
         switch subpageID {
         case "dictionaries":
-            let learning = NSTextField(wrappingLabelWithString:
-                "Rime 会在独立的 ~/Library/RimeBuffer 中学习词频。这里导入、导出的只是可移植学习记录，不会复制或替换正在使用的 LevelDB。")
-            learning.font = .systemFont(ofSize: 11)
-            learning.textColor = RimeUI.textMuted
             return contentColumn([
-                title("词库"),
-                caption("词库负责候选内容；输入方案决定如何检索与组织候选。"),
-                spacer(8),
                 sectionLabel("已安装词库"),
                 lexiconCard(kind: .chinese,
                             title: "雾凇拼音",
@@ -2173,17 +2174,16 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                             detail: "英文候选、补全、生词兜底与独立学习"),
                 spacer(16),
                 sectionLabel("用户学习"),
-                learning,
                 openDirBtn,
-                note,
             ])
         default:
             let chordStatus = chordSchemaStatusView()
+            let recovery = caption(ChordKeymapActivationCoordinator.shared.recoveryMessage ?? "")
+            recovery.textColor = .systemRed
+            recovery.isHidden = ChordKeymapActivationCoordinator.shared.recoveryMessage == nil
             return contentColumn([
-                title("输入方案"),
-                caption("单独轻点 Shift 切换中英；Shift 与字母/标点组合或持续按住 500 ms 后，会保持按下前的输入模式。"),
-                spacer(8),
                 chordStatus,
+                recovery,
                 inputEncodingSelectionView(),
             ])
         }
@@ -2252,15 +2252,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         return badge
     }
 
-    private func connectorNote(_ text: String) -> NSTextField {
-        let note = NSTextField(wrappingLabelWithString: text)
-        note.font = .systemFont(ofSize: 9)
-        note.textColor = RimeUI.textMuted
-        note.translatesAutoresizingMaskIntoConstraints = false
-        note.widthAnchor.constraint(equalToConstant: 626).isActive = true
-        return note
-    }
-
+    /// The row's name is its identifier, not a description, so it stays on
+    /// screen; `detail` is explanatory prose and stays off it, kept reachable
+    /// only as a tooltip so the information isn't lost, just not always-on.
     private func settingsRow(title: String,
                              detail: String,
                              symbolName: String,
@@ -2275,18 +2269,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         name.font = .systemFont(ofSize: 11, weight: .semibold)
         name.textColor = RimeUI.textPrimary
         name.lineBreakMode = .byTruncatingTail
-        let detailLabel = NSTextField(labelWithString: detail)
-        detailLabel.font = .systemFont(ofSize: 9)
-        detailLabel.textColor = RimeUI.textMuted
-        detailLabel.lineBreakMode = .byTruncatingTail
-        detailLabel.toolTip = detail
-        let copy = NSStackView(views: [name, detailLabel])
-        copy.orientation = .vertical
-        copy.alignment = .leading
-        copy.spacing = 3
-        copy.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        name.toolTip = detail
 
-        let row = NSStackView(views: [icon, copy, flexSpacer(), control])
+        let row = NSStackView(views: [icon, name, flexSpacer(), control])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 10
@@ -2300,9 +2285,178 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         row.layer?.cornerRadius = 8
         row.translatesAutoresizingMaskIntoConstraints = false
         row.widthAnchor.constraint(equalToConstant: width).isActive = true
-        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 58).isActive = true
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 46).isActive = true
         control.setContentHuggingPriority(.required, for: .horizontal)
         return row
+    }
+
+    private func utilityStatusBadge(_ text: String,
+                                    active: Bool) -> NSTextField {
+        let badge = NSTextField(labelWithString: text)
+        badge.font = .systemFont(ofSize: 10, weight: .semibold)
+        badge.alignment = .center
+        badge.wantsLayer = true
+        badge.layer?.borderWidth = SettingsVisualStyle.hairline(
+            backingScale: window?.backingScaleFactor
+        )
+        badge.layer?.cornerRadius = 7
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        badge.widthAnchor.constraint(greaterThanOrEqualToConstant: 62).isActive = true
+        badge.heightAnchor.constraint(equalToConstant: 24).isActive = true
+        applyUtilityStatusBadge(badge, text: text, active: active)
+        return badge
+    }
+
+    private func applyUtilityStatusBadge(_ badge: NSTextField,
+                                         text: String,
+                                         active: Bool) {
+        badge.stringValue = text
+        badge.textColor = active ? themeStatusColor : RimeUI.textMuted
+        badge.layer?.backgroundColor = (active
+            ? RimeUI.accentGreen.withAlphaComponent(0.12)
+            : RimeUI.surface3).cgColor
+        badge.layer?.borderColor = (active
+            ? RimeUI.accentGreen.withAlphaComponent(0.34)
+            : RimeUI.border).cgColor
+    }
+
+    private func utilityShortcutRecorder(
+        for action: RimeShortcutAction
+    ) -> RimeShortcutRecorderButton {
+        let recorder = RimeShortcutRecorderButton(action: action)
+        recorder.identifier = NSUserInterfaceItemIdentifier(
+            "settings.utility-shortcut.\(action.rawValue)"
+        )
+        recorder.onFeedback = { [weak self] message in
+            guard let self else { return }
+            self.settingsStatusLabel.stringValue = message
+                ?? ""
+            self.settingsStatusLabel.textColor = message?.contains("冲突") == true
+                ? .systemRed
+                : RimeUI.textMuted
+        }
+        return recorder
+    }
+
+    private func utilityActionRow(_ buttons: [NSButton]) -> NSView {
+        let row = NSStackView(views: buttons)
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.widthAnchor.constraint(lessThanOrEqualToConstant: 650).isActive = true
+        return row
+    }
+
+    private func refreshMailboxSettingsStatus(
+        snapshot: MailboxStoreSnapshot = MailboxStore.shared.snapshot
+    ) {
+        switch snapshot.persistence {
+        case .available:
+            if let badge = mailboxSettingsStatusBadge {
+                applyUtilityStatusBadge(badge, text: "可用", active: true)
+            }
+            mailboxSettingsSummaryLabel?.stringValue =
+                "当前有 \(snapshot.threads.count) 个会话，\(snapshot.unreadCount) 条未读。"
+            mailboxSettingsStorageButton?.isEnabled = true
+        case let .unavailable(reason):
+            if let badge = mailboxSettingsStatusBadge {
+                applyUtilityStatusBadge(badge, text: "不可用", active: false)
+            }
+            mailboxSettingsSummaryLabel?.stringValue = reason
+            mailboxSettingsStorageButton?.isEnabled = false
+        }
+    }
+
+    private func capsuleCloudStatusTitle(
+        _ status: CapsuleCloudSyncStatus
+    ) -> String {
+        switch status.phase {
+        case .unconfigured: return "未设置"
+        case .unavailable: return "不可用"
+        case .idle: return "等待同步"
+        case .syncing: return "同步中"
+        case .synced: return "已同步"
+        case .failed: return "同步失败"
+        }
+    }
+
+    private func capsuleCloudStatusDetail(
+        _ status: CapsuleCloudSyncStatus
+    ) -> String {
+        var pieces: [String] = []
+        if let folderName = status.folderName, !folderName.isEmpty {
+            pieces.append("文件夹：\(folderName)")
+        }
+        pieces.append(status.message)
+        if status.conflictCount > 0 {
+            pieces.append("\(status.conflictCount) 个冲突")
+        }
+        if status.deferredCount > 0 {
+            pieces.append("\(status.deferredCount) 个媒体待下载")
+        }
+        return pieces.joined(separator: " · ")
+    }
+
+    private func capsuleCloudActionRow(
+        status: CapsuleCloudSyncStatus
+    ) -> NSView {
+        let choose = SettingsPointingButton(
+            title: status.isConfigured ? "更换文件夹…" : "选择 iCloud 文件夹…",
+            target: self,
+            action: #selector(chooseCapsuleCloudFolder)
+        )
+        choose.bezelStyle = .rounded
+
+        let sync = SettingsPointingButton(
+            title: status.isBusy ? "正在同步…" : "立即同步",
+            target: self,
+            action: #selector(syncCapsuleCloudNow)
+        )
+        sync.bezelStyle = .rounded
+        sync.bezelColor = RimeUI.accentGreen
+
+        let disable = SettingsPointingButton(
+            title: "停用自动同步",
+            target: self,
+            action: #selector(disableCapsuleCloudSync)
+        )
+        disable.bezelStyle = .rounded
+
+        capsuleSyncSettingsSyncButton = sync
+        capsuleSyncSettingsChooseButton = choose
+        capsuleSyncSettingsDisableButton = disable
+        let row = utilityActionRow([sync, choose, disable])
+        row.identifier = NSUserInterfaceItemIdentifier(
+            "settings.capsule-cloud-actions"
+        )
+        refreshCapsuleSyncSettingsControls(status: status)
+        return row
+    }
+
+    private func refreshCapsuleSyncSettingsControls(
+        status: CapsuleCloudSyncStatus = CapsuleCloudSyncController.shared.status
+    ) {
+        if let badge = capsuleSyncSettingsStatusBadge {
+            applyUtilityStatusBadge(
+                badge,
+                text: capsuleCloudStatusTitle(status),
+                active: status.phase == .idle || status.phase == .synced
+                    || status.phase == .syncing
+            )
+        }
+        capsuleSyncSettingsDetailLabel?.stringValue = capsuleCloudStatusDetail(status)
+        capsuleSyncSettingsChooseButton?.title = status.isConfigured
+            ? "更换文件夹…"
+            : "选择 iCloud 文件夹…"
+        capsuleSyncSettingsSyncButton?.isHidden = !status.isConfigured
+        capsuleSyncSettingsDisableButton?.isHidden = !status.isConfigured
+        capsuleSyncSettingsSyncButton?.title = status.isBusy
+            ? "正在同步…"
+            : "立即同步"
+        capsuleSyncSettingsSyncButton?.isEnabled = status.isConfigured && !status.isBusy
+        capsuleSyncSettingsChooseButton?.isEnabled = !status.isBusy
+        capsuleSyncSettingsDisableButton?.isEnabled = status.isConfigured && !status.isBusy
     }
 
     private func themePreviewCard(_ mode: RimeAppearanceMode) -> NSView {
@@ -2330,12 +2484,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             status.hasLearningDatabase ? "学习库已建立" : "尚未建立学习库")
         statusLabel.font = .systemFont(ofSize: 9, weight: .semibold)
         statusLabel.textColor = status.hasLearningDatabase ? themeStatusColor : RimeUI.textMuted
-
-        let detailLabel = NSTextField(wrappingLabelWithString: detail)
-        detailLabel.font = .systemFont(ofSize: 9)
-        detailLabel.textColor = RimeUI.textMuted
-        detailLabel.lineBreakMode = .byTruncatingTail
-        detailLabel.toolTip = detail
+        name.toolTip = detail
 
         let importButton = SettingsLexiconButton(title: "导入学习…",
                                                   target: self,
@@ -2354,11 +2503,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         header.orientation = .horizontal
         header.alignment = .firstBaseline
         header.spacing = 6
-        let copy = NSStackView(views: [header, detailLabel])
-        copy.orientation = .vertical
-        copy.alignment = .leading
-        copy.spacing = 3
-        copy.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        header.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let actions = NSStackView(views: [importButton, exportButton])
         actions.orientation = .horizontal
@@ -2369,7 +2514,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             symbolName: "book.closed",
             accessibilityDescription: title
         )
-        let card = NSStackView(views: [icon, copy, flexSpacer(), actions])
+        let card = NSStackView(views: [icon, header, flexSpacer(), actions])
         card.orientation = .horizontal
         card.alignment = .centerY
         card.spacing = 10
@@ -2383,7 +2528,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         card.layer?.cornerRadius = 8
         card.translatesAutoresizingMaskIntoConstraints = false
         card.widthAnchor.constraint(equalToConstant: 650).isActive = true
-        card.heightAnchor.constraint(equalToConstant: 58).isActive = true
+        card.heightAnchor.constraint(greaterThanOrEqualToConstant: 46).isActive = true
         return card
     }
 
@@ -2420,14 +2565,14 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     private func chordSchemaStatusView() -> NSView {
-        let mode = ChordExtensionStore.shared.mode.implementationName
+        let implementation = ChordExtensionStore.shared.implementationName
         let badge = NSTextField(labelWithString: "并击")
         badge.font = .systemFont(ofSize: 10, weight: .semibold)
         badge.textColor = themeStatusColor
         badge.setContentHuggingPriority(.required, for: .horizontal)
         let row = settingsRow(
             title: "当前使用并击扩展",
-            detail: "正在使用\(mode)；选择下方任一方案即可切回普通输入。",
+            detail: "正在使用\(implementation)；选择下方任一方案即可切回普通输入。",
             symbolName: "hands.sparkles",
             control: badge
         )
@@ -2483,9 +2628,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         if subpageID == "theme" {
             appearancePopUp.removeFromSuperview()
             return contentColumn([
-                title("主题"),
-                caption("经典主题提供三种配色；拉斯塔主题同时使用红、黄、绿建立层级。"),
-                spacer(8),
                 sectionLabel("经典 · 配色"),
                 themePreviewCard(.night),
                 themePreviewCard(.day),
@@ -2499,13 +2641,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         candidatePreview = preview
         refreshBufferWidthControls()
         return contentColumn([
-            title("尺寸"),
-            caption("分别调整候选窗与缓冲工作台。候选窗可即时预览；工作台高度会根据内容自动适配。"),
-            spacer(8),
             sectionLabel("候选窗预览"),
             preview,
             spacer(12),
-            secondaryLabel("滑块灰色区间表示当前不支持（受关联项限制），无法调整。"),
             candidateMetricsView(),
             spacer(20),
             sectionLabel("缓冲工作台"),
@@ -2519,56 +2657,192 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     private func mailboxPage() -> NSView {
-        let controller = MailboxPaneViewController(
-            reviewRouter: MailboxBufferReviewAdapter.shared
+        let snapshot = MailboxStore.shared.snapshot
+        let persistenceDetail: String
+        let persistenceBadge: NSTextField
+        switch snapshot.persistence {
+        case .available:
+            persistenceDetail = "0600 JSON 原子落盘；内容只保存在本机。"
+            persistenceBadge = utilityStatusBadge("可用", active: true)
+        case let .unavailable(reason):
+            persistenceDetail = reason
+            persistenceBadge = utilityStatusBadge("不可用", active: false)
+        }
+
+        let openButton = SettingsPointingButton(
+            title: "打开 Mailbox",
+            target: self,
+            action: #selector(openMailboxWindowFromSettings)
         )
-        activeMailboxController = controller
-        let pane = controller.view
-        pane.identifier = NSUserInterfaceItemIdentifier(
-            "settings.mailbox-pane"
+        openButton.bezelStyle = .rounded
+        openButton.bezelColor = RimeUI.accentGreen
+
+        let storageButton = SettingsPointingButton(
+            title: "打开存储目录",
+            target: self,
+            action: #selector(openMailboxStorageDirectory)
         )
-        return pane
+        storageButton.bezelStyle = .rounded
+        storageButton.isEnabled = snapshot.persistence == .available
+        mailboxSettingsStorageButton = storageButton
+        mailboxSettingsStatusBadge = persistenceBadge
+
+        let connectorButton = SettingsPointingButton(
+            title: "AI 模型设置",
+            target: self,
+            action: #selector(openAIModelSettingsFromMailbox)
+        )
+        connectorButton.bezelStyle = .rounded
+
+        let shortcutRecorder = utilityShortcutRecorder(for: .openMailbox)
+        let actions = utilityActionRow([openButton, storageButton, connectorButton])
+        actions.identifier = NSUserInterfaceItemIdentifier(
+            "settings.mailbox-actions"
+        )
+        let path = MailboxStore.shared.storageDirectoryURL.path
+        let pathLabel = secondaryLabel("本地路径：\(path)")
+        pathLabel.toolTip = path
+        pathLabel.translatesAutoresizingMaskIntoConstraints = false
+        pathLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 650).isActive = true
+        let summaryLabel = secondaryLabel("")
+        summaryLabel.translatesAutoresizingMaskIntoConstraints = false
+        summaryLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 650).isActive = true
+        mailboxSettingsSummaryLabel = summaryLabel
+        refreshMailboxSettingsStatus(snapshot: snapshot)
+
+        let page = contentColumn([
+            sectionLabel("运行与存储"),
+            settingsRow(
+                title: "本地会话存储",
+                detail: persistenceDetail,
+                symbolName: "externaldrive",
+                control: persistenceBadge
+            ),
+            summaryLabel,
+            actions,
+            pathLabel,
+            spacer(12),
+            sectionLabel("全局快捷键"),
+            settingsRow(
+                title: "显示或隐藏 Mailbox",
+                detail: "当前为 \(RimeShortcutPreferences.shortcut(for: .openMailbox).displayTitle)；在其他输入法下同样可用。",
+                symbolName: "keyboard",
+                control: shortcutRecorder
+            ),
+        ])
+        page.identifier = NSUserInterfaceItemIdentifier(
+            "settings.mailbox-configuration"
+        )
+        return page
     }
 
     private func capsulePage() -> NSView {
-        let controller = CapsulePaneViewController()
-        activeCapsuleController = controller
-        let pane = controller.view
-        pane.identifier = NSUserInterfaceItemIdentifier(
-            "settings.capsule-pane"
+        let localDetail: String
+        let localIsAvailable: Bool
+        do {
+            let contentCount = try CapsuleContentStore.shared.listRecords().count
+            let passwordCount = try CapsulePasswordStore().listSummaries().count
+            localDetail = "\(contentCount) 个普通条目，\(passwordCount) 个加密密码条目。"
+            localIsAvailable = true
+        } catch {
+            localDetail = "无法读取本地资料库：\(error.localizedDescription)"
+            localIsAvailable = false
+        }
+        let localRoot = CapsuleContentStore.shared.rootURL
+        let localBadge = utilityStatusBadge(
+            localIsAvailable ? "可用" : "检查失败",
+            active: localIsAvailable
         )
-        return pane
+
+        let storageButton = SettingsPointingButton(
+            title: "打开资料目录",
+            target: self,
+            action: #selector(openCapsuleStorageDirectory)
+        )
+        storageButton.bezelStyle = .rounded
+
+        let shortcutRecorder = utilityShortcutRecorder(for: .toggleClipboardHistory)
+        let localActions = utilityActionRow([storageButton])
+        let pathLabel = secondaryLabel("本地路径：\(localRoot.path)")
+        pathLabel.toolTip = localRoot.path
+        pathLabel.translatesAutoresizingMaskIntoConstraints = false
+        pathLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 650).isActive = true
+
+        let syncStatus = CapsuleCloudSyncController.shared.status
+        let syncBadge = utilityStatusBadge(
+            capsuleCloudStatusTitle(syncStatus),
+            active: syncStatus.phase == .idle || syncStatus.phase == .synced
+                || syncStatus.phase == .syncing
+        )
+        capsuleSyncSettingsStatusBadge = syncBadge
+        let syncDetailLabel = secondaryLabel(capsuleCloudStatusDetail(syncStatus))
+        syncDetailLabel.translatesAutoresizingMaskIntoConstraints = false
+        syncDetailLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 650).isActive = true
+        capsuleSyncSettingsDetailLabel = syncDetailLabel
+        let syncActions = capsuleCloudActionRow(status: syncStatus)
+
+        let revealPasscodeSettings = CapsuleRevealPasscodeSettingsView()
+        revealPasscodeSettings.identifier = NSUserInterfaceItemIdentifier(
+            "settings.capsule-passcode-configuration"
+        )
+        revealPasscodeSettings.translatesAutoresizingMaskIntoConstraints = false
+        revealPasscodeSettings.widthAnchor.constraint(equalToConstant: 650).isActive = true
+
+        // Capsule's Recent tab is the clipboard history, so its capture and
+        // paste settings live on this page too.
+        let page = contentColumn([
+            settingsRow(
+                title: "允许收录剪贴板内容",
+                detail: "RIMES 运行时后台收录；安全输入、锁屏和休眠期间不会读取。",
+                symbolName: "clipboard",
+                control: clipboardHistoryCheck
+            ),
+            settingsRow(
+                title: "回车后自动粘贴",
+                detail: "无法经输入法直接上屏的内容，改为发送一次 ⌘V，省去手动粘贴。",
+                symbolName: "doc.on.clipboard",
+                control: clipboardAutoPasteCheck
+            ),
+            clipboardAutoPasteStatusLabel,
+            spacer(12),
+            sectionLabel("本地资料库"),
+            settingsRow(
+                title: "本地 Capsule",
+                detail: localDetail,
+                symbolName: "archivebox",
+                control: localBadge
+            ),
+            localActions,
+            pathLabel,
+            spacer(12),
+            sectionLabel("全局快捷键"),
+            settingsRow(
+                title: "显示或隐藏 Capsule",
+                detail: "当前为 \(RimeShortcutPreferences.shortcut(for: .toggleClipboardHistory).displayTitle)；在其他输入法下同样可用。",
+                symbolName: "keyboard",
+                control: shortcutRecorder
+            ),
+            spacer(12),
+            revealPasscodeSettings,
+            spacer(12),
+            sectionLabel("iCloud 自动同步"),
+            settingsRow(
+                title: "同步状态",
+                detail: "配置 iCloud Drive 文件夹，并自动同步普通条目与媒体。",
+                symbolName: "icloud",
+                control: syncBadge
+            ),
+            syncDetailLabel,
+            syncActions,
+        ])
+        page.identifier = NSUserInterfaceItemIdentifier(
+            "settings.capsule-configuration"
+        )
+        return page
     }
 
     private func bufferSettingsPage() -> NSView {
-        let deliveryShortcut = RimeShortcutPreferences
-            .shortcut(for: .deliverBuffer)
-            .displayTitle
-        let note = NSTextField(wrappingLabelWithString:
-            "缓冲区开启后，Rime 提交内容会进入单行缓冲条；轻按 \(deliveryShortcut) 或点击右侧纸飞机发送下一块，按住 \(deliveryShortcut) 约 1.2 秒发送全部。AI 生成插件会复用右侧主按钮和同一投递键请求 AI，结果就绪后再变回逐块发送。成功发送的块会立即消失；失败或未发送的块不会丢失，也不会保存发送历史。")
-        note.font = .systemFont(ofSize: 11)
-        note.textColor = RimeUI.textMuted
-
-        let secureNote = NSTextField(wrappingLabelWithString:
-            "安全：当系统安全输入生效时，工作台会隐藏正文，并禁用发送与插件操作。此保护始终开启。")
-        secureNote.font = .systemFont(ofSize: 11)
-        secureNote.textColor = RimeUI.textMuted
-
         return contentColumn([
-            title("缓冲区"),
-            caption("关闭工作台会暂停捕获并收束瞬态状态，但保留已经形成的块。"),
-            settingsRow(
-                title: "启用缓冲模式",
-                detail: "提交内容先暂存，确认后再发送到当前文本框。",
-                symbolName: "tray.full",
-                control: bufferCheck
-            ),
-            settingsRow(
-                title: "显示独立缓冲工作台",
-                detail: "打开后先由工作台接管输入；当前文本框保留为上屏目标。",
-                symbolName: "eye",
-                control: bufferWindowVisibleCheck
-            ),
             settingsRow(
                 title: "最后一块上屏后关闭工作台",
                 detail: "适用于 Default 与所有缓冲插件；部分失败或内容变化时保持打开。",
@@ -2576,11 +2850,13 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 control: closeAfterLastDeliveryCheck
             ),
             settingsRow(
-                title: "常显于所有桌面与全屏空间",
-                detail: "适合在应用和全屏空间之间切换时持续使用。",
-                symbolName: "pin",
-                control: bufferPinnedCheck
+                title: "对齐目标输入框",
+                detail: "在目标输入框正下方打开：左边缘对齐、宽度随其变化；下方空间不足时改在上方。",
+                symbolName: "text.alignleft",
+                control: alignToInputBoxCheck
             ),
+            alignToInputBoxStatusLabel,
+            accessibilityGrantButton,
             settingsRow(
                 title: "切换应用时清空本地缓冲",
                 detail: "只在没有外部来源块时执行；默认关闭。",
@@ -2588,28 +2864,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 control: resetOnAppSwitchCheck
             ),
             moveBufferWindowButton,
-            note,
             spacer(20),
             sectionLabel("快捷键"),
             shortcutSettingsView(),
-            spacer(8),
-            secureNote,
-        ])
-    }
-
-    private func clipSettingsPage() -> NSView {
-        contentColumn([
-            title("Clipboard History"),
-            caption("在本机私有数据库中保存文本、链接、图片、文件与颜色；窗口关闭后历史仍会保留。"),
-            settingsRow(
-                title: "允许收录剪贴板内容",
-                detail: "RIMES 运行时后台收录；安全输入、锁屏和休眠期间不会读取。",
-                symbolName: "clipboard",
-                control: clipboardHistoryCheck
-            ),
-            secondaryLabel(
-                "⌘⇧P 呼出独立窗口。历史与 Buffer、Mailbox、Capsule 隔离，保存在 ~/Library/Application Support/RIMES/clipboard。"
-            ),
         ])
     }
 
@@ -2618,10 +2875,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             return aiModelConnectionsPage()
         }
         guard subpageID == "local-gateway" else {
-            return contentColumn([
-                title("本地网关"),
-                caption("这个连接器页面已经移除。"),
-            ])
+            return contentColumn([])
         }
 
         let gatewayEnabled = LocalGateway.shared.enabled
@@ -2644,25 +2898,13 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         let configurationTitle = NSTextField(labelWithString: "接入配置")
         configurationTitle.font = .systemFont(ofSize: 11, weight: .semibold)
         configurationTitle.textColor = RimeUI.textPrimary
-        let configurationDetail = NSTextField(
-            wrappingLabelWithString:
-                "标准 MCP（Streamable HTTP）。Cursor、Codex、Claude Code 等客户端通用。"
-        )
-        configurationDetail.font = .systemFont(ofSize: 9)
-        configurationDetail.textColor = RimeUI.textMuted
-        let configurationCopy = NSStackView(views: [
-            configurationTitle,
-            configurationDetail,
-        ])
-        configurationCopy.orientation = .vertical
-        configurationCopy.alignment = .leading
-        configurationCopy.spacing = 3
-        configurationCopy.setContentCompressionResistancePriority(
+        configurationTitle.toolTip = "标准 MCP（Streamable HTTP）。Cursor、Codex、Claude Code 等客户端通用。"
+        configurationTitle.setContentCompressionResistancePriority(
             .defaultLow,
             for: .horizontal
         )
         let configurationHeader = NSStackView(views: [
-            configurationCopy,
+            configurationTitle,
             flexSpacer(),
             gatewayCopyConfigButton,
         ])
@@ -2684,17 +2926,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             commandActions.translatesAutoresizingMaskIntoConstraints = false
             commandActions.widthAnchor.constraint(equalToConstant: 626).isActive = true
             configurationViews.append(contentsOf: [
-                connectorNote(
-                    "等价于上方通用配置；仅在已安装 Claude Code CLI 时需要。"
-                ),
                 gatewayCommandField,
                 commandActions,
             ])
         }
 
         return contentColumn([
-            title("本地网关"),
-            caption("仅监听 127.0.0.1，并要求 Token 鉴权；推入内容仍需你在收件箱逐条确认。"),
             settingsRow(
                 title: "启用本地网关",
                 detail: "允许本机智能体通过标准 MCP / HTTP 推送待确认内容。",
@@ -2749,9 +2986,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 ),
                 actions,
                 codexLoginStatusLabel,
-                connectorNote(
-                    "CLI 在本机启动，但不代表本地推理：点击生成后，缓冲全文会经已登录服务发送。\(ProductIdentity.displayName) 不会把环境中的 API Key 透传给 Codex。"
-                ),
             ])
 
         case .claudeCodeCLI:
@@ -2790,9 +3024,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 ),
                 actions,
                 claudeLoginStatusLabel,
-                connectorNote(
-                    "CLI 在本机启动，但不代表本地推理：点击生成后，缓冲全文会经已登录服务发送。\(ProductIdentity.displayName) 不会把环境中的 API Key 透传给 Claude Code。"
-                ),
             ])
 
         case .openAICompatible:
@@ -2823,17 +3054,10 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 labeledSettingsRow("API Key", control: aiAPIKeyField),
                 actions,
                 aiConfigurationStatus,
-                connectorNote(
-                    "Base URL 应包含 API 前缀（例如 /v1），程序会追加 /chat/completions。远程地址必须使用 HTTPS；HTTP 仅允许 localhost、127.0.0.1 或 ::1。密钥保存在权限为 0600 的本地配置文件，不写入偏好设置或日志。"
-                ),
             ])
         }
 
         return contentColumn([
-            title("AI 模型"),
-            caption("“AI 生成”是统一缓冲插件；在这里切换它使用的模型连接器。正文只会在你明确点击生成时发送。"),
-            spacer(8),
-            sectionLabel("AI 模型"),
             aiConnectorSelectionView(),
             detailPanel,
         ])
@@ -3004,7 +3228,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         actions.alignment = .centerY
         actions.spacing = 6
 
-        let heading = NSStackView(views: [title("插件"), flexSpacer(), actions])
+        let heading = NSStackView(views: [flexSpacer(), actions])
         heading.orientation = .horizontal
         heading.alignment = .centerY
         heading.spacing = 12
@@ -3012,16 +3236,11 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         heading.widthAnchor.constraint(equalToConstant: 650).isActive = true
 
         pluginRowsStack.removeFromSuperview()
-        let note = NSTextField(wrappingLabelWithString:
-            "可以同时开启多个缓冲插件；只有已开启的插件会出现在缓冲工作台，当前使用项仍在工作台中切换。")
-        note.font = .systemFont(ofSize: 11)
-        note.textColor = RimeUI.textMuted
 
         let showExternal = subpageID == "all" || subpageID == "buffer-plugins"
         let showBuiltIns = subpageID == "all" || subpageID == "built-in-extensions"
         var views: [NSView] = [
             heading,
-            caption("在这里管理工作台可用的缓冲插件，或管理随应用提供的内部扩展。"),
             spacer(8),
         ]
         if showBuiltIns {
@@ -3041,7 +3260,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         }
         if showExternal {
             views.append(sectionLabel("缓冲插件"))
-            views.append(note)
             views.append(pluginRowsStack)
             views.append(pluginStatusLabel)
         }
@@ -3087,26 +3305,15 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             : themeStatusColor
         installation.setContentHuggingPriority(.required, for: .horizontal)
 
+        name.toolTip = plugin.descriptor.summary
         let titleRow = NSStackView(views: [name, version, installation])
         titleRow.orientation = .horizontal
         titleRow.alignment = .firstBaseline
         titleRow.spacing = 6
+        titleRow.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        titleRow.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let detail = NSTextField(labelWithString: plugin.descriptor.summary)
-        detail.font = .systemFont(ofSize: 9)
-        detail.textColor = RimeUI.textMuted
-        detail.lineBreakMode = .byTruncatingTail
-        detail.toolTip = plugin.descriptor.summary
-        detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        let labels = NSStackView(views: [titleRow, detail])
-        labels.orientation = .vertical
-        labels.alignment = .leading
-        labels.spacing = 2
-        labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        var rowViews: [NSView] = [icon, labels, flexSpacer()]
+        var rowViews: [NSView] = [icon, titleRow, flexSpacer()]
         if plugin.isInstalled,
            PluginRegistry.shared.hasConfiguration(
             for: plugin.descriptor.key
@@ -3174,7 +3381,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         row.layer?.cornerRadius = 8
         row.translatesAutoresizingMaskIntoConstraints = false
         row.widthAnchor.constraint(equalToConstant: 650).isActive = true
-        row.heightAnchor.constraint(equalToConstant: 58).isActive = true
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 46).isActive = true
         return row
     }
 
@@ -3256,48 +3463,164 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         let installButtons = NSStackView(views: [reinstallBtn, openInstallLogBtn])
         installButtons.orientation = .horizontal
         installButtons.spacing = 8
-        let installNote = NSTextField(wrappingLabelWithString:
-            "重新安装会从当前源码目录运行 build_install.sh，构建完成后替换并重启输入法进程。")
-        installNote.font = .systemFont(ofSize: 11)
-        installNote.textColor = RimeUI.textMuted
 
+        if subpageID == "permissions" {
+            return permissionsPage()
+        }
         if subpageID == "logs-data" {
             let openConfigBtn = SettingsPointingButton(
                 title: "打开 \(ProductIdentity.displayName) 数据目录",
                 target: self,
                 action: #selector(openDir)
             )
-            let dataNote = NSTextField(wrappingLabelWithString:
-                "配置、词库学习、插件、统计和练习进度保存在 ~/Library/RimeBuffer；Clipboard History 单独保存在 ~/Library/Application Support/RIMES/clipboard。缓冲区正文与发送历史不会持久化。")
-            dataNote.font = .systemFont(ofSize: 11)
-            dataNote.textColor = RimeUI.textMuted
+            openConfigBtn.toolTip =
+                "配置、词库学习、插件、统计和练习进度保存在 ~/Library/\(RimesPaths.directoryName)；"
+                + "Clipboard History 单独保存在 ~/Library/Application Support/RIMES/clipboard。"
+                + "缓冲区正文与发送历史不会持久化。"
             let logButtons = NSStackView(views: [openLogBtn, openInstallLogBtn])
             logButtons.orientation = .horizontal
             logButtons.spacing = 8
             return contentColumn([
-                title("日志与数据"),
-                caption("查看本地诊断信息和应用数据位置。"),
-                spacer(8),
                 sectionLabel("日志"),
                 logButtons,
                 spacer(16),
                 sectionLabel("本地数据"),
                 openConfigBtn,
-                dataNote,
             ])
         }
         return contentColumn([
-            title("更新与重启"),
-            caption("检查更新、重启输入法进程或从当前源码重新安装。"),
-            spacer(8),
             sectionLabel("运行状态"),
             runtimeButtons,
             spacer(12),
             sectionLabel("安装"),
             installButtons,
             installStatus,
-            installNote,
         ])
+    }
+
+    /// One row per permission RIMES actually uses, each stating what it
+    /// enables and what happens without it. A grant that fails silently is
+    /// indistinguishable from a broken feature, which is the whole reason
+    /// this page exists.
+    private func permissionsPage() -> NSView {
+        var rows: [NSView] = []
+        for report in SystemPermissionAudit.reportAll() {
+            let status: String
+            let symbol: String
+            switch report.status {
+            case .granted:
+                status = "已授权"
+                symbol = "checkmark.seal"
+            case .denied:
+                status = "未授权"
+                symbol = "exclamationmark.triangle"
+            case .undeterminable:
+                status = "系统未提供查询接口"
+                symbol = "questionmark.circle"
+            }
+            let button = SettingsPointingButton(
+                title: report.actionTitle,
+                target: self,
+                action: #selector(permissionActionTapped(_:))
+            )
+            button.tag = SystemPermission.allCases
+                .firstIndex(of: report.permission) ?? 0
+            rows.append(settingsRow(
+                title: "\(report.permission.title) · \(status)",
+                detail: "用于：\(report.permission.enables)\n"
+                    + "未授权时：\(report.permission.whenMissing)",
+                symbolName: symbol,
+                control: button
+            ))
+        }
+        // The identity TCC records against, spelled out. Three different
+        // names appear on this bundle and only one of them is the one to look
+        // for in System Settings.
+        let identity = SystemPermissionAudit.identity()
+        let identityNote = NSTextField(wrappingLabelWithString:
+            "系统按「标识符」记录授权，而不是按显示名：\n"
+            + "标识符：\(identity.bundleIdentifier)\n"
+            + "显示名：\(identity.bundleName)　可执行文件：\(identity.executableName)\n"
+            + "位置：\(identity.bundlePath)")
+        identityNote.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        identityNote.textColor = RimeUI.textSecondary
+        rows.append(spacer(12))
+        rows.append(sectionLabel("应用标识"))
+        rows.append(identityNote)
+        if !identity.namesAgree {
+            let mismatch = NSTextField(wrappingLabelWithString:
+                "这三个名称目前并不一致，历史授权记录可能同时留有旧标识符的条目。"
+                + "在系统设置里请以上面的标识符为准，删除对不上的旧条目。")
+            mismatch.font = .systemFont(ofSize: 11)
+            mismatch.textColor = RimeUI.textMuted
+            rows.append(mismatch)
+        }
+
+        if let authority = SystemPermissionAudit.signingAuthority() {
+            let signed = NSTextField(wrappingLabelWithString:
+                "签名证书：\(authority)。授权记录绑定在证书上而不是二进制哈希上，"
+                + "因此重新构建之后无需重新授权。")
+            signed.font = .systemFont(ofSize: 11)
+            signed.textColor = RimeUI.textMuted
+            rows.append(spacer(8))
+            rows.append(signed)
+        }
+        if SystemPermissionAudit.isAdHocSigned() {
+            // The single most useful sentence on this page for this build.
+            let note = NSTextField(wrappingLabelWithString:
+                "当前为临时签名（ad-hoc）构建：每次重新构建都会更换代码签名，"
+                + "系统会因此作废已授予的权限，而「系统设置」里的勾选仍然显示为开启，"
+                + "并且不会再次弹出授权对话框。恢复方法是在对应面板中移除 RIMES 后重新添加。"
+                + "改用固定的签名证书可以一劳永逸。")
+            note.font = .systemFont(ofSize: 11)
+            note.textColor = RimeUI.textMuted
+            rows.append(spacer(12))
+            rows.append(note)
+        }
+        rows.append(spacer(12))
+        let refresh = SettingsPointingButton(
+            title: "重新检测",
+            target: self,
+            action: #selector(refreshPermissionsPage)
+        )
+        let reset = SettingsPointingButton(
+            title: "清除授权记录并重新申请",
+            target: self,
+            action: #selector(resetAccessibilityRecordTapped)
+        )
+        let actions = NSStackView(views: [refresh, reset])
+        actions.orientation = .horizontal
+        actions.spacing = 8
+        actions.toolTip = "系统只对「从未记录过」的应用弹出授权对话框。一旦记录存在（临时签名每次"
+            + "重新构建都会让记录与新二进制对不上），再申请也不会有任何反应。"
+            + "清除记录后系统才会重新询问。"
+        rows.append(actions)
+        return contentColumn(rows)
+    }
+
+    @objc private func permissionActionTapped(_ sender: NSButton) {
+        let permissions = SystemPermission.allCases
+        guard sender.tag >= 0, sender.tag < permissions.count else { return }
+        let permission = permissions[sender.tag]
+        let prompted = SystemPermissionAudit.requestOrReveal(permission)
+        IMELog.write("permissions: \(permission.rawValue) action prompted=\(prompted)")
+        refreshPermissionsPage()
+    }
+
+    @objc private func resetAccessibilityRecordTapped() {
+        let cleared = SystemPermissionAudit.resetAccessibilityRecord()
+        // Only ask after the record is gone; asking first is what produced
+        // nothing at all.
+        if cleared {
+            ClipboardAutoPaste.requestPermission()
+        } else {
+            SystemPermissionAudit.requestOrReveal(.accessibility)
+        }
+        reload()
+    }
+
+    @objc private func refreshPermissionsPage() {
+        reload()
     }
 
     private func contentColumn(_ views: [NSView]) -> NSView {
@@ -3307,14 +3630,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         column.spacing = 8
         column.edgeInsets = NSEdgeInsets(top: 0, left: 24, bottom: 22, right: 24)
         return column
-    }
-
-    private func title(_ s: String) -> NSTextField {
-        let l = NSTextField(labelWithString: s)
-        l.font = .systemFont(ofSize: 12, weight: .semibold)
-        l.textColor = RimeUI.textSecondary
-        l.alignment = .left
-        return l
     }
 
     private func caption(_ s: String) -> NSTextField {
@@ -3412,13 +3727,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         row.alignment = .centerY
         row.spacing = 8
 
-        let help = secondaryLabel(
-            "工作台高度会随普通、翻译和多结果布局自动变化；这里只调整稳定宽度。也可以直接拖动工作台边缘。"
-        )
-        help.translatesAutoresizingMaskIntoConstraints = false
-        help.widthAnchor.constraint(equalToConstant: 650).isActive = true
-
-        let stack = NSStackView(views: [row, help])
+        let stack = NSStackView(views: [row])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 7
@@ -3434,15 +3743,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             let titleLabel = NSTextField(labelWithString: action.title)
             titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
             titleLabel.textColor = RimeUI.textPrimary
-
-            let detailLabel = NSTextField(labelWithString: action.detail)
-            detailLabel.font = .systemFont(ofSize: 9)
-            detailLabel.textColor = RimeUI.textMuted
-
-            let labels = NSStackView(views: [titleLabel, detailLabel])
-            labels.orientation = .vertical
-            labels.alignment = .leading
-            labels.spacing = 2
+            titleLabel.toolTip = action.detail
+            titleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 390).isActive = true
 
             let recorder = RimeShortcutRecorderButton(action: action)
             recorder.onFeedback = { [weak self] message in
@@ -3451,7 +3753,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 self.shortcutFeedbackLabel.isHidden = message == nil
             }
 
-            let row = NSStackView(views: [labels, flexSpacer(), recorder])
+            let row = NSStackView(views: [titleLabel, flexSpacer(), recorder])
             row.orientation = .horizontal
             row.alignment = .centerY
             row.spacing = 16
@@ -3465,7 +3767,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             row.layer?.cornerRadius = 8
             row.translatesAutoresizingMaskIntoConstraints = false
             row.widthAnchor.constraint(equalToConstant: 650).isActive = true
-            labels.widthAnchor.constraint(lessThanOrEqualToConstant: 390).isActive = true
             return row
         }
 
@@ -3476,14 +3777,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         )
         reset.bezelStyle = .rounded
 
-        let note = secondaryLabel(
-            "这里配置 RIMES 自己定义的快捷键。⌘/⌃A、⌘/⌃V、Backspace 与未配置的方向键继续遵循系统编辑语义，不在此处重映射。"
-        )
-        note.translatesAutoresizingMaskIntoConstraints = false
-        note.widthAnchor.constraint(equalToConstant: 650).isActive = true
-
         let stack = NSStackView(
-            views: rows + [shortcutFeedbackLabel, reset, note]
+            views: rows + [shortcutFeedbackLabel, reset]
         )
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -3523,14 +3818,22 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
     private func reload() {
         refreshInputConfigurationSelection()
-        bufferCheck.state = BufferModel.shared.enabled ? .on : .off
-        bufferWindowVisibleCheck.state = BufferWindowController.shared.isVisible ? .on : .off
+        alignToInputBoxCheck.state = FocusedInputBoxProbe.alignmentEnabled ? .on : .off
+        accessibilityGrantButton.isHidden = FocusedInputBoxProbe.isPermitted
+        alignToInputBoxStatusLabel.stringValue = FocusedInputBoxProbe.isPermitted
+            ? "已授权辅助功能：工作台会贴合当前输入框；密码框与整页文本区仍跟随光标。"
+            : "未授权辅助功能：打开开关会请求权限。未授权时工作台保持跟随光标。"
         clipboardHistoryCheck.state = ClipboardHistoryWindowController.shared.captureEnabled
             ? .on
             : .off
+        clipboardAutoPasteCheck.state = ClipboardAutoPaste.enabled ? .on : .off
+        clipboardAutoPasteStatusLabel.stringValue = ClipboardAutoPaste.isPermitted
+            ? "已授权辅助功能：图片、文件等内容会在窗口关闭后自动粘贴到目标输入框。"
+            : "未授权辅助功能：打开开关会请求权限。注意本应用为临时签名（ad-hoc），"
+                + "每次重新构建都会更换代码签名，系统会因此作废已授予的权限——"
+                + "在「系统设置 → 隐私与安全性 → 辅助功能」中移除本应用后重新添加即可恢复。"
         closeAfterLastDeliveryCheck.state = BufferWindowController.shared
             .closeAfterLastDeliveryEnabled ? .on : .off
-        bufferPinnedCheck.state = BufferWindowController.shared.pinned ? .on : .off
         resetOnAppSwitchCheck.state = BufferModel.shared.resetOnAppSwitch ? .on : .off
         gatewayEnableCheck.state = LocalGateway.shared.enabled ? .on : .off
         gatewayConfigField.stringValue = gatewayConfigJSON(redactingToken: true)
@@ -3616,13 +3919,10 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             codexLoginStatusLabel.textColor = codexLoginFeedbackIsError
                 ? .systemRed
                 : RimeUI.textSecondary
+            codexLoginStatusLabel.isHidden = false
         } else {
-            codexLoginStatusLabel.stringValue = AITextCodexLoginPresentation.idleMessage(
-                hasCredential: authenticated
-            )
-            codexLoginStatusLabel.textColor = authenticated
-                ? themeStatusColor
-                : RimeUI.textMuted
+            codexLoginStatusLabel.stringValue = ""
+            codexLoginStatusLabel.isHidden = true
         }
     }
 
@@ -3662,13 +3962,10 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             claudeLoginStatusLabel.textColor = claudeLoginFeedbackIsError
                 ? .systemRed
                 : RimeUI.textSecondary
+            claudeLoginStatusLabel.isHidden = false
         } else {
-            claudeLoginStatusLabel.stringValue = AITextClaudeLoginPresentation.idleMessage(
-                authenticationStatus: status
-            )
-            claudeLoginStatusLabel.textColor = status == true
-                ? themeStatusColor
-                : RimeUI.textMuted
+            claudeLoginStatusLabel.stringValue = ""
+            claudeLoginStatusLabel.isHidden = true
         }
     }
 
@@ -3847,15 +4144,160 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
     // MARK: Actions
 
+    @objc private func openMailboxWindowFromSettings() {
+        let threadID = MailboxStore.shared.selectLatestUnreadOrMostRecent()
+        MailboxWindowController.shared.show(selecting: threadID)
+        settingsStatusLabel.stringValue = "已打开独立 Mailbox 窗口"
+        settingsStatusLabel.textColor = RimeUI.textMuted
+    }
+
+    @objc private func openMailboxStorageDirectory() {
+        openUtilityDirectory(
+            MailboxStore.shared.storageDirectoryURL,
+            title: "Mailbox 存储目录"
+        )
+    }
+
+    @objc private func openAIModelSettingsFromMailbox() {
+        guard navigation.selectRoute(
+            SettingsCoreRoute.connectors.id,
+            catalog: routeCatalog
+        ), navigation.selectSubpage(
+            SettingsSubpageID(rawValue: "ai-model"),
+            catalog: routeCatalog
+        ) else { return }
+        settingsStatusLabel.stringValue = "已打开 AI 模型设置"
+        settingsStatusLabel.textColor = RimeUI.textMuted
+        reload()
+        showCurrentRoute()
+    }
+
+    @objc private func openCapsuleStorageDirectory() {
+        openUtilityDirectory(
+            CapsuleContentStore.shared.rootURL,
+            title: "Capsule 资料目录"
+        )
+    }
+
+    private func openUtilityDirectory(_ url: URL, title: String) {
+        do {
+            try FileManager.default.createDirectory(
+                at: url,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            guard NSWorkspace.shared.open(url) else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            settingsStatusLabel.stringValue = "已打开\(title)"
+            settingsStatusLabel.textColor = RimeUI.textMuted
+        } catch {
+            settingsStatusLabel.stringValue = "无法打开\(title)：\(error.localizedDescription)"
+            settingsStatusLabel.textColor = .systemRed
+        }
+    }
+
+    @objc private func chooseCapsuleCloudFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "选择 Capsule iCloud Drive 文件夹"
+        panel.message = "请在 iCloud Drive 中新建或选择一个空文件夹。普通条目和图片、PDF 会同步；密码、Skill 路径、查看口令与主密钥不会上传。"
+        panel.prompt = "使用此文件夹"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.resolvesAliases = false
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidates = [
+            home.appendingPathComponent(
+                "Library/Mobile Documents/com~apple~CloudDocs",
+                isDirectory: true
+            ),
+            home.appendingPathComponent(
+                "Library/CloudStorage",
+                isDirectory: true
+            ),
+        ]
+        panel.directoryURL = candidates.first {
+            FileManager.default.fileExists(atPath: $0.path)
+        }
+        let handle: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.settingsStatusLabel.stringValue = "正在配置 Capsule iCloud 同步…"
+            self?.settingsStatusLabel.textColor = RimeUI.textMuted
+            CapsuleCloudSyncController.shared.configure(folderURL: url) {
+                [weak self] result in
+                switch result {
+                case .success:
+                    self?.settingsStatusLabel.stringValue = "已启用 Capsule iCloud 自动同步"
+                    self?.settingsStatusLabel.textColor = RimeUI.textMuted
+                case let .failure(error):
+                    self?.presentCapsuleCloudSyncError(error)
+                }
+            }
+        }
+        if let window {
+            panel.beginSheetModal(for: window, completionHandler: handle)
+        } else {
+            handle(panel.runModal())
+        }
+    }
+
+    @objc private func syncCapsuleCloudNow() {
+        guard CapsuleCloudSyncController.shared.status.isConfigured else { return }
+        settingsStatusLabel.stringValue = "正在同步 Capsule…"
+        settingsStatusLabel.textColor = RimeUI.textMuted
+        CapsuleCloudSyncController.shared.requestSync(after: 0)
+    }
+
+    @objc private func disableCapsuleCloudSync() {
+        guard CapsuleCloudSyncController.shared.status.isConfigured else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "停用 Capsule iCloud 自动同步？"
+        alert.informativeText = "这只会移除本机同步配置，不会删除本机或 iCloud Drive 中的内容。"
+        alert.addButton(withTitle: "停用同步")
+        alert.addButton(withTitle: "取消")
+        let handle: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            CapsuleCloudSyncController.shared.disable { [weak self] result in
+                switch result {
+                case .success:
+                    self?.settingsStatusLabel.stringValue = "已停用 Capsule iCloud 自动同步"
+                    self?.settingsStatusLabel.textColor = RimeUI.textMuted
+                case let .failure(error):
+                    self?.presentCapsuleCloudSyncError(error)
+                }
+            }
+        }
+        if let window {
+            alert.beginSheetModal(for: window, completionHandler: handle)
+        } else {
+            handle(alert.runModal())
+        }
+    }
+
+    private func presentCapsuleCloudSyncError(_ error: Error) {
+        settingsStatusLabel.stringValue = error.localizedDescription
+        settingsStatusLabel.textColor = .systemRed
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Capsule iCloud 同步配置失败"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "好")
+        if let window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
     @objc private func routeChosen(_ sender: SettingsRouteButton) {
         if sender.routeID == navigation.currentRouteID {
             refreshSidebarSelection()
             return
         }
-        guard activeCapsuleController?.confirmDiscardChangesIfNeeded() != false else {
-            refreshSidebarSelection()
-            return
-        }
+        guard confirmLeavingChordEditor() else { return }
         guard navigation.selectRoute(sender.routeID, catalog: routeCatalog) else { return }
         if let route = routeCatalog.route(for: sender.routeID) {
             settingsStatusLabel.stringValue = "已打开\(route.title)"
@@ -3870,10 +4312,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
               route.subpages.indices.contains(sender.selectedSegment) else { return }
         let subpage = route.subpages[sender.selectedSegment].id
         if subpage == navigation.selectedSubpage() { return }
-        guard activeCapsuleController?.confirmDiscardChangesIfNeeded() != false else {
-            if let selected = navigation.selectedSubpage(),
-               let index = route.subpages.firstIndex(where: { $0.id == selected }) {
-                sender.selectedSegment = index
+        guard confirmLeavingChordEditor() else {
+            if let old = route.subpages.firstIndex(where: { $0.id == navigation.selectedSubpage() }) {
+                sender.selectedSegment = old
             }
             return
         }
@@ -4127,7 +4568,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         pluginName: String
     ) {
         let store = ChordExtensionStore.shared
-        guard !chordExtensionDeploymentInProgress else {
+        guard !chordExtensionDeploymentInProgress,
+              !ChordKeymapActivationCoordinator.shared.isApplying else {
             sender.state = store.isEnabled ? .on : .off
             return
         }
@@ -4146,8 +4588,13 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             : storedPreviousIDs
         let previousSchemaID = InputConfigurationStore.shared.selectedSchemaID
 
-        RimeBufferController.active?.forceCommit()
+        RIMESController.active?.forceCommit()
         do {
+            if enabled {
+                try ChordKeymapRuntimeFiles(root: userDir).writeSchema(
+                    for: ChordKeymapStore.shared.activeProfile
+                )
+            }
             try PluginRegistry.shared.setEnabled(enabled, for: sender.pluginKey)
             let nextIDs = InputSchemaCatalog.enabledIDs(
                 chordExtensionEnabled: store.isEnabled
@@ -4156,7 +4603,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         } catch {
             _ = store.setEnabled(previousEnabled, source: .rollback)
             _ = InputConfigurationStore.shared.select(schemaID: previousSchemaID)
-            RimeBufferController.applyStoredInputConfiguration()
+            RIMESController.applyStoredInputConfiguration()
             try? SchemaListStore.writeEnabledIDs(previousIDs, to: schemaListURL)
             sender.state = previousEnabled ? .on : .off
             setPluginStatus(
@@ -4168,6 +4615,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         }
 
         chordExtensionDeploymentInProgress = true
+        ChordKeymapActivationCoordinator.shared.extensionDeploymentInProgress = true
         sender.isEnabled = false
         setPluginStatus(
             enabled
@@ -4188,6 +4636,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             DispatchQueue.main.async { [weak self, weak sender] in
                 guard let self else { return }
                 self.chordExtensionDeploymentInProgress = false
+                ChordKeymapActivationCoordinator.shared.extensionDeploymentInProgress = false
                 if deployed {
                     self.setPluginStatus(
                         enabled
@@ -4202,7 +4651,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 _ = InputConfigurationStore.shared.select(
                     schemaID: previousSchemaID
                 )
-                RimeBufferController.applyStoredInputConfiguration()
+                RIMESController.applyStoredInputConfiguration()
                 let restoredList: Bool
                 do {
                     try SchemaListStore.writeEnabledIDs(
@@ -4308,7 +4757,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         _ = InputConfigurationStore.shared.select(
             encoding: InputEncoding.allCases[sender.tag]
         )
-        RimeBufferController.applyStoredInputConfiguration()
+        RIMESController.applyStoredInputConfiguration()
         reload()
     }
 
@@ -4322,7 +4771,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             settingsStatusLabel.textColor = RimeUI.textMuted
         }
         BufferWindowController.shared.refresh()
-        RimeBufferController.refreshActiveUI()
+        RIMESController.refreshActiveUI()
     }
 
     @objc private func codexLoginButtonPressed() {
@@ -4389,7 +4838,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 if authorizationChanged {
                     AITextPluginRuntimeRegistry.shared.workspace.configurationDidChange()
                     BufferWindowController.shared.refresh()
-                    RimeBufferController.refreshActiveUI()
+                    RIMESController.refreshActiveUI()
                 }
                 DispatchQueue.main.async { [weak self] in
                     guard let self,
@@ -4462,7 +4911,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 }
                 self.refreshClaudeLoginControls()
                 BufferWindowController.shared.refresh()
-                RimeBufferController.refreshActiveUI()
+                RIMESController.refreshActiveUI()
                 DispatchQueue.main.async { [weak self] in
                     guard let self,
                           self.window?.isVisible == true,
@@ -4500,7 +4949,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             info("无法应用方案：\(error.localizedDescription)")
             return
         }
-        RimeBufferController.active?.forceCommit()
+        RIMESController.active?.forceCommit()
         guard info("开始部署…完成后输入法会自动重启。") else {
             return
         }
@@ -4539,7 +4988,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             return
         }
 
-        RimeBufferController.active?.forceCommit()
+        RIMESController.active?.forceCommit()
         InputMetricsPersistence.saveNow()
 
         let command = [
@@ -4579,28 +5028,46 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         IMELog.write("setting resetOnAppSwitch=\(resetOnAppSwitchCheck.state == .on)")
     }
 
-    @objc private func bufferToggled() {
-        let enabled = bufferCheck.state == .on
-        if enabled {
-            BufferWindowController.shared.openAndResume()
-        } else {
-            ActionPluginHost.shared.cancelActiveInvocationForWorkbench()
-            DerivedBufferWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
-            BuiltInBufferActionWorkspaceRouter.selectedWorkspace?.workbenchWillPause()
-            BufferModel.shared.pauseCapturePreservingContent()
+    /// The switch records intent; the grant is what actually enables the
+    /// probe. Enabling without it would silently do nothing, so the first
+    /// enable raises the system prompt. macOS answers only after the user acts
+    /// in System Settings, so the status line — not the switch — reports
+    /// whether alignment is live.
+    @objc private func alignToInputBoxToggled() {
+        let enabled = alignToInputBoxCheck.state == .on
+        FocusedInputBoxProbe.alignmentEnabled = enabled
+        if enabled, !FocusedInputBoxProbe.isPermitted {
+            SystemPermissionAudit.requestOrReveal(.accessibility)
         }
-        RimeBufferController.refreshActiveUI()
         reload()
-        IMELog.write("setting bufferEnabled=\(enabled)")
+        IMELog.write(
+            "setting alignToInputBox=\(enabled) "
+            + "permitted=\(FocusedInputBoxProbe.isPermitted)"
+        )
     }
 
-    @objc private func bufferWindowVisibilityToggled() {
-        if bufferWindowVisibleCheck.state == .on {
-            BufferWindowController.shared.openAndResume()
-        } else {
-            BufferWindowController.shared.closeAndPause()
+    @objc private func requestAccessibilityGrant() {
+        // Falls back to opening the pane when no dialog can appear, instead
+        // of asking for a grant and showing the user nothing.
+        SystemPermissionAudit.requestOrReveal(.accessibility)
+        reload()
+        IMELog.write(
+            "setting accessibility grant requested permitted="
+            + "\(FocusedInputBoxProbe.isPermitted)"
+        )
+    }
+
+    @objc private func clipboardAutoPasteToggled() {
+        let enabled = clipboardAutoPasteCheck.state == .on
+        ClipboardAutoPaste.enabled = enabled
+        if enabled, !ClipboardAutoPaste.isPermitted {
+            SystemPermissionAudit.requestOrReveal(.accessibility)
         }
         reload()
+        IMELog.write(
+            "setting clipboardAutoPaste=\(enabled) "
+            + "permitted=\(ClipboardAutoPaste.isPermitted)"
+        )
     }
 
     @objc private func clipboardHistoryToggled() {
@@ -4612,11 +5079,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     @objc private func closeAfterLastDeliveryToggled() {
         BufferWindowController.shared.closeAfterLastDeliveryEnabled =
             closeAfterLastDeliveryCheck.state == .on
-        reload()
-    }
-
-    @objc private func bufferPinnedToggled() {
-        BufferWindowController.shared.pinned = bufferPinnedCheck.state == .on
         reload()
     }
 
@@ -4809,7 +5271,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     @objc private func restartInputMethod() {
-        RimeBufferController.active?.forceCommit()
+        RIMESController.active?.forceCommit()
         InputMetricsPersistence.saveNow()
         IMELog.write("settings: restart requested")
         exit(0)

@@ -191,8 +191,24 @@ class RimeFixedAccentSwitch: NSControl {
         }
     }
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 38, height: 22) }
-    override var acceptsFirstResponder: Bool { isEnabled }
+    /// The toolbar variant: a mini track that sits beside 22pt icon buttons
+    /// and, like them, takes the click without taking keyboard focus.
+    var isCompact = false {
+        didSet {
+            invalidateIntrinsicContentSize()
+            needsDisplay = true
+        }
+    }
+
+    private var trackSize: NSSize {
+        isCompact ? NSSize(width: 26, height: 15) : NSSize(width: 36, height: 20)
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: trackSize.width + 2, height: trackSize.height + 2)
+    }
+    override var acceptsFirstResponder: Bool { isEnabled && !isCompact }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { isCompact }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -299,8 +315,8 @@ class RimeFixedAccentSwitch: NSControl {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        let trackHeight: CGFloat = 20
-        let trackWidth: CGFloat = 36
+        let trackHeight = trackSize.height
+        let trackWidth = trackSize.width
         let trackRect = NSRect(
             x: bounds.midX - trackWidth / 2,
             y: bounds.midY - trackHeight / 2,

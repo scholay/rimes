@@ -89,7 +89,7 @@ enum FlyChordSchemaLocator {
             userRoot = URL(fileURLWithPath: userOverride, isDirectory: true)
         } else {
             userRoot = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
         }
         // Rime applies `my_combo.custom.yaml` during deployment. The effective
         // algebra therefore lives in build/, while the root schema remains the
@@ -169,6 +169,33 @@ enum FlyChordSchemaParser {
         try load(from: FlyChordSchemaLocator.locate(
             additionalSearchRoots: additionalSearchRoots
         ))
+    }
+
+    /// Learning follows the same active profile as both input paths. Keep the
+    /// built-in parser and its exact historical rule IDs for existing progress.
+    static func loadActive(
+        profile: ChordKeymapProfile = ChordKeymapStore.shared.activeProfile
+    ) throws -> FlyChordSchema {
+        if profile.isBuiltIn { return try loadDefault() }
+        let mappings = profile.mappings.enumerated().map { index, entry in
+            let keys = profile.canonicalKeys(entry.keys)
+            return FlyChordMapping(
+                id: stableMappingID(schemaID: profile.schemaID,
+                                    chord: keys, output: entry.output),
+                chord: keys,
+                output: entry.output,
+                keyCount: keys.count,
+                sourceOrder: index
+            )
+        }
+        return FlyChordSchema(
+            schemaID: profile.schemaID,
+            displayName: profile.name,
+            alphabet: profile.alphabet,
+            sourceURL: ChordKeymapStore.shared.activeProfileURL,
+            literalRules: [],
+            mappings: mappings
+        )
     }
 
     static func parse(_ text: String, sourceURL: URL) throws -> FlyChordSchema {
@@ -696,24 +723,35 @@ final class FlyChordProgressStore {
     static let maximumItems = 4_096
 
     let storageURL: URL
+    let schemaID: String
     private let fileManager: FileManager
     private let dateProvider: () -> Date
     private let lock = NSLock()
     private var file: PersistedFile
 
     init(storageRoot: URL? = nil,
+         schemaID: String = FlyChordLearningIdentity.schemaID,
          fileManager: FileManager = .default,
          dateProvider: @escaping () -> Date = Date.init) throws {
+        guard !schemaID.isEmpty, schemaID.utf8.count <= 96,
+              schemaID.utf8.allSatisfy({
+                  (0x61...0x7a).contains($0) || (0x30...0x39).contains($0)
+                      || $0 == 0x5f
+              }) else {
+            throw FlyChordProgressStoreError.invalidProgressFile
+        }
         let environmentRoot = ProcessInfo.processInfo.environment["RIMEBUFFER_LOCAL_DATA_ROOT"]
             ?? ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DIR"]
         let root = storageRoot
             ?? environmentRoot.map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-                .appendingPathComponent("Library/RimeBuffer", isDirectory: true)
-        storageURL = root.appendingPathComponent("learning/my_combo_progress.json")
+                .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
+        storageURL = root.appendingPathComponent("learning/\(schemaID)_progress.json")
+        self.schemaID = schemaID
         self.fileManager = fileManager
         self.dateProvider = dateProvider
-        file = try Self.load(from: storageURL, fileManager: fileManager)
+        file = try Self.load(from: storageURL, schemaID: schemaID,
+                             fileManager: fileManager)
     }
 
     var snapshot: FlyChordProgressSnapshot {
@@ -724,7 +762,7 @@ final class FlyChordProgressStore {
 
     @discardableResult
     func recordAttempt(mappingID: String, correct: Bool) throws -> FlyChordProgressSnapshot {
-        guard Self.validMappingID(mappingID) else {
+        guard Self.validMappingID(mappingID, schemaID: schemaID) else {
             throw FlyChordProgressStoreError.invalidMappingID(mappingID)
         }
         lock.lock()
@@ -764,7 +802,7 @@ final class FlyChordProgressStore {
         lock.lock()
         defer { lock.unlock() }
         let updated = PersistedFile(version: 1,
-                                    schemaID: FlyChordLearningIdentity.schemaID,
+                                    schemaID: schemaID,
                                     items: [:],
                                     updatedAt: dateProvider().timeIntervalSince1970)
         try persist(updated)
@@ -774,7 +812,7 @@ final class FlyChordProgressStore {
 
     private func persist(_ value: PersistedFile) throws {
         do {
-            guard Self.validate(value) else {
+            guard Self.validate(value, schemaID: schemaID) else {
                 throw FlyChordProgressStoreError.invalidProgressFile
             }
             try fileManager.createDirectory(at: storageURL.deletingLastPathComponent(),
@@ -797,10 +835,11 @@ final class FlyChordProgressStore {
     }
 
     private static func load(from url: URL,
+                             schemaID: String,
                              fileManager: FileManager) throws -> PersistedFile {
         guard fileManager.fileExists(atPath: url.path) else {
             return PersistedFile(version: 1,
-                                 schemaID: FlyChordLearningIdentity.schemaID,
+                                 schemaID: schemaID,
                                  items: [:],
                                  updatedAt: 0)
         }
@@ -819,7 +858,7 @@ final class FlyChordProgressStore {
             }
             let decoded = try JSONDecoder().decode(PersistedFile.self,
                                                    from: Data(contentsOf: url))
-            guard validate(decoded) else {
+            guard validate(decoded, schemaID: schemaID) else {
                 throw FlyChordProgressStoreError.invalidProgressFile
             }
             return decoded
@@ -830,13 +869,14 @@ final class FlyChordProgressStore {
         }
     }
 
-    private static func validate(_ value: PersistedFile) -> Bool {
+    private static func validate(_ value: PersistedFile,
+                                 schemaID: String) -> Bool {
         value.version == 1
-            && value.schemaID == FlyChordLearningIdentity.schemaID
+            && value.schemaID == schemaID
             && value.updatedAt.isFinite
             && value.items.count <= maximumItems
             && value.items.allSatisfy { id, item in
-                validMappingID(id)
+                validMappingID(id, schemaID: schemaID)
                     && item.attempts >= 0
                     && item.correctAttempts >= 0
                     && item.correctAttempts <= item.attempts
@@ -848,8 +888,8 @@ final class FlyChordProgressStore {
             }
     }
 
-    private static func validMappingID(_ id: String) -> Bool {
-        let prefix = "\(FlyChordLearningIdentity.schemaID).rule."
+    private static func validMappingID(_ id: String, schemaID: String) -> Bool {
+        let prefix = "\(schemaID).rule."
         guard id.hasPrefix(prefix), id.count == prefix.count + 16 else { return false }
         return id.dropFirst(prefix.count).allSatisfy { $0.isHexDigit }
     }

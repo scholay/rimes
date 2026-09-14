@@ -50,6 +50,7 @@ func runPluginPlatformSmokeTest() -> Bool {
         BuiltInPluginID.appleTranslation,
         BuiltInPluginID.streamInput,
         BuiltInPluginID.aiText,
+        BuiltInPluginID.music,
     ]) else {
         return fail("shipped buffer plugin registry")
     }
@@ -171,7 +172,7 @@ func runPluginPlatformSmokeTest() -> Bool {
           "id": "\(externalRawID)",
           "name": "Smoke External",
           "version": "1.0",
-          "runtimeConfigPaths": ["~/Library/RimeBuffer/smoke.json"],
+          "runtimeConfigPaths": ["~/Library/RIMES/smoke.json"],
           "actions": [{
             "id": "run",
             "title": "Run",

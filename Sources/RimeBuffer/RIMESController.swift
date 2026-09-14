@@ -346,6 +346,48 @@ enum BufferUnhandledPrintableRules {
     }
 }
 
+/// Whether Return belongs to the Buffer at all.
+///
+/// Capture routes a field's keys to the Buffer, and Return is the delivery
+/// gesture — tap sends the next block, hold sends every block. But a paste
+/// never passes through the input method: Command-V puts a paragraph straight
+/// into the host field, so the Buffer can be capturing a field that already
+/// holds text it knows nothing about, with nothing of its own to send.
+///
+/// Claiming Return there swallowed the keystroke for the length of the
+/// tap/hold decision and delivered nothing, which is why a pasted message
+/// could not be sent. A gesture with no work to do is not a gesture; the key
+/// belongs to the application.
+/// Whether a focus activation should reset the Buffer to direct input.
+///
+/// A newly focused field starts in direct mode: capture authority never
+/// survives a focus change, and that is deliberate. But the controller's own
+/// `focusToken` is updated *after* the coordinator publishes the lease, so a
+/// click that grants capture to the incoming field lands in the window
+/// between them — and the activation that follows then reads its own token as
+/// a change and revokes the grant the user just asked for.
+///
+/// Capturing the token being activated is not a change away from it. That one
+/// exception is the difference between a click that works and a Buffer that
+/// has to be closed and reopened.
+enum BufferFocusActivationRules {
+    static func resetsCaptureRoute(previousToken: FocusToken?,
+                                   activatedToken: FocusToken,
+                                   captureBoundToActivatedToken: Bool) -> Bool {
+        guard previousToken != activatedToken else { return false }
+        return !captureBoundToActivatedToken
+    }
+}
+
+enum BufferEnterOwnershipRules {
+    static func ownsReturn(pendingBlockCount: Int,
+                           hasIncompleteBlocks: Bool) -> Bool {
+        // An incomplete block still counts: a plugin mid-generation owns the
+        // key so a half-finished result cannot be sent by an early Return.
+        pendingBlockCount > 0 || hasIncompleteBlocks
+    }
+}
+
 enum BufferEnterSecureInputDisposition: Equatable {
     case normal
     case consumeWithoutGuardOrGeneration
@@ -431,6 +473,40 @@ struct BufferEnterCallbackOwnership: Equatable {
 enum ShiftGestureReleaseDecision: Equatable {
     case replayStandaloneTap(rimeKeycode: Int32)
     case discard
+}
+
+/// `flagsChanged` reports the aggregate modifier mask, but `keyCode` still
+/// identifies the physical modifier that changed. A Command release after a
+/// Command-Shift global shortcut can therefore carry a Shift-only aggregate
+/// mask. Treating that aggregate delta as a new Shift press makes the later
+/// real Shift release look like a standalone language toggle. Only a physical
+/// left/right Shift event may create or finish a Shift gesture.
+enum ShiftModifierEventRules {
+    static func rimeKeycode(forHardwareKeyCode keyCode: UInt16) -> Int32? {
+        guard let eventKey = RimeKey.fromVirtualKeyCode(keyCode),
+              eventKey == RimeKey.shiftL || eventKey == RimeKey.shiftR else {
+            return nil
+        }
+        return eventKey
+    }
+
+    /// True only when the *other* Shift key goes down while one is already
+    /// held. Both that and a redelivered flagsChanged for a single press carry
+    /// an empty aggregate delta, and only the physical key tells them apart.
+    /// Reading a redelivery as a second Shift voids the gesture the press just
+    /// created, which silently removes the standalone tap that switches
+    /// librime between Chinese and English.
+    static func isSecondShiftTransition(aggregateDeltaIsEmpty: Bool,
+                                        shiftIsDown: Bool,
+                                        hardwareKeyCode: UInt16,
+                                        inFlightGestureKeycode: Int32?) -> Bool {
+        guard aggregateDeltaIsEmpty,
+              shiftIsDown,
+              let key = rimeKeycode(forHardwareKeyCode: hardwareKeyCode) else {
+            return false
+        }
+        return inFlightGestureKeycode != key
+    }
 }
 
 /// librime treats a sub-500ms Shift press/release with no intervening Rime key
@@ -984,12 +1060,12 @@ enum InputCaretGeometryRules {
     }
 }
 
-@objc(RimeBufferController)
-final class RimeBufferController: IMKInputController {
+@objc(RIMESController)
+final class RIMESController: IMKInputController {
 
     /// The controller currently owning focus — menu commands and F4 preference
     /// persistence route through the live session here.
-    static var active: RimeBufferController? {
+    static var active: RIMESController? {
         InputFocusCoordinator.shared.interactionTarget()?.controller
     }
 
@@ -1054,7 +1130,7 @@ final class RimeBufferController: IMKInputController {
     private static let duplicateArrowCommandWindow: CFTimeInterval = 0.05
     private static let duplicateClipboardCommandWindow: CFTimeInterval = 0.5
     private static let duplicateWorkbenchEscapeCommandWindow: CFTimeInterval = 0.25
-    private static let bufferEnterHoldDelay: TimeInterval = 1.2
+    private static let bufferEnterHoldDelay: TimeInterval = 0.6
     private static let bufferEnterPollInterval: TimeInterval = 0.02
     private static let keyboardLayoutOverrideCache = RimeKeyboardLayoutOverrideCache()
     /// Rime pages fetched per matrix batch — also the initial expand size, so
@@ -1127,11 +1203,13 @@ final class RimeBufferController: IMKInputController {
     /// recovery uses the same base to preserve all pre-existing raw input.
     private var pendingFlyChordBase: (context: RimeContextModel,
                                       policy: FlyChordSettlementPolicy,
+                                      profile: ChordKeymapProfile,
                                       owner: FocusToken,
                                       clientIdentity: ObjectIdentifier)?
     private var mutualPairingState = FlyChordMutualPairingState()
     private var chordDurationObserver: NSObjectProtocol?
     private var chordExtensionObserver: NSObjectProtocol?
+    private var chordKeymapObserver: NSObjectProtocol?
     private var userDictionaryMaintenanceObserver: NSObjectProtocol?
     private var userDictionaryMaintenanceEndObserver: NSObjectProtocol?
 
@@ -1142,7 +1220,7 @@ final class RimeBufferController: IMKInputController {
                                             ChordExtensionStore.shared.isEnabled)
     }
     private var flyChordSettlementPolicy: FlyChordSettlementPolicy {
-        ChordExtensionStore.shared.mode.settlementPolicy
+        ChordExtensionStore.shared.settlementPolicy
     }
 
     private func shouldUseBufferCommands(client: IMKTextInput?) -> Bool {
@@ -1190,6 +1268,7 @@ final class RimeBufferController: IMKInputController {
     private func streamInputDisposition(keycode: Int32?,
                                         mask: Int32,
                                         exactExternalFocus: Bool,
+                                        hasLiveComposition: Bool = false,
                                         chordRoute: StreamInputChordRoute?)
         -> StreamInputCaptureRules.Disposition {
         StreamInputCaptureRules.disposition(
@@ -1203,6 +1282,7 @@ final class RimeBufferController: IMKInputController {
             ),
             secureInput: IsSecureEventInputEnabled(),
             exactExternalFocus: exactExternalFocus,
+            hasLiveComposition: hasLiveComposition,
             chordSchemaID: chordRoute?.schemaID
         )
     }
@@ -1241,7 +1321,8 @@ final class RimeBufferController: IMKInputController {
             resolveComposition(
                 client: client,
                 owner: lease.token,
-                externalTarget: lease.isExternalTarget
+                externalTarget: lease.isExternalTarget,
+                trustedLease: lease
             )
         }
 
@@ -1283,9 +1364,11 @@ final class RimeBufferController: IMKInputController {
         return bufferControlDisposition(client: client)
     }
 
-    private var generatedResultCopyAvailable: Bool {
+    /// ⌘C belongs to the Buffer when it has something to copy out: a
+    /// generated result, or staged text whose box is not locked.
+    private var bufferCommandCopyAvailable: Bool {
         !IsSecureEventInputEnabled()
-            && BufferWindowController.shared.canCopyGeneratedResult
+            && BufferWindowController.shared.canCopyWithCommandC
     }
 
     private func bufferPluginShortcutDisposition(client: IMKTextInput?)
@@ -1293,6 +1376,7 @@ final class RimeBufferController: IMKInputController {
         // A protected workbench must neither reveal nor activate a plugin;
         // leave native Command+Shift+arrow selection intact in secure fields.
         guard !IsSecureEventInputEnabled() else { return .passThrough }
+        if BufferWindowController.shared.canNavigatePlugins { return .executeBufferAction }
         return bufferControlDisposition(client: client)
     }
 
@@ -1343,31 +1427,57 @@ final class RimeBufferController: IMKInputController {
         if let lease = currentLease(matching: client) {
             return !lease.isExternalTarget
         }
-        return BufferWindowController.shared.isOwnClient(bundleID: bundleId(of: client))
+        // Client classification is frozen when focus authority is adopted.
+        // Never query an unowned proxy merely to recover its bundle ID.
+        return false
     }
 
-    private func clearCompositionPresentation(client: IMKTextInput) {
+    private func clearCompositionPresentation(
+        client: IMKTextInput,
+        trustedLease: FocusLease? = nil
+    ) {
         ClipboardHistoryWindowController.shared.clearSearchComposition()
         if let focusToken {
             BufferWindowController.shared.clearInlineComposition(owner: focusToken)
         }
-        let frozenLease = currentLease(matching: client)
-        let requiresTransientSurfaceGate = frozenLease.map {
-            $0.hostKind.requiresTransientSurfaceAuthority
-        } ?? FocusHostRules.isTransientSystemSurfaceBundle(
-            bundleId(of: client)
-        )
+        // The selected input source can change synchronously while an IMK
+        // proxy call is in flight. Once that happens, even an "empty" marked
+        // text write belongs to the newly selected input method's field and is
+        // therefore forbidden. Retire only our local bookkeeping here; the
+        // input-source observer performs the remaining engine/focus cleanup.
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            composition.markCleared()
+            IMELog.write("marked-text clear skipped; RIMES authority retired")
+            return
+        }
+        let frozenLease = trustedLease.flatMap { lease in
+            lease.controller === self
+                && lease.clientIdentity == ObjectIdentifier(client as AnyObject)
+                ? lease
+                : nil
+        } ?? currentLease(matching: client)
+        guard let frozenLease else {
+            composition.markCleared()
+            IMELog.write("marked-text clear skipped; no frozen client lease")
+            return
+        }
+        let requiresTransientSurfaceGate = frozenLease.hostKind
+            .requiresTransientSurfaceAuthority
         if requiresTransientSurfaceGate {
-            guard let lease = frozenLease,
-                  InputFocusCoordinator.shared.interactionTarget(
-                    expected: lease.token,
+            guard InputFocusCoordinator.shared.interactionTarget(
+                    expected: frozenLease.token,
                     forceOverlayVisibilityRefresh: true
-                  ) === lease else {
+                  ) === frozenLease else {
                 // Keep local composition bookkeeping correct without invoking
                 // a system-surface proxy whose exact window disappeared.
                 composition.markCleared()
                 return
             }
+        }
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            composition.markCleared()
+            IMELog.write("marked-text clear abandoned after source change")
+            return
         }
         composition.clear(client: client)
     }
@@ -1376,18 +1486,23 @@ final class RimeBufferController: IMKInputController {
     private func deliverDirectText(_ text: String,
                                    client: IMKTextInput,
                                    externalTarget: Bool? = nil) -> Bool {
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            IMELog.write("direct insert blocked; RIMES authority retired")
+            return false
+        }
         let frozenLease = currentLease(matching: client)
-        let requiresTransientSurfaceGate = frozenLease.map {
-            $0.hostKind.requiresTransientSurfaceAuthority
-        } ?? FocusHostRules.isTransientSystemSurfaceBundle(
-            bundleId(of: client)
-        )
+        guard let frozenLease else {
+            composition.markCleared()
+            IMELog.write("direct insert blocked; no frozen client lease")
+            return false
+        }
+        let requiresTransientSurfaceGate = frozenLease.hostKind
+            .requiresTransientSurfaceAuthority
         if requiresTransientSurfaceGate {
-            guard let lease = frozenLease,
-                  InputFocusCoordinator.shared.interactionTarget(
-                    expected: lease.token,
+            guard InputFocusCoordinator.shared.interactionTarget(
+                    expected: frozenLease.token,
                     forceOverlayVisibilityRefresh: true
-                  ) === lease else {
+                  ) === frozenLease else {
                 // Do not call clearMarkedText on a hidden system-surface proxy.
                 composition.markCleared()
                 IMELog.write("direct insert blocked; transient surface window authority unavailable")
@@ -1399,7 +1514,7 @@ final class RimeBufferController: IMKInputController {
         // synchronously re-enter this controller after the committed text is
         // already visible; at that point the old candidate state must be gone.
         CommitPresentationRetirement.perform(
-            owner: frozenLease?.token,
+            owner: frozenLease.token,
             clearInline: { owner in
                 BufferWindowController.shared.clearInlineComposition(
                     owner: owner
@@ -1409,8 +1524,13 @@ final class RimeBufferController: IMKInputController {
                 candidateWindow.hide(owner: owner)
             }
         )
-        guard Delivery.insert(text, into: client) else {
-            clearCompositionPresentation(client: client)
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              Delivery.insert(text, into: client) else {
+            if RimeInputSourceAuthority.currentSourceIsOwn() {
+                clearCompositionPresentation(client: client)
+            } else {
+                composition.markCleared()
+            }
             return false
         }
         composition.commitDidInsert()
@@ -1426,6 +1546,20 @@ final class RimeBufferController: IMKInputController {
             return nil
         }
         return lease
+    }
+
+    private func cachedBundleID(for client: IMKTextInput) -> String {
+        currentLease(matching: client)?.bundleID ?? "retired"
+    }
+
+    /// `IMKInputController.client()` is itself a host-proxy lookup. Keep every
+    /// nil-sender/lifecycle fallback behind a live TIS check on both sides so a
+    /// source switch cannot turn a convenience lookup into foreign-IME access.
+    private func currentControllerClientWithSourceAuthority() -> IMKTextInput? {
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
+        let current = self.client()
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
+        return current
     }
 
     private func currentCallbackClient(_ sender: Any?) -> IMKTextInput? {
@@ -1478,11 +1612,12 @@ final class RimeBufferController: IMKInputController {
               ),
               lease.controller === self,
               let leaseClient = lease.client,
-              let controllerClient = self.client(),
+              let controllerClient = currentControllerClientWithSourceAuthority(),
               ObjectIdentifier(leaseClient as AnyObject)
                 == lease.clientIdentity,
               ObjectIdentifier(controllerClient as AnyObject)
-                == lease.clientIdentity else { return nil }
+                == lease.clientIdentity,
+              RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
         return leaseClient
     }
 
@@ -1504,19 +1639,30 @@ final class RimeBufferController: IMKInputController {
             IMELog.write("\(operation): stale explicit callback ignored")
             return nil
         }
-        let implicitClient = self.client()
+        let implicitClient = currentControllerClientWithSourceAuthority()
         let implicitIdentityMatches = implicitClient.map {
             ObjectIdentifier($0 as AnyObject) == lease.clientIdentity
         } ?? false
-        guard FocusActivationRules.currentControllerClientMayApply(
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              FocusActivationRules.currentControllerClientMayApply(
             clientExists: implicitClient != nil,
             identityMatches: implicitIdentityMatches
         ) else {
-            IMELog.write("\(operation): callback has no matching current controller client")
-            suspendUntrustedFocusLease(
-                lease,
-                reason: "\(operation) current client unavailable or mismatched"
-            )
+            if RimeInputSourceAuthority.currentSourceIsOwn() {
+                IMELog.write(
+                    "\(operation): callback has no matching current controller client"
+                )
+                suspendUntrustedFocusLease(
+                    lease,
+                    reason: "\(operation) current client unavailable or mismatched"
+                )
+            } else {
+                retireForInactiveInputSource(
+                    reason: "input source changed during \(operation) client lookup",
+                    currentInputSourceID:
+                        RimeInputSourceAuthority.currentInputSourceID()
+                )
+            }
             return nil
         }
 
@@ -1586,6 +1732,13 @@ final class RimeBufferController: IMKInputController {
         ) { [weak self] notification in
             self?.chordExtensionDidChange(notification)
         }
+        chordKeymapObserver = NotificationCenter.default.addObserver(
+            forName: .chordKeymapDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.chord.invalidate()
+            self?.pendingFlyChordBase = nil
+            self?.mutualPairingState.reset()
+        }
         userDictionaryMaintenanceObserver = NotificationCenter.default.addObserver(
             forName: .rimeUserDictionaryMaintenanceWillBegin,
             object: rimeEngine,
@@ -1614,6 +1767,9 @@ final class RimeBufferController: IMKInputController {
         }
         if let chordExtensionObserver {
             NotificationCenter.default.removeObserver(chordExtensionObserver)
+        }
+        if let chordKeymapObserver {
+            NotificationCenter.default.removeObserver(chordKeymapObserver)
         }
         if let userDictionaryMaintenanceObserver {
             NotificationCenter.default.removeObserver(userDictionaryMaintenanceObserver)
@@ -1647,10 +1803,10 @@ final class RimeBufferController: IMKInputController {
             )
             return false
         }
-        // A transient nil TIS read makes main fail closed and unregister every
-        // process-global shortcut. A later exact IMK callback is fresh authority
-        // from the selected RIMES source, so synchronously reconcile the Carbon
-        // registrations even if macOS never emits a second TIS notification.
+        // A transient nil TIS read retires IMK authority and the RIMES-only
+        // shortcut while leaving standalone utilities registered. A later exact
+        // IMK callback is fresh authority, so reconcile the full Carbon set even
+        // if macOS never emits a second TIS notification.
         _ = GlobalHotKeyController.shared.setRuntimeEnabledForInputSource(true)
         loggedInactiveInputSourceCallback = false
         return true
@@ -1664,6 +1820,7 @@ final class RimeBufferController: IMKInputController {
         currentInputSourceID: String?
     ) {
         dispatchPrecondition(condition: .onQueue(.main))
+        _ = GlobalHotKeyController.shared.setRuntimeEnabledForInputSource(false)
         let rejectedToken = focusToken
 
         // The stale IMK callback can arrive before the distributed TIS change
@@ -1723,12 +1880,13 @@ final class RimeBufferController: IMKInputController {
         } else {
             // A Shift that began outside this trusted focus can modify keys,
             // but its eventual release must never become a standalone toggle.
-            shiftGesture?.cancelForFocusChange()
+            voidShiftGesture("activateServer", focusChange: true)
         }
-        let activeClient: IMKTextInput? = (sender as? IMKTextInput) ?? self.client()
+        let activeClient: IMKTextInput? = (sender as? IMKTextInput)
+            ?? currentControllerClientWithSourceAuthority()
         if let activeClient {
             guard adoptActivationFocus(client: activeClient) else {
-                IMELog.write("activate: stale client callback rejected bundle=\(bundleId(of: activeClient))")
+                IMELog.write("activate: stale client callback rejected")
                 return
             }
             // Match Squirrel's keyboard-layout policy. `last` deliberately
@@ -1736,11 +1894,87 @@ final class RimeBufferController: IMKInputController {
             // perturbs TextInputUI's per-document state (notably in WeChat).
             let keyboard = Self.resolveKeyboardLayoutOverride()
             if let layout = keyboard.layout {
+                guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+                    retireForInactiveInputSource(
+                        reason: "source changed during activation",
+                        currentInputSourceID: RimeInputSourceAuthority
+                            .currentInputSourceID()
+                    )
+                    return
+                }
+                let clientIdentity = ObjectIdentifier(activeClient as AnyObject)
+                guard let lease = currentLease(matching: activeClient),
+                      InputFocusCoordinator.shared.exactCurrentLease(
+                        expected: lease.token,
+                        controller: self,
+                        clientIdentity: clientIdentity
+                      ) === lease,
+                      let controllerClient =
+                        currentControllerClientWithSourceAuthority(),
+                      ObjectIdentifier(controllerClient as AnyObject)
+                        == clientIdentity,
+                      InputFocusCoordinator.shared.exactCurrentLease(
+                        expected: lease.token,
+                        controller: self,
+                        clientIdentity: clientIdentity
+                      ) === lease else {
+                    if RimeInputSourceAuthority.currentSourceIsOwn() {
+                        IMELog.write(
+                            "activate: keyboard override abandoned; focus changed"
+                        )
+                    } else {
+                        retireForInactiveInputSource(
+                            reason: "source changed before keyboard override",
+                            currentInputSourceID: RimeInputSourceAuthority
+                                .currentInputSourceID()
+                        )
+                    }
+                    return
+                }
                 activeClient.overrideKeyboard(withKeyboardNamed: layout)
+                guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+                    retireForInactiveInputSource(
+                        reason: "source changed after keyboard override",
+                        currentInputSourceID: RimeInputSourceAuthority
+                            .currentInputSourceID()
+                    )
+                    return
+                }
+                guard let controllerClient =
+                        currentControllerClientWithSourceAuthority(),
+                      ObjectIdentifier(controllerClient as AnyObject)
+                        == clientIdentity,
+                      InputFocusCoordinator.shared.exactCurrentLease(
+                        expected: lease.token,
+                        controller: self,
+                        clientIdentity: clientIdentity
+                      ) === lease else {
+                    if RimeInputSourceAuthority.currentSourceIsOwn() {
+                        IMELog.write(
+                            "activate: keyboard override completed after focus changed"
+                        )
+                    } else {
+                        retireForInactiveInputSource(
+                            reason: "source changed after keyboard override validation",
+                            currentInputSourceID: RimeInputSourceAuthority
+                                .currentInputSourceID()
+                        )
+                    }
+                    return
+                }
             }
-            IMELog.write("activate: client=\(bundleId(of: activeClient)) keyboard=\(keyboard.layout ?? "last") source=\(keyboard.source) cache=\(keyboard.cacheStatus.rawValue)")
+            IMELog.write("activate: client=\(cachedBundleID(for: activeClient)) keyboard=\(keyboard.layout ?? "last") source=\(keyboard.source) cache=\(keyboard.cacheStatus.rawValue)")
+        } else if !RimeInputSourceAuthority.currentSourceIsOwn() {
+            retireForInactiveInputSource(
+                reason: "input source changed while resolving activation client",
+                currentInputSourceID:
+                    RimeInputSourceAuthority.currentInputSourceID()
+            )
+            return
         } else if InputFocusCoordinator.shared.owner != nil {
-            IMELog.write("activate: missing current client; suspending global focus lease")
+            IMELog.write(
+                "activate: missing current client; suspending global focus lease"
+            )
             suspendGlobalFocusLeaseIfPresent(reason: "activate missing client")
         }
         guard rimeEngine.start() else {
@@ -1769,6 +2003,7 @@ final class RimeBufferController: IMKInputController {
     /// duration and schema gating before its first processKey.
     @discardableResult
     private func ensureSessionReady(applyPreference: Bool = false) -> Bool {
+        guard !ChordKeymapActivationCoordinator.shared.isApplying else { return false }
         guard rimeEngine.isHealthy else {
             clearTransientCompositionAfterSessionFailure()
             return false
@@ -1837,7 +2072,8 @@ final class RimeBufferController: IMKInputController {
                 resolveComposition(client: client,
                                    owner: lease.token,
                                    externalTarget: lease.isExternalTarget,
-                                   isolateChordClientRouting: true)
+                                   isolateChordClientRouting: true,
+                                   trustedLease: lease)
             } else {
                 abandonCompositionWithoutClient(lease,
                                                 reason: "user dictionary maintenance")
@@ -1885,7 +2121,7 @@ final class RimeBufferController: IMKInputController {
         let environment = ProcessInfo.processInfo.environment
         let userDirectory = environment["RIMEBUFFER_USER_DIR"].map {
             URL(fileURLWithPath: $0, isDirectory: true)
-        } ?? home.appendingPathComponent("Library/RimeBuffer", isDirectory: true)
+        } ?? home.appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
         let squirrelDirectory = home.appendingPathComponent("Library/Rime", isDirectory: true)
         let candidates = [
             userDirectory.appendingPathComponent("build/squirrel.yaml"),
@@ -1907,7 +2143,17 @@ final class RimeBufferController: IMKInputController {
     @discardableResult
     private func adoptActivationFocus(client: IMKTextInput) -> Bool {
         guard currentControllerClientMatches(client) else {
-            suspendGlobalFocusLeaseIfPresent(reason: "activation current client mismatch")
+            if RimeInputSourceAuthority.currentSourceIsOwn() {
+                suspendGlobalFocusLeaseIfPresent(
+                    reason: "activation current client mismatch"
+                )
+            } else {
+                retireForInactiveInputSource(
+                    reason: "input source changed before activation",
+                    currentInputSourceID:
+                        RimeInputSourceAuthority.currentInputSourceID()
+                )
+            }
             return false
         }
         // NSEvent timestamps and systemUptime share the system-boot clock. A
@@ -1920,7 +2166,16 @@ final class RimeBufferController: IMKInputController {
             controller: self,
             client: client,
             eventFloor: eventFloor
-        ) else { return false }
+        ) else {
+            if !RimeInputSourceAuthority.currentSourceIsOwn() {
+                retireForInactiveInputSource(
+                    reason: "input source changed while beginning activation",
+                    currentInputSourceID:
+                        RimeInputSourceAuthority.currentInputSourceID()
+                )
+            }
+            return false
+        }
         applyFocusActivation(activation, client: client)
         return true
     }
@@ -1930,7 +2185,17 @@ final class RimeBufferController: IMKInputController {
                                  eventTimestamp: TimeInterval,
                                  eventType: NSEvent.EventType) -> Bool {
         guard currentControllerClientMatches(client) else {
-            suspendGlobalFocusLeaseIfPresent(reason: "event current client mismatch")
+            if RimeInputSourceAuthority.currentSourceIsOwn() {
+                suspendGlobalFocusLeaseIfPresent(
+                    reason: "event current client mismatch"
+                )
+            } else {
+                retireForInactiveInputSource(
+                    reason: "input source changed before event focus",
+                    currentInputSourceID:
+                        RimeInputSourceAuthority.currentInputSourceID()
+                )
+            }
             return false
         }
         guard let activation = InputFocusCoordinator.shared.noteEvent(
@@ -1938,13 +2203,25 @@ final class RimeBufferController: IMKInputController {
             client: client,
             eventTimestamp: eventTimestamp,
             eventType: eventType
-        ) else { return false }
+        ) else {
+            if !RimeInputSourceAuthority.currentSourceIsOwn() {
+                retireForInactiveInputSource(
+                    reason: "input source changed while adopting event focus",
+                    currentInputSourceID:
+                        RimeInputSourceAuthority.currentInputSourceID()
+                )
+            }
+            return false
+        }
         applyFocusActivation(activation, client: client)
         return true
     }
 
     private func currentControllerClientMatches(_ proposed: IMKTextInput) -> Bool {
-        let implicitClient = self.client()
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            return false
+        }
+        let implicitClient = currentControllerClientWithSourceAuthority()
         return FocusActivationRules.currentControllerClientMayApply(
             clientExists: implicitClient != nil,
             identityMatches: implicitClient.map {
@@ -1964,17 +2241,38 @@ final class RimeBufferController: IMKInputController {
 
     private func applyFocusActivation(_ activation: InputFocusCoordinator.Activation,
                                       client: IMKTextInput) {
+        guard focusActivationStillCurrent(
+            activation,
+            client: client,
+            stage: "before apply"
+        ) else { return }
         let focusChanged = focusToken != activation.token
         if focusChanged {
             BufferModel.shared.clearAllContentSelection()
+            guard focusActivationStillCurrent(
+                activation,
+                client: client,
+                stage: "after selection clear"
+            ) else { return }
         }
         // Resolve the displaced session before exposing the new token. If the
         // same proxy is reused, a pending chord flush can otherwise publish the
         // old session's candidates under the new owner.
         if let displaced = activation.displaced {
             displaced.controller?.finalizeDisplacedFocus(displaced)
+            guard focusActivationStillCurrent(
+                activation,
+                client: client,
+                stage: "after displaced cleanup"
+            ) else { return }
         }
-        if focusChanged {
+        if BufferFocusActivationRules.resetsCaptureRoute(
+            previousToken: focusToken,
+            activatedToken: activation.token,
+            captureBoundToActivatedToken: BufferModel.shared.capturesInput(
+                for: activation.token
+            )
+        ) {
             // Visibility and staged content survive focus changes, but capture
             // authority never does. The newly focused field therefore starts
             // in ordinary direct-input mode until the user explicitly chooses
@@ -1982,11 +2280,72 @@ final class RimeBufferController: IMKInputController {
             BufferModel.shared.routeDirectPreservingContent(
                 reason: "focus changed to \(activation.token)"
             )
+            guard focusActivationStillCurrent(
+                activation,
+                client: client,
+                stage: "after buffer route reset"
+            ) else { return }
         }
         focusToken = activation.token
         BufferWindowController.shared.focusedInputDidActivate(
             expected: activation.token
         )
+    }
+
+    /// Cleanup of a displaced IMK client and Buffer presentation callbacks can
+    /// synchronously re-enter focus handling. Never publish the outer token
+    /// after a newer activation has won, and retire all RIMES authority if the
+    /// input source changed during that callback chain.
+    private func focusActivationStillCurrent(
+        _ activation: InputFocusCoordinator.Activation,
+        client: IMKTextInput,
+        stage: String
+    ) -> Bool {
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            retireForInactiveInputSource(
+                reason: "input source changed \(stage) focus activation",
+                currentInputSourceID:
+                    RimeInputSourceAuthority.currentInputSourceID()
+            )
+            return false
+        }
+        let clientIdentity = ObjectIdentifier(client as AnyObject)
+        guard let lease = InputFocusCoordinator.shared.exactCurrentLease(
+            expected: activation.token,
+            controller: self,
+            clientIdentity: clientIdentity
+        ),
+        let controllerClient = currentControllerClientWithSourceAuthority(),
+        ObjectIdentifier(controllerClient as AnyObject) == clientIdentity,
+        InputFocusCoordinator.shared.exactCurrentLease(
+            expected: activation.token,
+            controller: self,
+            clientIdentity: clientIdentity
+        ) === lease
+        else {
+            if RimeInputSourceAuthority.currentSourceIsOwn() {
+                IMELog.write(
+                    "focus activation apply abandoned stage=\(stage) "
+                        + "token=\(activation.token)"
+                )
+            } else {
+                retireForInactiveInputSource(
+                    reason: "input source changed during \(stage) focus validation",
+                    currentInputSourceID:
+                        RimeInputSourceAuthority.currentInputSourceID()
+                )
+            }
+            return false
+        }
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            retireForInactiveInputSource(
+                reason: "input source changed after \(stage) focus validation",
+                currentInputSourceID:
+                    RimeInputSourceAuthority.currentInputSourceID()
+            )
+            return false
+        }
+        return true
     }
 
     /// Resolve a lease that was replaced by a newer focus epoch. Candidate hide
@@ -2010,7 +2369,8 @@ final class RimeBufferController: IMKInputController {
             resolveComposition(client: displacedClient,
                                owner: lease.token,
                                externalTarget: lease.isExternalTarget,
-                               isolateChordClientRouting: true)
+                               isolateChordClientRouting: true,
+                               trustedLease: lease)
         }
         if focusToken == lease.token {
             focusToken = nil
@@ -2085,11 +2445,18 @@ final class RimeBufferController: IMKInputController {
         } else {
             resolveComposition(client: client,
                                owner: lease.token,
-                               externalTarget: lease.isExternalTarget)
+                               externalTarget: lease.isExternalTarget,
+                               trustedLease: lease)
         }
         if BufferModel.shared.captureFocusToken == lease.token {
             BufferModel.shared.routeDirectPreservingContent(
                 reason: "input focus deactivated"
+            )
+            // The route cannot outlive the token, but the user's intent can:
+            // if that application is still in front, this is a handover, not
+            // a departure. See rearmCaptureAfterHostSessionLoss.
+            BufferWindowController.shared.rearmCaptureAfterHostSessionLoss(
+                bundleID: lease.bundleID
             )
         }
         _ = InputFocusCoordinator.shared.deactivate(controller: self, token: lease.token)
@@ -2109,12 +2476,13 @@ final class RimeBufferController: IMKInputController {
         } else {
             resolveComposition(client: client,
                                owner: lease.token,
-                               externalTarget: lease.isExternalTarget)
+                               externalTarget: lease.isExternalTarget,
+                               trustedLease: lease)
         }
         // Let the host finish the current command/blur first. If the exact
         // external lease survives, restore its idle guard before another key.
         DispatchQueue.main.async {
-            RimeBufferController.refreshActiveUI()
+            RIMESController.refreshActiveUI()
         }
     }
 
@@ -2122,6 +2490,10 @@ final class RimeBufferController: IMKInputController {
     /// Cmd-Tab, status-menu restart, schema switch): resolve any in-flight
     /// chord + composition into the field NOW.
     func forceCommit() {
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            IMELog.write("forceCommit ignored; RIMES authority retired")
+            return
+        }
         guard let lease = currentLease(), let client = lease.client else {
             IMELog.write("forceCommit ignored; no current focus lease")
             return
@@ -2134,7 +2506,8 @@ final class RimeBufferController: IMKInputController {
         }
         resolveComposition(client: client,
                            owner: lease.token,
-                           externalTarget: lease.isExternalTarget)
+                           externalTarget: lease.isExternalTarget,
+                           trustedLease: lease)
         if currentCallbackClient(client) != nil {
             updateUI(client: client)
         }
@@ -2145,7 +2518,8 @@ final class RimeBufferController: IMKInputController {
     private func resolveComposition(client: IMKTextInput?,
                                     owner: FocusToken?,
                                     externalTarget: Bool? = nil,
-                                    isolateChordClientRouting: Bool = false) {
+                                    isolateChordClientRouting: Bool = false,
+                                    trustedLease: FocusLease? = nil) {
         // `owner` may already be displaced from the coordinator. Retire that
         // exact lease's projections before commit-on-blur can call the old
         // client; owner-scoped cleanup cannot erase the replacement focus.
@@ -2160,41 +2534,65 @@ final class RimeBufferController: IMKInputController {
                 candidateWindow.hide(owner: owner)
             }
         )
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            chordClientRoutingGate.withIsolatedClientRouting {
+                chord.flush()
+            }
+            mutualPairingState.reset()
+            if session != 0 {
+                rimeEngine.clearComposition(session: session)
+            }
+            composition.markCleared()
+            if let owner {
+                InputFocusCoordinator.shared.setCompositionActive(
+                    false,
+                    token: owner
+                )
+                candidateWindow.hide(owner: owner)
+            }
+            IMELog.write("composition resolved locally; RIMES authority retired")
+            return
+        }
+        var frozenClientLease: FocusLease?
         if let client {
-            let frozenLease = currentLease(matching: client)
-            let requiresTransientSurfaceGate = frozenLease.map {
-                $0.hostKind.requiresTransientSurfaceAuthority
-            } ?? FocusHostRules.isTransientSystemSurfaceBundle(
-                bundleId(of: client)
-            )
-            guard !requiresTransientSurfaceGate || (
-                frozenLease.map { lease in
-                    owner == lease.token
-                        && InputFocusCoordinator.shared.interactionTarget(
-                            expected: lease.token,
-                            forceOverlayVisibilityRefresh: true
-                        ) === lease
-                } ?? false
-            ) else {
-                if let lease = frozenLease {
-                    suspendUntrustedFocusLease(
-                        lease,
-                        reason: "transient surface composition target validation"
-                    )
-                    abandonCompositionWithoutClient(
-                        lease,
-                        reason: "transient surface window unavailable"
-                    )
-                } else {
-                    chordClientRoutingGate.withIsolatedClientRouting {
-                        chord.flush()
-                    }
-                    mutualPairingState.reset()
-                    if session != 0 {
-                        rimeEngine.clearComposition(session: session)
-                    }
-                    composition.markCleared()
+            let frozenLease = trustedLease.flatMap { lease in
+                lease.controller === self
+                    && lease.clientIdentity
+                        == ObjectIdentifier(client as AnyObject)
+                    && owner == lease.token
+                    ? lease
+                    : nil
+            } ?? currentLease(matching: client)
+            guard let frozenLease else {
+                chordClientRoutingGate.withIsolatedClientRouting {
+                    chord.flush()
                 }
+                mutualPairingState.reset()
+                if session != 0 {
+                    rimeEngine.clearComposition(session: session)
+                }
+                composition.markCleared()
+                IMELog.write("composition discarded; no frozen client lease")
+                return
+            }
+            frozenClientLease = frozenLease
+            let requiresTransientSurfaceGate = frozenLease.hostKind
+                .requiresTransientSurfaceAuthority
+            guard !requiresTransientSurfaceGate || (
+                owner == frozenLease.token
+                    && InputFocusCoordinator.shared.interactionTarget(
+                        expected: frozenLease.token,
+                        forceOverlayVisibilityRefresh: true
+                    ) === frozenLease
+            ) else {
+                suspendUntrustedFocusLease(
+                    frozenLease,
+                    reason: "transient surface composition target validation"
+                )
+                abandonCompositionWithoutClient(
+                    frozenLease,
+                    reason: "transient surface window unavailable"
+                )
                 return
             }
         }
@@ -2210,8 +2608,11 @@ final class RimeBufferController: IMKInputController {
         guard session != 0 else {
             // The buffer's idle marked guard can exist without librime. It
             // still must be retired on an exact trusted blur/deactivation.
-            if let client {
-                clearCompositionPresentation(client: client)
+            if let client, RimeInputSourceAuthority.currentSourceIsOwn() {
+                clearCompositionPresentation(
+                    client: client,
+                    trustedLease: frozenClientLease
+                )
             } else {
                 composition.markCleared()
             }
@@ -2221,10 +2622,19 @@ final class RimeBufferController: IMKInputController {
             }
             return
         }
-        if let client {
+        if let client, RimeInputSourceAuthority.currentSourceIsOwn() {
             _ = rimeEngine.commitComposition(session: session)
             drainCommit(client, externalTarget: externalTarget)
-            clearCompositionPresentation(client: client)
+            if RimeInputSourceAuthority.currentSourceIsOwn() {
+                clearCompositionPresentation(
+                    client: client,
+                    trustedLease: frozenClientLease
+                )
+            } else {
+                // `drainCommit` can synchronously re-enter the host. A source
+                // switch during that call revokes the old proxy immediately.
+                composition.markCleared()
+            }
         } else {
             rimeEngine.clearComposition(session: session)
             composition.markCleared()
@@ -2237,7 +2647,8 @@ final class RimeBufferController: IMKInputController {
 
     /// Called only by BufferDeliveryCoordinator for the exact live lease.
     func resolveCompositionForBufferDelivery(target: FocusLease) {
-        guard target.controller === self,
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              target.controller === self,
               InputFocusCoordinator.shared.liveTarget(
                 expected: target.token,
                 forceOverlayVisibilityRefresh: true
@@ -2245,14 +2656,16 @@ final class RimeBufferController: IMKInputController {
               focusToken == target.token else { return }
         resolveComposition(client: target.client,
                            owner: target.token,
-                           externalTarget: target.isExternalTarget)
+                           externalTarget: target.isExternalTarget,
+                           trustedLease: target)
     }
 
     /// Closing the workbench or opening its editor must also settle a suspended
     /// lease, but an untrusted proxy cannot receive text. Recover into the
     /// buffer when possible and otherwise discard the unresolved session.
     func resolveCompositionForWorkbenchTransition(target: FocusLease) {
-        guard target.controller === self,
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              target.controller === self,
               InputFocusCoordinator.shared.isCurrent(target.token, controller: self),
               focusToken == target.token else { return }
         guard InputFocusCoordinator.shared.interactionTarget(expected: target.token) === target else {
@@ -2262,7 +2675,8 @@ final class RimeBufferController: IMKInputController {
         }
         resolveComposition(client: target.client,
                            owner: target.token,
-                           externalTarget: target.isExternalTarget)
+                           externalTarget: target.isExternalTarget,
+                           trustedLease: target)
     }
 
     /// Exact-target delivery used by the standalone Clipboard History window.
@@ -2275,7 +2689,8 @@ final class RimeBufferController: IMKInputController {
         expected token: FocusToken
     ) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard !text.isEmpty,
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              !text.isEmpty,
               !IsSecureEventInputEnabled(),
               focusToken == token,
               let initial = InputFocusCoordinator.shared.liveTarget(
@@ -2292,7 +2707,8 @@ final class RimeBufferController: IMKInputController {
             resolveCompositionForWorkbenchTransition(target: initial)
         }
 
-        guard !IsSecureEventInputEnabled(),
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              !IsSecureEventInputEnabled(),
               focusToken == token,
               let current = InputFocusCoordinator.shared.liveTarget(
                 expected: token,
@@ -2305,12 +2721,16 @@ final class RimeBufferController: IMKInputController {
               ObjectIdentifier(client as AnyObject) == current.clientIdentity else {
             return false
         }
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            return false
+        }
         let delivered = deliverDirectText(
             text,
             client: client,
             externalTarget: true
         )
         if delivered,
+           RimeInputSourceAuthority.currentSourceIsOwn(),
            InputFocusCoordinator.shared.liveTarget(
             expected: token,
             forceOverlayVisibilityRefresh: true
@@ -2509,9 +2929,10 @@ final class RimeBufferController: IMKInputController {
               lease.clientIdentity == clientIdentity,
               let leaseClient = lease.client,
               ObjectIdentifier(leaseClient as AnyObject) == clientIdentity,
-              let controllerClient = self.client(),
+              let controllerClient = currentControllerClientWithSourceAuthority(),
               ObjectIdentifier(controllerClient as AnyObject)
-                == clientIdentity else { return nil }
+                == clientIdentity,
+              RimeInputSourceAuthority.currentSourceIsOwn() else { return nil }
         return leaseClient
     }
 
@@ -2641,7 +3062,7 @@ final class RimeBufferController: IMKInputController {
                 // without feeding that untrusted transition into Rime.
                 lastModifiers = rejectedModifiers
             }
-            IMELog.write("handle: stale event rejected bundle=\(bundleId(of: client))")
+            IMELog.write("handle: stale event rejected")
             if event.type == .keyDown {
                 let disposition = BufferWorkbenchEscapeRoutingRules.disposition(
                     isUnmodifiedEscape: isUnmodifiedEscape(
@@ -2668,7 +3089,7 @@ final class RimeBufferController: IMKInputController {
                     keycode: keysym(for: event),
                     mask: RimeKey.modifierMask(from: event.modifierFlags)
                 ), (shortcut != .copyGeneratedResult
-                    || generatedResultCopyAvailable),
+                    || bufferCommandCopyAvailable),
                    bufferClipboardDisposition(client: client) != .passThrough {
                     if shortcut == .copyGeneratedResult {
                         if event.type == .keyDown {
@@ -2891,7 +3312,7 @@ final class RimeBufferController: IMKInputController {
             keycode: keycode,
             mask: RimeKey.modifierMask(from: event.modifierFlags)
         ), (shortcut != .copyGeneratedResult
-            || generatedResultCopyAvailable),
+            || bufferCommandCopyAvailable),
            bufferClipboardDisposition(client: client) != .passThrough {
             return true
         }
@@ -3002,7 +3423,7 @@ final class RimeBufferController: IMKInputController {
         }
 
         if event.modifierFlags.contains(.shift) {
-            shiftGesture?.noteModifierUse()
+            voidShiftGesture("clipboardSearchKeyDown")
         }
         publishTelemetryKey(event, client: client)
 
@@ -3089,7 +3510,7 @@ final class RimeBufferController: IMKInputController {
         // do not feed this keyDown to librime, but it still means Shift was a
         // modifier rather than a standalone mode-toggle tap.
         if event.modifierFlags.contains(.shift) {
-            shiftGesture?.noteModifierUse()
+            voidShiftGesture("handleKeyDown")
         }
         publishTelemetryKey(event, client: client)
 
@@ -3119,7 +3540,7 @@ final class RimeBufferController: IMKInputController {
                 bufferClipboardShortcutKeysDown.remove(event.keyCode)
             }
             if shortcut == .copyGeneratedResult,
-               !generatedResultCopyAvailable {
+               !bufferCommandCopyAvailable {
                 // A normal source rail has no generated target to copy. Leave
                 // the exact Command+C entirely to the host without settling or
                 // otherwise mutating Buffer composition.
@@ -3253,11 +3674,34 @@ final class RimeBufferController: IMKInputController {
             updateUI(client: client)
             return true
         }
+        // A keysym only covers printable ASCII, so any other script arrives
+        // with no keycode at all and would otherwise fall through to the host
+        // — the one case where stream input silently loses what was typed.
+        // Hand the characters straight to the raw line instead.
+        if routedKeycode == nil,
+           let streamLease,
+           routedMask & (RimeKey.controlMask | RimeKey.altMask
+               | RimeKey.superMask) == 0,
+           let typed = event.characters,
+           !typed.isEmpty,
+           typed.unicodeScalars.allSatisfy({
+               !CharacterSet.controlCharacters.contains($0)
+           }),
+           prepareForStreamInputCapture(client: client, lease: streamLease),
+           StreamInputWorkspace.shared.insertTypedText(
+             typed,
+             focusToken: streamLease.token
+           ),
+           streamInputLease(client: client) === streamLease {
+            updateUI(client: client)
+            return true
+        }
         let streamChordRoute = streamInputChordRoute
         switch streamInputDisposition(
             keycode: routedKeycode,
             mask: routedMask,
             exactExternalFocus: streamLease != nil,
+            hasLiveComposition: composition.composing || chord.hasPending,
             chordRoute: streamChordRoute
         ) {
         case .passThrough:
@@ -3484,7 +3928,19 @@ final class RimeBufferController: IMKInputController {
             bufferEnabled: captureAuthorized,
             exactExternalFocus: exactExternalFocus,
             secureInputEnabled: IsSecureEventInputEnabled()
-        ) else { return false }
+        ) else {
+            if streamInputModeSelected, let characters = event.characters,
+               !characters.isEmpty {
+                IMELog.write(
+                    "stream diag: ASCII fallback declined "
+                        + "\(IMELog.redact(characters)) "
+                        + "authorized=\(captureAuthorized) "
+                        + "exactExternalFocus=\(exactExternalFocus) "
+                        + "secure=\(IsSecureEventInputEnabled())"
+                )
+            }
+            return false
+        }
         return insertDirectText(text,
                                 client: client,
                                 source: "Rime ASCII fallback",
@@ -3628,6 +4084,16 @@ final class RimeBufferController: IMKInputController {
             hardwareKeyCode: hardwareKeyCode
         ) {
             return true
+        }
+        let deliverySource = BufferDeliveryContentRouter.current()
+        guard BufferEnterOwnershipRules.ownsReturn(
+            pendingBlockCount: deliverySource.deliveryPendingBlocks.count,
+            hasIncompleteBlocks: deliverySource.hasIncompleteDeliveryBlocks
+        ) else {
+            // Nothing staged: hand Return back so the host acts on whatever
+            // the user put in the field by other means.
+            IMELog.write("buffer enter released to host; nothing staged")
+            return false
         }
         beginBufferEnterGesture(client: client,
                                 hardwareKeyCode: hardwareKeyCode)
@@ -3897,7 +4363,7 @@ final class RimeBufferController: IMKInputController {
             physicalShortcut: physicalClipboardShortcut
         ) {
             if shortcut == .copyGeneratedResult,
-               !generatedResultCopyAvailable {
+               !bufferCommandCopyAvailable {
                 return false
             }
             let clipboardClient = callbackClient
@@ -4313,6 +4779,9 @@ final class RimeBufferController: IMKInputController {
     private func performBufferPluginSwitch(direction: Int,
                                            client: IMKTextInput,
                                            source: String) -> Bool {
+        if BufferWindowController.shared.canNavigatePlugins {
+            return BufferWindowController.shared.navigatePlugin(direction: direction)
+        }
         guard shouldUseBufferCommands(client: client),
               !IsSecureEventInputEnabled() else { return false }
         let plugins = PluginRegistry.shared.plugins(capability: .bufferAction)
@@ -4397,11 +4866,26 @@ final class RimeBufferController: IMKInputController {
         return !ctx.active && ctx.input.isEmpty && ctx.preedit.isEmpty
     }
 
+    /// Every route that can turn a standalone Shift tap into "used as a
+    /// modifier" reports which one it was. Without this the tap simply
+    /// disappears and there is no way to tell a real modifier combination from
+    /// an unrelated focus or panel event cancelling the user's language switch.
+    private func voidShiftGesture(_ site: String, focusChange: Bool = false) {
+        guard var gesture = shiftGesture, !gesture.usedAsModifier else { return }
+        if focusChange {
+            gesture.cancelForFocusChange()
+        } else {
+            gesture.noteModifierUse()
+        }
+        shiftGesture = gesture
+        IMELog.write("stream diag: Shift gesture voided at \(site)")
+    }
+
     private func cancelFocusBoundGestures() {
         // Shift press is deferred, so cancellation creates no librime release
         // debt. Keep the physical gesture only to discard a later same-focus
         // release if the key remains held across activation.
-        shiftGesture?.cancelForFocusChange()
+        voidShiftGesture("cancelFocusBoundGestures", focusChange: true)
         let mustConsumeRelease = bufferEnterPending
             || bufferEnterSuppressUntilPhysicalUp
             || bufferEnterCallbackOwnership.suppressesKeyUp
@@ -4536,7 +5020,8 @@ final class RimeBufferController: IMKInputController {
     /// checked at the action boundary instead of relying on the workbench's
     /// periodic privacy refresh, which can lag an OS secure-input transition.
     private func reassertBufferControlGuardIfAllowed(client: IMKTextInput) {
-        guard BufferEnterSecureInputRules.disposition(
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              BufferEnterSecureInputRules.disposition(
             secureInputEnabled: IsSecureEventInputEnabled()
         ) == .normal else { return }
         composition.reassertBufferGuard(rimeComposing: false,
@@ -4767,7 +5252,7 @@ final class RimeBufferController: IMKInputController {
                                                source: .direct,
                                                client: resolvedClient)
             }
-            IMELog.write("candidate single-character \(IMELog.redact(text)) inserted=\(inserted) target=\(bundleId(of: resolvedClient)) by \(source)")
+            IMELog.write("candidate single-character \(IMELog.redact(text)) inserted=\(inserted) target=\(cachedBundleID(for: resolvedClient)) by \(source)")
         }
 
         if let focusToken {
@@ -4806,7 +5291,11 @@ final class RimeBufferController: IMKInputController {
                 let ctx = rimeEngine.getContext(session: session)
                 if chord.hasPending || composition.composing || ctx.active
                     || !ctx.input.isEmpty || !ctx.preedit.isEmpty {
-                    resolveComposition(client: client, owner: focusToken)
+                    resolveComposition(
+                        client: client,
+                        owner: focusToken,
+                        trustedLease: currentLease(matching: client)
+                    )
                     updateUI(client: client)
                 }
             }
@@ -4918,7 +5407,7 @@ final class RimeBufferController: IMKInputController {
         }
 
         if shortcut == .copyGeneratedResult {
-            return BufferWindowController.shared.copyGeneratedResultAndClose(
+            return BufferWindowController.shared.copyForCommandC(
                 expectedToken: lease.token
             )
         }
@@ -5163,7 +5652,9 @@ final class RimeBufferController: IMKInputController {
             let ctx = rimeEngine.getContext(session: session)
             if chord.hasPending || composition.composing || ctx.active || !ctx.input.isEmpty || !ctx.preedit.isEmpty {
                 resolveComposition(client: client,
-                                   owner: expectedLease?.token ?? focusToken)
+                                   owner: expectedLease?.token ?? focusToken,
+                                   trustedLease: expectedLease
+                                       ?? currentLease(matching: client))
             }
         }
 
@@ -5192,6 +5683,28 @@ final class RimeBufferController: IMKInputController {
                 owner: expectedLease.token
             )
             candidateWindow.hide(owner: expectedLease.token)
+            // Rime declines ASCII letters in English mode and passes most
+            // symbols straight through. Those keys are exactly how the user
+            // writes English and punctuation, so in stream mode they belong in
+            // the raw line rather than as hidden buffer blocks.
+            if streamInputModeSelected {
+                let accepted = deliverToStreamRawIfSelected(
+                    text,
+                    owner: expectedLease.token
+                )
+                if accepted {
+                    clearCompositionPresentation(client: client)
+                    publishAuthoredCommitTelemetry(
+                        characterCount: text.count,
+                        source: .buffer,
+                        client: client
+                    )
+                    IMELog.write(
+                        "\(source) text \(IMELog.redact(text)) -> stream raw"
+                    )
+                    return true
+                }
+            }
             BufferModel.shared.appendDirectInputFragment(
                 text,
                 owner: .focus(expectedLease.token)
@@ -5208,7 +5721,7 @@ final class RimeBufferController: IMKInputController {
                                                source: .direct,
                                                client: client)
             }
-            IMELog.write("\(source) text \(IMELog.redact(text)) inserted=\(inserted) target=\(bundleId(of: client))")
+            IMELog.write("\(source) text \(IMELog.redact(text)) inserted=\(inserted) target=\(cachedBundleID(for: client))")
             guard inserted else { return false }
         }
         publishCompositionActive(false)
@@ -5268,7 +5781,7 @@ final class RimeBufferController: IMKInputController {
         ) != 0
         let isChordKey = isPress
             && !hasCommandModifier
-            && RimeKey.isChordingKey(keycode)
+            && ChordKeymapStore.shared.activeProfile.half(for: keycode) != nil
             && chordGated
         // Prototype semantics: a PRESS of a non-chord key resolves the pending
         // chord before processing; release events never pre-flush.
@@ -5288,6 +5801,7 @@ final class RimeBufferController: IMKInputController {
                 pendingFlyChordBase = (
                     context: rimeEngine.getContext(session: session),
                     policy: policy,
+                    profile: ChordKeymapStore.shared.activeProfile,
                     owner: focusToken,
                     clientIdentity: ObjectIdentifier(client as AnyObject)
                 )
@@ -5299,7 +5813,8 @@ final class RimeBufferController: IMKInputController {
                 keycode,
                 mask: mask,
                 client: client,
-                policy: batchPolicy
+                policy: batchPolicy,
+                layout: pendingFlyChordBase?.profile
             )
             switch decision {
             case .consume:
@@ -5309,7 +5824,7 @@ final class RimeBufferController: IMKInputController {
                 return true
             case let .process(keys):
                 // Presses are deliberately staged until the batch boundary.
-                // Every shape settles; only 互击 may later recombine a left-only
+                // Every shape settles; unified 并击 may later recombine a left-only
                 // batch with the following right-only batch.
                 for key in keys {
                     chord.noteHandledChordKey(key.keycode, mask: key.mask)
@@ -5339,12 +5854,26 @@ final class RimeBufferController: IMKInputController {
         }
 
         let nonShiftChanges = changes.subtracting(.shift)
-        let isSecondShiftTransition = changes.isEmpty
-            && modifiers.contains(.shift)
-            && (event.keyCode == 56 || event.keyCode == 60)
-        if modifiers.contains(.shift),
-           !nonShiftChanges.isEmpty || isSecondShiftTransition {
-            shiftGesture?.noteModifierUse()
+        // A second Shift is the *other* Shift key going down while the first is
+        // still held: no aggregate delta, but a different physical key. macOS
+        // also redelivers flagsChanged for a single press — same key, same
+        // empty delta — and reading that as a second Shift voided the gesture
+        // the press had just created, so an ordinary tap could never reach
+        // librime's ASCII switch and Chinese/English could not be toggled.
+        let isSecondShiftTransition = ShiftModifierEventRules
+            .isSecondShiftTransition(
+                aggregateDeltaIsEmpty: changes.isEmpty,
+                shiftIsDown: modifiers.contains(.shift),
+                hardwareKeyCode: event.keyCode,
+                inFlightGestureKeycode: shiftGesture?.rimeKeycode
+            )
+        if !nonShiftChanges.isEmpty
+            || (modifiers.contains(.shift) && isSecondShiftTransition) {
+            voidShiftGesture(
+                "flagsChanged nonShift=\(nonShiftChanges.rawValue) "
+                    + "secondShift=\(isSecondShiftTransition) "
+                    + "keyCode=\(event.keyCode)"
+            )
         }
 
         // Every trusted flagsChanged is a physical boundary for stream chords,
@@ -5390,12 +5919,22 @@ final class RimeBufferController: IMKInputController {
         // paths. Replay a matched press/release only after we have proved this
         // was a short standalone tap; modified, long and focus-cancelled
         // gestures never reach ascii_composer at all.
-        if changes.contains(.shift) {
+        let physicalShiftKey = changes.contains(.shift)
+            ? ShiftModifierEventRules.rimeKeycode(
+                forHardwareKeyCode: event.keyCode
+            )
+            : nil
+        if changes.contains(.shift), physicalShiftKey == nil {
+            // An aggregate Shift delta attached to another modifier cannot
+            // authenticate a tap. If a real gesture was already in flight,
+            // fail closed so a later physical release cannot toggle ASCII.
+            voidShiftGesture("aggregateShiftDelta keyCode=\(event.keyCode)")
+            IMELog.write(
+                "aggregate Shift delta ignored for non-Shift keyCode=\(event.keyCode)"
+            )
+        }
+        if let shiftKey = physicalShiftKey {
             let pressed = modifiers.contains(.shift)
-            let eventKey = RimeKey.fromVirtualKeyCode(event.keyCode)
-            let shiftKey = eventKey == RimeKey.shiftL || eventKey == RimeKey.shiftR
-                ? eventKey!
-                : RimeKey.shiftL
             if pressed {
                 // Preserve processRimeKey's non-chord boundary even though the
                 // mode-switch event itself is deferred until release.
@@ -5445,8 +5984,28 @@ final class RimeBufferController: IMKInputController {
                         "standalone Shift tap discarded by global hotkey tombstone "
                             + "route=\(Self.globalHotKeyShiftTombstone.route)"
                     )
+                } else if let releaseGesture {
+                    let elapsed = max(0, event.timestamp - releaseGesture.beganAt)
+                    IMELog.write(
+                        "stream diag: Shift tap discarded "
+                            + "usedAsModifier=\(releaseGesture.usedAsModifier) "
+                            + "elapsed=\(String(format: "%.3f", elapsed)) "
+                            + "sessionMatch=\(releaseGesture.session == session) "
+                            + "schemaMatch="
+                            + "\(releaseGesture.schemaID == currentSchemaId)"
+                    )
+                } else {
+                    IMELog.write(
+                        "stream diag: Shift release with no gesture in flight"
+                    )
                 }
             }
+        }
+        if changes.contains(.shift) {
+            // Keep the aggregate baseline synchronized even when a different
+            // modifier's flagsChanged callback exposed the Shift delta. The
+            // physical Shift callback, if any, is the only event allowed to
+            // authenticate a standalone language-toggle gesture.
             changes.remove(.shift)
             if changes.isEmpty {
                 lastModifiers = modifiers
@@ -5535,7 +6094,7 @@ final class RimeBufferController: IMKInputController {
         let scalars = characters.unicodeScalars.map(\.value)
         guard Self.shouldConsumeCodexBufferControlText(
             scalars,
-            bundleId: bundleId(of: client),
+            bundleId: cachedBundleID(for: client),
             bufferActive: shouldUseBufferCommands(client: client)
         ) else { return false }
 
@@ -5583,6 +6142,7 @@ final class RimeBufferController: IMKInputController {
         // timer from a displaced field must not first mutate Rime and only
         // discover the stale destination when it is ready to drain a commit.
         guard let base,
+              base.profile == ChordKeymapStore.shared.activeProfile,
               focusToken == base.owner,
               client.map({ ObjectIdentifier($0 as AnyObject) == base.clientIdentity }) != false else {
             mutualPairingState.reset()
@@ -5609,7 +6169,8 @@ final class RimeBufferController: IMKInputController {
             // the old private Rime session.
             initialTarget = nil
         }
-        guard let shape = FlyChordBatchShape(keys: keys) else {
+        let profile = base.profile
+        guard let shape = FlyChordBatchShape(keys: keys, layout: profile) else {
             IMELog.write("FlyYao batch rejected unknown keyboard-half shape")
             return
         }
@@ -5619,11 +6180,11 @@ final class RimeBufferController: IMKInputController {
         var engineKeys = keys
         var engineBaseInput = contextBefore.input
         var replayedLeft: FlyChordMutualPairingState.SettledLeft?
-        var boundaryPlan = FlyChordBoundaryRules.plan(for: contextBefore)
+        var boundaryPlan = ChordKeymapBoundaryRules.plan(for: contextBefore, profile: profile)
 
         func replaySettledLeft(_ left: FlyChordMutualPairingState.SettledLeft) -> Bool {
-            let insertsBoundary = FlyChordBoundaryRules.shouldInsert(
-                forKeyCount: left.keys.count
+            let insertsBoundary = ChordKeymapBoundaryRules.shouldInsert(
+                keys: left.keys.map(\.keycode), profile: profile
             )
             if insertsBoundary,
                left.boundaryPlan.before,
@@ -5663,6 +6224,8 @@ final class RimeBufferController: IMKInputController {
             currentKeyCount: keys.count,
             policy: policy,
             currentContext: contextBefore
+        ), ChordKeymapBoundaryRules.mayCombine(
+            keys: previousLeft.keys.map(\.keycode) + keys.map(\.keycode), profile: profile
         ) {
             var rollbackHandled = true
             for _ in 0..<previousLeft.insertedScalarCount {
@@ -5705,8 +6268,8 @@ final class RimeBufferController: IMKInputController {
             }
         }
 
-        let insertsBoundary = FlyChordBoundaryRules.shouldInsert(
-            forKeyCount: engineKeys.count
+        let insertsBoundary = ChordKeymapBoundaryRules.shouldInsert(
+            keys: engineKeys.map(\.keycode), profile: profile
         )
         let leadingBoundaryAccepted = !insertsBoundary
             || !boundaryPlan.before
@@ -5746,7 +6309,9 @@ final class RimeBufferController: IMKInputController {
                 baseInput: contextBefore.input,
                 settledContext: settledContext,
                 boundaryPlan: boundaryPlan,
-                policy: policy,
+                policy: ChordKeymapBoundaryRules.mayAwaitComplement(
+                    keys: engineKeys.map(\.keycode), profile: profile
+                ) ? policy : .sameBatchOnly,
                 shape: shape
             )
         } else {
@@ -5995,6 +6560,19 @@ final class RimeBufferController: IMKInputController {
         ctx.candidates.map { "\($0.label):\($0.text):\($0.comment)" }.joined(separator: "|")
     }
 
+    /// librime hands finished text back through three separate doors: an
+    /// ordinary commit, the ASCII fallback for keys it declines, and Return
+    /// over a live composition. All three must reach the same sink. In stream
+    /// mode that sink is the raw line the user is looking at — anything else
+    /// lands in BufferModel blocks that stay invisible until another plugin is
+    /// selected, which reads as the text having been swallowed.
+    private func deliverToStreamRawIfSelected(_ text: String,
+                                              owner: FocusToken) -> Bool {
+        guard streamInputModeSelected else { return false }
+        return StreamInputWorkspace.shared.insertTypedText(text,
+                                                           focusToken: owner)
+    }
+
     private func commitRawInput(client: IMKTextInput) -> Bool {
         guard session != 0 else { return false }
 
@@ -6027,6 +6605,24 @@ final class RimeBufferController: IMKInputController {
                 BufferWindowController.shared.clearInlineComposition(owner: focusToken)
                 candidateWindow.hide(owner: focusToken)
             }
+            // Return over a live composition is librime's "commit what I
+            // actually typed". In stream mode those letters belong in the raw
+            // line the user is looking at; appending them to BufferModel hides
+            // them in blocks that only reappear once another plugin is
+            // selected, which reads as the letters having been swallowed.
+            if let focusToken,
+               deliverToStreamRawIfSelected(raw, owner: focusToken) {
+                clearCompositionPresentation(client: client)
+                publishAuthoredCommitTelemetry(characterCount: raw.count,
+                                               source: .buffer,
+                                               client: client)
+                IMELog.write(
+                    "raw input \(IMELog.redact(raw)) -> stream raw"
+                )
+                publishCompositionActive(false)
+                updateUI(client: client)
+                return true
+            }
             BufferModel.shared.append(raw)
             clearCompositionPresentation(client: client)
             publishAuthoredCommitTelemetry(characterCount: raw.count,
@@ -6040,7 +6636,7 @@ final class RimeBufferController: IMKInputController {
                                                source: .direct,
                                                client: client)
             }
-            IMELog.write("raw input \(IMELog.redact(raw)) inserted=\(inserted) target=\(bundleId(of: client))")
+            IMELog.write("raw input \(IMELog.redact(raw)) inserted=\(inserted) target=\(cachedBundleID(for: client))")
         }
         publishCompositionActive(false)
         updateUI(client: client)
@@ -6069,6 +6665,20 @@ final class RimeBufferController: IMKInputController {
                 BufferWindowController.shared.clearInlineComposition(owner: focusToken)
                 candidateWindow.hide(owner: focusToken)
             }
+            // Consciousness-stream input is an ordinary input surface, so what
+            // Rime commits is what the user wrote: it belongs in that raw line
+            // rather than as a finished buffer block.
+            if let focusToken,
+               deliverToStreamRawIfSelected(commit, owner: focusToken) {
+                clearCompositionPresentation(client: client)
+                publishAuthoredCommitTelemetry(characterCount: commit.count,
+                                               source: .buffer,
+                                               client: client)
+                IMELog.write(
+                    "commit \(IMELog.redact(commit)) -> stream raw"
+                )
+                return nil
+            }
             BufferModel.shared.append(commit)
             clearCompositionPresentation(client: client)
             publishAuthoredCommitTelemetry(characterCount: commit.count,
@@ -6084,7 +6694,7 @@ final class RimeBufferController: IMKInputController {
                                                source: .direct,
                                                client: client)
             }
-            IMELog.write("commit \(IMELog.redact(commit)) inserted=\(inserted) target=\(bundleId(of: client))")
+            IMELog.write("commit \(IMELog.redact(commit)) inserted=\(inserted) target=\(cachedBundleID(for: client))")
         }
         return commit
     }
@@ -6100,7 +6710,23 @@ final class RimeBufferController: IMKInputController {
         return true
     }
 
+    private func practiceAllowsObservation(client: IMKTextInput) -> Bool {
+        guard TypingPracticeTelemetry.isPracticeInputFocused,
+              !IsSecureEventInputEnabled(), let focusToken,
+              let target = InputFocusCoordinator.shared.interactionTarget(expected: focusToken),
+              !target.isExternalTarget, target.controller === self,
+              target.clientIdentity == ObjectIdentifier(client as AnyObject) else { return false }
+        return true
+    }
+
     private func publishTelemetryKey(_ event: NSEvent, client: IMKTextInput) {
+        if practiceAllowsObservation(client: client) {
+            TypingPracticeTelemetry.shared.noteIMEKey(
+                event, isComposing: composition.composing || chord.hasPending,
+                owner: ObjectIdentifier(client as AnyObject)
+            )
+            return
+        }
         guard telemetryAllowsObservation(client: client),
               let keyID = KeyboardLayout.keyId(forKeyCode: event.keyCode) else { return }
         InputTelemetryBus.shared.publish(.key(.init(
@@ -6134,6 +6760,12 @@ final class RimeBufferController: IMKInputController {
         handledReleaseCount: Int,
         client: IMKTextInput
     ) {
+        if practiceAllowsObservation(client: client) {
+            TypingPracticeTelemetry.shared.noteIMEChord(
+                schemaID: currentSchemaId, owner: ObjectIdentifier(client as AnyObject)
+            )
+            return
+        }
         guard telemetryAllowsObservation(client: client) else { return }
         InputTelemetryBus.shared.publish(.chord(.init(
             rimeKeyCodes: keys.map(\.keycode),
@@ -6161,7 +6793,8 @@ final class RimeBufferController: IMKInputController {
 
     /// Token-aware destination used only by BufferDeliveryCoordinator.
     func deliverBufferedBlock(_ text: String, origin _: Origin, target: FocusLease) -> Bool {
-        guard target.controller === self,
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              target.controller === self,
               focusToken == target.token,
               InputFocusCoordinator.shared.liveTarget(
                 expected: target.token,
@@ -6172,7 +6805,8 @@ final class RimeBufferController: IMKInputController {
             IMELog.write("buffer send blocked; stale target token=\(target.token)")
             return false
         }
-        guard Delivery.insert(text, into: client) else {
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              Delivery.insert(text, into: client) else {
             return false
         }
         composition.commitDidInsert()
@@ -6180,7 +6814,8 @@ final class RimeBufferController: IMKInputController {
     }
 
     static func refreshActiveUI() {
-        if let owner = InputFocusCoordinator.shared.interactionTarget(),
+        if RimeInputSourceAuthority.currentSourceIsOwn(),
+           let owner = InputFocusCoordinator.shared.interactionTarget(),
            let controller = owner.controller,
            let client = owner.client,
            InputFocusCoordinator.shared.isCurrent(owner.token, controller: controller) {
@@ -6238,7 +6873,7 @@ final class RimeBufferController: IMKInputController {
             return
         }
 
-        if RimeBufferController.active === self,
+        if RIMESController.active === self,
            currentLease() != nil {
             applyStoredInputConfigurationToLiveSession()
             IMELog.write("chord_extension disabled active_session fallback=\(currentSchemaId)")
@@ -6301,6 +6936,26 @@ final class RimeBufferController: IMKInputController {
     }
 
     private func updateUI(client: IMKTextInput) {
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            chordClientRoutingGate.withIsolatedClientRouting {
+                chord.flush()
+            }
+            mutualPairingState.reset()
+            if session != 0 {
+                rimeEngine.clearComposition(session: session)
+            }
+            if let focusToken {
+                BufferWindowController.shared.clearInlineComposition(
+                    owner: focusToken
+                )
+                candidateWindow.hide(owner: focusToken)
+            } else {
+                BufferWindowController.shared.clearInlineComposition()
+            }
+            composition.markCleared()
+            IMELog.write("updateUI ignored; RIMES authority retired")
+            return
+        }
         guard let focusToken else {
             BufferWindowController.shared.clearInlineComposition()
             return
@@ -6334,6 +6989,15 @@ final class RimeBufferController: IMKInputController {
                 secureInput: secureInput
             )
             let guardActive: Bool
+            guard uiTransactionStillCurrent(
+                lease: lease,
+                client: client,
+                secureInput: secureInput
+            ) else {
+                candidateWindow.hide(owner: focusToken)
+                IMELog.write("updateUI fallback presentation blocked before host write token=\(focusToken)")
+                return
+            }
             switch presentation {
             case .none, .normalPreedit:
                 clearCompositionPresentation(client: client)
@@ -6376,20 +7040,25 @@ final class RimeBufferController: IMKInputController {
 
         // A schema switch made INSIDE Rime (F4 switcher) must feel as global
         // as a menu switch: persist it so other controllers adopt it on focus.
-        if !currentSchemaId.isEmpty, status.schemaId != currentSchemaId, !status.schemaId.isEmpty {
+        let staleChordSchema = ChordExtensionStore.isChordSchema(status.schemaId)
+            && (status.schemaId != ChordExtensionStore.schemaID || !ChordExtensionStore.shared.isEnabled)
+        if staleChordSchema || (!currentSchemaId.isEmpty && status.schemaId != currentSchemaId && !status.schemaId.isEmpty) {
             let adopted = InputConfigurationStore.shared.adoptRuntimeSchema(
                 status.schemaId
             )
             if !adopted,
-               status.schemaId == ChordExtensionStore.schemaID,
-               !ChordExtensionStore.shared.isEnabled {
+               ChordExtensionStore.isChordSchema(status.schemaId) {
                 let fallback = InputConfigurationStore.shared.runtimeProfile.schemaID
                 rimeEngine.clearComposition(session: session)
                 composition.markCleared()
                 pendingFlyChordBase = nil
                 mutualPairingState.reset()
-                if fallback != status.schemaId {
-                    _ = rimeEngine.selectSchema(fallback, session: session)
+                chord.invalidate()
+                guard fallback != status.schemaId,
+                      rimeEngine.selectSchema(fallback, session: session),
+                      rimeEngine.getStatus(session: session).schemaId == fallback else {
+                    candidateWindow.hideAll()
+                    return
                 }
                 refreshSchema()
                 IMELog.write(
@@ -6404,7 +7073,10 @@ final class RimeBufferController: IMKInputController {
         currentASCIIMode = status.asciiMode
         StatusMenu.shared.update(schemaId: status.schemaId, schemaName: status.schemaName)
 
-        let bid = bundleId(of: client)
+        // Bundle identity was frozen when this exact lease was adopted. Do
+        // not query the IMK proxy again after librime work may have allowed an
+        // input-source transition to occur.
+        let bid = lease.bundleID
         let mode = CompositionSession.mode(for: bid)
         let rimeContextActive = ctx.active || !ctx.input.isEmpty || !ctx.preedit.isEmpty
         let compositionActive = chord.hasPending || rimeContextActive
@@ -6417,6 +7089,16 @@ final class RimeBufferController: IMKInputController {
             stagedChordGuardActive: stagedChordGuardActive
         )
         let guardActive: Bool
+        guard uiTransactionStillCurrent(
+            lease: lease,
+            client: client,
+            secureInput: secureInput
+        ) else {
+            BufferWindowController.shared.clearInlineComposition(owner: focusToken)
+            candidateWindow.hide(owner: focusToken)
+            IMELog.write("updateUI presentation blocked before host write token=\(focusToken)")
+            return
+        }
         switch presentation {
         case .none:
             clearCompositionPresentation(client: client)
@@ -6544,6 +7226,15 @@ final class RimeBufferController: IMKInputController {
         let wantsPanel = !ctx.candidates.isEmpty
             || (showPreeditInPanel && (!ctx.preedit.isEmpty || !ctx.input.isEmpty))
         if wantsPanel {
+            guard uiTransactionStillCurrent(
+                lease: lease,
+                client: client,
+                secureInput: secureInput
+            ) else {
+                candidateWindow.hide(owner: focusToken)
+                IMELog.write("candidate caret blocked before host query token=\(focusToken)")
+                return
+            }
             let anchor = caretRect(for: client)
             guard uiTransactionStillCurrent(
                 lease: lease,
@@ -6570,7 +7261,8 @@ final class RimeBufferController: IMKInputController {
         client: IMKTextInput,
         secureInput: Bool
     ) -> Bool {
-        focusToken == lease.token
+        RimeInputSourceAuthority.currentSourceIsOwn()
+            && focusToken == lease.token
             && ObjectIdentifier(client as AnyObject) == lease.clientIdentity
             && InputFocusCoordinator.shared.interactionTarget(
                 expected: lease.token
@@ -6591,7 +7283,8 @@ final class RimeBufferController: IMKInputController {
     /// delivery; a synchronous focus change discards the returned rectangle.
     func workbenchCaretRect(expected lease: FocusLease) -> NSRect? {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard !IsSecureEventInputEnabled(),
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              !IsSecureEventInputEnabled(),
               lease.controller === self,
               focusToken == lease.token,
               let client = lease.client,
@@ -6602,7 +7295,8 @@ final class RimeBufferController: IMKInputController {
               ) === lease else { return nil }
 
         let rect = caretRect(for: client)
-        guard !IsSecureEventInputEnabled(),
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              !IsSecureEventInputEnabled(),
               focusToken == lease.token,
               InputFocusCoordinator.shared.liveTarget(
                 expected: lease.token,
@@ -6615,25 +7309,56 @@ final class RimeBufferController: IMKInputController {
         return rect
     }
 
+    /// Focused text-box frame for a newly summoned workbench, behind the same
+    /// live lease validation as `workbenchCaretRect`. The Accessibility read
+    /// is bracketed by two ownership checks, so a synchronous focus change
+    /// discards the rectangle rather than aligning the workbench to a field
+    /// the user has already left. Returns nil whenever alignment is off, the
+    /// grant is missing, or the host exposes no usable text box.
+    func workbenchInputBoxRect(expected lease: FocusLease) -> NSRect? {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              !IsSecureEventInputEnabled(),
+              lease.controller === self,
+              focusToken == lease.token,
+              let client = lease.client,
+              ObjectIdentifier(client as AnyObject) == lease.clientIdentity,
+              InputFocusCoordinator.shared.liveTarget(
+                expected: lease.token,
+                forceOverlayVisibilityRefresh: true
+              ) === lease else { return nil }
+
+        guard let box = FocusedInputBoxProbe.focusedBoxFrame() else { return nil }
+        guard RimeInputSourceAuthority.currentSourceIsOwn(),
+              !IsSecureEventInputEnabled(),
+              focusToken == lease.token,
+              InputFocusCoordinator.shared.liveTarget(
+                expected: lease.token,
+                forceOverlayVisibilityRefresh: true
+              ) === lease else { return nil }
+        return box
+    }
+
     /// Caret rect in screen coords. Reliable while a marked-text session is
     /// active (§4.2); the candidate window validates it and only caches it for
     /// the lifetime of the current exact owner token.
     private func caretRect(for client: IMKTextInput) -> NSRect {
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else {
+            return .zero
+        }
         // InputMethodKit defines this index relative to the inline session,
         // while selectedRange/markedRange are document-relative. Index 0 also
         // means the current selection when a host exposes no inline session.
         // Mixing those coordinate systems moves both the ordinary candidate
         // panel and the explicitly opened workbench in Chromium/Electron clients.
-        return InputCaretGeometryRules.queryAtInlineSessionAnchor { index in
+        let rect = InputCaretGeometryRules.queryAtInlineSessionAnchor { index in
             var rect = NSRect.zero
             _ = client.attributes(forCharacterIndex: index,
                                   lineHeightRectangle: &rect)
             return rect
         }
-    }
-
-    private func bundleId(of client: IMKTextInput) -> String {
-        client.bundleIdentifier() ?? "unknown"
+        guard RimeInputSourceAuthority.currentSourceIsOwn() else { return .zero }
+        return rect
     }
 
     private func watchdog(_ what: String, since t0: CFAbsoluteTime) {
@@ -6664,20 +7389,15 @@ final class RimeBufferController: IMKInputController {
         StatusMenu.shared.toggleClipboardHistory()
     }
 
-    @objc func toggleBufferPinnedFromInputMenu(_ sender: Any?) {
-        StatusMenu.shared.toggleBufferPinned()
+    @objc func openMaintenanceFromInputMenu(_ sender: Any?) {
+        StatusMenu.shared.showMaintenanceMenu(target: self)
     }
-
-    @objc func moveBufferWindowFromInputMenu(_ sender: Any?) {
-        StatusMenu.shared.moveBufferWindowToCurrentScreen()
-    }
-
     @objc func openMailboxFromInputMenu(_ sender: Any?) {
         StatusMenu.shared.openMailbox()
     }
 
-    @objc func openCapsuleFromInputMenu(_ sender: Any?) {
-        StatusMenu.shared.openCapsule()
+    @objc func openCodexSessionFromInputMenu(_ sender: Any?) {
+        StatusMenu.shared.openCodexSession()
     }
 
     @objc func checkUpdateFromInputMenu(_ sender: Any?) {

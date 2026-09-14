@@ -1,5 +1,35 @@
 # Third-party notices
 
+## AudioKit
+
+The Buffer Music audio graph uses
+[`AudioKit/AudioKit`](https://github.com/AudioKit/AudioKit), version 5.7.2
+(revision `97a35fe04cd8e3d13b8744e1216b8673f825bef6`). Its AudioEngine,
+AppleSampler, Mixer, and Reverb supply audio playback and processing. The
+electronic instrument is synthesized by RIMES; no AudioKit demo sound banks
+are included. The separately licensed AVL acoustic drum recordings are
+documented below.
+
+Copyright (c) 2016 Aurelius Prochazka
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
 ## Rime Ice configuration and dictionaries
 
 The Rime schemas, dictionaries, Lua modules, OpenCC data, symbol tables, and
@@ -108,3 +138,20 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## AVL Drumkits — Black Pearl 4pc
+
+The acoustic drum sample library `Black_Pearl_4_LV2.sf2` is by Glen MacArthur
+and Robin Gareus, from x42/avldrums.lv2 commit
+`9389f16f139410d9a55f9006976bd54cbd8b7806`. It is bundled unmodified, separately
+from RIMES code, under CC BY-SA 3.0 with the author's exception for music and
+other non-sample-library works. The full upstream attribution/exception is in
+`Music/AVL-README.txt`, shipped with the sample asset.
+
+Source: https://github.com/x42/avldrums.lv2/tree/9389f16f139410d9a55f9006976bd54cbd8b7806/sf2
+
+License: https://creativecommons.org/licenses/by-sa/3.0/
+
+The x42 LV2 player/FluidSynth code is not included. AudioKit's AppleSampler
+loads the licensed sample library. RIMES drum patterns are original; no
+BeatBuddy recordings, MIDI content, or firmware are redistributed.

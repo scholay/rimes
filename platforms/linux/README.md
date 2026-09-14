@@ -11,7 +11,7 @@ OCR、插件 UI、自绘候选窗、焦点租约或设置窗口；候选显示�
 的 Fcitx5 Rime 或 IBus Rime 负责。当前版本只做过文件事务和包完整性自动测试，尚未在
 真实 Linux 桌面、X11 或 Wayland 中完成打字验收，因此发布时必须保留 `Preview` 标识。
 数据包中的 `my_combo` 可把同一批次按键交给 Rime chord composer，并包含单键 `v`
-修复；RIMES macOS 前端实现的跨批互击配对不在本预览中。
+修复；RIMES macOS 前端实现的跨批分离击键配对不在本预览中。
 
 ## 前置条件
 

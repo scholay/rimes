@@ -145,7 +145,7 @@ rimes_is_owned_bundle() {
     probe_status=$?
     [ "$probe_status" -eq 0 ] || return 2
     case "$identifier" in
-        com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
+        com.scholay.inputmethod.isaac|com.scholay.isaac|com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
             return 0
             ;;
         *)
@@ -164,7 +164,7 @@ rimes_is_owned_bundle_as_login_user() {
     probe_status=$?
     [ "$probe_status" -eq 0 ] || return 2
     case "$identifier" in
-        com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
+        com.scholay.inputmethod.isaac|com.scholay.isaac|com.isaac.inputmethod.RimeBuffer|com.isaac.inputmethod.ETInput)
             return 0
             ;;
         *)
