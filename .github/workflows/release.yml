@@ -67,7 +67,7 @@ jobs:
           test "$PARENT_ID" = "$BUNDLE_ID"
           test "$PARENT_ID" != "$MODE_ID"
           test "$MODE_ID" = "$DECLARED_MODE_ID"
-          test "$CONNECTION" = 'RimeBuffer_1_Connection'
+          test "$CONNECTION" = 'RIMES_1_Connection'
           test "$DISPLAY_NAME" = 'RIMES'
           test "$MENU_TITLE" = 'RIMES'
           test "$EXECUTABLE" = 'RIMES'
@@ -78,8 +78,8 @@ jobs:
           # orphans the old rows and stacks duplicate "RIMES" entries in
           # System Settings (this bit us across the 0.3–0.4 renames — see
           # RELEASE.md). Never change these without a migration story.
-          test "$BUNDLE_ID" = 'com.scholay.isaac'
-          test "$MODE_ID" = 'com.scholay.isaac.Hans'
+          test "$BUNDLE_ID" = 'com.scholay.inputmethod.isaac'
+          test "$MODE_ID" = 'com.scholay.inputmethod.isaac.Hans'
           test "$MODE_ID" = "${BUNDLE_ID}.Hans"
           for STRINGS in Resources/*.lproj/InfoPlist.strings; do
             plutil -lint "$STRINGS"
@@ -371,9 +371,9 @@ jobs:
           parent_id=$(/usr/libexec/PlistBuddy -c 'Print :TISInputSourceID' "$info")
           mode_id=$(/usr/libexec/PlistBuddy -c 'Print :ComponentInputModeDict:tsVisibleInputModeOrderedArrayKey:0' "$info")
           declared_mode_id=$(/usr/libexec/PlistBuddy -c "Print :ComponentInputModeDict:tsInputModeListKey:${mode_id}:TISInputSourceID" "$info")
-          [[ "$bundle_id" == com.scholay.isaac ]]
+          [[ "$bundle_id" == com.scholay.inputmethod.isaac ]]
           [[ "$parent_id" == "$bundle_id" ]]
-          [[ "$mode_id" == com.scholay.isaac.Hans ]]
+          [[ "$mode_id" == com.scholay.inputmethod.isaac.Hans ]]
           [[ "$declared_mode_id" == "$mode_id" ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")" == "$VERSION" ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info")" == RIMES ]]
@@ -383,7 +383,7 @@ jobs:
           lipo "$bin" -verify_arch arm64 x86_64
           "$bin" input-source-install-smoke
 
-          receipt="$(pkgutil --pkg-info com.scholay.isaac)"
+          receipt="$(pkgutil --pkg-info com.scholay.inputmethod.isaac)"
           printf '%s\n' "$receipt" | grep -Fq "version: $VERSION"
           printf '%s\n' "$receipt" | grep -Fq 'location: Library/Input Methods'
 
@@ -737,10 +737,10 @@ jobs:
             exit 1
           fi
 
-          [[ "$(xmllint --xpath "count(/installer-gui-script/pkg-ref[@id='com.scholay.isaac' and @version='$VERSION' and text()='#component.pkg'])" "$product_distribution")" == 1 ]]
-          [[ "$(xmllint --xpath "count(/pkg-info[@identifier='com.scholay.isaac' and @version='$VERSION'])" "$package_info")" == 1 ]]
+          [[ "$(xmllint --xpath "count(/installer-gui-script/pkg-ref[@id='com.scholay.inputmethod.isaac' and @version='$VERSION' and text()='#component.pkg'])" "$product_distribution")" == 1 ]]
+          [[ "$(xmllint --xpath "count(/pkg-info[@identifier='com.scholay.inputmethod.isaac' and @version='$VERSION'])" "$package_info")" == 1 ]]
           [[ "$(xmllint --xpath 'count(/pkg-info/bundle)' "$package_info")" == 1 ]]
-          [[ "$(xmllint --xpath "count(/pkg-info/bundle[@id='com.scholay.isaac' and @path='./RIMES.app' and @CFBundleShortVersionString='$VERSION'])" "$package_info")" == 1 ]]
+          [[ "$(xmllint --xpath "count(/pkg-info/bundle[@id='com.scholay.inputmethod.isaac' and @path='./RIMES.app' and @CFBundleShortVersionString='$VERSION'])" "$package_info")" == 1 ]]
           [[ "$(xmllint --xpath 'count(/pkg-info/strict-identifier/bundle)' "$package_info")" == 0 ]]
           [[ "$(xmllint --xpath 'count(/pkg-info/relocate/bundle)' "$package_info")" == 0 ]]
           grep -Eq '<pkg-info[^>]*relocatable="false"' "$package_info"
@@ -755,9 +755,9 @@ jobs:
           parent_id=$(/usr/libexec/PlistBuddy -c 'Print :TISInputSourceID' "$info")
           mode_id=$(/usr/libexec/PlistBuddy -c 'Print :ComponentInputModeDict:tsVisibleInputModeOrderedArrayKey:0' "$info")
           declared_mode_id=$(/usr/libexec/PlistBuddy -c "Print :ComponentInputModeDict:tsInputModeListKey:${mode_id}:TISInputSourceID" "$info")
-          [[ "$bundle_id" == com.scholay.isaac ]]
+          [[ "$bundle_id" == com.scholay.inputmethod.isaac ]]
           [[ "$parent_id" == "$bundle_id" ]]
-          [[ "$mode_id" == com.scholay.isaac.Hans ]]
+          [[ "$mode_id" == com.scholay.inputmethod.isaac.Hans ]]
           [[ "$declared_mode_id" == "$mode_id" ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")" == "$VERSION" ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info")" == RIMES ]]
@@ -1318,7 +1318,7 @@ jobs:
             echo 'Smoke-tested app contains an unexpected symlink.' >&2
             exit 1
           fi
-          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" == 'com.scholay.isaac' ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" == 'com.scholay.inputmethod.isaac' ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" == "$VERSION" ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" == 'RIMES' ]]
           lipo "$bin" -verify_arch arm64 x86_64
@@ -1518,13 +1518,13 @@ jobs:
           [[ -x "$component_dir/Scripts/rimes-companion-launch-agent.sh" ]]
           [[ -x "$component_dir/Scripts/rimes-timeout" ]]
           [[ -x "$component_dir/Scripts/rimes-update-handoff" ]]
-          [[ "$(xmllint --xpath "count(/installer-gui-script/pkg-ref[@id='com.scholay.isaac' and @version='$VERSION' and text()='#component.pkg'])" "$product_distribution")" == '1' ]]
+          [[ "$(xmllint --xpath "count(/installer-gui-script/pkg-ref[@id='com.scholay.inputmethod.isaac' and @version='$VERSION' and text()='#component.pkg'])" "$product_distribution")" == '1' ]]
           grep -Eq '<pkg-info[^>]*relocatable="false"' "$package_info"
-          grep -Fq "identifier=\"com.scholay.isaac\"" "$package_info"
+          grep -Fq "identifier=\"com.scholay.inputmethod.isaac\"" "$package_info"
           grep -Fq "version=\"$VERSION\"" "$package_info"
           [[ "$(xmllint --xpath 'count(/pkg-info/bundle)' "$package_info")" == '1' ]]
           [[ "$(xmllint --xpath \
-            "count(/pkg-info/bundle[@id='com.scholay.isaac' and @path='./RIMES.app' and @CFBundleShortVersionString='$VERSION'])" \
+            "count(/pkg-info/bundle[@id='com.scholay.inputmethod.isaac' and @path='./RIMES.app' and @CFBundleShortVersionString='$VERSION'])" \
             "$package_info")" == '1' ]]
           grep -Fq '<bundle-version>' "$package_info"
           grep -Fq '<upgrade-bundle>' "$package_info"
@@ -1532,7 +1532,7 @@ jobs:
           [[ "$(xmllint --xpath 'count(/pkg-info/relocate/bundle)' "$package_info")" == '0' ]]
           grep -Fq '<preinstall file="./preinstall"' "$package_info"
           grep -Fq '<postinstall file="./postinstall"' "$package_info"
-          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$payload_app/Contents/Info.plist")" == 'com.scholay.isaac' ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$payload_app/Contents/Info.plist")" == 'com.scholay.inputmethod.isaac' ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$payload_app/Contents/Info.plist")" == "$VERSION" ]]
           lipo "$payload_app/Contents/MacOS/RIMES" -verify_arch arm64 x86_64
           codesign --verify --deep --strict --verbose=2 "$payload_app"
