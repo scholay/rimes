@@ -220,10 +220,35 @@ jobs:
 
       # Universal (arm64 + x86_64) so the same .app runs on Apple Silicon and
       # Intel. librime is dlopen'd at runtime, so nothing extra is needed here.
+      # Each slice is built separately and merged with lipo: passing both
+      # --arch flags at once switches SwiftPM to the Xcode build system, which
+      # cannot resolve the build-tool plugin SwiftTerm 1.20 declares ("missing
+      # target SwiftTermBuildInfoPlugin"). The native build system, used by CI
+      # and build_install.sh, handles it.
       - name: Build (release, universal)
         run: |
-          swift build -c release --arch arm64 --arch x86_64
-          echo "BIN_DIR=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)" >> "$GITHUB_ENV"
+          set -euo pipefail
+          for arch in arm64 x86_64; do
+            swift build -c release --arch "$arch"
+          done
+          arm_bin="$(swift build -c release --arch arm64 --show-bin-path)"
+          x86_bin="$(swift build -c release --arch x86_64 --show-bin-path)"
+          BIN_DIR="$RUNNER_TEMP/rimes-universal"
+          rm -rf "$BIN_DIR"
+          mkdir -p "$BIN_DIR"
+          lipo -create "$arm_bin/RimeBuffer" "$x86_bin/RimeBuffer" \
+            -output "$BIN_DIR/RimeBuffer"
+          lipo "$BIN_DIR/RimeBuffer" -verify_arch arm64 x86_64
+          # Resource bundles hold no code, so both slices must have produced
+          # the same set with the same bytes; ship one copy.
+          [[ "$(cd "$arm_bin" && ls -d -- *.bundle 2>/dev/null)" \
+            == "$(cd "$x86_bin" && ls -d -- *.bundle 2>/dev/null)" ]]
+          for resource_bundle in "$arm_bin/"*.bundle; do
+            [ -d "$resource_bundle" ] || continue
+            diff -r "$resource_bundle" "$x86_bin/$(basename "$resource_bundle")"
+            cp -R "$resource_bundle" "$BIN_DIR/"
+          done
+          echo "BIN_DIR=$BIN_DIR" >> "$GITHUB_ENV"
 
       # Download librime + Rime data (from Squirrel's official pkg) so the app is
       # self-contained — end users don't need to install Squirrel separately.
