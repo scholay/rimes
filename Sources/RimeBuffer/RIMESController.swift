@@ -1207,6 +1207,9 @@ final class RIMESController: IMKInputController {
                                       owner: FocusToken,
                                       clientIdentity: ObjectIdentifier)?
     private var mutualPairingState = FlyChordMutualPairingState()
+    /// The field whose native chord is in progress; releases the host never
+    /// delivered may only settle into this same field.
+    private var nativeChordOwner: (token: FocusToken, clientIdentity: ObjectIdentifier)?
     private var chordDurationObserver: NSObjectProtocol?
     private var chordExtensionObserver: NSObjectProtocol?
     private var chordKeymapObserver: NSObjectProtocol?
@@ -1714,6 +1717,9 @@ final class RIMESController: IMKInputController {
         }
         chord.onDiscard = { [weak self] client in
             self?.finishDiscardedChord(client: client)
+        }
+        chord.onNativeRelease = { [weak self] keycodes, client in
+            self?.deliverNativeChordReleases(keycodes, client: client)
         }
         chord.duration = ChordSettings.duration
         // Settings ▸ 输入 can retune the chord window while this controller is
@@ -3294,6 +3300,11 @@ final class RIMESController: IMKInputController {
     }
 
     private func handleKeyUp(_ event: NSEvent, client: IMKTextInput) -> Bool {
+        if let nativeKeycode = chord.takeNativeRelease(hardwareKeyCode: event.keyCode) {
+            _ = processNativeChordEvent(nativeKeycode, mask: RimeKey.releaseMask, client: client)
+            if !chord.hasNativeKeysDown { nativeChordOwner = nil }
+            return true
+        }
         guard let keycode = keysym(for: event) else { return false }
         if bufferPluginNavigationKeysDown.remove(event.keyCode) != nil {
             return true
@@ -3842,6 +3853,18 @@ final class RIMESController: IMKInputController {
             return false
         }
         let mask = routedMask
+        if NativeChordRoutingRules.isChordKey(
+            keycode: keycode,
+            mask: mask,
+            profile: ChordKeymapStore.shared.activeProfile,
+            schemaID: currentSchemaId,
+            asciiMode: currentASCIIMode,
+            extensionEnabled: ChordExtensionStore.shared.isEnabled
+        ) {
+            // Ahead of the candidate window: Space and digits are chord keys
+            // in a native scheme, not selection keys.
+            return handleNativeChordPress(keycode, event: event, client: client)
+        }
         if keycode == RimeKey.return,
            mask & (RimeKey.controlMask | RimeKey.altMask | RimeKey.superMask) == 0,
            commitRawInput(client: client) {
@@ -5844,6 +5867,64 @@ final class RIMESController: IMKInputController {
         drainCommit(client)
         updateUI(client: client)
         return handled
+    }
+
+    /// A native scheme receives the physical press itself. librime's
+    /// chord_composer decides what was simultaneous and settles the chord on
+    /// the last release, exactly as it does under Squirrel.
+    private func handleNativeChordPress(_ keycode: Int32,
+                                        event: NSEvent,
+                                        client: IMKTextInput) -> Bool {
+        // Holding a chord must never press its keys again.
+        if event.isARepeat { return true }
+        guard let focusToken else {
+            IMELog.write("native chord press rejected without a focus owner")
+            return false
+        }
+        let identity = ObjectIdentifier(client as AnyObject)
+        if let owner = nativeChordOwner,
+           owner.token != focusToken || owner.clientIdentity != identity {
+            // Keys still down belong to the previous field's chord.
+            chord.flush()
+        }
+        guard chord.noteNativePress(keycode, hardwareKeyCode: event.keyCode,
+                                    client: client) else { return true }
+        if nativeChordOwner == nil { nativeChordOwner = (focusToken, identity) }
+        return processNativeChordEvent(keycode, mask: 0, client: client)
+    }
+
+    private func processNativeChordEvent(_ keycode: Int32,
+                                         mask: Int32,
+                                         client: IMKTextInput) -> Bool {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let handled = rimeEngine.processKey(keycode, mask: mask, session: session)
+        watchdog("native chord k=\(keycode) m=\(mask)", since: t0)
+        drainCommit(client)
+        updateUI(client: client)
+        return handled
+    }
+
+    /// Releases the host never delivered (a lost key-up, a flush on a non-chord
+    /// press, focus leaving mid-chord). librime must see them or the next chord
+    /// would include keys it still believes are down. A chord that settles after
+    /// its field lost focus is dropped rather than committed somewhere else.
+    private func deliverNativeChordReleases(_ keycodes: [Int32],
+                                            client: (any IMKTextInput)?) {
+        let owner = nativeChordOwner
+        if !chord.hasNativeKeysDown { nativeChordOwner = nil }
+        guard session != 0 else { return }
+        for keycode in keycodes {
+            _ = rimeEngine.processKey(keycode, mask: RimeKey.releaseMask, session: session)
+        }
+        guard let owner, let client, focusToken == owner.token,
+              ObjectIdentifier(client as AnyObject) == owner.clientIdentity else {
+            rimeEngine.clearComposition(session: session)
+            composition.markCleared()
+            IMELog.write("native chord released after its field lost focus; composition cleared")
+            return
+        }
+        drainCommit(client)
+        updateUI(client: client)
     }
 
     private func handleFlags(_ event: NSEvent, client: IMKTextInput) -> Bool {

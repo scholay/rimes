@@ -53,7 +53,7 @@ func runChordKeymapSmokeTest() -> Bool {
         let store = ChordKeymapStore(rootURL: root, defaults: defaults,
                                     builtInLoader: { builtin })
         guard store.activeProfile == builtin, store.loadError == nil,
-              try store.allProfiles() == [builtin] else { return fail("initial state") }
+              try store.allProfiles() == [builtin] + NativeChordSchemeCatalog.all else { return fail("initial state") }
 
         var profile = ChordKeymapProfile.newProfile(name: "测试 ' 键位")
         guard profile.boundaryPolicy == .explicitSyllables else { return fail("new profile boundary policy") }
@@ -133,7 +133,7 @@ func runChordKeymapSmokeTest() -> Bool {
         }
         try store.save(profile)
         guard try store.profile(id: profile.id) == profile,
-              try store.allProfiles().count == 3,
+              try store.allProfiles().count == 3 + NativeChordSchemeCatalog.all.count,
               rejects({ try store.save(builtin) }),
               rejects({ try store.remove(id: builtin.id) }) else { return fail("store CRUD") }
 

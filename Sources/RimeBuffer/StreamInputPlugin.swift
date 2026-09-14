@@ -93,10 +93,13 @@ enum StreamInputChordRoutingRules {
     static func route(for configuration: ChordExtensionConfiguration,
                       profile: ChordKeymapProfile? = nil)
         -> StreamInputChordRoute? {
-        guard configuration.isEnabled,
+        let profile = profile ?? ChordKeymapStore.shared.activeProfile
+        // Stream capture decodes chords through a pinyin keymap. A native
+        // scheme has none, so the stream stays on sequential capture.
+        guard configuration.isEnabled, !profile.isNative,
               !ChordKeymapActivationCoordinator.shared.isApplying else { return nil }
         return StreamInputChordRoute(
-            schemaID: (profile ?? ChordKeymapStore.shared.activeProfile).schemaID,
+            schemaID: profile.schemaID,
             policy: configuration.settlementPolicy
         )
     }

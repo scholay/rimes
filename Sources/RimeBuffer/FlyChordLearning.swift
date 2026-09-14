@@ -41,6 +41,7 @@ enum FlyChordSchemaError: LocalizedError, Equatable {
     case missingChordComposer
     case missingAlgebra
     case noLiteralMappings
+    case nativeSchemeWithoutLessons(String)
 
     var errorDescription: String? {
         switch self {
@@ -56,6 +57,8 @@ enum FlyChordSchemaError: LocalizedError, Equatable {
             return "并击方案缺少 chord_composer.algebra 配置"
         case .noLiteralMappings:
             return "并击方案中没有可用于学习的精确映射"
+        case let .nativeSchemeWithoutLessons(name):
+            return "「\(name)」由方案自身定义码元与字词，不提供飞耀课程；可使用麓鸣的并击练习器练习"
         }
     }
 }
@@ -177,6 +180,9 @@ enum FlyChordSchemaParser {
         profile: ChordKeymapProfile = ChordKeymapStore.shared.activeProfile
     ) throws -> FlyChordSchema {
         if profile.isBuiltIn { return try loadDefault() }
+        guard !profile.isNative else {
+            throw FlyChordSchemaError.nativeSchemeWithoutLessons(profile.name)
+        }
         let mappings = profile.mappings.enumerated().map { index, entry in
             let keys = profile.canonicalKeys(entry.keys)
             return FlyChordMapping(
