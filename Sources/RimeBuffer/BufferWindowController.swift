@@ -3402,10 +3402,19 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         }
         selection.clear()
         refresh()
+        // Default may add the live-metrics row or fold to the toolbar, so the
+        // restored height is the standard geometry for those flags, not a
+        // fixed constant; a Music-sized frame still fails.
+        let standardHeight = BufferWindowGeometry.height(
+            expanded: toolbarExpanded,
+            mode: .standard,
+            showsLiveMetrics: liveMetricsRowShown,
+            railFolded: railFoldedForFocus
+        )
         guard !musicPresentationActive, !panel.canBecomeKey, !bufferRail.isHidden,
               layoutMode == .standard,
-              abs(panel.frame.height - BufferWindowGeometry.expandedHeight) < 1 else {
-            print("FAILED: music panel did not restore passive Buffer")
+              abs(panel.frame.height - standardHeight) < 1 else {
+            print("FAILED: music panel did not restore passive Buffer: presentation=\(musicPresentationActive) canBecomeKey=\(panel.canBecomeKey) railHidden=\(bufferRail.isHidden) layout=\(layoutMode) height=\(panel.frame.height) expected=\(standardHeight) metrics=\(liveMetricsRowShown) folded=\(railFoldedForFocus) expanded=\(toolbarExpanded)")
             return false
         }
         print("Music production panel smoke: OK (520/760/1040, passive restoration)")

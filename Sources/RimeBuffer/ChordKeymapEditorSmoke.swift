@@ -124,10 +124,13 @@ func runChordKeymapEditorSmokeTest(outputURL: URL? = nil) -> Bool {
         let keyFields = views.compactMap({ $0 as? NSTextField }).filter {
             ["chord-keymap.left-keys", "chord-keymap.right-keys"].contains($0.accessibilityIdentifier())
         }
+        // The fields share an equal-width constraint; on a 1x display AppKit
+        // aligns frames to whole points, so an odd total splits 281/280.
+        let pixel = 1 / (window.backingScaleFactor > 0 ? window.backingScaleFactor : 1)
         guard keyFields.count == 2,
               keyFields.allSatisfy({ $0.frame.width >= 200 }),
-              abs(keyFields[0].frame.width - keyFields[1].frame.width) < 1 else {
-            return fail("both key-zone fields must have equal, readable widths of at least 200pt")
+              abs(keyFields[0].frame.width - keyFields[1].frame.width) <= pixel else {
+            return fail("both key-zone fields must have equal, readable widths of at least 200pt: \(keyFields.map { $0.frame.width })")
         }
         pane.displayIfNeeded()
         guard pane.bounds.width == 698, pane.bounds.height >= 600,
