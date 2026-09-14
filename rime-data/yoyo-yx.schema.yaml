@@ -1,0 +1,116 @@
+# Rime schema - 麓鸣
+schema:
+  author:
+    - Rayalizing
+  description: |
+    麓鸣音形版，180码元，主词并击方案。
+  name: "麓鸣·yx"
+  schema_id: yoyo-yx
+  version: 1.0
+
+# #=============================== 
+内功心法:
+  __include: 八荒六合  # 八荒六合，唯我独尊
+                      # 打法：并击主词
+                        # - 单手不带空格，直出***一简字上屏（建议背）***
+                        # - 双手不带空格，打四定，第五击顶字上屏
+                        # - 双手带空格，打词补码或***单字前两码***：
+                        #   - 双手带空格时，前面有码，则打出补码，下一击顶字上屏
+                        #   - 【第一击】为双手带空格时（前面无码），则打出单字前两码
+                        # - 单手带空格，打单字补码或***一简词上屏（建议背）***
+                        # > 注：「上屏」类的都是直接上屏。
+指法:
+  __include: yoyo:/折梅
+# #=============================== 
+
+__include: yoyo:/
+__patch: 
+  translator/dictionary: yoyo-yx
+  translator/prism: yoyo-yx
+  translator/preedit_format:
+    - xform/\((.+?)\)/$1/
+    - xform/!(.+?)@/$1/
+    - xform/[_+<>]//
+  key_binder:
+    bindings:
+      - {accept: BackSpace, send_sequence: "{BackSpace}{BackSpace}{BackSpace}", when: composing}
+      - {accept: "Right", send_sequence: "{Right}{Right}{Right}", when: composing}
+      - {accept: "Left", send_sequence: "{Left}{Left}{Left}", when: composing}
+      # - {accept: Control_L, send: KP_2 , when: has_menu}
+      - {accept: apostrophe, send: KP_2 , when: has_menu}  # （这里 send:2 无效了，send:KP_2 才能二选）
+      - {accept: "Shift+Tab", send: Page_Up, when: paging}
+      - {accept: Tab, send: Page_Down, when: has_menu}
+      - {accept: "Control+period", toggle: ascii_punct, when: always}
+      - {accept: "Shift+space", toggle: full_shape, when: always}
+      # - {accept: "Control+Shift+space", select: .next, when: always}
+  chord_composer:
+    alphabet: "123456qwertasdfgzxcvb 7890-=uiop[hjkl;ynm,."
+    prompt_format:  # 并击过程中套用的式样
+      - xform/!(.+?)@/$1/
+      - xform/\((.+?)\)/$1/
+      - xform/[_+<>]//
+    output_format:  # 并击完成后套用的式样
+      - xform|^[<>_+\(!]([0-9]+)[\)@]*$|$1|  # 将纯数字还原
+    algebra:
+      __patch:
+        - 内功心法
+        - 指法
+
+  speller:
+    # auto_clear: max_length # 3种选择， manual|auto|max_length 空码按下一键确认清屏|空码自动清|达到最长码时后码顶上清屏
+    # max_code_length: 6
+    alphabet: "zyxwvutsrqponmlkjihgfedcba;,.MLKJIHGFEDCBA<>[()_+'1234567890!@"
+    initials: "zyxwvutsrqponmlkjihgfedcba;,.MLKJIHGFEDCBA<>[(_+'!"
+    auto_select: true
+    auto_select_pattern: "'.+|^_[a-zA-Z0-9]{2}$|^\\+[a-zA-Z0-9]{2}$|^<[a-zA-Z0-9]{2}$|^>[a-zA-Z0-9]{2}$"  # 快符和一简，候选唯一则顶屏
+
+    algebra:
+    # 先处理词编码
+      # 前两码：双手不带空格
+      - xform|^([a-zA-Z]{4})$|($1)|
+      - xform|^([a-zA-Z]{4})([a-zA-Z]{4})$|($1)($2)|
+      # 第三码：双手带空格
+      - xform|^([a-zA-Z]{4})([a-zA-Z]{4})([a-zA-Z]{4})$|($1)($2)!$3@|
+
+    # 单字编码：
+      # 前两码和词前两码一样的格式（双手不带空格）：
+      # - xform|^!(..)@|($1)|
+      # 第三码：单手带空格（编码不分左右手）：
+      - derive|-([a-zA-Z]{2})$|>$1|
+      - xform|-([a-zA-Z]{2})$|<$1|
+
+    popping:
+      - match: '[_+][a-zA-Z0-9]+'
+        accept: "[<>!(]"    # 已有单字第一码，打出任意 < > ( ! 中的字符则顶屏
+      - match: "![a-zA-Z0-9]+@"
+        accept: "[_+!(]"  # 已有单字前两码（并击）, 打出任意 _ + ( ! 中的字符则顶屏
+      - match: "[_+][a-zA-Z0-9]+[_+][a-zA-Z0-9]+"
+        accept: "[_+!(]"  # 已有单字前两码（串击）, 打出任意 _ + ( ! 中的字符则顶屏
+      - match: "[(][a-zA-Z0-9]+[)]"
+        accept: "[_+!]"  # 已有词前两码的情况
+      - match: '(\([a-zA-Z0-9]+\)){2}'
+        accept: "[^0-9! ']"   # 已有词4码(并击两次的情况)
+      - match: '(\([a-zA-Z0-9]+\)){2}![a-zA-Z0-9]+@'
+        accept: "[^0-9 ']"   # 已有词6码(并击三次的情况)
+      - match: '([_+][a-zA-Z0-9]+)*[<>][a-zA-Z0-9]+'
+        accept: "[^0-9 ']"    # 已有一简或单字第三码（前两码为串击）的情况
+      - match: '![a-zA-Z0-9]+@[<>][a-zA-Z0-9]+'
+        accept: "[^0-9 ']"    # 已有单字第三码（前两码为并击）的情况
+
+
+八荒六合:
+  __append:
+    # 将左右手（无空格）的按键组合：转换为  (左右)  的格式
+    - xform|^([123456qwertasdfgzxcvb]+)([7890\-=uiop\[hjkl;ynm,.]+)$|($1'$2)|
+    
+    # 将左右手（带空格）的按键组合：转换为  !左右@  的格式
+    - xform|^(?=.*[123456qwertasdfgzxcvb])(?=.*[7890\-=uiop\[hjkl;ynm,.])([0-9a-z;,.\-=\[]*) ([0-9a-z;,.\-=\[]*)$|!$1$2@|  # 这里的 “(?=.*[123456qwertasdfgzxcvb])” 是”正向预查“：用于确保左手至少有一个按键。
+    - xform|^(![123456qwertasdfgzxcvb]+)([7890\-=uiop\[hjkl;ynm,.]+@)|$1'$2|
+    
+    # 单手带空格：<左  >右
+    - xform|^(?=.*[123456qwertasdfgzxcvb])([123456qwertasdfgzxcvb]*) ([123456qwertasdfgzxcvb]*)$|<$1$2|        # 将左手1到多个按键(带空格)转换为  <左  的格式 
+    - xform|^(?=.*[7890\-=uiop\[hjkl;ynm,.])([7890\-=uiop\[hjkl;ynm,.]*) ([7890\-=uiop\[hjkl;ynm,.]*)$|>$1$2|  # 将右手1到多个按键(带空格)转换为  >右  的格式
+
+    # 单手不带空格：_左  +右
+    - xform|^([123456qwertasdfgzxcvb]+)$|_$1|    # 将左手1到多个按键(不带空格)转换为  _左  的格式
+    - xform|^([7890\-=uiop\[hjkl;ynm,.]+)$|+$1|  # 将右手1到多个按键(不带空格)转换为  +右  的格式
