@@ -62,10 +62,11 @@ if ! rimes_run_bounded 3 /bin/cp "$HANDOFF_HELPER" "$STAGED_HANDOFF" \
 fi
 HANDOFF_HELPER="$STAGED_HANDOFF"
 
-# Strict-identifier replacement cannot express the one supported identity
-# migration: older RIMES builds used com.isaac.inputmethod.ETInput at this same
-# frozen path. Relocation is disabled, so explicitly accept only current/legacy
-# RIMES here and refuse to overwrite any unrelated or malformed occupant.
+# Strict-identifier replacement cannot express the supported identity
+# migration: rename-period dev builds used com.scholay.isaac at this path.
+# Relocation is disabled, so explicitly accept only RIMES identities here and
+# refuse to overwrite any unrelated or malformed occupant. Pre-rename
+# ETInput.app bundles live at another path; postinstall retires them.
 CANONICAL_APP="/Library/Input Methods/RIMES.app"
 if [ -e "$CANONICAL_APP" ] || [ -L "$CANONICAL_APP" ]; then
     if [ -L "$CANONICAL_APP" ] || [ ! -d "$CANONICAL_APP" ] \

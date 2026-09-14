@@ -4,7 +4,7 @@
 
 A modern macOS input method built from scratch: **librime** engine + custom candidate UI + a persistent **buffer workbench**. Its core schemes are Rime Ice full Pinyin, Natural Code double Pinyin, Xiaohe double Pinyin, Wubi 86, and English; the disabled-by-default Chording extension supplies the Feiyao preset and custom keymaps, with one behavior supporting both combined and left-then-right split strokes. **Self-contained** — librime and Rime data are bundled; no separate Squirrel install required.
 
-> Internal codename remains **RimeBuffer** (SPM target, `Sources/RimeBuffer/`). `ETInput.app` is kept as a compatibility path for existing installs and in-app updates. The public product name is **RIMES** (rime-scholay).
+> Internal codename remains **RimeBuffer** (SPM target, `Sources/RimeBuffer/`). The installed app is `RIMES.app` (input-method id `com.scholay.inputmethod.isaac`, data in `~/Library/RIMES`); an `ETInput.app` left by an earlier version is removed when the new pkg installs, and its settings and dictionaries are copied once into the new directory. The public product name is **RIMES** (rime-scholay).
 
 ## Demo videos
 
@@ -92,8 +92,8 @@ once from the official Release page.
 
 After Developer ID becomes available, formal releases will continue to provide only
 Developer ID-signed and Apple-notarized `RIMES-<version>.pkg` files through
-[GitHub Releases](https://github.com/scholay/rimes/releases). The installer fixes the
-compatibility bundle `ETInput.app` at `/Library/Input Methods`, then registers and enables the
+[GitHub Releases](https://github.com/scholay/rimes/releases). The installer fixes
+`RIMES.app` at `/Library/Input Methods` (removing an earlier `ETInput.app`), then registers and enables the
 parent/child input sources in order and makes one best-effort switch to “RIMES”. If a recent
 macOS release does not refresh the input menu immediately, installation still succeeds; log
 out and back in, then confirm RIMES in System Settings. Do not terminate

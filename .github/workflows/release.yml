@@ -333,6 +333,45 @@ jobs:
           echo "PKG=$PKG" >> "$GITHUB_OUTPUT"
           echo "APP_ZIP=$APP_ZIP" >> "$GITHUB_OUTPUT"
 
+      # Existing users arrive from the last published preview, which still
+      # carries the pre-rename identity (ETInput.app, MacOS/ETInput,
+      # com.isaac.inputmethod.RimeBuffer). Install that exact published package
+      # first, so the next step exercises the upgrade the rename must survive
+      # rather than only a clean install.
+      - name: Install the last published preview before upgrading
+        if: steps.version.outputs.IS_RELEASE != 'true'
+        timeout-minutes: 8
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPGRADE_FROM: 0.5.0-preview.1
+        run: |
+          set -euo pipefail
+          from_dir="$RUNNER_TEMP/rimes-upgrade-from"
+          mkdir -p "$from_dir"
+          gh release download "v$UPGRADE_FROM" --repo scholay/rimes \
+            --pattern "RIMES-$UPGRADE_FROM.pkg" --pattern SHA256SUMS \
+            --dir "$from_dir"
+          (cd "$from_dir" \
+            && grep -F "  RIMES-$UPGRADE_FROM.pkg" SHA256SUMS | shasum -a 256 -c -)
+          set +e
+          sudo -n /usr/sbin/installer -pkg "$from_dir/RIMES-$UPGRADE_FROM.pkg" -target / \
+            2>&1 | tee "$from_dir/installer.log"
+          installer_status="${PIPESTATUS[0]}"
+          set -e
+          [[ "$installer_status" -eq 0 ]] || {
+            echo "Installing the published v$UPGRADE_FROM failed with status $installer_status." >&2
+            exit 1
+          }
+          old_app='/Library/Input Methods/ETInput.app'
+          [[ -d "$old_app" && ! -L "$old_app" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$old_app/Contents/Info.plist")" \
+            == com.isaac.inputmethod.RimeBuffer ]]
+          pkgutil --pkg-info com.isaac.inputmethod.RimeBuffer
+          echo 'Enabled input sources before the upgrade:'
+          defaults read com.apple.HIToolbox AppleEnabledInputSources 2>/dev/null \
+            | grep -E 'Bundle ID|InputSourceKind|Input Mode' || true
+          echo "RIMES_UPGRADE_FROM=$UPGRADE_FROM" >> "$GITHUB_ENV"
+
       # A hosted runner is disposable, so exercise the real PackageKit path
       # before any unsigned build may leave it. This directly guards against a
       # postinstall regression surfacing as Installer Code 112. A missing Aqua
@@ -386,6 +425,28 @@ jobs:
           receipt="$(pkgutil --pkg-info com.scholay.inputmethod.isaac)"
           printf '%s\n' "$receipt" | grep -Fq "version: $VERSION"
           printf '%s\n' "$receipt" | grep -Fq 'location: Library/Input Methods'
+
+          if [[ -n "${RIMES_UPGRADE_FROM:-}" ]]; then
+            # The rename upgrade: postinstall retires every other bundle that
+            # carries a RIMES identity, so only the renamed app may remain.
+            [[ ! -e '/Library/Input Methods/ETInput.app' \
+              && ! -L '/Library/Input Methods/ETInput.app' ]] || {
+              echo "The pre-rename ETInput.app survived the upgrade from v$RIMES_UPGRADE_FROM." >&2
+              exit 1
+            }
+            survivors="$(find '/Library/Input Methods' -mindepth 1 -maxdepth 1 -iname '*.app' \
+              ! -path "$app" -exec /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+              '{}/Contents/Info.plist' ';' 2>/dev/null \
+              | grep -E '^com\.(isaac\.inputmethod\.|scholay\.)' || true)"
+            [[ -z "$survivors" ]] || {
+              echo "RIMES bundles other than RIMES.app remain: $survivors" >&2
+              exit 1
+            }
+            grep -F 'RIMES postinstall' /var/log/install.log 2>/dev/null | tail -20 || true
+            echo 'Enabled input sources after the upgrade:'
+            defaults read com.apple.HIToolbox AppleEnabledInputSources 2>/dev/null \
+              | grep -E 'Bundle ID|InputSourceKind|Input Mode' || true
+          fi
 
       - name: Upload manual unsigned artifacts
         if: steps.version.outputs.IS_RELEASE != 'true'

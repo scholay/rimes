@@ -6,10 +6,11 @@
         <key>RootRelativeBundlePath</key>
         <string>RIMES.app</string>
         <key>BundleHasStrictIdentifier</key>
-        <!-- The frozen path also contains pre-0.4.2 builds whose legacy
-             bundle id is com.scholay.inputmethod.isaac. preinstall rejects
-             every unrelated occupant before this deliberate one-time
-             identifier migration; relocatability remains disabled. -->
+        <!-- Rename-period dev builds used RIMES.app as com.scholay.isaac.
+             preinstall rejects every unrelated occupant before this
+             deliberate identifier migration; relocatability remains
+             disabled. Pre-rename ETInput.app bundles live at another path
+             and are retired by postinstall. -->
         <false/>
         <key>BundleIsRelocatable</key>
         <false/>
