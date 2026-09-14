@@ -342,14 +342,29 @@ jobs:
             "gui/$companion_uid/com.scholay.rimes.dev-companion-start" \
             >/dev/null 2>&1 || true
           launchctl bootstrap "gui/$companion_uid" "$user_companion"
-          for _ in 1 2 3 4 5 6 7 8 9 10; do
-            test ! -e "$companion_probe/opened" || break
+          # RunAtLoad runs /usr/bin/open, and LaunchServices can take seconds to
+          # launch a freshly signed app from /tmp on a busy runner; open may also
+          # still be exiting when the marker lands. Poll for both within 15s, and
+          # show launchd's view of the job if either never happens.
+          companion_state=""
+          for _ in $(seq 1 60); do
+            if [ -e "$companion_probe/opened" ]; then
+              companion_state="$(launchctl print \
+                "gui/$companion_uid/com.scholay.rimes.dev-companion-start" 2>&1 || true)"
+              if printf '%s\n' "$companion_state" | grep -Fq 'state = not running'; then
+                break
+              fi
+            fi
             sleep 0.25
           done
-          test -e "$companion_probe/opened"
-          launchctl print \
-            "gui/$companion_uid/com.scholay.rimes.dev-companion-start" \
-            | grep -F 'state = not running'
+          if [ ! -e "$companion_probe/opened" ] \
+              || ! printf '%s\n' "$companion_state" | grep -Fq 'state = not running'; then
+            if [ -e "$companion_probe/opened" ]; then marker=present; else marker=missing; fi
+            echo "Companion bootstrap did not launch and exit within 15s (marker $marker)." >&2
+            launchctl print \
+              "gui/$companion_uid/com.scholay.rimes.dev-companion-start" >&2 || true
+            exit 1
+          fi
           launchctl bootout \
             "gui/$companion_uid/com.scholay.rimes.dev-companion-start"
           HOME="$companion_probe" /bin/bash \
