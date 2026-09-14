@@ -88,7 +88,7 @@
 
 ## 保存、应用与升级
 
-默认持久目录为 `~/Library/RimeBuffer/chord-keymaps/`，目录权限为 `0700`，原生数据文件采用原子写入并保持 `0600`：
+默认持久目录为 `~/Library/RIMES/chord-keymaps/`，目录权限为 `0700`，原生数据文件采用原子写入并保持 `0600`：
 
 ```text
 chord-keymaps/
