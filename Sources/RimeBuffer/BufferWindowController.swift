@@ -3411,10 +3411,15 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             showsLiveMetrics: liveMetricsRowShown,
             railFolded: railFoldedForFocus
         )
-        guard !musicPresentationActive, !panel.canBecomeKey, !bufferRail.isHidden,
+        // Music must hand the keyboard back. The panel may still take key
+        // status, but only as the standalone composing field that the Buffer
+        // uses whenever another input method is active (as on CI runners).
+        guard !musicPresentationActive, !panel.musicKeyboardEnabled,
+              panel.canBecomeKey == presentationMode.panelAcceptsKeyInput,
+              !bufferRail.isHidden,
               layoutMode == .standard,
               abs(panel.frame.height - standardHeight) < 1 else {
-            print("FAILED: music panel did not restore passive Buffer: presentation=\(musicPresentationActive) canBecomeKey=\(panel.canBecomeKey) railHidden=\(bufferRail.isHidden) layout=\(layoutMode) height=\(panel.frame.height) expected=\(standardHeight) metrics=\(liveMetricsRowShown) folded=\(railFoldedForFocus) expanded=\(toolbarExpanded)")
+            print("FAILED: music panel did not restore passive Buffer: presentation=\(musicPresentationActive) musicKeyboard=\(panel.musicKeyboardEnabled) canBecomeKey=\(panel.canBecomeKey) mode=\(presentationMode) railHidden=\(bufferRail.isHidden) layout=\(layoutMode) height=\(panel.frame.height) expected=\(standardHeight) metrics=\(liveMetricsRowShown) folded=\(railFoldedForFocus) expanded=\(toolbarExpanded)")
             return false
         }
         print("Music production panel smoke: OK (520/760/1040, passive restoration)")
