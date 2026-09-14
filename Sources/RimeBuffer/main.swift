@@ -1004,7 +1004,7 @@ if CommandLine.arguments.dropFirst().contains(where: { $0.hasSuffix("-smoke") })
 }
 
 // A standalone SettingsWindowController spins up its OWN RimeEngine. If that
-// engine opened the live ~/Library/RimeBuffer userdb while the installed IME is
+// engine opened the live ~/Library/RIMES userdb while the installed IME is
 // running, the two librime instances would fight over the LevelDB lock and break
 // the user's live typing. So the dev GUI tools redirect to an isolated userdb
 // (unless the caller already pinned RIMEBUFFER_USER_DIR).

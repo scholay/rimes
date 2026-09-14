@@ -34,7 +34,7 @@ Fable's version turned the prototype into a real macOS input method instead of a
 - `Sources/RimeBuffer/RimeKey.swift`: X11 keysym mapping and modifier masks.
 - `Sources/RimeBuffer/RimeEngine.swift`: Swift wrapper over the bridge, per-session calls.
 - `Sources/CRimeBridge/CRimeBridge.cpp`: librime dlopen, vtable, context/status wrappers.
-- `build_install.sh`: seed the Rime user directory, build, sign, install, register.
+- `build_install.sh`: seed `~/Library/RIMES` (copying pre-rename `~/Library/RimeBuffer` data first), build, sign, install, register.
 
 ## Validation Checklist
 

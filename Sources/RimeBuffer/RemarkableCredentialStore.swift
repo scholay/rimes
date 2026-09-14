@@ -97,9 +97,9 @@ struct RemarkableSSHConfiguration: Codable, Equatable,
 /// repeated prompts. Until the app has a stable Developer ID identity, this
 /// store keeps the SSH password in a private JSON file:
 ///
-///   ~/Library/RimeBuffer/plugin-config/builtin.remarkable/credentials.json
+///   ~/Library/RIMES/plugin-config/builtin.remarkable/credentials.json
 ///
-/// The shared `~/Library/RimeBuffer` root may use a safe non-writable 0755
+/// The shared `~/Library/RIMES` root may use a safe non-writable 0755
 /// mode. The private directories below it are mode 0700 and the credential is
 /// atomically replaced as a mode-0600 regular file.
 final class RemarkableCredentialStore {

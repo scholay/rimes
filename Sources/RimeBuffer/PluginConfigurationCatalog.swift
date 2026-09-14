@@ -355,7 +355,7 @@ enum PluginConfigurationCatalog {
                     id: MyPromptPluginConfigurationFieldID.libraryDirectory,
                     title: "本地提示词目录",
                     helpText: "支持 ~/ 开头或绝对路径。目录不存在时会自动创建；提示词正文不会写入日志。",
-                    placeholder: "~/Library/RimeBuffer/my-prompt/library",
+                    placeholder: "~/Library/\(RimesPaths.directoryName)/my-prompt/library",
                     defaultValue: defaultMyPromptLibraryDirectory.path,
                     maximumLength: 2_048,
                     isRequired: true,

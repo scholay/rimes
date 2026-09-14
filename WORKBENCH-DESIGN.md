@@ -7,7 +7,7 @@
 
 > **2026-08-31 Buffer UI、结果复制与主题最新覆盖（优先于本文全部旧工作台方案）**：Buffer 始终显示 33pt 顶部工具栏与 1pt divider，不可折叠、不可由前置图标关闭。普通/source-only/target-only 为 78pt，实时 source+target 为 112pt。前置输入/插件图标只标识当前插件，不再切换工具栏。工具栏承载插件选择、当前插件配置、按状态出现的返回编辑、状态与关闭；空白 chrome、状态、间距和弹性留白是拖窗区，控件保持首击交互。右侧专用 24pt 拖动条已删除。工具栏常显不写偏好，隐藏或 secure/session protection 也不收起工具栏。alternative 数量与独立候选浮窗均不增高；target rail 不显示角色图标。完整且新鲜的非 `BufferModel` 生成结果在回传框左侧、结果文字之前显示复制按钮，纯 `Command+C` 等价：冻结并重新验证同一 source/workspace/generation/有序 block IDs 与文本，按 block 顺序无分隔写入系统剪贴板，再安全关闭/暂停 Buffer。复制不调用 `prepare`、`consume`、`BufferDeliveryCoordinator` 或 `Delivery.insert`，不提交、修改或消费 source；普通 Buffer 原文、空/未完成、protected 或 stale/drifted 结果 fail closed/按既有规则透传。墨竹、翡翠、静谧是 **Classic** 家族配色；**Rasta** 是独立完整的红黄绿语义主题。本文后续可折叠工具栏、前置图标切换、44/78 折叠高度、回传框右侧复制、toolbarless、专用右侧拖动区、target 角色图标、旧主题分类或通过 Delivery 复制等冲突描述均为历史记录，由本条覆盖。
 
-> **2026-07-19 缓冲插件决策（覆盖本文旧 Processor/MarineBridge 描述）**：外部缓冲插件由通用 HTTP Action Plugin 宿主从 `~/Library/RimeBuffer/plugins/*/manifest.json` 动态加载；Marine 是首个实现。苹果本地翻译不伪装成 HTTP 插件，而是内置 `.bufferAction`，但与 Marine 在同一缓冲插件列表和唯一 owner 下互斥。用户调用外部动作时冻结 request/context/focus，匹配结果直接进缓冲，失效结果进收件箱，两者都不自动上屏。旧 `MarineBridge` 源码暂留但已从 focus 主路径解除。
+> **2026-07-19 缓冲插件决策（覆盖本文旧 Processor/MarineBridge 描述）**：外部缓冲插件由通用 HTTP Action Plugin 宿主从 `~/Library/RIMES/plugins/*/manifest.json` 动态加载；Marine 是首个实现。苹果本地翻译不伪装成 HTTP 插件，而是内置 `.bufferAction`，但与 Marine 在同一缓冲插件列表和唯一 owner 下互斥。用户调用外部动作时冻结 request/context/focus，匹配结果直接进缓冲，失效结果进收件箱，两者都不自动上屏。旧 `MarineBridge` 源码暂留但已从 focus 主路径解除。
 上游输入：七张早期视觉探索稿（已退役）+ 产品负责人 2026-07-16 口头需求收敛
 关系：本文档记录工作台路线与历史裁决；`ARCHITECTURE.md` 是 P1 时代交接文档。运行时事实与本文冲突时以 `SYSTEM-ARCHITECTURE.md` 为准。
 

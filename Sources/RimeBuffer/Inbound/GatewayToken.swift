@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// Bearer token for the local gateway, stored 0600 at ~/Library/RimeBuffer/
+/// Bearer token for the local gateway, stored 0600 at ~/Library/RIMES/
 /// gateway-token. Not in the Keychain — ad-hoc signing makes Keychain ACLs
 /// re-prompt on every rebuild. The token only guards against OTHER users / the
 /// network; a same-user process in the trust domain can read the file, which is

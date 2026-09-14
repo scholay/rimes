@@ -388,7 +388,7 @@ final class RimeEngine {
         return RimeEngine.squirrelFrameworks
     }()
 
-    // Its OWN user dir (~/Library/RimeBuffer). Separate from Squirrel's so the
+    // Its OWN user dir (~/Library/RIMES). Separate from Squirrel's so the
     // two never fight over the same userdb LevelDB lock — that lock conflict
     // silently kills candidates. First run deploys into it from sharedDataDir.
     // RIMEBUFFER_USER_DIR overrides it (used by the CLI smoke harness).

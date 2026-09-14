@@ -1064,7 +1064,7 @@ export function SettingsSurface({
       <SettingsSection title="日志与数据" description="运行日志不记录输入正文；插件配置和用户词库保存在独立目录。">
         <SettingRow title="运行日志" detail="~/rimebuffer.log · 0600 权限 · 自动轮转" icon="fileSearch" control={<Button kind="secondary" onClick={() => setStatus("已模拟打开运行日志")}>打开运行日志</Button>} />
         <SettingRow title="安装日志" detail="~/rimebuffer-install.log" icon="fileSearch" control={<Button kind="secondary" onClick={() => setStatus("已模拟打开安装日志")}>打开安装日志</Button>} />
-        <SettingRow title="RIMES 数据目录" detail="~/Library/RimeBuffer" icon="database" control={<Button kind="secondary" onClick={() => setStatus("已模拟打开 RIMES 数据目录")}>打开数据目录</Button>} />
+        <SettingRow title="RIMES 数据目录" detail="~/Library/RIMES" icon="database" control={<Button kind="secondary" onClick={() => setStatus("已模拟打开 RIMES 数据目录")}>打开数据目录</Button>} />
       </SettingsSection>
     );
   };

@@ -275,7 +275,7 @@ BufferDeliveryCoordinator (单例)
 | SSE 订阅 | 订阅外部事件流 | 计划 M6 |
 | SSH | `/usr/bin/ssh` 子进程流式读 stdout；密钥全交 ssh-agent，输入法不碰；用 argv 数组防参数注入 | 计划 M6 |
 | Remarkable（显式只读动作） | SSH 稳定定位当前页；固定初始 USB Web URL 导出 PDF；PDFKit 目标 300 dpi 有界渲染 + Apple Vision 在 Mac 本地 OCR | ✅ 内置缓冲插件；不等同于通用 SSH provider |
-| Action Plugin | `~/Library/RimeBuffer/plugins/*/manifest.json` 声明动作；按 runtime config 走本机 Bearer HTTP | ✅ 通用宿主；具体插件独立安装 |
+| Action Plugin | `~/Library/RIMES/plugins/*/manifest.json` 声明动作；按 runtime config 走本机 Bearer HTTP | ✅ 通用宿主；具体插件独立安装 |
 | MarineBridge | 旧 `/buffer-state/latest` 轮询实现仍保留源码，但 focus 主路径已解除调用 | 仅兼容存档，不是新链路依赖 |
 
 ### 4.4 Action Plugin 宿主、实时翻译与历史兼容实现
@@ -285,7 +285,7 @@ BufferDeliveryCoordinator (单例)
 
 每个插件目录包含 schemaVersion=1 的 `manifest.json`，声明插件 id/name、runtime config 候选路径和动作 `id/title/symbol/statusPath/invokePath/modes`；需要由 Rime 执行模型的动作可增量声明 `preparePath`，互斥场景动作还可声明成对的 `presentationId/presentationTitle`。同一插件内共享 presentation id 的动作必须共享标题和 status/prepare/invoke/stream 契约；请求、流事件、结果元数据与发送复核始终保留 status 当前选中的真实 action id。当前 owner 解析后的整个动作面只有一个 presentation 且它是 prepared 时，工作台把它提升到右侧 AI 主控件并从展开层隐藏；只要存在任意第二个 presentation，就全部保留为显式按钮，Return 不猜测。runtime config 只接受 `localhost/127.0.0.1/::1`，必须包含与 manifest 精确相同的 `pluginId` 以及 `apiBase/token/updatedAt`（可附 `instanceId/processId`）；宿主拒绝符号链接、非普通文件、相对路径逃逸和超过 1 MiB 的配置，按更新时间从新到旧探测，跳过已失效的残留配置。一次 status 成功后，prepare/invoke、生成后的复核与发送前复核都锁定该精确 runtime binding，期间出现更新的配置也不能把请求切到另一实例。工作台可见时每秒轻量刷新状态；用户不可见的 generation/context 作废会取消过时调用并重新获取当前状态，但不修改 `BufferModel` 正文，也不暴露刷新按钮或固定槽。
 
-`ActionPluginManager` 管理 `~/Library/RimeBuffer/plugins`：本地安装可复制完整插件目录或单一清单，网络安装只接受 HTTPS `manifest.json`，不解压归档、也不执行安装脚本；安装过程使用同目录暂存与替换，并拒绝异 ID、大小写碰撞及符号链接重定向。底层启用状态仍单独持久化并在损坏时 fail-closed；设置页把安装、卸载、刷新和打开目录收进三个操作弹窗，插件行不再暴露底层启用与当前 owner 两套状态。管理读写串行化，远端下载绑定 mutation generation，后发的启停/卸载可让迟到下载失效，不能复活插件。管理变更通过通知让 `ActionPluginHost` 立即重载；插件被禁用、卸载或升级时，旧动作、在途调用、发送复核和 bearer 绑定同时失效。
+`ActionPluginManager` 管理 `~/Library/RIMES/plugins`：本地安装可复制完整插件目录或单一清单，网络安装只接受 HTTPS `manifest.json`，不解压归档、也不执行安装脚本；安装过程使用同目录暂存与替换，并拒绝异 ID、大小写碰撞及符号链接重定向。底层启用状态仍单独持久化并在损坏时 fail-closed；设置页把安装、卸载、刷新和打开目录收进三个操作弹窗，插件行不再暴露底层启用与当前 owner 两套状态。管理读写串行化，远端下载绑定 mutation generation，后发的启停/卸载可让迟到下载失效，不能复活插件。管理变更通过通知让 `ActionPluginHost` 立即重载；插件被禁用、卸载或升级时，旧动作、在途调用、发送复核和 bearer 绑定同时失效。
 
 用户点击显式动作，或对唯一 prepared presentation 点击右侧 AI 主控件/按 Return 时，宿主冻结 `actionId + requestId + contextId + FocusToken + runtime binding`，但绝不把 IMK client、FocusToken 或 bearer token 交给插件。带 `preparePath` 的动作先返回 `protocolVersion=1 + resultFormat=blocks-v1 + pluginId/runtimeInstanceId/requestId/actionId/contextId + prompt`；宿主逐项校验插件、实例、请求、动作、上下文和 256 KiB 上限后，才把 prompt 交给当前 Rime AI 连接器。模型选择、订阅/API 凭据、CLI 参数、工具开关与结果 schema 全部留在 RimeBuffer，插件不能覆盖。没有 `preparePath` 的旧插件仍走 legacy invoke/stream，保持 Action Plugin v1 向后兼容。
 

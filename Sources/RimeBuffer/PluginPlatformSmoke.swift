@@ -172,7 +172,7 @@ func runPluginPlatformSmokeTest() -> Bool {
           "id": "\(externalRawID)",
           "name": "Smoke External",
           "version": "1.0",
-          "runtimeConfigPaths": ["~/Library/RimeBuffer/smoke.json"],
+          "runtimeConfigPaths": ["~/Library/RIMES/smoke.json"],
           "actions": [{
             "id": "run",
             "title": "Run",

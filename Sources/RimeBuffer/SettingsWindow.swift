@@ -2157,7 +2157,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             target: self,
             action: #selector(openDir)
         )
-        openDirBtn.toolTip = "配置目录是 ~/Library/RimeBuffer。未显示的方案文件仅作为词典或反查依赖保留，不会出现在 F4。"
+        openDirBtn.toolTip = "配置目录是 ~/Library/\(RimesPaths.directoryName)。未显示的方案文件仅作为词典或反查依赖保留，不会出现在 F4。"
 
         switch subpageID {
         case "dictionaries":
@@ -3474,7 +3474,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 action: #selector(openDir)
             )
             openConfigBtn.toolTip =
-                "配置、词库学习、插件、统计和练习进度保存在 ~/Library/RimeBuffer；"
+                "配置、词库学习、插件、统计和练习进度保存在 ~/Library/\(RimesPaths.directoryName)；"
                 + "Clipboard History 单独保存在 ~/Library/Application Support/RIMES/clipboard。"
                 + "缓冲区正文与发送历史不会持久化。"
             let logButtons = NSStackView(views: [openLogBtn, openInstallLogBtn])

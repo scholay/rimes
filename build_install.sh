@@ -83,10 +83,25 @@ esac
 # 并击 schema is added only when its extension is enabled. Everything else you
 # have is preserved. With no ~/Library/Rime, the app deploys from the bundled
 # schemas instead. RB_KEEP_USERDB=1 skips reseeding.
-RB_USER="$HOME/Library/RimeBuffer"
+RB_USER="$HOME/Library/RIMES"
+RB_LEGACY_USER="$HOME/Library/RimeBuffer"
 if [ -L "$RB_USER" ]; then
-    echo "!! refusing to update symlinked RimeBuffer user directory: $RB_USER"
+    echo "!! refusing to update symlinked RIMES user directory: $RB_USER"
     exit 1
+fi
+# Data from before the RIMES rename moves the way the app's first launch moves
+# it (RimesDataMigration): copied once into an absent or empty directory,
+# marked, original left in place. It has to happen here, because seeding below
+# creates $RB_USER and the app then refuses to merge into an occupied one.
+RB_MIGRATION_MARKER="$RB_USER/.rimes-migrated-from-rimebuffer"
+if [ -d "$RB_LEGACY_USER" ] && [ ! -L "$RB_LEGACY_USER" ] && [ ! -e "$RB_MIGRATION_MARKER" ]; then
+    if [ ! -e "$RB_USER" ] || [ -z "$(ls -A "$RB_USER")" ]; then
+        echo "==> copying pre-rename data $RB_LEGACY_USER -> $RB_USER (original left in place)"
+        /usr/bin/ditto "$RB_LEGACY_USER" "$RB_USER"
+        : > "$RB_MIGRATION_MARKER"
+    else
+        echo "!! $RB_USER already holds data; pre-rename data stays in $RB_LEGACY_USER"
+    fi
 fi
 if [ "${RB_KEEP_USERDB:-0}" != "1" ]; then
     if [ -d "$HOME/Library/Rime" ]; then
