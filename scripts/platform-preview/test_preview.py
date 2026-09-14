@@ -17,6 +17,35 @@ preview = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(preview)
 
 
+class PlatformPackagerPinTests(unittest.TestCase):
+    """The Linux and Windows packagers pin the reviewed closure size as a
+    tripwire. Pinned numbers that trail the policy fail only in the package
+    transaction jobs, far from the policy change that caused them."""
+
+    REPO = SCRIPT.parents[2]
+    PINS = {
+        "platforms/linux/scripts/package.sh": r'"\$staged_count" == "(\d+)"',
+        "platforms/linux/tests/smoke.sh": r'"\$payload_count" == "(\d+)"',
+        "platforms/windows/scripts/New-RimesDataPreviewPackage.ps1": r"\$stagedInventory\.Count -ne (\d+)",
+        "platforms/windows/tests/Smoke-RimesDataPreview.ps1": r"(?:PayloadFiles|\$payloadFiles\.Count) -eq (\d+)",
+    }
+
+    def test_platform_packagers_pin_the_policy_closure_size(self) -> None:
+        import json
+        import re
+
+        policy = json.loads((self.REPO / "scripts/platform-preview/policy.json").read_text(encoding="utf-8"))
+        expected = len(policy["include"])
+        for relative, pattern in self.PINS.items():
+            pins = re.findall(pattern, (self.REPO / relative).read_text(encoding="utf-8"))
+            self.assertTrue(pins, f"{relative}: pinned closure size not found")
+            for pin in pins:
+                self.assertEqual(
+                    int(pin), expected,
+                    f"{relative} pins {pin} files; policy.json includes {expected}",
+                )
+
+
 class StageTests(unittest.TestCase):
     def fixture_result(self, root: Path) -> dict:
         source = root / "source"
