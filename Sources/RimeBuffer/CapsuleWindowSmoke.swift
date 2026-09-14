@@ -215,10 +215,7 @@ func runCapsuleWindowSmokeTest() -> Bool {
         }
 
         setPasscodeButton.performClick(nil)
-        _ = RunLoop.current.run(
-            mode: .default,
-            before: Date(timeIntervalSinceNow: 0.05)
-        )
+        _ = capsuleRunLoop { passcodeParent.attachedSheet != nil }
         guard let currentCodeSheet = passcodeParent.attachedSheet,
               passcodeStore.matches(.defaultValue) else {
             return capsuleWindowSmokeFail(
@@ -231,11 +228,13 @@ func runCapsuleWindowSmokeTest() -> Bool {
         ) else {
             return capsuleWindowSmokeFail("current passcode event fixture")
         }
-        _ = RunLoop.current.run(
-            mode: .default,
-            before: Date(timeIntervalSinceNow: 0.05)
-        )
-        guard let configurationSheet = passcodeParent.attachedSheet else {
+        // The configuration sheet waits for the verification sheet to finish
+        // leaving the same window.
+        _ = capsuleRunLoop {
+            passcodeParent.attachedSheet.map { $0 !== currentCodeSheet } ?? false
+        }
+        guard let configurationSheet = passcodeParent.attachedSheet,
+              configurationSheet !== currentCodeSheet else {
             return capsuleWindowSmokeFail("passcode configuration sheet")
         }
         guard capsuleSendPasscode(
@@ -248,6 +247,9 @@ func runCapsuleWindowSmokeTest() -> Bool {
               ) else {
             return capsuleWindowSmokeFail("new passcode event fixture")
         }
+        _ = capsuleRunLoop {
+            passcodeParent.attachedSheet == nil && passcodeStore.matches(customPasscode)
+        }
         guard passcodeParent.attachedSheet == nil,
               passcodeStore.matches(customPasscode),
               !passcodeStore.matches(.defaultValue) else {
@@ -255,10 +257,7 @@ func runCapsuleWindowSmokeTest() -> Bool {
         }
 
         resetPasscodeButton.performClick(nil)
-        _ = RunLoop.current.run(
-            mode: .default,
-            before: Date(timeIntervalSinceNow: 0.05)
-        )
+        _ = capsuleRunLoop { passcodeParent.attachedSheet != nil }
         guard let resetVerificationSheet = passcodeParent.attachedSheet,
               passcodeStore.matches(customPasscode) else {
             return capsuleWindowSmokeFail(
@@ -271,10 +270,11 @@ func runCapsuleWindowSmokeTest() -> Bool {
         ) else {
             return capsuleWindowSmokeFail("reset passcode event fixture")
         }
-        _ = RunLoop.current.run(
-            mode: .default,
-            before: Date(timeIntervalSinceNow: 0.05)
-        )
+        // The reset itself runs on the turn after the verification sheet
+        // detaches.
+        _ = capsuleRunLoop {
+            passcodeParent.attachedSheet == nil && passcodeStore.matches(.defaultValue)
+        }
         guard passcodeParent.attachedSheet == nil,
               passcodeStore.matches(.defaultValue),
               !passcodeStore.isCustomized else {
@@ -1095,6 +1095,23 @@ private func capsuleSendPasscodeChord(
             return false
         }
         window.sendEvent(keyUp)
+    }
+    return true
+}
+
+/// Sheets animate in and out, and AppKit holds a queued sheet until the
+/// previous one has left, so a slow runner needs more than one short turn.
+/// Returns whether the condition held before the deadline; callers still
+/// assert the state themselves.
+private func capsuleRunLoop(timeout: TimeInterval = 3,
+                            until condition: () -> Bool) -> Bool {
+    let deadline = Date(timeIntervalSinceNow: timeout)
+    while !condition() {
+        guard Date() < deadline else { return false }
+        _ = RunLoop.current.run(
+            mode: .default,
+            before: Date(timeIntervalSinceNow: 0.02)
+        )
     }
     return true
 }
