@@ -10,12 +10,12 @@ func runCodexSessionSmokeTest() -> Bool {
     {"type":"session_meta","ordinal":0,"timestamp":"2026-09-03T07:59:05Z",
      "payload":{"id":"019febc7-9994-7253-96a8-68c0b209f108",
                 "session_id":"019febc7-9994-7253-96a8-68c0b209f108",
-                "cwd":"/Users/isaac/Documents/example",
+                "cwd":"/Users/example/Documents/example",
                 "cli_version":"0.52.0","model_provider":"openai"}}
     """.utf8)
     guard let parsed = CodexRolloutParser.header(from: header),
           parsed.sessionID == "019febc7-9994-7253-96a8-68c0b209f108",
-          parsed.cwd == "/Users/isaac/Documents/example",
+          parsed.cwd == "/Users/example/Documents/example",
           parsed.cliVersion == "0.52.0" else {
         return codexFail("session header")
     }
@@ -65,18 +65,18 @@ func runCodexSessionSmokeTest() -> Bool {
     guard item("""
     {"type":"CommandExecution","id":"exec-1","process_id":"35621",
      "command":["/bin/zsh","-lc","git status --short"],
-     "cwd":"/Users/isaac/x","exit_code":0,"status":"completed"}
+     "cwd":"/Users/example/x","exit_code":0,"status":"completed"}
     """) == .commandExecution(command: "/bin/zsh -lc git status --short",
-                              cwd: "/Users/isaac/x",
+                              cwd: "/Users/example/x",
                               exitCode: 0,
                               status: "completed") else {
         return codexFail("CommandExecution")
     }
     guard item("""
     {"type":"FileChange","id":"exec-2","status":"completed",
-     "changes":{"/Users/isaac/b.md":{"type":"update","unified_diff":"@@"},
-                "/Users/isaac/a.md":{"type":"add","unified_diff":"@@"}}}
-    """) == .fileChange(paths: ["/Users/isaac/a.md", "/Users/isaac/b.md"],
+     "changes":{"/Users/example/b.md":{"type":"update","unified_diff":"@@"},
+                "/Users/example/a.md":{"type":"add","unified_diff":"@@"}}}
+    """) == .fileChange(paths: ["/Users/example/a.md", "/Users/example/b.md"],
                         status: "completed") else {
         return codexFail("FileChange")
     }
@@ -111,7 +111,7 @@ func runCodexSessionSmokeTest() -> Bool {
     let verbatim: [CodexRolloutItem] = [
         .commandExecution(command: "git status --short", cwd: nil,
                           exitCode: 0, status: "completed"),
-        .fileChange(paths: ["/Users/isaac/a.md"], status: "completed"),
+        .fileChange(paths: ["/Users/example/a.md"], status: "completed"),
         .toolCall(server: "cua_repl", tool: "js", status: "completed"),
         .userMessage(text: "hi"),
         .other(kind: "ImageView"),
@@ -169,7 +169,7 @@ func runCodexSessionSmokeTest() -> Bool {
                                    cwd: nil, exitCode: 0, status: "completed"))
             == "$ git status --short → 0",
           CodexSessionRowFormatter.summary(
-            for: .fileChange(paths: ["/Users/isaac/docs/a.md"], status: nil))
+            for: .fileChange(paths: ["/Users/example/docs/a.md"], status: nil))
             == "± a.md",
           CodexSessionRowFormatter.summary(
             for: .toolCall(server: "cua_repl", tool: "js", status: "completed"))

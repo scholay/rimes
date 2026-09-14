@@ -216,10 +216,11 @@ enum SystemPermissionAudit {
             decoding: pipe.fileHandleForReading.readDataToEndOfFile(),
             as: UTF8.self
         ).trimmingCharacters(in: .whitespacesAndNewlines)
-        let ok = process.terminationStatus == 0 && !output.contains("No such bundle")
+        let unknownBundle = output.contains("No such bundle")
+        let ok = process.terminationStatus == 0 && !unknownBundle
         IMELog.write(
             "permissions: reset Accessibility for \(bundleIdentifier) ok=\(ok) "
-                + "output=\(output.isEmpty ? "none" : output)"
+                + "status=\(process.terminationStatus) unknownBundle=\(unknownBundle)"
         )
         return ok
     }
