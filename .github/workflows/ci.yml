@@ -8,6 +8,43 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Fast, macOS-free checks of the release rules: tags are the only version
+  # source, commits follow Conventional Commits (release notes are generated
+  # from them), and the version tooling behaves as documented in RELEASE.md.
+  release-tooling:
+    name: Release tooling
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Release tool tests
+        run: python3 -m unittest discover -s scripts/release -p "test*.py" -v
+
+      - name: Release script syntax
+        run: bash -n scripts/release.sh
+
+      - name: Info.plist carries no committed version
+        run: python3 scripts/release/release_tool.py check-plist
+
+      - name: Conventional commit messages
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/release/release_tool.py lint-commits "$BASE_SHA" "$HEAD_SHA"
+
+      - name: CHANGELOG covers every release
+        run: |
+          if ! python3 scripts/release/release_tool.py changelog --check; then
+            echo "::warning file=CHANGELOG.md::CHANGELOG.md is missing the latest release. Run python3 scripts/release/release_tool.py changelog --write in this or the next PR."
+          fi
+
   build:
     # GRDB 7.11.1 declares swift-tools-version 6.1. macOS 15 runners provide
     # a compatible Xcode toolchain while preserving the existing macOS build.
