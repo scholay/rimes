@@ -220,10 +220,35 @@ jobs:
 
       # Universal (arm64 + x86_64) so the same .app runs on Apple Silicon and
       # Intel. librime is dlopen'd at runtime, so nothing extra is needed here.
+      # Each slice is built separately and merged with lipo: passing both
+      # --arch flags at once switches SwiftPM to the Xcode build system, which
+      # cannot resolve the build-tool plugin SwiftTerm 1.20 declares ("missing
+      # target SwiftTermBuildInfoPlugin"). The native build system, used by CI
+      # and build_install.sh, handles it.
       - name: Build (release, universal)
         run: |
-          swift build -c release --arch arm64 --arch x86_64
-          echo "BIN_DIR=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)" >> "$GITHUB_ENV"
+          set -euo pipefail
+          for arch in arm64 x86_64; do
+            swift build -c release --arch "$arch"
+          done
+          arm_bin="$(swift build -c release --arch arm64 --show-bin-path)"
+          x86_bin="$(swift build -c release --arch x86_64 --show-bin-path)"
+          BIN_DIR="$RUNNER_TEMP/rimes-universal"
+          rm -rf "$BIN_DIR"
+          mkdir -p "$BIN_DIR"
+          lipo -create "$arm_bin/RimeBuffer" "$x86_bin/RimeBuffer" \
+            -output "$BIN_DIR/RimeBuffer"
+          lipo "$BIN_DIR/RimeBuffer" -verify_arch arm64 x86_64
+          # Resource bundles hold no code, so both slices must have produced
+          # the same set with the same bytes; ship one copy.
+          [[ "$(cd "$arm_bin" && ls -d -- *.bundle 2>/dev/null)" \
+            == "$(cd "$x86_bin" && ls -d -- *.bundle 2>/dev/null)" ]]
+          for resource_bundle in "$arm_bin/"*.bundle; do
+            [ -d "$resource_bundle" ] || continue
+            diff -r "$resource_bundle" "$x86_bin/$(basename "$resource_bundle")"
+            cp -R "$resource_bundle" "$BIN_DIR/"
+          done
+          echo "BIN_DIR=$BIN_DIR" >> "$GITHUB_ENV"
 
       # Download librime + Rime data (from Squirrel's official pkg) so the app is
       # self-contained — end users don't need to install Squirrel separately.
@@ -333,6 +358,45 @@ jobs:
           echo "PKG=$PKG" >> "$GITHUB_OUTPUT"
           echo "APP_ZIP=$APP_ZIP" >> "$GITHUB_OUTPUT"
 
+      # Existing users arrive from the last published preview, which still
+      # carries the pre-rename identity (ETInput.app, MacOS/ETInput,
+      # com.isaac.inputmethod.RimeBuffer). Install that exact published package
+      # first, so the next step exercises the upgrade the rename must survive
+      # rather than only a clean install.
+      - name: Install the last published preview before upgrading
+        if: steps.version.outputs.IS_RELEASE != 'true'
+        timeout-minutes: 8
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPGRADE_FROM: 0.5.0-preview.1
+        run: |
+          set -euo pipefail
+          from_dir="$RUNNER_TEMP/rimes-upgrade-from"
+          mkdir -p "$from_dir"
+          gh release download "v$UPGRADE_FROM" --repo scholay/rimes \
+            --pattern "RIMES-$UPGRADE_FROM.pkg" --pattern SHA256SUMS \
+            --dir "$from_dir"
+          (cd "$from_dir" \
+            && grep -F "  RIMES-$UPGRADE_FROM.pkg" SHA256SUMS | shasum -a 256 -c -)
+          set +e
+          sudo -n /usr/sbin/installer -pkg "$from_dir/RIMES-$UPGRADE_FROM.pkg" -target / \
+            2>&1 | tee "$from_dir/installer.log"
+          installer_status="${PIPESTATUS[0]}"
+          set -e
+          [[ "$installer_status" -eq 0 ]] || {
+            echo "Installing the published v$UPGRADE_FROM failed with status $installer_status." >&2
+            exit 1
+          }
+          old_app='/Library/Input Methods/ETInput.app'
+          [[ -d "$old_app" && ! -L "$old_app" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$old_app/Contents/Info.plist")" \
+            == com.isaac.inputmethod.RimeBuffer ]]
+          pkgutil --pkg-info com.isaac.inputmethod.RimeBuffer
+          echo 'Enabled input sources before the upgrade:'
+          defaults read com.apple.HIToolbox AppleEnabledInputSources 2>/dev/null \
+            | grep -E 'Bundle ID|InputSourceKind|Input Mode' || true
+          echo "RIMES_UPGRADE_FROM=$UPGRADE_FROM" >> "$GITHUB_ENV"
+
       # A hosted runner is disposable, so exercise the real PackageKit path
       # before any unsigned build may leave it. This directly guards against a
       # postinstall regression surfacing as Installer Code 112. A missing Aqua
@@ -386,6 +450,28 @@ jobs:
           receipt="$(pkgutil --pkg-info com.scholay.inputmethod.isaac)"
           printf '%s\n' "$receipt" | grep -Fq "version: $VERSION"
           printf '%s\n' "$receipt" | grep -Fq 'location: Library/Input Methods'
+
+          if [[ -n "${RIMES_UPGRADE_FROM:-}" ]]; then
+            # The rename upgrade: postinstall retires every other bundle that
+            # carries a RIMES identity, so only the renamed app may remain.
+            [[ ! -e '/Library/Input Methods/ETInput.app' \
+              && ! -L '/Library/Input Methods/ETInput.app' ]] || {
+              echo "The pre-rename ETInput.app survived the upgrade from v$RIMES_UPGRADE_FROM." >&2
+              exit 1
+            }
+            survivors="$(find '/Library/Input Methods' -mindepth 1 -maxdepth 1 -iname '*.app' \
+              ! -path "$app" -exec /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+              '{}/Contents/Info.plist' ';' 2>/dev/null \
+              | grep -E '^com\.(isaac\.inputmethod\.|scholay\.)' || true)"
+            [[ -z "$survivors" ]] || {
+              echo "RIMES bundles other than RIMES.app remain: $survivors" >&2
+              exit 1
+            }
+            grep -F 'RIMES postinstall' /var/log/install.log 2>/dev/null | tail -20 || true
+            echo 'Enabled input sources after the upgrade:'
+            defaults read com.apple.HIToolbox AppleEnabledInputSources 2>/dev/null \
+              | grep -E 'Bundle ID|InputSourceKind|Input Mode' || true
+          fi
 
       - name: Upload manual unsigned artifacts
         if: steps.version.outputs.IS_RELEASE != 'true'

@@ -4,7 +4,7 @@
 
 从零做的现代 macOS 输入法：**librime** 引擎 + 自绘候选窗 + 常驻缓冲区（buffer）。内置雾凇全拼、自然码双拼、小鹤双拼、五笔 86 与英文核心方案；默认关闭的“并击”扩展提供飞耀预设和自定义键位，统一支持同拍组合与左右分开击键。**自包含**打包 librime 与词库，装一个就能用，无需单独安装 Squirrel。
 
-> 仓库/内部代号仍是 **RimeBuffer**（SPM target、`Sources/RimeBuffer/`）；`ETInput.app` 为兼容旧安装与自动更新保留的内部路径。对外产品名统一为 **RIMES**（rime-scholay）。
+> 仓库/内部代号仍是 **RimeBuffer**（SPM target、`Sources/RimeBuffer/`）；安装后的应用是 `RIMES.app`（输入法 id `com.scholay.inputmethod.isaac`，数据目录 `~/Library/RIMES`）；早期版本留下的 `ETInput.app` 会在安装新 pkg 时自动移除，设置与词库一次性复制到新目录。对外产品名统一为 **RIMES**（rime-scholay）。
 
 ## 演示视频
 
@@ -87,8 +87,8 @@ Mac 可能由 MDM 禁止这个例外。完整步骤与风险边界见
 ### 正式版
 
 取得 Developer ID 后，正式版仍只通过 [GitHub Releases](https://github.com/scholay/rimes/releases)
-提供经 Developer ID 签名和 Apple 公证的 `RIMES-版本号.pkg`。安装器会把内部兼容路径
-`ETInput.app` 固定放进 `/Library/Input Methods`，并在当前 GUI 用户会话中按 parent → child
+提供经 Developer ID 签名和 Apple 公证的 `RIMES-版本号.pkg`。安装器会把
+`RIMES.app` 固定放进 `/Library/Input Methods`（同时移除早期版本的 `ETInput.app`），并在当前 GUI 用户会话中按 parent → child
 的顺序注册、启用和尝试切换。若新版 macOS 的输入法菜单未立即刷新，安装本身仍会正常完成；
 注销并重新登录后再在系统设置中确认「RIMES」即可。不要手动结束 `TextInputMenuAgent` 或
 `imklaunchagent`。

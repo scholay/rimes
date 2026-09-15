@@ -2,7 +2,7 @@
 
 RIMES 通过 **GitHub Actions + GitHub Releases + 应用内自动更新** 分发。
 终端用户优先使用 Release 里的 `.pkg` 安装器；产物是**自包含** app，librime 引擎与 Rime
-词库都打包在 `ETInput.app` 内，无需单独安装 Squirrel。
+词库都打包在 `RIMES.app` 内，无需单独安装 Squirrel。
 
 预置缓冲插件名称、版本与默认安装策略统一维护在
 `Catalog/buffer-plugins.json`。每次插件更新先运行
@@ -21,8 +21,11 @@ Buffer 插件随已签名应用一起交付，不再生成或上传独立 manife
 当前 `main` 的显式手动工作流创建不可变 tag。旧仓库
 `young-bo-i/rime-buffer` 只保留历史版本和一次性升级桥，不再发布新功能版本。
 
-> 仓库/内部代号是 RimeBuffer（SPM target、源码目录、控制器类）；`ETInput.app` / `MacOS/ETInput`
-> 是冻结的升级兼容路径；对外产品名是 RIMES。三者刻意分离，品牌变化不迁移 TIS 身份。
+> 仓库/内部代号是 RimeBuffer（SPM target、源码目录、控制器类）；安装产物是 `RIMES.app` /
+> `MacOS/RIMES`，输入法 id 为 `com.scholay.inputmethod.isaac`；对外产品名是 RIMES。
+> `v0.5.0-preview.1` 及更早版本的 `ETInput.app`（`com.isaac.inputmethod.RimeBuffer`）只作为
+> 升级来源存在：pkg 安装时退役旧 bundle，应用首启把 `~/Library/RimeBuffer` 一次性复制到
+> `~/Library/RIMES`（见第四节）。
 
 ## 一、发布新版本
 
@@ -45,17 +48,17 @@ workflow 使用两台彼此隔离的 runner。第一台 `build_and_smoke` 不绑
 校验和作为短期 handoff Artifact 传出。第二台全新的 `sign_and_publish` runner 才进入
 受保护的 `macos-release` Environment；它先按严格成员/路径/权限/大小规则解包 app，并只做
 结构、架构和 ad-hoc 签名等被动校验。只有正式 tag 通过这些校验后才导入签名与公证凭据，且
-凭据所在 runner 不执行 handoff 中的 ETInput。
+凭据所在 runner 不执行 handoff 中的 app。
 
 1. `swift build -c release --arch arm64 --arch x86_64`（**通用二进制**，Intel/Apple Silicon 通用）
 2. `scripts/fetch-rime.sh` 下载 librime 运行时（从 Squirrel 官方 pkg 提取，见下）
-3. 组装 `ETInput.app`：二进制 → `MacOS/ETInput`，`Info.plist`，并把 librime + 插件 + Rime
+3. 组装 `RIMES.app`：二进制 → `MacOS/RIMES`，`Info.plist`，并把 librime + 插件 + Rime
    词库拷进 `Contents/Frameworks` 与 `Contents/SharedSupport`；用 ad-hoc 签名执行 runtime smoke，
    再通过上述受校验的 handoff 交给 fresh signing runner
 4. 被动校验通过后，用同一张 Developer ID Application 证书逐个重签所有 bundled Mach-O，
    再以 hardened runtime 签 app；凭据所在 runner 不执行该 app
-5. 把 app 提交 Apple 公证、等待 `Accepted` 并 staple；随后才创建仅供
-   v0.4.2 及更早客户端迁移的 `ETInput-X.Y.Z.zip`
+5. 把 app 提交 Apple 公证、等待 `Accepted` 并 staple；随后才创建保留签名与票据的
+   app 归档 `RIMES-X.Y.Z.zip`
 6. 以 Developer ID Installer 签署 `RIMES-X.Y.Z.pkg`，再次提交公证并 staple
 7. 对最终资产执行 `codesign`、`pkgutil`、`stapler` 与 `spctl` 校验，通过后才创建
    GitHub Release 并计算/发布 SHA256；发布前先销毁临时 keychain/P8，发布使用受控的
@@ -72,9 +75,11 @@ Artifact，不创建 Release；显式勾选 `publish_unsigned_preview` 且版本
 
 1. 只能手动从当前 `origin/main` 触发；workflow 会再次核对远端 SHA，并拒绝已经存在的 tag 或 Release。
 2. 无 secrets 的构建机生成 ad-hoc app 与 unsigned PKG，执行 runtime smoke，并通过真实
-   `sudo installer` 验证 PackageKit、固定路径、输入法 metadata、通用架构和安装回执。
+   `sudo installer` 验证 PackageKit、固定路径、输入法 metadata、通用架构和安装回执。安装新包前
+   先按 `SHA256SUMS` 校验并安装上一个公开预览 `v0.5.0-preview.1`（改名前的 `ETInput.app`），
+   再断言升级后旧 bundle 已被退役、`/Library/Input Methods` 只剩 `RIMES.app` 一个 RIMES 身份。
 3. 独立的无 secrets 发布机只做被动成员集、权限、版本、架构、签名状态与 SHA-256 复核，
-   不执行 handoff 中的 ETInput。
+   不执行 handoff 中的 app。
 4. Release 只包含 `RIMES-X.Y.Z-preview.N.pkg` 与 `SHA256SUMS`，必须标记为 Pre-release、
    `latest=false`，正文明确写明 unsigned / not notarized，并链接 `UNSIGNED-PREVIEW.md`。
 5. 预览版不进入应用内更新；后续预览递增 `N`，正式版仍使用不带后缀的 `vX.Y.Z`，任何既有
@@ -171,10 +176,13 @@ Installer 身份/Team、公证票据，以及四个 universal dylib 的独立 SH
 
 ## 四、新用户安装器（[`scripts/make-pkg.sh`](scripts/make-pkg.sh)）
 
-`.pkg` 会把 `ETInput.app` 固定安装到 `/Library/Input Methods`，且显式禁用 Installer
-relocation。`BundleHasStrictIdentifier=false` 是刻意的一次性兼容策略：该固定路径还存在
-v0.4.1 的 legacy id `com.isaac.inputmethod.ETInput`；preinstall 会先拒绝任何非
-RIMES 占用者，再允许 legacy/current 两个 id 原地迁移。
+`.pkg` 会把 `RIMES.app` 固定安装到 `/Library/Input Methods`，且显式禁用 Installer
+relocation。`BundleHasStrictIdentifier=false` 是刻意的兼容策略：改名期间的开发构建曾以
+`com.scholay.isaac` 使用 `RIMES.app`；preinstall 会先拒绝任何非 RIMES 占用者。改名前的
+`ETInput.app`（`com.isaac.inputmethod.RimeBuffer`，v0.4.1 及更早为
+`com.isaac.inputmethod.ETInput`）在另一路径：payload 落盘后，postinstall 扫描系统与当前
+GUI 用户的 `Input Methods`，移除除新 payload 外所有声明 RIMES 身份的 bundle；若仍有重复
+路径无法移除或扫描失败，postinstall 记录路径并以失败退出，不启动 companion。
 
 替换 payload 前，preinstall 使用包内随新版本构建、签名的最小 universal TIS helper 切到
 ASCII fallback，不再要求 v0.4.1 等旧 binary 理解新参数。所有可能碰到 DirectoryService、
@@ -190,7 +198,7 @@ companion LaunchAgent：新定义在同一目录完成构造、lint 与字段校
 任何其他账户存在同 ID dev 安装、home 无法安全遍历或记录不一致都会在 payload 改动前
 fail-closed。postinstall 退休当前用户的 dev 安装后再次全量审计，再发布另一个系统级 Aqua
 LaunchAgent。它在每次冷登录时只运行一次短命 guard：若后来又出现用户级 dev 痕迹则直接
-退出，否则执行 `/usr/bin/open -g /Library/Input Methods/ETInput.app`；它不设 `KeepAlive`，
+退出，否则执行 `/usr/bin/open -g /Library/Input Methods/RIMES.app`；它不设 `KeepAlive`，
 也不承载第二份 UI/IME 服务。这个登录 guard 只是对安装后异常残留的防御，不能代替包安装前
 的全账户冲突审计。postinstall 在替换这个 system agent 前保存原始字节，后续
 旧进程退出或新进程启动检查失败会恢复旧 agent（原来不存在则恢复为不存在）。这样即使
@@ -211,7 +219,8 @@ bootstrap；TIS 激活留到 GUI 会话建立后处理。任何路径都不结�
 `com.scholay.inputmethod.isaac.Hans`。必须保留 `.inputmethod.` 段：改名期间的
 `com.scholay.isaac` 虽然签名校验及注册调用成功，却无法进入 TIS 输入源列表。
 签名证书与 Bundle ID 是两个独立设置；更换证书不要求更换 Bundle ID。旧标识的
-偏好按独立迁移标记复制，现有 `~/Library/RIMES` 数据目录保持不变。父输入法与
+偏好（`RimeBuffer.` 前缀）与 `~/Library/RimeBuffer` 数据目录各按独立迁移标记一次性复制到新名称，
+只复制不移动，原目录保留作回退。父输入法与
 子 mode 不能共用同一个 TIS id，否则父项无法启用、`TISSelectInputSource` 会返回 `paramErr`。
 macOS 会把这些 id 写入受保护的 TIS 偏好，因此后续不要随意改动。
 
@@ -230,8 +239,10 @@ macOS 会把这些 id 写入受保护的 TIS 偏好，因此后续不要随意�
   `/Library/Input Methods`，不解压任意 app，不清 quarantine，也不结束进程；
 - 也可从菜单「检查更新…」手动触发。
 
-旧的 `ETInput-X.Y.Z.zip` 只为已经发布、无法追溯修改的旧客户端保留迁移兼容；
-新更新器不再消费 ZIP。自动检查默认开启（`UserDefaults` 键
+Release 中的 `RIMES-X.Y.Z.zip` 只是签名 app 归档，更新器不消费 ZIP。`v0.5.0-preview.1` 及
+更早版本的更新器要求包 id `com.isaac.inputmethod.RimeBuffer` 与 `./ETInput.app`，会拒绝改名后
+的 pkg；这些版本从未进入自动更新通道（所有既有 Release 都是 Pre-release），因此用户需手动
+安装一次新 pkg。自动检查默认开启（`UserDefaults` 键
 `updateAutoCheckEnabled`）。
 
 ## 版本号约定
@@ -263,14 +274,7 @@ Weasel、Fcitx5 Rime 与 IBus Rime 的数据/脚本包，不得描述为完整�
 
 ## 七、旧仓库客户端迁移
 
-`v0.4.1` 及更早的已安装包把更新地址编译为 `young-bo-i/rime-buffer`，因此仅在新仓创建
-Release 无法主动触达这些客户端。迁仓版本需按下面顺序做一次桥接：
-
-1. 先在 `scholay/rimes` 完成正式 Release，并验证其中精确存在 `ETInput-X.Y.Z.zip`；
-2. 下载该 ZIP 并核对 SHA256；
-3. 由旧仓库写权限持有者创建同版本 `vX.Y.Z` Release，只镜像这一份 ZIP，并在说明中指向
-   新仓库源码与正式下载页；
-4. 从旧版本升级后，新 bundle 内的更新地址已经是 `scholay/rimes`，后续版本只需发布到新仓。
-
-桥接资产必须与新仓字节完全一致，不能在旧仓重新构建。没有旧仓写权限时，主发布可以继续，
-但无法让旧安装自动发现迁仓版本，只能请用户从新仓手动安装一次。
+`v0.4.1` 及更早的已安装包把更新地址编译为 `young-bo-i/rime-buffer`，并消费
+`ETInput-X.Y.Z.zip`。改名后的 release workflow 不再生成这份 ZIP，旧仓桥接因此不再可行：
+这些用户需从 `scholay/rimes` 手动安装一次新 pkg，postinstall 会退役旧的 `ETInput.app`。
+`young-bo-i/rime-buffer` 中的历史 Release 保持不变。
