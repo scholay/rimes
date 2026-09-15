@@ -203,6 +203,14 @@ class GitHistoryTests(unittest.TestCase):
         self.assertLess(text.index("## [v0.5.0-preview.1]"), text.index("## [v0.4.3]"))
         self.assertIn("— 2026-09-01", text)
 
+    def test_changelog_ignores_tags_that_origin_does_not_publish(self):
+        text = tool.render_changelog(["v0.5.0-preview.1"])
+        self.assertNotIn("## [v0.4.3]", text)
+        self.assertIn("- **chord:** add yoyo schemes", text)
+        self.assertIn("- initial import", text)
+        with self.assertRaisesRegex(tool.ReleaseError, "本地缺少 origin 的 tag"):
+            tool.render_changelog(["v0.5.0-preview.1", "v0.6.0-preview.1"])
+
     def test_lint_commits_flags_non_conventional_subjects(self):
         problems = tool.lint_commits("v0.4.3", "HEAD")
         self.assertEqual(len(problems), 1)

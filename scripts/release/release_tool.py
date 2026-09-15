@@ -19,7 +19,7 @@ Subcommands:
   notes --tag TAG [--from TAG] [--ref REF]
       Print grouped release notes for TAG from local git history.
   changelog [--write | --check]
-      Regenerate CHANGELOG.md from every macOS tag in local git history.
+      Regenerate CHANGELOG.md from every macOS tag published on origin.
   lint-commits BASE HEAD
       Fail when a non-merge commit in BASE..HEAD is not a Conventional Commit.
   check-plist [PATH]
@@ -384,6 +384,19 @@ def local_mac_tags() -> list[MacVersion]:
     return sorted((version for version in versions if version), key=lambda version: version.key)
 
 
+def origin_tag_names() -> list[str]:
+    """Tags published on origin.
+
+    A clone can hold tags that were never pushed to the canonical repository
+    (v0.1.0-v0.4.1 were released from the retired young-bo-i/rime-buffer), so
+    anything that must match between machines and CI reads origin instead.
+    """
+    try:
+        return tag_names(git("ls-remote", "--tags", "--refs", "origin").splitlines())
+    except subprocess.CalledProcessError as error:
+        raise ReleaseError(f"无法读取 origin 的 tag：{error.stderr.strip()}") from error
+
+
 def release_notes(tag: str, start: str | None = None, ref: str | None = None) -> str:
     candidate = parse_mac_tag(tag)
     if candidate is None:
@@ -400,8 +413,18 @@ def release_notes(tag: str, start: str | None = None, ref: str | None = None) ->
     return f"## 变更（{since}）\n\n{render_changes(start, end)}\n\n**完整对比**：{compare}\n"
 
 
-def render_changelog() -> str:
-    tags = local_mac_tags()
+def render_changelog(names: list[str] | None = None) -> str:
+    local = local_mac_tags()
+    if names is not None:
+        published = {version for version in map(parse_mac_tag, names) if version}
+        missing = published - set(local)
+        if missing:
+            raise ReleaseError(
+                "本地缺少 origin 的 tag：" + ", ".join(sorted(v.tag for v in missing))
+                + "。请先运行 git fetch origin --tags。"
+            )
+        local = [version for version in local if version in published]
+    tags = local
     sections = []
     for index, version in enumerate(tags):
         previous = tags[index - 1].tag if index else None
@@ -487,7 +510,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "notes":
             sys.stdout.write(release_notes(args.tag, args.start, args.ref))
         elif args.command == "changelog":
-            text = render_changelog()
+            text = render_changelog(origin_tag_names())
             if args.check:
                 current = CHANGELOG.read_text(encoding="utf-8") if CHANGELOG.exists() else ""
                 if current != text:
