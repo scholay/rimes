@@ -1,0 +1,128 @@
+# Rime dictionary
+# encoding: utf-8
+
+---
+name: yoyo_kf
+version: "2025-12-16"
+sort: by_weight
+columns:
+  - text
+  - code
+  - weight
+encoder:
+  rules:
+    - length_equal: 2
+      formula: "AaAbBaBb"
+    - length_equal: 3
+      formula: "AaBaCaCb"
+    - length_in_range: [4, 99]
+      formula: "AaBaCaZa"
+...
+#----------  快符  ----------#
+# 快符：用单引号引导，可一键上屏的标点
+# 注: '#' 的快符是 '/j' (详见rays_symbols.yaml)
+
+,	_tM	10
+,	+tM	10
+```	_qM	10
+```	+qM	10
+.	_rM	10
+.	+rM	10
+！	_eM	10
+！	+eM	10
+
+，	_gM	10
+，	+gM	10
+；	_aM	10
+；	+aM	10
+。	_fM	10
+。	+fM	10
+？	_dM	10
+？	+dM	10
+
+、	_bM	10
+、	+bM	10
+：	_zM	10
+：	+zM	10
+【	_vM	10
+【	+vM	10
+】	_cM	10
+】	+cM	10
+
+ ↑ 	'_S	10
+ ↑ 	'+S	10
+ ↓ 	'_X	10
+ ↓ 	'+X	10
+ ← 	'_Z	10
+ ← 	'+Z	10
+ → 	'_Y	10
+ → 	'+Y	10
+
+`	'_F	10
+`	'+F	10
+，	'	10
+。	'	9
+；	'_f	10
+；	'+f	10
+：	'_m	10
+：	'+m	10
+·	'_o	10
+·	'+o	10
+、	'_d	10
+、	'+d	10
+~	'_c	10
+~	'+c	10
+？	'_w	10
+？	'+w	10
+！	'_t	10
+！	'+t	10
+——	'_p	10
+——	'+p	10
+……	'_l	10
+……	'+l	10
+
+¥	'_r	10
+¥	'+r	10
+$	'_q	10
+$	'+q	10
+
+%	'_b	10
+%	'+b	10
+@	'_a	10
+@	'+a	10
+|	'_u	10
+|	'+u	10
+&	'_h	10
+&	'+h	10
+^	'_j	10
+^	'+j	10
+*	'_x	10
+*	'+x	10
+
+（	'_k	10
+）	'+k	10
+
+【	'_z	10
+】	'+z	10
+
+
+{	'_D	10
+}	'+D	10
+
+《	'_s	10
+》	'+s	10
+
+<	'_J	10
+>	'+J	10
+
+“	'_n	10
+”	'+n	10
+
+e.g. 	'_eg	10
+e.g. 	'+eg	10
+i.e. 	'_ie	10
+i.e. 	'+ie	10
+etc. 	'_et	10
+etc. 	'+et	10
+VS. 	'_vs	10
+VS. 	'+vs	10

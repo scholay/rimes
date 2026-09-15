@@ -124,6 +124,20 @@
       "lua/is_in_user_dict.lua",
       "lua/mode_switch_processor.lua",
       "lua/t9_preedit.lua"
+    ],
+    "nativeChordSchemes": [
+      "licenses/yoyo-SOURCE.md",
+      "lua/yoyo/commit_raw.lua",
+      "lua/yoyo/popping.lua",
+      "lua/yoyo/yoyo.lua",
+      "yoyo-yx-char.dict.yaml",
+      "yoyo-yx-hm.dict.yaml",
+      "yoyo-yx-hm.schema.yaml",
+      "yoyo-yx-word.dict.yaml",
+      "yoyo-yx.dict.yaml",
+      "yoyo-yx.schema.yaml",
+      "yoyo.yaml",
+      "yoyo_kf.dict.yaml"
     ]
   },
   "staticUserDictionaries": {

@@ -1,0 +1,27 @@
+# Rime dictionary: yoyo
+# encoding: utf-8
+---
+name: yoyo-yx-hm
+version: 1.0
+sort: by_weight
+columns:
+  - text
+  - code
+  - weight
+encoder:
+  rules:
+    - length_equal: 2
+      formula: "AaAbBaBbBcBdBeBfAcAdAeAf"
+    - length_equal: 3
+      formula: "AaAbBaBbCaCbCcCdCeCfAcAd"
+    - length_equal: 4
+      formula: "AaAbBaBbCaCbDaDbDcDdDeDf"
+    - length_equal: 5
+      formula: "AaAbBaBbCaCbDaDbEaEbEcEd"
+    - length_in_range: [6, 99]
+      formula: "AaAbBaBbCaCbDaDbEaEbZaZb"
+import_tables:
+  - yoyo_kf
+  - yoyo-yx-char
+  - yoyo-yx-word
+...

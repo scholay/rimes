@@ -86,6 +86,18 @@ modification boundary, checksum, and license text are included as
 `rime-data/licenses/rime-wubi-SOURCE.md` and
 `rime-data/licenses/rime-wubi-LICENSE`.
 
+## 呦呦音形 (麓鸣输入法 · 音形分支)
+
+The 呦呦音形 chord schemes (`yoyo-yx` with 折梅 fingering, `yoyo-yx-hm` with
+寒梅 fingering), their shared `yoyo.yaml`, dictionaries and `lua/yoyo/`
+processors are by Rayalizing, from
+[`Rayalizing/yoyo`](https://github.com/Rayalizing/yoyo) at revision
+`2f9dcc86f04558282c185b7c712630a311b8513b`. They are macOS chord-extension data
+and are excluded from the Linux and Windows preview packages. The upstream
+repository declares no license; the file list, checksums, redistribution
+status and upstream data provenance are recorded in
+`rime-data/licenses/yoyo-SOURCE.md`.
+
 RIMES-authored application and packaging code remains MIT-licensed. Those MIT
 terms do not replace the licenses above for third-party data.
 

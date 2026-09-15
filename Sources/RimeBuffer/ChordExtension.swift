@@ -42,6 +42,7 @@ final class ChordExtensionStore {
     static var schemaID: String { ChordKeymapStore.shared.activeProfile.schemaID }
     static func isChordSchema(_ id: String) -> Bool {
         id == "my_combo" || id.hasPrefix("rimes_chord_")
+            || NativeChordSchemeCatalog.isNativeSchema(id)
     }
     static let pluginID = "builtin.fly-chord-learning"
 

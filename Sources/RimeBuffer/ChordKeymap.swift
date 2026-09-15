@@ -45,7 +45,7 @@ enum ChordKeymapError: LocalizedError {
         switch self {
         case let .invalid(reason): return "并击键位方案无效：\(reason)"
         case let .missing(name): return "未找到并击键位方案：\(name)"
-        case .readOnlyBuiltIn: return "内置飞耀方案不能覆盖或删除，请先复制。"
+        case .readOnlyBuiltIn: return "内置方案不能覆盖或删除；飞耀可以先复制再编辑。"
         case .activeProfileRemoval: return "当前使用的键位方案不能删除，请先应用其他方案。"
         case .unsafePath: return "键位方案路径不是安全的本机普通文件或目录。"
         case .unreadable: return "无法读写并击键位方案文件。"
@@ -71,11 +71,15 @@ struct ChordKeymapProfile: Codable, Equatable, Identifiable {
     var mappings: [ChordKeymapEntry]
     var boundaryPolicy: ChordKeymapBoundaryPolicy = .explicitSyllables
     var outputEncoding: ChordOutputEncoding = .fullPinyin
+    /// Set only on the read-only presets of NativeChordSchemeCatalog: the
+    /// bundled Rime schema that owns chording, instead of a mapping table.
+    var nativeSchemeID: String?
 
     init(formatVersion: Int = 1, id: String, name: String,
          leftKeys: String, rightKeys: String, mappings: [ChordKeymapEntry],
          boundaryPolicy: ChordKeymapBoundaryPolicy = .explicitSyllables,
-         outputEncoding: ChordOutputEncoding = .fullPinyin) {
+         outputEncoding: ChordOutputEncoding = .fullPinyin,
+         nativeSchemeID: String? = nil) {
         self.formatVersion = formatVersion
         self.id = id
         self.name = name
@@ -84,10 +88,12 @@ struct ChordKeymapProfile: Codable, Equatable, Identifiable {
         self.mappings = mappings
         self.boundaryPolicy = boundaryPolicy
         self.outputEncoding = outputEncoding
+        self.nativeSchemeID = nativeSchemeID
     }
 
     private enum CodingKeys: String, CodingKey {
         case formatVersion, id, name, leftKeys, rightKeys, mappings, boundaryPolicy, outputEncoding
+        case nativeSchemeID
     }
 
     init(from decoder: Decoder) throws {
@@ -102,12 +108,17 @@ struct ChordKeymapProfile: Codable, Equatable, Identifiable {
                                                        forKey: .boundaryPolicy) ?? .explicitSyllables
         outputEncoding = try container.decodeIfPresent(ChordOutputEncoding.self,
                                                        forKey: .outputEncoding) ?? .fullPinyin
+        nativeSchemeID = try container.decodeIfPresent(String.self, forKey: .nativeSchemeID)
     }
 
     var alphabet: String { leftKeys + rightKeys }
     var isBuiltIn: Bool { id == Self.builtInID }
+    var isNative: Bool { nativeSchemeID != nil }
+    /// Read-only presets: the 飞耀 template and every native chord scheme.
+    var isPreset: Bool { isBuiltIn || isNative }
     var schemaID: String {
-        isBuiltIn ? "my_combo"
+        if let nativeSchemeID { return nativeSchemeID }
+        return isBuiltIn ? "my_combo"
             : "rimes_chord_" + id.lowercased().replacingOccurrences(of: "-", with: "")
     }
 
@@ -180,6 +191,18 @@ struct ChordKeymapProfile: Codable, Equatable, Identifiable {
     func validated(requireMappings: Bool = true) throws -> ChordKeymapProfile {
         guard formatVersion == 1 else {
             throw ChordKeymapError.invalid("不支持的格式版本 \(formatVersion)")
+        }
+        // A native preset is defined by the app, not by file contents: a
+        // stored snapshot resolves to the current preset, and nothing else may
+        // claim a native schema.
+        if let preset = NativeChordSchemeCatalog.profile(id: id) {
+            guard nativeSchemeID == nil || nativeSchemeID == preset.nativeSchemeID else {
+                throw ChordKeymapError.invalid("原生并击方案与所属 Rime 方案不一致")
+            }
+            return preset
+        }
+        guard nativeSchemeID == nil else {
+            throw ChordKeymapError.invalid("原生并击方案只能使用内置预设，不能导入或复制为自定义键位")
         }
         guard isBuiltIn || UUID(uuidString: id) != nil else {
             throw ChordKeymapError.invalid("方案 ID 必须是 UUID")
@@ -329,7 +352,7 @@ final class ChordKeymapStore {
                 throw ChordKeymapError.missing(url.lastPathComponent)
             }
             let profile = try decode(data, requireMappings: false)
-            guard !profile.isBuiltIn,
+            guard !profile.isPreset,
                   url.deletingPathExtension().lastPathComponent == profile.id else {
                 throw ChordKeymapError.invalid("文件名与方案 ID 不一致：\(url.lastPathComponent)")
             }
@@ -338,17 +361,18 @@ final class ChordKeymapStore {
             if $0.name == $1.name { return $0.id < $1.id }
             return $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
-        return [builtin] + custom
+        return [builtin] + NativeChordSchemeCatalog.all + custom
     }
 
     func profile(id: String) throws -> ChordKeymapProfile {
         lock.lock()
         defer { lock.unlock() }
         if id == ChordKeymapProfile.builtInID { return try builtInProfile() }
+        if let native = NativeChordSchemeCatalog.profile(id: id) { return native }
         let url = try profileURL(id: id)
         guard let data = try readData(at: url) else { throw ChordKeymapError.missing(id) }
         let profile = try decode(data, requireMappings: false)
-        guard profile.id == id.lowercased(), !profile.isBuiltIn else {
+        guard profile.id == id.lowercased(), !profile.isPreset else {
             throw ChordKeymapError.invalid("文件名与方案 ID 不一致")
         }
         return profile
@@ -358,7 +382,7 @@ final class ChordKeymapStore {
         lock.lock()
         defer { lock.unlock() }
         let normalized = try profile.validated(requireMappings: false)
-        guard !normalized.isBuiltIn else { throw ChordKeymapError.readOnlyBuiltIn }
+        guard !normalized.isPreset else { throw ChordKeymapError.readOnlyBuiltIn }
         let target = try profileURL(id: normalized.id)
         let files = try profileFiles()
         guard files.contains(target) || files.count < Self.maximumCustomProfiles else {
@@ -370,7 +394,10 @@ final class ChordKeymapStore {
     func remove(id: String) throws {
         lock.lock()
         defer { lock.unlock() }
-        guard id != ChordKeymapProfile.builtInID else { throw ChordKeymapError.readOnlyBuiltIn }
+        guard id != ChordKeymapProfile.builtInID,
+              NativeChordSchemeCatalog.profile(id: id) == nil else {
+            throw ChordKeymapError.readOnlyBuiltIn
+        }
         guard activeProfile.id != id.lowercased() else { throw ChordKeymapError.activeProfileRemoval }
         let target = try profileURL(id: id)
         guard try readData(at: target) != nil else { throw ChordKeymapError.missing(id) }
@@ -409,6 +436,9 @@ final class ChordKeymapStore {
 
     func importData(_ data: Data) throws -> ChordKeymapProfile {
         var profile = try decode(data, requireMappings: false)
+        guard !profile.isNative else {
+            throw ChordKeymapError.invalid("原生并击方案已内置，请直接在方案列表中选择")
+        }
         profile.id = UUID().uuidString.lowercased()
         return try profile.validated(requireMappings: false)
     }

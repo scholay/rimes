@@ -444,7 +444,8 @@ if StandaloneRimeCommandRules.requiresIsolatedUserDir(
     if (CommandLine.arguments.contains("smoke")
         || CommandLine.arguments.contains("user-lexicon-bridge-smoke")
         || CommandLine.arguments.contains("chord-keymap-engine-smoke")
-        || CommandLine.arguments.contains("chord-ziranma-engine-smoke")),
+        || CommandLine.arguments.contains("chord-ziranma-engine-smoke")
+        || CommandLine.arguments.contains("yoyo-engine-smoke")),
        !configureEngineSmokeRuntime(isolatedUserDir: isolatedUserDir) {
         exit(1)
     }
@@ -918,6 +919,12 @@ if CommandLine.arguments.contains("chord-keymap-smoke") {
 }
 if CommandLine.arguments.contains("chord-keymap-engine-smoke") {
     exit(runChordKeymapEngineSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("native-chord-smoke") {
+    exit(runNativeChordSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("yoyo-engine-smoke") {
+    exit(runYoyoEngineSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("chord-ziranma-smoke") {
     exit(runChordZiranmaSmokeTest() ? 0 : 1)

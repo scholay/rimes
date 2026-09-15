@@ -336,6 +336,18 @@ jobs:
           RIMEBUFFER_SHARED_DIR="$SHARED" \
           RIMEBUFFER_FRAMEWORKS_DIR="$FRAMEWORKS" \
             "$BIN" user-lexicon-bridge-smoke
+          # Deploy real chord schemas through the keymap activation flow on the
+          # shipped runtime: the built-in presets, 自然码 encoding, and the
+          # bundled 呦呦音形 native schemes, whose Lua and dictionaries only
+          # load correctly from the assembled app.
+          for smoke in chord-keymap-engine-smoke chord-ziranma-engine-smoke yoyo-engine-smoke; do
+            smoke_root="$RUNNER_TEMP/rimes-$smoke"
+            mkdir -p "$smoke_root"
+            RIMEBUFFER_USER_DIR="$smoke_root" \
+            RIMEBUFFER_SHARED_DIR="$SHARED" \
+            RIMEBUFFER_FRAMEWORKS_DIR="$FRAMEWORKS" \
+              "$BIN" "$smoke"
+          done
 
       # Rehearsals and unsigned previews are ad-hoc signed and never enter the
       # protected signing environment. A formal vX.Y.Z tag skips this path and

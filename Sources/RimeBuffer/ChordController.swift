@@ -222,7 +222,9 @@ enum FlyChordSettlementPolicy: Equatable {
 /// fires.
 enum FlyChordRoutingRules {
     static func shouldStage(schemaID: String, asciiMode: Bool) -> Bool {
+        // Native schemes settle chords in librime itself; nothing is staged.
         schemaID == ChordExtensionStore.schemaID && !asciiMode
+            && !NativeChordSchemeCatalog.isNativeSchema(schemaID)
     }
 
     static func shouldStage(schemaID: String,
@@ -443,6 +445,50 @@ struct FlyChordBatchState {
     }
 }
 
+/// Physical keys held for a native scheme's chord, in press order. Pure so the
+/// repeat, duplicate and lost-release rules are testable without IMK.
+struct NativeChordKeysDown: Equatable {
+    /// `observedDown`: physical key state confirmed this key down at its press.
+    /// Only such keys may be released from physical state later; if the state
+    /// cannot see a key, its release waits for the host's key-up or a flush.
+    private(set) var keys: [(hardwareKeyCode: UInt16, keycode: Int32, observedDown: Bool)] = []
+
+    var hasKeys: Bool { !keys.isEmpty }
+
+    mutating func press(_ keycode: Int32, hardwareKeyCode: UInt16,
+                        observedDown: Bool = true) -> Bool {
+        guard !keys.contains(where: { $0.hardwareKeyCode == hardwareKeyCode }) else {
+            return false
+        }
+        keys.append((hardwareKeyCode, keycode, observedDown))
+        return true
+    }
+
+    mutating func release(hardwareKeyCode: UInt16) -> Int32? {
+        guard let index = keys.firstIndex(where: { $0.hardwareKeyCode == hardwareKeyCode }) else {
+            return nil
+        }
+        return keys.remove(at: index).keycode
+    }
+
+    mutating func releaseAll(where isUp: (UInt16) -> Bool) -> [Int32] {
+        let released = keys.filter { isUp($0.hardwareKeyCode) }.map(\.keycode)
+        keys.removeAll { isUp($0.hardwareKeyCode) }
+        return released
+    }
+
+    /// Keys whose press was observed down and whose physical state now reads up.
+    mutating func releasePhysicallyUp(_ isDown: (UInt16) -> Bool) -> [Int32] {
+        let observed = Set(keys.filter(\.observedDown).map(\.hardwareKeyCode))
+        return releaseAll { observed.contains($0) && !isDown($0) }
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.keys.map(\.hardwareKeyCode) == rhs.keys.map(\.hardwareKeyCode)
+            && lhs.keys.map(\.keycode) == rhs.keys.map(\.keycode)
+    }
+}
+
 /// Detect the only mutation chord_composer is allowed to make when a failed
 /// press subset is released: one contiguous insertion at the current raw-input
 /// cursor.  The cursor remains immediately after that insertion, so ordinary
@@ -479,6 +525,20 @@ final class ChordController {
     private var timer: Timer?
     private weak var client: (any IMKTextInput)?
 
+    /// Keys of a native scheme's chord that are physically down. Their presses
+    /// already reached librime; the chord settles on the last release.
+    private var nativeKeysDown = NativeChordKeysDown()
+    private var nativeClient: (any IMKTextInput)?
+    private var nativeReleaseTimer: Timer?
+
+    /// Delivers releases the host never sent: a key-up lost to a focus change
+    /// or a host that drops keyUp. Runs before a flush or invalidation too, so
+    /// librime's chord_composer never keeps a key it believes is still down.
+    var onNativeRelease: ((_ keycodes: [Int32], _ client: (any IMKTextInput)?) -> Void)?
+    var physicalKeyIsDown: (UInt16) -> Bool = { keyCode in
+        CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(keyCode))
+    }
+
     /// Replays keys (with releaseMask) against the session and drains commits.
     var onFlush: ((_ keys: [(keycode: Int32, mask: Int32)], _ client: (any IMKTextInput)?) -> Void)?
 
@@ -486,7 +546,55 @@ final class ChordController {
     /// marked-text guard.
     var onDiscard: ((_ client: (any IMKTextInput)?) -> Void)?
 
-    var hasPending: Bool { batch.hasPending }
+    var hasPending: Bool { batch.hasPending || nativeKeysDown.hasKeys }
+    var hasNativeKeysDown: Bool { nativeKeysDown.hasKeys }
+
+    /// Records a native chord press. False for an auto-repeat or a key that is
+    /// already down: its press must not reach librime twice.
+    func noteNativePress(_ keycode: Int32, hardwareKeyCode: UInt16,
+                         client: (any IMKTextInput)?) -> Bool {
+        guard nativeKeysDown.press(keycode, hardwareKeyCode: hardwareKeyCode,
+                                   observedDown: physicalKeyIsDown(hardwareKeyCode)) else {
+            return false
+        }
+        nativeClient = client
+        if nativeReleaseTimer == nil {
+            let t = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+                self?.releaseNativeKeysPhysicallyUp()
+            }
+            nativeReleaseTimer = t
+            RunLoop.main.add(t, forMode: .common)
+        }
+        return true
+    }
+
+    /// The Rime keycode whose release the host just delivered, if that key was
+    /// part of a native chord.
+    func takeNativeRelease(hardwareKeyCode: UInt16) -> Int32? {
+        let keycode = nativeKeysDown.release(hardwareKeyCode: hardwareKeyCode)
+        if !nativeKeysDown.hasKeys { stopNativeReleaseTimer() }
+        return keycode
+    }
+
+    private func releaseNativeKeysPhysicallyUp() {
+        let released = nativeKeysDown.releasePhysicallyUp(physicalKeyIsDown)
+        let client = nativeClient
+        if !nativeKeysDown.hasKeys { stopNativeReleaseTimer() }
+        if !released.isEmpty { onNativeRelease?(released, client) }
+    }
+
+    private func releaseAllNativeKeys() {
+        let released = nativeKeysDown.releaseAll(where: { _ in true })
+        let client = nativeClient
+        stopNativeReleaseTimer()
+        if !released.isEmpty { onNativeRelease?(released, client) }
+    }
+
+    private func stopNativeReleaseTimer() {
+        nativeReleaseTimer?.invalidate()
+        nativeReleaseTimer = nil
+        if !nativeKeysDown.hasKeys { nativeClient = nil }
+    }
 
     /// Stage a physical chord press before it reaches Rime. All accepted keys
     /// enter Rime together at settlement, without discarding a useful
@@ -518,6 +626,7 @@ final class ChordController {
     /// Resolve the pending chord NOW (timer fired, a non-chord key arrived,
     /// focus is leaving, or a commit is being forced).
     func flush() {
+        releaseAllNativeKeys()
         guard batch.hasPending else { return }
         let keys = batch.settle().map { (keycode: $0.keycode, mask: $0.mask) }
         let flushClient = client      // strong for the duration of the flush
@@ -544,6 +653,7 @@ final class ChordController {
     }
 
     func invalidate() {
+        releaseAllNativeKeys()
         timer?.invalidate()
         timer = nil
         client = nil

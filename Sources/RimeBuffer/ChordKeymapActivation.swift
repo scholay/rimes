@@ -58,7 +58,8 @@ struct ChordKeymapRuntimeFiles {
     }
 
     func writeSchema(for profile: ChordKeymapProfile) throws {
-        guard !profile.isBuiltIn else { return }
+        // Presets ship their schema in SharedSupport; only keymaps generate one.
+        guard !profile.isPreset else { return }
         let yaml = try ChordKeymapCompiler.schemaYAML(for: profile)
         try prepareRoot()
         let url = root.appendingPathComponent(profile.schemaID + ".schema.yaml")
@@ -69,7 +70,7 @@ struct ChordKeymapRuntimeFiles {
 
     func prepare(_ profile: ChordKeymapProfile) throws -> Snapshot {
         try prepareRoot()
-        let schemaURL = profile.isBuiltIn ? nil
+        let schemaURL = profile.isPreset ? nil
             : root.appendingPathComponent(profile.schemaID + ".schema.yaml")
         let listURL = root.appendingPathComponent("default.custom.yaml")
         let snapshot = Snapshot(schemaURL: schemaURL,

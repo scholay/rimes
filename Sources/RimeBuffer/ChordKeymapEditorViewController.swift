@@ -301,7 +301,7 @@ final class ChordKeymapEditorViewController: NSViewController,
     }
 
     private var isDirty: Bool {
-        !draft.isBuiltIn && (hasUnsavedProfile || draft != savedDraft || entryDirty)
+        !draft.isPreset && (hasUnsavedProfile || draft != savedDraft || entryDirty)
     }
 
     private func retainUnsavedDraft() {
@@ -318,7 +318,7 @@ final class ChordKeymapEditorViewController: NSViewController,
     }
 
     private func captureProfileFields() {
-        guard isViewLoaded, !loading, !draft.isBuiltIn else { return }
+        guard isViewLoaded, !loading, !draft.isPreset else { return }
         draft.name = nameField.stringValue
         draft.boundaryPolicy = boundaryPicker.indexOfSelectedItem == 0 ? .legacyBatches : .explicitSyllables
         draft.outputEncoding = ChordOutputEncoding.allCases[max(encodingPicker.indexOfSelectedItem, 0)]
@@ -349,7 +349,7 @@ final class ChordKeymapEditorViewController: NSViewController,
     }
 
     private func refreshControls() {
-        let editable = !draft.isBuiltIn && !applying
+        let editable = !draft.isPreset && !applying
         [nameField, leftField, rightField, outputField].forEach { $0.isEnabled = editable }
         keysField.isEnabled = !applying
         profilePicker.isEnabled = !applying
@@ -363,9 +363,16 @@ final class ChordKeymapEditorViewController: NSViewController,
         removeEntryButton.isEnabled = editable && editingKeys != nil
         deleteProfileButton.isEnabled = editable && draft.id != store.activeProfile.id && !hasUnsavedProfile
         keyboardMode.isEnabled = !applying
-        if draft.isBuiltIn { keyboardMode.selectedSegment = 0 }
+        if draft.isPreset { keyboardMode.selectedSegment = 0 }
         addButton.title = editingKeys == nil ? "添加映射" : "更新映射"
-        let identity = draft.isBuiltIn ? "内置模板 · 只读，复制后即可编辑" : "自定义方案 · \(draft.mappings.count) 条映射"
+        let identity: String
+        if draft.isNative {
+            identity = "原生并击方案 · 码元与字词由方案自身定义，按全部松开结算"
+        } else if draft.isPreset {
+            identity = "内置模板 · 只读，复制后即可编辑"
+        } else {
+            identity = "自定义方案 · \(draft.mappings.count) 条映射"
+        }
         profileStatus.stringValue = identity + (draft.id == store.activeProfile.id ? " · 当前已启用" : "")
         recorder.alphabet = draft.alphabet
     }
@@ -463,6 +470,10 @@ final class ChordKeymapEditorViewController: NSViewController,
     }
 
     @objc private func duplicateProfile() {
+        guard !draft.isNative else {
+            setStatus("原生并击方案不使用键位映射表，不能复制为自定义方案。", error: true)
+            return
+        }
         guard confirmCanLeave() else { return }
         openUnsaved(draft.duplicated())
     }
@@ -477,7 +488,7 @@ final class ChordKeymapEditorViewController: NSViewController,
     }
 
     @objc private func deleteProfile() {
-        guard !draft.isBuiltIn, draft.id != store.activeProfile.id, !hasUnsavedProfile,
+        guard !draft.isPreset, draft.id != store.activeProfile.id, !hasUnsavedProfile,
               confirmCanLeave() else { return }
         let alert = NSAlert()
         alert.messageText = "删除“\(draft.name)”？"
@@ -497,7 +508,7 @@ final class ChordKeymapEditorViewController: NSViewController,
     }
 
     @objc private func changeKeyboardMode() {
-        if draft.isBuiltIn && keyboardMode.selectedSegment != 0 {
+        if draft.isPreset && keyboardMode.selectedSegment != 0 {
             keyboardMode.selectedSegment = 0
             setStatus("内置飞耀模板只读。点击“复制方案”后可以调整键区。")
         }
@@ -510,7 +521,7 @@ final class ChordKeymapEditorViewController: NSViewController,
             var selected = Set(keysField.stringValue.lowercased())
             if selected.contains(key) { selected.remove(key) } else { selected.insert(key) }
             keysField.stringValue = draft.canonicalKeys(String(selected))
-        } else if !draft.isBuiltIn {
+        } else if !draft.isPreset {
             draft.leftKeys.removeAll(where: { $0 == key })
             draft.rightKeys.removeAll(where: { $0 == key })
             if keyboardMode.selectedSegment == 1 { draft.leftKeys.append(key) }
@@ -539,7 +550,7 @@ final class ChordKeymapEditorViewController: NSViewController,
     }
 
     private func confirmEntryReplacement() -> Bool {
-        guard entryDirty, !draft.isBuiltIn else { return true }
+        guard entryDirty, !draft.isPreset else { return true }
         let alert = NSAlert()
         alert.messageText = "当前映射尚未加入方案"
         alert.informativeText = "先保存这条映射，或放弃该条目的修改。"
@@ -556,7 +567,10 @@ final class ChordKeymapEditorViewController: NSViewController,
     @objc private func addOrUpdateEntry() { _ = upsertEntry() }
 
     @discardableResult private func upsertEntry() -> Bool {
-        guard !draft.isBuiltIn else { setStatus("请先复制内置方案再编辑。", error: true); return false }
+        guard !draft.isPreset else {
+            setStatus(draft.isNative ? "原生并击方案由方案自身定义，不能编辑。" : "请先复制内置方案再编辑。", error: true)
+            return false
+        }
         captureProfileFields()
         var candidate = draft
         let rawKeys = keysField.stringValue.lowercased()
@@ -591,7 +605,7 @@ final class ChordKeymapEditorViewController: NSViewController,
     }
 
     @objc private func removeEntry() {
-        guard !draft.isBuiltIn, let key = editingKeys else { return }
+        guard !draft.isPreset, let key = editingKeys else { return }
         draft.mappings.removeAll(where: { $0.keys == key })
         clearEntryFields()
         loading = true
@@ -626,7 +640,7 @@ final class ChordKeymapEditorViewController: NSViewController,
     @objc private func saveDraftAction() { _ = saveDraft() }
 
     @discardableResult private func saveDraft() -> Bool {
-        guard !draft.isBuiltIn else { return true }
+        guard !draft.isPreset else { return true }
         if entryDirty && !upsertEntry() { return false }
         captureProfileFields()
         do {
@@ -645,7 +659,7 @@ final class ChordKeymapEditorViewController: NSViewController,
 
     @objc private func applyDraft() {
         guard !applying else { return }
-        if !draft.isBuiltIn && !saveDraft() { return }
+        if !draft.isPreset && !saveDraft() { return }
         do {
             let profile = try draft.validated()
             applying = true
@@ -729,6 +743,9 @@ final class ChordKeymapEditorViewController: NSViewController,
             throw editorError("请至少选择一个属于当前键区的键，且不要重复。")
         }
         let canonical = profile.canonicalKeys(lower)
+        if profile.isNative {
+            return "\(canonical.uppercased()) → 由「\(profile.name)」在 Rime 中结算（码元、通道与顶功由方案定义）"
+        }
         let codes = Set(lower.unicodeScalars.map { Int32($0.value) })
         if let entry = profile.entry(for: codes) {
             let kind = entry.kind == .syllable ? "完整音节" : "拼音片段"
