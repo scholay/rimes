@@ -155,6 +155,6 @@ and also rebuilds the unchanged macOS target before creating a GitHub
 release workflow, and a prerelease is excluded from the macOS updater's
 `/releases/latest` channel.
 
-Create the tag through `./scripts/release.sh preview X.Y.Z`; the script refuses
+Create the tag through `./scripts/release.sh platform X.Y.Z` (or `platform patch|minor|major`); the script refuses
 dirty or diverged worktrees and verifies that both `origin` URLs resolve to the
 canonical `scholay/rimes` repository before pushing.

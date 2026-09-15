@@ -1,280 +1,116 @@
-# 发布与自动更新
+# 发布流程
 
-RIMES 通过 **GitHub Actions + GitHub Releases + 应用内自动更新** 分发。
-终端用户优先使用 Release 里的 `.pkg` 安装器；产物是**自包含** app，librime 引擎与 Rime
-词库都打包在 `RIMES.app` 内，无需单独安装 Squirrel。
+**合并到 main → CI 全绿 → `./scripts/release.sh <渠道>` → tag 触发工作流 → GitHub Release。**
 
-预置缓冲插件名称、版本与默认安装策略统一维护在
-`Catalog/buffer-plugins.json`。每次插件更新先运行
-`python3 -B scripts/sync-buffer-plugin-catalog.py`，它会同步运行时 Swift catalog 与中英文
-README 表；CI 和 `scripts/release.sh` 都会用 `--check` 阻止版本或文档漂移。当前维护的三个
-Buffer 插件随已签名应用一起交付，不再生成或上传独立 manifest/插件资产。历史 Release 中的
-旧插件资产按不可变发布政策保留，但不代表当前产品仍维护或安装它们。
+版本号只来自 tag。发布脚本不修改、不提交任何文件，只在 `origin/main` 上创建并推送一个 tag；
+构建、验证、发布说明和 Release 全部由 GitHub Actions 按同一套规则完成。唯一发布中心是
+[`scholay/rimes`](https://github.com/scholay/rimes/releases)。
 
-唯一发布中心是 [`scholay/rimes`](https://github.com/scholay/rimes/releases)：
-
-- `vX.Y.Z`：macOS 正式版，进入 `/releases/latest` 和应用内更新通道；
-- `vX.Y.Z-preview.N`：macOS 未签名公开预览版，始终是 Pre-release，不进入 latest 或自动更新；
-- `platform-preview-vX.Y.Z`：Windows/Linux 数据与输入方案预览版，始终标记为 Pre-release。
-
-这些通道使用互不混淆的 tag 规则；正式版与跨平台预览由 tag 触发，macOS 未签名预览则由
-当前 `main` 的显式手动工作流创建不可变 tag。旧仓库
-`young-bo-i/rime-buffer` 只保留历史版本和一次性升级桥，不再发布新功能版本。
-
-> 仓库/内部代号是 RimeBuffer（SPM target、源码目录、控制器类）；安装产物是 `RIMES.app` /
-> `MacOS/RIMES`，输入法 id 为 `com.scholay.inputmethod.isaac`；对外产品名是 RIMES。
-> `v0.5.0-preview.1` 及更早版本的 `ETInput.app`（`com.isaac.inputmethod.RimeBuffer`）只作为
-> 升级来源存在：pkg 安装时退役旧 bundle，应用首启把 `~/Library/RimeBuffer` 一次性复制到
-> `~/Library/RIMES`（见第四节）。
-
-## 一、发布新版本
-
-```bash
-./scripts/release.sh --dry-run 0.5.0  # 当前功能线先做只读发布检查
-./scripts/release.sh 0.5.0            # 门禁、凭据与真机验收齐备后才执行
-./scripts/release.sh patch            # 已发布功能线的后续维护版；也支持 minor / major
-gh workflow run release.yml --ref main -f version=0.5.0-preview.1 -f publish_unsigned_preview=true
+```mermaid
+flowchart LR
+  PR["PR（Conventional Commits）"] -->|CI 全绿后合并| main
+  main -->|release.sh 校验 CI 并推送 tag| tag["vX.Y.Z-preview.N / vX.Y.Z"]
+  tag --> build["无 secrets runner：构建、smoke、升级安装"]
+  build -->|预览版| pre["Pre-release（未签名）"]
+  build -->|正式版| sign["macos-release：签名、公证"] --> latest["Latest Release + 自动更新"]
 ```
 
-脚本只允许 `origin` 的 fetch/push URL 同时指向 `scholay/rimes`。它会从远端正式 tag 与
-`Info.plist` 的较新者计算版本基线，拒绝脏工作区、分叉的 `main`、已有/回退 tag 和错误仓库；
-需要更新版本时只提交 `Info.plist`，最后原子推送 `main` 与 `vX.Y.Z`。它不会
-`git add -A`，也不会删除或重建远端 tag。
+## 渠道
 
-推送 tag 会触发 [`.github/workflows/release.yml`](.github/workflows/release.yml)：
+| 渠道 | tag | 命令 | 产物 | 用户如何升级 |
+|---|---|---|---|---|
+| macOS 预览版 | `vX.Y.Z-preview.N` | `./scripts/release.sh preview` | 未签名 PKG + `SHA256SUMS`，Pre-release | 手动安装，见 [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) |
+| macOS 正式版 | `vX.Y.Z` | `./scripts/release.sh stable` | Developer ID 签名并公证的 PKG / ZIP，Latest | 应用内自动更新 |
+| Windows / Linux 数据预览 | `platform-preview-vX.Y.Z` | `./scripts/release.sh platform minor` | 数据与脚本包，Pre-release | 手动安装，见 [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) |
 
-workflow 使用两台彼此隔离的 runner。第一台 `build_and_smoke` 不绑定受保护 Environment、也不
-读取任何发布 Secret：它构建并实际执行 ad-hoc app 的 runtime smoke，再把 app、构建上下文和
-校验和作为短期 handoff Artifact 传出。第二台全新的 `sign_and_publish` runner 才进入
-受保护的 `macos-release` Environment；它先按严格成员/路径/权限/大小规则解包 app，并只做
-结构、架构和 ad-hoc 签名等被动校验。只有正式 tag 通过这些校验后才导入签名与公证凭据，且
-凭据所在 runner 不执行 handoff 中的 app。
+> 正式版需要 Developer ID 与受保护的 `macos-release` Environment（见
+> [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md#二正式发布环境与-secrets)）。仓库目前尚未配置，
+> 所以现在只发布预览版；`release.sh` 与工作流都会拒绝正式版。
 
-1. `swift build -c release --arch arm64 --arch x86_64`（**通用二进制**，Intel/Apple Silicon 通用）
-2. `scripts/fetch-rime.sh` 下载 librime 运行时（从 Squirrel 官方 pkg 提取，见下）
-3. 组装 `RIMES.app`：二进制 → `MacOS/RIMES`，`Info.plist`，并把 librime + 插件 + Rime
-   词库拷进 `Contents/Frameworks` 与 `Contents/SharedSupport`；用 ad-hoc 签名执行 runtime smoke，
-   再通过上述受校验的 handoff 交给 fresh signing runner
-4. 被动校验通过后，用同一张 Developer ID Application 证书逐个重签所有 bundled Mach-O，
-   再以 hardened runtime 签 app；凭据所在 runner 不执行该 app
-5. 把 app 提交 Apple 公证、等待 `Accepted` 并 staple；随后才创建保留签名与票据的
-   app 归档 `RIMES-X.Y.Z.zip`
-6. 以 Developer ID Installer 签署 `RIMES-X.Y.Z.pkg`，再次提交公证并 staple
-7. 对最终资产执行 `codesign`、`pkgutil`、`stapler` 与 `spctl` 校验，通过后才创建
-   GitHub Release 并计算/发布 SHA256；发布前先销毁临时 keychain/P8，发布使用受控的
-   `gh` CLI，所有外部 Actions 都固定到完整 commit SHA
+## 一、日常节奏
 
-也可在 GitHub Actions 手动运行 `Release macOS` 做发布前演练。普通手动运行只上传短期
-Artifact，不创建 Release；显式勾选 `publish_unsigned_preview` 且版本严格使用
-`X.Y.Z-preview.N` 时，才会从当前 `main` 创建同名 GitHub Pre-release。正式 Release 仍必须
-来自严格的 `vX.Y.Z` tag，且签名或公证凭据缺失时 fail-closed，绝不回退为未签名产物。
+1. **一个 PR 只做一件事。** 提交信息使用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/)：
+   `feat(scope): …`、`fix: …`、`perf:`、`refactor:`、`docs:`、`test:`、`build:`、`ci:`、`chore:`、`style:`、`revert:`。
+   发布说明由提交信息生成，CI 的「Release tooling」会拒绝不合规的提交。
+2. **不直接推送 main。** main 受 ruleset 保护：合并必须经过 PR，且所有 CI 检查通过。
+3. **每合并一个用户可见的功能或修复，就发布一个预览版；最迟每周一次。** 发布本身不需要改任何文件。
+4. 一条预览线经过真机验证后，用 `stable` 转正（需要 Developer ID）。
 
-### 受控未签名预览通道
+## 二、发布一个版本
 
-未取得 Developer ID 时，可用 `vX.Y.Z-preview.N` 向明确接受风险的社区用户发布测试版本：
+```bash
+git switch main && git pull --ff-only
+./scripts/release.sh --dry-run preview   # 查看版本号、门禁结果和发布说明
+./scripts/release.sh preview             # 确认后推送 tag
+```
 
-1. 只能手动从当前 `origin/main` 触发；workflow 会再次核对远端 SHA，并拒绝已经存在的 tag 或 Release。
-2. 无 secrets 的构建机生成 ad-hoc app 与 unsigned PKG，执行 runtime smoke，并通过真实
-   `sudo installer` 验证 PackageKit、固定路径、输入法 metadata、通用架构和安装回执。安装新包前
-   先按 `SHA256SUMS` 校验并安装上一个公开预览 `v0.5.0-preview.1`（改名前的 `ETInput.app`），
-   再断言升级后旧 bundle 已被退役、`/Library/Input Methods` 只剩 `RIMES.app` 一个 RIMES 身份。
-3. 独立的无 secrets 发布机只做被动成员集、权限、版本、架构、签名状态与 SHA-256 复核，
-   不执行 handoff 中的 app。
-4. Release 只包含 `RIMES-X.Y.Z-preview.N.pkg` 与 `SHA256SUMS`，必须标记为 Pre-release、
-   `latest=false`，正文明确写明 unsigned / not notarized，并链接 `UNSIGNED-PREVIEW.md`。
-5. 预览版不进入应用内更新；后续预览递增 `N`，正式版仍使用不带后缀的 `vX.Y.Z`，任何既有
-   tag 和资产都不得删除、移动或覆盖。
-
-### 已关闭的一次性未签名预览通道（历史：v0.4.3）
-
-`v0.4.3` 曾作为一次性 GitHub **Pre-release**，让明确接受风险的社区用户验证安装修复。
-该通道已经完成并永久关闭；以下内容仅记录当时的发布契约，不是可再次执行的操作手册：
-
-1. 当时从已审核、已合并的 `main` commit 手动运行 `Release macOS`，版本固定为 `0.4.3`，并由
-   workflow 确认事件 commit 等于当时的 `origin/main`。
-2. 无 secrets 的临时构建机先生成 ad-hoc app 与 unsigned PKG，真实执行一次
-   `sudo installer -pkg RIMES-0.4.3.pkg -target /`，并验证安装回执、固定路径、输入法 metadata、
-   universal 架构和 ad-hoc 签名。任何安装失败（包括 Code 112）都必须中止发布。
-3. 独立的无 secrets 发布机下载不可变 handoff，只做被动结构、签名状态、版本、成员集、大小和
-   SHA-256 复核，不执行 ETInput。验证通过后由工作流创建 `v0.4.3` GitHub Pre-release；不得手工
-   上传或替换资产。
-4. 公开资产固定包含 `RIMES-0.4.3.pkg`、`SHA256SUMS` 以及当时同次构建的旧插件/manifest
-   资产，不包含内部 `ETInput-handoff.zip`。这些历史资产不删除、不替换，也不会在新版本继续
-   生成；`SHA256SUMS` 仍是该历史发布的字节基线。
-5. GitHub Release 的版本固定为 `v0.4.3`，必须是 **Pre-release** 且不得设为 `latest`；标题和
-   首段必须写明“unsigned / not notarized / Apple 未验证”，并链接
-   [`UNSIGNED-PREVIEW.md`](UNSIGNED-PREVIEW.md) 和
-   [Apple 官方安全说明](https://support.apple.com/zh-cn/102445)。只允许从
-   `https://github.com/scholay/rimes/releases/tag/v0.4.3` 下载，不授权任何镜像或二次打包。
-6. 发布后把 tag、PKG、校验文件及 Release 正文中的摘要视为不可变。不得删除后重传同名资产、
-   移动/重建 tag，或把另一份字节覆盖成 `v0.4.3`。发现问题时撤下预览并发布新的更高版本号。
-7. `v0.4.3` 不得进入 `/releases/latest`，不得提供或宣称应用内自动更新。用户安装未来正式版时
-   必须手动下载新的 PKG。
-
-未来首个 Developer ID 签名并经 Apple 公证的正式版必须使用**高于 `0.4.3` 的新版本号**
-（当前功能线按 `v0.5.0` 演练），并完整经过原有 protected Environment、双证书签名、两次公证和
-fail-closed 校验。绝不能在 `v0.4.3` 上补签后覆盖原字节。
-
-> 当前 GitHub 仓库尚未配置 `macos-release` Environment、发布 Secrets 与 tag ruleset，开发机
-> 也没有 Developer ID Application/Installer 身份。因此当前只能发布明确标注、不可自动更新的
-> `v0.5.0-preview.N`；在这些门禁补齐前不得创建 `v0.5.0` 正式 tag 或把预览产物标记为正式 Release。
-
-### 正式发布环境与 Secrets
-
-先创建受保护的 GitHub Environment `macos-release`：开启 required reviewers，并把 deployment
-branch/tag rule 限制到受保护的 `vX.Y.Z` tag；仓库 ruleset 同时禁止非发布维护者创建或移动
-这类 tag。workflow 还会在导入凭据前要求 tag 精确指向当时的 `origin/main`，手动
-`workflow_dispatch` 即使选择 tag 也只能生成未签名 Artifact，不能进入正式发布分支。
-
-在该 Environment 的 secrets 中配置以下 8 项；P12 必须分别包含
-有效的 Developer ID Application / Developer ID Installer 证书及其私钥：
-
-| Secret | 内容 |
+| 命令 | 结果 |
 |---|---|
-| `RIMES_DEVELOPER_ID_APPLICATION_P12_BASE64` | Application `.p12` 文件的单行 Base64 |
-| `RIMES_DEVELOPER_ID_APPLICATION_P12_PASSWORD` | 上述 P12 的导出密码 |
-| `RIMES_DEVELOPER_ID_INSTALLER_P12_BASE64` | Installer `.p12` 文件的单行 Base64 |
-| `RIMES_DEVELOPER_ID_INSTALLER_P12_PASSWORD` | 上述 P12 的导出密码 |
-| `RIMES_DEVELOPER_TEAM_ID` | 两张证书所属的 10 位 Apple Team ID |
-| `RIMES_NOTARY_KEY_P8_BASE64` | App Store Connect API 私钥 `.p8` 的单行 Base64 |
-| `RIMES_NOTARY_KEY_ID` | App Store Connect API Key ID |
-| `RIMES_NOTARY_ISSUER_ID` | App Store Connect Issuer ID（UUID） |
+| `preview` | 继续进行中的预览线：`v0.5.0-preview.1` → `v0.5.0-preview.2` |
+| `preview patch\|minor\|major` | 从最新正式版升级，开始新预览线的 `preview.1` |
+| `preview X.Y.Z` | 开始指定的预览线；低于进行中的预览线会被拒绝 |
+| `stable` | 把进行中的预览线转正：`v0.5.0-preview.N` → `v0.5.0` |
+| `patch\|minor\|major` 或 `X.Y.Z` | 直接发布正式版 |
+| `platform patch\|minor\|major\|X.Y.Z` | Windows / Linux 数据预览 |
 
-> 可用 `base64 -i certificate.p12 | tr -d '\n'` 生成适合粘贴的单行内容；P8 同理。
-> 不要把证书、私钥或密码提交到仓库。
+脚本在推送前逐项检查，任何一项不满足都会拒绝（`--dry-run` 只报告）：
 
-正式 workflow 只在上述 fresh signing runner 把两张证书导入一次性 keychain，只把证书
-common name、Team ID 和临时路径传给后续步骤；P12 导入后立即删除，公证结束、Release 上传
-前删除临时 keychain 与 P8；失败路径也会无条件清理。导入脚本还会
-拒绝多张同类型 identity、Team ID 不一致或缺少任一凭据的配置。
+- `origin` 的 fetch / push 地址都指向 `scholay/rimes`；
+- 当前在 `main`，工作区干净，`HEAD` 等于 `origin/main`；
+- `origin/main` 这个提交的 `CI`、`Platform Preview Data`、`Windows Native Foundation` 都已通过；
+- 新 tag 不存在，并高于同渠道已发布的版本；
+- `Info.plist` 版本仍是占位值，预置插件 catalog 已同步；
+- 正式版还要求 `macos-release` Environment 已配置。
 
-## 二、自包含 librime（[`scripts/fetch-rime.sh`](scripts/fetch-rime.sh)）
+## 三、tag 推送之后
 
-librime 是**静态链接**的（依赖只有系统 libSystem/libc++），所以自包含只需三样：
-`librime.1.dylib` + 3 个插件 + `SharedSupport`（默认方案/词库）。fetch-rime 从 Squirrel
-官方 `.pkg` 提取这些到 `Vendor/rime/`。1.1.2 的 URL、字节长度、SHA-256、Developer ID
-Installer 身份/Team、公证票据，以及四个 universal dylib 的独立 SHA-256 都固定在脚本中；
-任何一项漂移都会在展开和 RIMES 重签之前 fail-closed。正式 workflow 总是 `--force` 下载，
-不信任 runner 上已有的 `Vendor/` 缓存。升级 Squirrel 必须在 PR 中重新审计并更新 allowlist。
+[`.github/workflows/release.yml`](.github/workflows/release.yml) 接手：
 
-简体 Octagram 模型保持为已审计的 40,925,228-byte compact 字节。获取时先复用
-`RB_OCTAGRAM_MODEL_PATH` 指定文件或 `Vendor/.cache`（两者都重新校验长度和 SHA-256），
-再以官方 `rime-octagram-data` 20260712 Release 资产为主源、固定 revision 的 raw 文件为
-备源；每个网络源都有有界重试和超时。所有模型来源在写入缓存和替换现有
-`Vendor/rime` 之前完成最终校验，因此失败不会破坏上一次可用 runtime。`--force` 会跳过
-本地来源，正式发布仍只接受从已审计网络源重新取得的完全相同字节。
+1. **构建**（无 secrets 的 runner）：把 tag 版本写入 `CFBundleShortVersionString`、run number 写入
+   `CFBundleVersion`；arm64 与 x86_64 分别构建后用 `lipo` 合并为通用二进制；组装 `RIMES.app` 并执行
+   runtime smoke。
+2. **预览版**：打未签名 PKG；在一次性 runner 上先安装**最新已发布的 Release**，再安装新包，验证旧 bundle
+   已被退役、回执、签名与架构；随后另一台无 secrets 的 runner 被动复核字节并创建 Pre-release。
+3. **正式版**：全新 runner 进入受保护的 `macos-release`，签名、公证、校验后创建 Latest Release。
+4. **发布说明** = 安装与校验说明 + 自动生成的「变更」：自上一版本以来的提交按类型分组，列出合并的 PR
+   和完整对比链接。预览版对比上一个 tag，正式版对比上一个正式版。
 
-- **`Vendor/` 是 gitignore 的**——二进制不进 git，构建时按锁定版本拉取，可复现。
-- 运行时 `CRimeBridge` 优先 `dlopen` app bundle 内的 librime（找不到才回退系统 Squirrel），
-  `shared_data_dir` 指向 bundle 的 `SharedSupport`；首启自动 `start_maintenance` 部署词库到
-  `~/Library/RIMES`。因此 CI 与终端用户机器都无需预装 Squirrel。
+工作流失败时**不要删除 tag 重来**：修复后发布下一个版本号。tag、资产与 SHA-256 一经发布即不可变，
+ruleset 禁止删除或移动 `v*` 与 `platform-preview-v*` tag。
 
-## 三、持续集成（CI）
+## 四、发布前演练
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在每次 push / PR 到 `main` 时：
-`swift build` + 运行 `schema-smoke`、`buffer-smoke`、`stats-smoke` 等纯 Swift 自检（不依赖 librime）。
+`Release macOS` 工作流在以下情况以演练模式运行完整的构建、打包和升级安装，**不发布**，产物保留 7 天：
 
-## 四、新用户安装器（[`scripts/make-pkg.sh`](scripts/make-pkg.sh)）
+- 修改打包相关文件的 PR（`Package.swift` / `Package.resolved`、`Info.plist`、`Resources/`、`rime-data/`、
+  `scripts/pkg/`、发布脚本与工作流等）；
+- 每天 03:17（北京时间）对 main 的定时运行；
+- 在 Actions 页面手动运行（可指定版本号）。
 
-`.pkg` 会把 `RIMES.app` 固定安装到 `/Library/Input Methods`，且显式禁用 Installer
-relocation。`BundleHasStrictIdentifier=false` 是刻意的兼容策略：改名期间的开发构建曾以
-`com.scholay.isaac` 使用 `RIMES.app`；preinstall 会先拒绝任何非 RIMES 占用者。改名前的
-`ETInput.app`（`com.isaac.inputmethod.RimeBuffer`，v0.4.1 及更早为
-`com.isaac.inputmethod.ETInput`）在另一路径：payload 落盘后，postinstall 扫描系统与当前
-GUI 用户的 `Input Methods`，移除除新 payload 外所有声明 RIMES 身份的 bundle；若仍有重复
-路径无法移除或扫描失败，postinstall 记录路径并以失败退出，不启动 companion。
+演练默认使用下一次 `release.sh preview` 会得到的版本号，所以演练通过就等于下一个预览版的构建已经过一遍。
 
-替换 payload 前，preinstall 使用包内随新版本构建、签名的最小 universal TIS helper 切到
-ASCII fallback，不再要求 v0.4.1 等旧 binary 理解新参数。所有可能碰到 DirectoryService、
-网络 home、Aqua bootstrap 或 TIS 的命令都由独立进程组 watchdog 约束；TERM/KILL 会覆盖整棵
-命令树，preinstall/postinstall 另有 30/240 秒总预算。payload 落盘后，postinstall 在当前
-GUI 用户的 Aqua 会话中按独立子进程分阶段执行 `register → enable parent →
-enable child → best-effort select`。注册/启用在 90 秒总预算内未收敛时，pkg 仍成功，
-并为当前用户安排一个仅在下次 Aqua 登录执行的 one-shot repair LaunchAgent；
-成功后 marker 与 LaunchAgent 会自删除。开发安装另用一个不带 `KeepAlive` 的用户级
-companion LaunchAgent：新定义在同一目录完成构造、lint 与字段校验后原子替换，只执行一次
-`open -g` 用户 App。系统包在替换 payload 前枚举所有本机普通账户的
-准确 home 记录：只允许当前 GUI 用户存在可验证、可由 postinstall 退休的 dev app/agent；
-任何其他账户存在同 ID dev 安装、home 无法安全遍历或记录不一致都会在 payload 改动前
-fail-closed。postinstall 退休当前用户的 dev 安装后再次全量审计，再发布另一个系统级 Aqua
-LaunchAgent。它在每次冷登录时只运行一次短命 guard：若后来又出现用户级 dev 痕迹则直接
-退出，否则执行 `/usr/bin/open -g /Library/Input Methods/RIMES.app`；它不设 `KeepAlive`，
-也不承载第二份 UI/IME 服务。这个登录 guard 只是对安装后异常残留的防御，不能代替包安装前
-的全账户冲突审计。postinstall 在替换这个 system agent 前保存原始字节，后续
-旧进程退出或新进程启动检查失败会恢复旧 agent（原来不存在则恢复为不存在）。这样即使
-登录后选用其他输入法，Buffer、Clipboard、Mailbox 与 Capsule 的 Carbon 快捷键仍由同一
-个 RIMES 进程提供。无 GUI 用户时仅在所有本机账户都无 dev 冲突后安装 payload 与冷登录
-bootstrap；TIS 激活留到 GUI 会话建立后处理。任何路径都不结束
-`imklaunchagent`/`TextInputMenuAgent`。
+## 五、版本号规则
 
-发布回归还必须固定周边窗口的权限边界：在其他输入法下，四个全局快捷键仍可开关对应窗口，
-但不得访问外部 IMK client、切换输入源、合成粘贴/其他按键、调用 Accessibility/Post Event，
-或读取、提交、取消外部输入法组字。设置窗口只在 RIMES 输入源下打开；其中 Mailbox 与 Capsule
-必须是配置/状态页，不能嵌入实际会话或内容管理 pane。Capsule Password 的查看入口必须显示
-四个槽位，并用原生物理键事件验证四组 chord（默认 `RH / WO / CVN / QU`）；更换和恢复默认
-都先验证当前凭据，自定义原码不落盘或同步，只保留一个加盐摘要凭据，验证成功后的明文最多
-显示 15 秒。
+- **tag 是唯一来源。** 仓库里的 `Info.plist` 固定为 `0.0.0-dev`，CI 会拒绝提交真实版本号；
+  `build_install.sh` 的开发安装用 `git describe` 命名（如 `0.5.0-preview.1-73-ge4490c8`）。
+- 排序：`X.Y.Z-preview.N` 低于 `X.Y.Z`；预览号从 1 开始递增，禁止回退。
+- 应用内更新只认严格的 `X.Y.Z`；预览版和开发版不会收到更新提示。
 
-输入法 bundle id 为 `com.scholay.inputmethod.isaac`，可选择的输入模式使用独立 id
-`com.scholay.inputmethod.isaac.Hans`。必须保留 `.inputmethod.` 段：改名期间的
-`com.scholay.isaac` 虽然签名校验及注册调用成功，却无法进入 TIS 输入源列表。
-签名证书与 Bundle ID 是两个独立设置；更换证书不要求更换 Bundle ID。旧标识的
-偏好（`RimeBuffer.` 前缀）与 `~/Library/RimeBuffer` 数据目录各按独立迁移标记一次性复制到新名称，
-只复制不移动，原目录保留作回退。父输入法与
-子 mode 不能共用同一个 TIS id，否则父项无法启用、`TISSelectInputSource` 会返回 `paramErr`。
-macOS 会把这些 id 写入受保护的 TIS 偏好，因此后续不要随意改动。
+## 六、更新日志
 
-## 五、应用内自动更新（[`UpdateManager.swift`](Sources/RimeBuffer/UpdateManager.swift)）
+每个 Release 的正文都带有变更列表。[`CHANGELOG.md`](CHANGELOG.md) 由
+`python3 scripts/release/release_tool.py changelog --write` 从 tag 生成：发布后在下一个 PR 里顺手更新，
+CI 在它落后时会给出警告。
 
-从本次修复版本开始，已安装并运行的正式签名 RIMES：
+## 七、暂不提供
 
-- **启动时 + 每小时** 静默查询 `scholay/rimes` 的最新 Release；
-- 只接受严格 `vX.Y.Z` 下唯一的 `RIMES-X.Y.Z.pkg`，并在后台下载；
-- 下载完成后，输入法菜单中的更新项变为「安装 RIMES vX…」；
-- 下载后和用户确认后各验证一次：GitHub HTTPS/精确资产路径、普通文件/大小上限、
-  `pkgutil --check-signature`、`spctl --assess --type install`，以及 Installer 证书与当前 app
-  的 10 位 Team ID 一致；每个系统校验工具都有硬超时，且包内 product/component identifier
-  与版本必须精确等于 Release 的 `X.Y.Z`，不能把历史同-Team pkg 改名重放；
-- 用户确认后只把已验证 `.pkg` 交给 macOS Installer。应用自身不修改
-  `/Library/Input Methods`，不解压任意 app，不清 quarantine，也不结束进程；
-- 也可从菜单「检查更新…」手动触发。
+Homebrew cask 和可用的应用内更新要等 Developer ID。没有签名时，把包放进 Homebrew 就意味着让用户
+移除隔离属性、绕过 Gatekeeper，这正是 [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) 禁止的做法。
 
-Release 中的 `RIMES-X.Y.Z.zip` 只是签名 app 归档，更新器不消费 ZIP。`v0.5.0-preview.1` 及
-更早版本的更新器要求包 id `com.isaac.inputmethod.RimeBuffer` 与 `./ETInput.app`，会拒绝改名后
-的 pkg；这些版本从未进入自动更新通道（所有既有 Release 都是 Pre-release），因此用户需手动
-安装一次新 pkg。自动检查默认开启（`UserDefaults` 键
-`updateAutoCheckEnabled`）。
+## 相关文档
 
-## 版本号约定
-
-- `Info.plist` 的 `CFBundleShortVersionString` 用 `x.y.z`；tag 为 `vX.Y.Z`。
-- CI 会用 tag 覆盖 plist 版本，用 `github.run_number` 作为 `CFBundleVersion`。
-- 只有 tag 版本 **严格大于** 当前运行版本时，客户端才会提示更新。
-
-## 六、Windows / Linux 输入方案预览
-
-跨平台 Data / Input-Schemes Preview 使用独立的 `platform-preview-vX.Y.Z` 标签和
-`.github/workflows/platform-preview-release.yml`。日常数据验证另由只读的
-`.github/workflows/platform-preview.yml` 负责。该标签不会匹配 macOS 正式发布所用的 `v*`
-规则；生成的 GitHub Release 必须标记为 **Pre-release**，因此也不会进入 macOS 客户端
-查询的 `/releases/latest` 自动更新通道。
-
-预览工作流在 Windows、Linux 与 macOS runner 上共同校验审核过的 Rime 数据闭包，并在
-原生 Windows/Linux runner 上执行安装、校验、卸载文件事务。发布资产只是面向
-Weasel、Fcitx5 Rime 与 IBus Rime 的数据/脚本包，不得描述为完整原生 RIMES 应用。
-
-发布预览版：
-
-```bash
-./scripts/release.sh preview 0.2.0
-```
-
-精确能力边界、被排除的数据和本地验证命令见
-[CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)。
-
-## 七、旧仓库客户端迁移
-
-`v0.4.1` 及更早的已安装包把更新地址编译为 `young-bo-i/rime-buffer`，并消费
-`ETInput-X.Y.Z.zip`。改名后的 release workflow 不再生成这份 ZIP，旧仓桥接因此不再可行：
-这些用户需从 `scholay/rimes` 手动安装一次新 pkg，postinstall 会退役旧的 `ETInput.app`。
-`young-bo-i/rime-buffer` 中的历史 Release 保持不变。
+- [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md)：双 runner 签名设计、Environment 与 Secrets、自包含 librime、
+  安装器、应用内更新、CI、跨平台预览。
+- [RELEASE-HISTORY.md](RELEASE-HISTORY.md)：已关闭的发布通道、旧仓库迁移与 RIMES 改名。
+- [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md)：面向用户的预览版下载、校验与安装说明。
+- [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)：Windows / Linux 数据预览的能力边界。

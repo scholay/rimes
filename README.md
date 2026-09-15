@@ -66,11 +66,11 @@
 
 ## 安装
 
-### 未签名公开预览版（v0.5.0-preview.1）
+### 未签名公开预览版（`vX.Y.Z-preview.N`）
 
-在取得 Apple Developer Program 资格前，社区可以从官方仓库的
-[GitHub Pre-release v0.5.0-preview.1](https://github.com/scholay/rimes/releases/tag/v0.5.0-preview.1)
-下载 `RIMES-0.5.0-preview.1.pkg`。这个包**没有 Developer ID 签名、没有经过 Apple 公证，Apple
+在取得 Apple Developer Program 资格前，社区可以从官方仓库
+[GitHub Releases](https://github.com/scholay/rimes/releases) 中最新的 **Pre-release**
+下载 `RIMES-X.Y.Z-preview.N.pkg`。这个包**没有 Developer ID 签名、没有经过 Apple 公证，Apple
 无法验证它**；它不是正式版。只从 `scholay/rimes` 下载，并在安装前把本机计算的 SHA-256
 与该 Release 公布的值逐字核对。
 
@@ -81,8 +81,8 @@ Mac 可能由 MDM 禁止这个例外。完整步骤与风险边界见
 [《未签名预览版安装说明》](UNSIGNED-PREVIEW.md)，以及
 [Apple 官方说明](https://support.apple.com/zh-cn/102445)。
 
-`v0.5.0-preview.1` 不进入应用内自动更新通道。将来发布 Developer ID 签名并经 Apple 公证的正式版后，
-预览版用户需要从官方 Release 手动下载安装一次。
+预览版不进入应用内自动更新通道：新预览版需要手动下载安装，每个 Release 页面都列出了变更。
+将来发布 Developer ID 签名并经 Apple 公证的正式版后，预览版用户需要从官方 Release 手动安装一次。
 
 ### 正式版
 
@@ -129,21 +129,28 @@ Windows 11 实机验证。它目前仍是 commit-only 开发里程碑，尚无�
 | [SYSTEM-ARCHITECTURE.md](SYSTEM-ARCHITECTURE.md) | 当前权威全局架构（接手开发请先读） |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | P1/P2 历史契约与踩坑 |
 | [PLUGIN-CONFIGURATION.md](PLUGIN-CONFIGURATION.md) | 插件声明式配置 |
-| [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) | 当前未签名预览版的下载、校验与安全安装步骤 |
+| [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) | 未签名预览版的下载、校验与安全安装步骤 |
 | [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) | Windows / Linux 输入方案预览边界与验证 |
-| [RELEASE.md](RELEASE.md) | CI、通用二进制、应用内更新 |
+| [RELEASE.md](RELEASE.md) | 发布流程：渠道、一条命令发布、节奏与版本号规则 |
+| [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md) | 发布技术参考：签名、安装器、应用内更新、CI |
+| [RELEASE-HISTORY.md](RELEASE-HISTORY.md) | 已关闭的发布通道、旧仓库迁移与改名记录 |
+| [CHANGELOG.md](CHANGELOG.md) | 由 tag 与提交信息生成的逐版本变更 |
 
 ## 自动更新
 
 已安装的正式签名版 RIMES 会检查 [`scholay/rimes`](https://github.com/scholay/rimes) 的
-GitHub Release；未签名的 `vX.Y.Z-preview.N` 不会进入该通道。发布：
+GitHub Release；未签名的 `vX.Y.Z-preview.N` 不会进入该通道。
+
+发布只有一个入口，版本号只来自 tag（流程见 [RELEASE.md](RELEASE.md)，变更见 [CHANGELOG.md](CHANGELOG.md)）：
 
 ```bash
-./scripts/release.sh patch         # macOS 正式版
-./scripts/release.sh preview 0.2.0 # Windows/Linux 数据预览版
+./scripts/release.sh --dry-run preview  # 预览计划、CI 门禁与发布说明
+./scripts/release.sh preview            # macOS 未签名预览版 vX.Y.Z-preview.N
+./scripts/release.sh stable             # 预览线转正为 vX.Y.Z（需 Developer ID）
+./scripts/release.sh platform minor     # Windows/Linux 数据预览版
 ```
 
-所有 Release 都发布在新仓库：macOS `vX.Y.Z` 是正式版；`vX.Y.Z-preview.N` 是未签名
+所有 Release 都发布在 `scholay/rimes`：macOS `vX.Y.Z` 是正式版；`vX.Y.Z-preview.N` 是未签名
 Pre-release，不进入自动更新。Windows/Linux `platform-preview-vX.Y.Z` 始终是 Pre-release。
 
 ## 友链
