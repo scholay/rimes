@@ -25,3 +25,7 @@ Vendor/
 rime_ai.local.json
 rime-data/**/*.userdb*
 rime-data/**/build/
+
+# Python bytecode caches written by running the release and preview tooling
+__pycache__/
+*.pyc
