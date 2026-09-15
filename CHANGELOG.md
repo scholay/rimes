@@ -4,6 +4,110 @@
 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/) 生成，请勿手工编辑。
 每个版本的安装方式与校验和见 [GitHub Releases](https://github.com/scholay/rimes/releases)。
 
+## [v0.5.0-preview.2](https://github.com/scholay/rimes/releases/tag/v0.5.0-preview.2) — 2026-09-15
+
+### 合并的 PR
+
+- #20 不再跟踪 Python 字节码缓存
+- #19 统一发布流程——一条命令、tag 为唯一版本来源
+- #18 发布前演练 v0.5.0-preview.1 升级，修复 universal 构建
+- #16 打包校验改为 55 个文件的审核闭包
+- #15 Buffer 输入框锁定、Capsule、自然码并击与 RIMES 更名
+
+### 新功能
+
+- **release:** one release command that only pushes a tag (560c224)
+- **release:** derive versions, notes, and changelog from tags (12a06d5)
+- **chord:** 自然码 output encoding for chord keymaps (2ba4edf)
+- **capsule:** default the Capsule rail to ⌘⇧V and finish the rename (5e50330)
+- **capsule:** one Capsule with the manager drawn as the rail grown upward (c79aa54)
+- **capsule:** save Recent cards into Capsule from the rail (d8fcf36)
+- **capsule:** turn the clipboard rail into Capsule with saved-entry tabs (34790cc)
+- **buffer:** lock sending to the exact input box and rework the toolbar (ef632a0)
+- **settings:** keep only the main title on every settings page (ff773cd)
+- **buffer:** fold the rails whenever the workbench cannot take a keystroke (1b562fc)
+- **buffer:** fold the rails to the toolbar when the workbench has no focus (6b7cf4f)
+- **buffer:** add the composing field so any input method can type here (7009d49)
+- **buffer:** name the two input modes and fence them at the boundary (a0fcba1)
+- **buffer:** show live typing figures as a second line in Default mode (6b5a089)
+- **doctor:** report the app's own identity, signing and permission state (f972a8a)
+- **migration:** one definition of where data lives, and a proven way to move it (4440ef7)
+- **permissions:** clear the record so the system will ask again, and name  the identity it asks about (7a7a92e)
+- **settings:** audit system permissions item by item, and stop asking for  grants the system will not prompt for (143c6e2)
+- **clipboard:** make activation a choice, and say when a paste was blocked (48bbc1a)
+- **buffer:** put closing-after-the-last-block in the auto-send menu (4bc3f5a)
+- **codex:** follow a real session instead of reading one field of it (6564b5f)
+- **aggregator:** route a published model catalog by endpoint, not by name (cd374ba)
+- **buffer:** add AudioKit music plugin and fix continuous plugin cycling (a627226)
+- **stream-input:** compose in the raw line and age blocks out (6a1d66b)
+- **statistics:** add graphical dashboards and article typing tests (f5d6151)
+- **chord:** add configurable keymaps and unify split strokes (fc8f8a6)
+- **buffer:** source-row import, split pull-downs, tighter geometry (fb71e17)
+- **stream-input:** pause segments, comma types, models are selectable (dc9cc40)
+- add workbench menu, toast, auto-paste, and input-box probe (bd701a2)
+- visualize Buffer target association (94a1ee0)
+- harden standalone companion workflows (182c19a)
+- copy Capsule media and harden model fetch (dd43816)
+- add secure Capsule iCloud sync (eba5185)
+- keep the Buffer toolbar permanently visible (46846b1)
+- complete standalone workspaces and rich clipboard (ce69283)
+- add local-first Mailbox and Capsule workflows (ba61146)
+
+### 修复
+
+- **release:** build CHANGELOG.md from the tags origin publishes (5119ddd)
+- **release:** build each architecture natively and merge with lipo (0e09fd5)
+- **platform-preview:** pin the 55-file reviewed closure (4750235)
+- finish moving code paths to ~/Library/RIMES (51a8f11)
+- keep tool output and a real home path out of logs and fixtures (fd6ee49)
+- **buffer:** restore the target link after leaving Music (36460a5)
+- **buffer:** lock Electron apps and custom-drawn apps to their input box (25f2964)
+- **buffer:** fold the whole panel, hold it steady, and recall the lost target (d07e397)
+- **buffer:** give the standalone rail a click that can succeed, and stop  reparenting during layout (209c18e)
+- **buffer:** stop a focus activation from undoing the capture it was given (be7600d)
+- **buffer:** stop the metrics row from collapsing every rail (6db2e52)
+- **release:** finish the rename in packaging, and sign so grants survive (d392690)
+- **buffer:** hand Return back when nothing is staged, and stop hiding options (011eb85)
+- **buffer:** keep a capture click that has nowhere to land yet (80f2059)
+- **buffer:** isolate translation units and correct auto-send lifecycle (93072bd)
+- **input:** let a Shift tap switch language, and stop swallowing letters (ef3c2b7)
+- **buffer:** align the caret opening to the first character, not the edge (1a7d565)
+- **menu:** dispatch maintenance commands; surface the Accessibility grant (4ef66fb)
+- **clipboard:** trackpad direction, clicks hold the rail, copy feedback (49c2e44)
+- preserve Chinese mode after utility shortcuts (e0fb5f9)
+
+### 重构
+
+- one name — RIMES — for the bundle, executable, identifier and data (d3a5620)
+- **translation:** extract the session bridge and give codex a working PATH (be77bd6)
+- **stream-input:** guess on the connector alone (a30d773)
+- **capsule:** free-form password secrets; retire Prompt/Memory/URL (43d6de7)
+- float Buffer rail actions (2d2c361)
+
+### 文档
+
+- **release:** one-page process, with reference and history split out (9350038)
+- point data paths at ~/Library/RIMES (260c5fa)
+- **chord:** point the keymap directory at ~/Library/RIMES (0f33412)
+- **chord:** document the 自然码 output encoding (3996d18)
+
+### 维护
+
+- stop tracking Python bytecode caches (ba8e0f6)
+- **release:** publish previews from tags, rehearse packaging on PRs and nightly (cb69fd9)
+- **release:** rehearse the upgrade from v0.5.0-preview.1, and finish the rename in docs (cdcfd34)
+- wait for the companion launch agent instead of racing it (e8c4cbb)
+- **capsule:** wait for passcode sheets instead of one 50ms turn (d9ed303)
+- **buffer:** let the Music panel smoke run under a foreign input method (dd76bd5)
+- bring the smokes and settings render count up to this branch (61544ff)
+- pin the RIMES input-source identity (a34e7f6)
+- **chord:** add the Isaac2025 and Isaac2026 keymaps (582dbbf)
+
+### 其他
+
+- Keep capture across the session the toolbar click itself destroys (ba32b62)
+- Shrink the panel to a toolbar strip when the rails fold (9670ce2)
+
 ## [v0.5.0-preview.1](https://github.com/scholay/rimes/releases/tag/v0.5.0-preview.1) — 2026-08-22
 
 ### 新功能
