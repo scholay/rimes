@@ -1,29 +1,51 @@
 name: Release macOS
 
+# Pushing a tag is the only way to publish. scripts/release.sh creates it:
+#   vX.Y.Z            Developer ID-signed release (protected environment)
+#   vX.Y.Z-preview.N  explicitly unsigned public pre-release
+# Every other trigger is a rehearsal that builds, packages, and installs on a
+# disposable runner, then keeps the artifacts for 7 days without publishing:
+# pull requests that touch packaging, a nightly run of main, and manual runs.
 on:
   push:
     tags:
-      # GitHub tag filters are globs, so the job validates the exact vX.Y.Z
-      # shape again before it is allowed to publish.
+      # GitHub tag filters are globs, so the job validates the exact shape
+      # again before anything may be published.
       - 'v*'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Package.swift'
+      - 'Package.resolved'
+      - 'Info.plist'
+      - 'build_install.sh'
+      - 'Resources/**'
+      - 'rime-data/**'
+      - 'Sources/CRimeBridge/**'
+      - 'scripts/fetch-rime.sh'
+      - 'scripts/make-pkg.sh'
+      - 'scripts/sign-macos-app.sh'
+      - 'scripts/pkg/**'
+      - 'scripts/release.sh'
+      - 'scripts/release/**'
+      - '.github/workflows/release.yml'
+  schedule:
+    # 03:17 Asia/Shanghai: catch packaging drift on main before anyone tags.
+    - cron: '17 19 * * *'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version: X.Y.Z rehearsal or X.Y.Z-preview.N public preview'
+        description: 'Rehearsal version (default: the version the next preview would get). Never publishes.'
         required: false
-        default: '0.5.0'
-      publish_unsigned_preview:
-        description: 'Publish an explicitly unsigned X.Y.Z-preview.N GitHub pre-release'
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
 concurrency:
   group: release-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  # A newer push to the same pull request supersedes its rehearsal; tag and
+  # scheduled runs always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build_and_smoke:
@@ -130,46 +152,37 @@ jobs:
         id: version
         env:
           DISPATCH_VERSION: ${{ github.event.inputs.version }}
-          PUBLISH_UNSIGNED_PREVIEW: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_unsigned_preview }}
         run: |
           set -euo pipefail
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+          IS_RELEASE=false
+          IS_UNSIGNED_PREVIEW=false
           if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_TYPE" == "tag" ]]; then
-            if [[ ! "$GITHUB_REF_NAME" =~ ^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]; then
-              echo "Stable release tags must be exactly vX.Y.Z: $GITHUB_REF_NAME" >&2
+            if [[ "$GITHUB_REF_NAME" =~ ^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]; then
+              VERSION="${BASH_REMATCH[1]}"
+              IS_RELEASE=true
+            elif [[ "$GITHUB_REF_NAME" =~ ^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.[1-9][0-9]*)$ ]]; then
+              VERSION="${BASH_REMATCH[1]}"
+              IS_UNSIGNED_PREVIEW=true
+            else
+              echo "Release tags must be exactly vX.Y.Z or vX.Y.Z-preview.N: $GITHUB_REF_NAME" >&2
               exit 1
             fi
-            VERSION="${BASH_REMATCH[1]}"
-            IS_RELEASE=true
           elif [[ -n "$DISPATCH_VERSION" ]]; then
             VERSION="$DISPATCH_VERSION"
-            IS_RELEASE=false
           else
-            VERSION="0.0.0-dev"
-            IS_RELEASE=false
+            # Rehearse the exact version string the next preview would get.
+            VERSION="$(git ls-remote --tags --refs origin \
+              | python3 scripts/release/release_tool.py rehearsal-version)"
           fi
-          if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+          if [[ ! "$VERSION" =~ ${semver}(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
             echo "Invalid build version: $VERSION" >&2
-            exit 1
-          fi
-          IS_UNSIGNED_PREVIEW=false
-          if [[ "$PUBLISH_UNSIGNED_PREVIEW" == true ]]; then
-            [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] || {
-              echo 'Unsigned previews may only be published by an explicit manual dispatch.' >&2
-              exit 1
-            }
-            [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.([1-9][0-9]*)$ ]] || {
-              echo "Public unsigned previews must use X.Y.Z-preview.N with N >= 1: $VERSION" >&2
-              exit 1
-            }
-            IS_UNSIGNED_PREVIEW=true
-          elif [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] && [[ "$VERSION" == *-* ]]; then
-            echo 'A prerelease version requires publish_unsigned_preview=true.' >&2
             exit 1
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
           echo "IS_RELEASE=$IS_RELEASE" >> "$GITHUB_OUTPUT"
           echo "IS_UNSIGNED_PREVIEW=$IS_UNSIGNED_PREVIEW" >> "$GITHUB_OUTPUT"
-          echo "Building version: $VERSION"
+          echo "Building version: $VERSION (event: $GITHUB_EVENT_NAME, release: $IS_RELEASE, unsigned preview: $IS_UNSIGNED_PREVIEW)"
 
       # A tag name alone is not authority to use the Developer ID keys. Keep
       # this check before the credential-import step, and pair it with the
@@ -187,28 +200,31 @@ jobs:
             exit 1
           }
 
-      # An unsigned preview is still a public software release. It may only be
-      # made manually from the exact current protected main commit; selecting a
-      # historical branch/commit in the workflow_dispatch UI is rejected.
+      # An unsigned preview is still a public software release. Its tag must
+      # name a commit that is already on main (scripts/release.sh tags the
+      # current origin/main after its CI passed), and the version must be vacant.
       - name: Authorize unsigned preview source
         if: steps.version.outputs.IS_UNSIGNED_PREVIEW == 'true'
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: scholay/rimes
         run: |
           set -euo pipefail
-          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
-          [[ "$GITHUB_REF" == refs/heads/main ]]
-          [[ "$GITHUB_REF_TYPE" == branch && "$GITHUB_REF_NAME" == main ]]
+          [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_TYPE" == tag ]]
+          [[ "$GITHUB_REF_NAME" == "v$VERSION" ]]
           [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.([1-9][0-9]*)$ ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          git fetch --no-tags --depth=1 origin \
-            '+refs/heads/main:refs/remotes/origin/main'
-          main_sha="$(git rev-parse refs/remotes/origin/main)"
-          [[ "$GITHUB_SHA" == "$main_sha" ]] || {
-            echo "Unsigned previews must use current origin/main." >&2
-            echo "event=$GITHUB_SHA main=$main_sha" >&2
+          [[ "$(gh api "repos/$GH_REPO/commits/$GITHUB_REF_NAME" --jq .sha)" == "$GITHUB_SHA" ]]
+          on_main="$(gh api "repos/$GH_REPO/compare/$GITHUB_SHA...main" --jq .status)"
+          [[ "$on_main" == identical || "$on_main" == ahead ]] || {
+            echo "Preview tag $GITHUB_REF_NAME names a commit that is not on main ($on_main)." >&2
             exit 1
           }
+          if gh release view "$GITHUB_REF_NAME" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to replace it: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
 
       - name: Stamp version into Info.plist
         run: |
@@ -321,9 +337,9 @@ jobs:
           RIMEBUFFER_FRAMEWORKS_DIR="$FRAMEWORKS" \
             "$BIN" user-lexicon-bridge-smoke
 
-      # workflow_dispatch is deliberately unsigned/ad-hoc and never enters the
-      # protected signing environment. It remains useful for installation and
-      # packaging smoke tests, but cannot be mistaken for a releasable build.
+      # Rehearsals and unsigned previews are ad-hoc signed and never enter the
+      # protected signing environment. A formal vX.Y.Z tag skips this path and
+      # is packaged only on the fresh signing runner.
       - name: Package manual ad-hoc artifacts
         if: steps.version.outputs.IS_RELEASE != 'true'
         id: manual_package
@@ -358,44 +374,54 @@ jobs:
           echo "PKG=$PKG" >> "$GITHUB_OUTPUT"
           echo "APP_ZIP=$APP_ZIP" >> "$GITHUB_OUTPUT"
 
-      # Existing users arrive from the last published preview, which still
-      # carries the pre-rename identity (ETInput.app, MacOS/ETInput,
-      # com.isaac.inputmethod.RimeBuffer). Install that exact published package
-      # first, so the next step exercises the upgrade the rename must survive
-      # rather than only a clean install.
-      - name: Install the last published preview before upgrading
+      # Existing users arrive from the newest published release, so install
+      # that exact package (checksum-verified) first. The next step then proves
+      # the upgrade instead of only a clean install: postinstall must retire
+      # every other RIMES bundle, including pre-rename ETInput.app installs.
+      - name: Install the newest published release before upgrading
         if: steps.version.outputs.IS_RELEASE != 'true'
         timeout-minutes: 8
         env:
           GH_TOKEN: ${{ github.token }}
-          UPGRADE_FROM: 0.5.0-preview.1
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           set -euo pipefail
+          from="$(gh release list --repo scholay/rimes --limit 100 --json tagName,isDraft \
+            | python3 scripts/release/release_tool.py latest-release --exclude "$VERSION")"
           from_dir="$RUNNER_TEMP/rimes-upgrade-from"
           mkdir -p "$from_dir"
-          gh release download "v$UPGRADE_FROM" --repo scholay/rimes \
-            --pattern "RIMES-$UPGRADE_FROM.pkg" --pattern SHA256SUMS \
+          gh release download "v$from" --repo scholay/rimes \
+            --pattern "RIMES-$from.pkg" --pattern SHA256SUMS \
             --dir "$from_dir"
           (cd "$from_dir" \
-            && grep -F "  RIMES-$UPGRADE_FROM.pkg" SHA256SUMS | shasum -a 256 -c -)
+            && grep -F "  RIMES-$from.pkg" SHA256SUMS | shasum -a 256 -c -)
           set +e
-          sudo -n /usr/sbin/installer -pkg "$from_dir/RIMES-$UPGRADE_FROM.pkg" -target / \
+          sudo -n /usr/sbin/installer -pkg "$from_dir/RIMES-$from.pkg" -target / \
             2>&1 | tee "$from_dir/installer.log"
           installer_status="${PIPESTATUS[0]}"
           set -e
           [[ "$installer_status" -eq 0 ]] || {
-            echo "Installing the published v$UPGRADE_FROM failed with status $installer_status." >&2
+            echo "Installing the published v$from failed with status $installer_status." >&2
             exit 1
           }
-          old_app='/Library/Input Methods/ETInput.app'
-          [[ -d "$old_app" && ! -L "$old_app" ]]
-          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$old_app/Contents/Info.plist")" \
-            == com.isaac.inputmethod.RimeBuffer ]]
-          pkgutil --pkg-info com.isaac.inputmethod.RimeBuffer
+          installed=0
+          for bundle in '/Library/Input Methods/'*.app; do
+            [[ -d "$bundle" && ! -L "$bundle" ]] || continue
+            id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$bundle/Contents/Info.plist" 2>/dev/null || true)"
+            if [[ "$id" =~ ^com\.(isaac\.inputmethod\.|scholay\.) ]]; then
+              echo "v$from installed $bundle ($id)"
+              installed=$((installed + 1))
+            fi
+          done
+          [[ "$installed" -eq 1 ]] || {
+            echo "Expected exactly one RIMES bundle after installing v$from, found $installed." >&2
+            exit 1
+          }
+          pkgutil --pkgs | grep -E '^com\.(isaac\.inputmethod\.|scholay\.)'
           echo 'Enabled input sources before the upgrade:'
           defaults read com.apple.HIToolbox AppleEnabledInputSources 2>/dev/null \
             | grep -E 'Bundle ID|InputSourceKind|Input Mode' || true
-          echo "RIMES_UPGRADE_FROM=$UPGRADE_FROM" >> "$GITHUB_ENV"
+          echo "RIMES_UPGRADE_FROM=$from" >> "$GITHUB_ENV"
 
       # A hosted runner is disposable, so exercise the real PackageKit path
       # before any unsigned build may leave it. This directly guards against a
@@ -452,8 +478,9 @@ jobs:
           printf '%s\n' "$receipt" | grep -Fq 'location: Library/Input Methods'
 
           if [[ -n "${RIMES_UPGRADE_FROM:-}" ]]; then
-            # The rename upgrade: postinstall retires every other bundle that
-            # carries a RIMES identity, so only the renamed app may remain.
+            # postinstall retires every other bundle that carries a RIMES
+            # identity (including pre-rename ETInput.app), so only RIMES.app
+            # may remain after upgrading from v$RIMES_UPGRADE_FROM.
             [[ ! -e '/Library/Input Methods/ETInput.app' \
               && ! -L '/Library/Input Methods/ETInput.app' ]] || {
               echo "The pre-rename ETInput.app survived the upgrade from v$RIMES_UPGRADE_FROM." >&2
@@ -606,7 +633,8 @@ jobs:
     if: >-
       needs.build_and_smoke.result == 'success' &&
       needs.build_and_smoke.outputs.is_unsigned_preview == 'true' &&
-      github.event_name == 'workflow_dispatch' &&
+      github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/tags/v') &&
       github.repository == 'scholay/rimes'
     runs-on: macos-15
     # This fresh runner receives no Developer ID/App Store Connect secrets and
@@ -619,35 +647,26 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+          # Full history and tags: release notes list the commits since the
+          # previous release tag.
+          fetch-depth: 0
 
-      - name: Authorize current main and reject an occupied version
+      - name: Authorize the preview tag and reject an occupied version
         env:
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: scholay/rimes
         run: |
           set -euo pipefail
-          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
-          [[ "$GITHUB_REF" == refs/heads/main ]]
-          [[ "$GITHUB_REF_TYPE" == branch && "$GITHUB_REF_NAME" == main ]]
+          [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_TYPE" == tag ]]
           [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.([1-9][0-9]*)$ ]]
-          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          git fetch --no-tags --depth=1 origin \
-            '+refs/heads/main:refs/remotes/origin/main'
-          [[ "$(git rev-parse refs/remotes/origin/main)" == "$GITHUB_SHA" ]]
-          [[ "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" == "$GITHUB_SHA" ]]
-
           tag="v$VERSION"
-          set +e
-          tag_probe="$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq .object.sha 2>&1)"
-          tag_status=$?
-          set -e
-          if [[ "$tag_status" -eq 0 ]]; then
-            echo "Tag already exists; refusing unsigned publication: $tag ($tag_probe)" >&2
-            exit 1
-          fi
-          printf '%s\n' "$tag_probe" | grep -Fq 'HTTP 404' || {
-            echo "Could not prove that tag $tag is vacant: $tag_probe" >&2
+          [[ "$GITHUB_REF_NAME" == "$tag" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ "$(gh api "repos/$GH_REPO/commits/$tag" --jq .sha)" == "$GITHUB_SHA" ]]
+          on_main="$(gh api "repos/$GH_REPO/compare/$GITHUB_SHA...main" --jq .status)"
+          [[ "$on_main" == identical || "$on_main" == ahead ]] || {
+            echo "Preview tag $tag names a commit that is not on main ($on_main)." >&2
             exit 1
           }
 
@@ -1047,38 +1066,25 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$PREVIEW_TAG" == "v$VERSION" ]]
-          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/main ]]
-          git fetch --no-tags --depth=1 origin \
-            '+refs/heads/main:refs/remotes/origin/main'
+          [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_NAME" == "$PREVIEW_TAG" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          [[ "$(git rev-parse refs/remotes/origin/main)" == "$GITHUB_SHA" ]]
-          [[ "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" == "$GITHUB_SHA" ]]
+          [[ "$(gh api "repos/$GH_REPO/commits/$PREVIEW_TAG" --jq .sha)" == "$GITHUB_SHA" ]] || {
+            echo "Tag moved during verification; refusing publication: $PREVIEW_TAG" >&2
+            exit 1
+          }
 
           set +e
-          tag_probe="$(gh api "repos/$GH_REPO/git/ref/tags/$PREVIEW_TAG" --jq .object.sha 2>&1)"
-          tag_status=$?
           release_probe="$(gh api "repos/$GH_REPO/releases/tags/$PREVIEW_TAG" --jq .id 2>&1)"
           release_status=$?
           set -e
-          [[ "$tag_status" -ne 0 ]] || {
-            echo "Tag appeared during verification; refusing publication: $PREVIEW_TAG" >&2
-            exit 1
-          }
-          printf '%s\n' "$tag_probe" | grep -Fq 'HTTP 404'
           [[ "$release_status" -ne 0 ]] || {
             echo "Release appeared during verification; refusing publication: $PREVIEW_TAG" >&2
             exit 1
           }
           printf '%s\n' "$release_probe" | grep -Fq 'HTTP 404'
 
-          gh release create "$PREVIEW_TAG" --repo "$GH_REPO" \
-            "$PREVIEW_PUBLISH_DIR/$PREVIEW_PKG" \
-            "$PREVIEW_PUBLISH_DIR/SHA256SUMS" \
-            --target "$GITHUB_SHA" \
-            --prerelease \
-            --latest=false \
-            --title "RIMES v${VERSION} — UNSIGNED PREVIEW" \
-            --notes-file - <<'EOF'
+          notes="$RUNNER_TEMP/rimes-preview-notes.md"
+          cat >"$notes" <<'EOF'
           # ⚠️ UNSIGNED / NOT NOTARIZED 免费预览版
 
           此版本为了让社区先验证修复，**没有 Apple Developer ID 签名，也没有经过
@@ -1111,8 +1117,19 @@ jobs:
           固定安装路径、输入法元数据、通用架构及 ad-hoc 代码签名；这不能替代不同 macOS
           版本上的 Gatekeeper 界面测试。
           EOF
+          printf '\n' >>"$notes"
+          python3 scripts/release/release_tool.py notes --tag "$PREVIEW_TAG" >>"$notes"
 
-          [[ "$(gh api "repos/$GH_REPO/git/ref/tags/$PREVIEW_TAG" --jq .object.sha)" == "$GITHUB_SHA" ]]
+          gh release create "$PREVIEW_TAG" --repo "$GH_REPO" \
+            "$PREVIEW_PUBLISH_DIR/$PREVIEW_PKG" \
+            "$PREVIEW_PUBLISH_DIR/SHA256SUMS" \
+            --verify-tag \
+            --prerelease \
+            --latest=false \
+            --title "RIMES v${VERSION} — UNSIGNED PREVIEW" \
+            --notes-file "$notes"
+
+          [[ "$(gh api "repos/$GH_REPO/commits/$PREVIEW_TAG" --jq .sha)" == "$GITHUB_SHA" ]]
           [[ "$(gh api "repos/$GH_REPO/releases/tags/$PREVIEW_TAG" --jq .prerelease)" == true ]]
           [[ "$(gh api "repos/$GH_REPO/releases/tags/$PREVIEW_TAG" --jq .draft)" == false ]]
           release_id="$(gh api "repos/$GH_REPO/releases/tags/$PREVIEW_TAG" --jq .id)"
@@ -1156,6 +1173,9 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+          # Full history and tags for the release notes. The notes script is
+          # source from this same tagged commit; the handoff app is never run.
+          fetch-depth: 0
 
       - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
@@ -1177,8 +1197,8 @@ jobs:
           set -euo pipefail
           [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
           # This protected job is formal-release-only. Never retain an unsigned
-          # downgrade branch here; workflow_dispatch artifacts are completed
-          # entirely in build_and_smoke without entering this environment.
+          # downgrade branch here; rehearsal and preview artifacts are completed
+          # entirely outside this environment.
           [[ "$IS_RELEASE" == true ]]
 
           handoff="$RUNNER_TEMP/rimes-release-inputs"
@@ -1692,12 +1712,8 @@ jobs:
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
         run: |
           set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" --repo "$GH_REPO" \
-            "$PKG" "$APP_ZIP" \
-            --verify-tag \
-            --latest \
-            --title "RIMES v${VERSION}" \
-            --notes-file - <<'EOF'
+          notes="$RUNNER_TEMP/rimes-release-notes.md"
+          cat >"$notes" <<'EOF'
           ## RIMES v${{ needs.build_and_smoke.outputs.version }}
 
           现代 macOS 中文输入法（IMK + librime）。**自包含**：librime 引擎与 Rime
@@ -1723,6 +1739,15 @@ jobs:
           | PKG | `${{ steps.pkg.outputs.PKG_SHA256 }}` |
           | ZIP | `${{ steps.package.outputs.SHA256 }}` |
           EOF
+          printf '\n' >>"$notes"
+          python3 scripts/release/release_tool.py notes --tag "$GITHUB_REF_NAME" >>"$notes"
+
+          gh release create "$GITHUB_REF_NAME" --repo "$GH_REPO" \
+            "$PKG" "$APP_ZIP" \
+            --verify-tag \
+            --latest \
+            --title "RIMES v${VERSION}" \
+            --notes-file "$notes"
 
       - name: Always remove temporary signing material
         if: always()

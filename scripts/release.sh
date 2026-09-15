@@ -1,19 +1,27 @@
 #!/bin/bash
 # =============================================================================
-# RIMES 发布脚本
+# RIMES 发布脚本 —— 所有渠道的唯一入口
 #
-# 在唯一的正式发布仓库 scholay/rimes 创建 vX.Y.Z tag。tag 推送后由
-# .github/workflows/release.yml 构建并创建 GitHub Release。
+# 版本号只来自 tag。脚本从远端 tag 计算下一个版本，确认 origin/main 的 CI 全绿，
+# 在 origin/main 上创建 tag 并只推送这个 tag；不修改、不提交任何文件。
+# tag 推送后由 GitHub Actions 构建、验证并创建 Release。
 #
 # 用法：
-#   ./scripts/release.sh                 # 基于远端 tag / Info.plist 的较新版本 patch +1
-#   ./scripts/release.sh patch           # 同上
-#   ./scripts/release.sh minor           # 次版本 +1
-#   ./scripts/release.sh major           # 主版本 +1
-#   ./scripts/release.sh 0.4.2           # 显式指定版本号
-#   ./scripts/release.sh --dry-run 0.4.2 # 只做校验并展示计划
-#   ./scripts/release.sh --yes 0.4.2     # 跳过交互确认（用于受控自动化）
-#   ./scripts/release.sh preview 0.2.0   # 发布 Windows / Linux 数据预览包
+#   ./scripts/release.sh preview               # 继续当前预览线：v0.5.0-preview.1 → v0.5.0-preview.2
+#   ./scripts/release.sh preview minor         # 开始新预览线：最新正式版 minor+1 的 preview.1
+#   ./scripts/release.sh preview 0.6.0         # 开始指定的预览线 v0.6.0-preview.1
+#   ./scripts/release.sh stable                # 当前预览线转正：v0.5.0-preview.N → v0.5.0
+#   ./scripts/release.sh patch|minor|major     # 直接发布正式版（基于最新正式版）
+#   ./scripts/release.sh 0.5.1                 # 直接发布指定正式版
+#   ./scripts/release.sh platform minor        # Windows / Linux 数据预览 platform-preview-vX.Y.Z
+#   ./scripts/release.sh platform 0.2.0        # 指定跨平台预览版本
+#
+# 选项：
+#   -n, --dry-run   只做校验并展示计划与发布说明；任何分支都可运行，不创建或推送 tag
+#   -y, --yes       跳过交互确认（用于受控自动化）
+#   -h, --help      显示本说明
+#
+# 正式版需要 Developer ID 与受保护的 macos-release Environment；缺失时脚本拒绝发布。
 # =============================================================================
 set -euo pipefail
 
@@ -24,34 +32,14 @@ warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
 die()     { echo -e "${RED}[ERROR]${NC} $1" >&2; exit 1; }
 
 usage() {
-    sed -n '2,17p' "$0" | sed -E 's/^# ?//'
+    sed -n '2,26p' "$0" | sed -E 's/^# ?//'
 }
 
-is_version() {
-    [[ "$1" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-}
-
-version_gt() {
-    local a_major a_minor a_patch b_major b_minor b_patch
-    IFS='.' read -r a_major a_minor a_patch <<< "$1"
-    IFS='.' read -r b_major b_minor b_patch <<< "$2"
-    (( a_major > b_major )) && return 0
-    (( a_major < b_major )) && return 1
-    (( a_minor > b_minor )) && return 0
-    (( a_minor < b_minor )) && return 1
-    (( a_patch > b_patch ))
-}
-
-bump() {
-    local major minor patch
-    IFS='.' read -r major minor patch <<< "$1"
-    case "$2" in
-        major) echo "$((major + 1)).0.0" ;;
-        minor) echo "$major.$((minor + 1)).0" ;;
-        patch) echo "$major.$minor.$((patch + 1))" ;;
-        *) die "未知的版本升级类型: $2" ;;
-    esac
-}
+REMOTE="origin"
+EXPECTED_REPO="scholay/rimes"
+# Workflows that run on every push to main. A release commit must have passed
+# all of them; the release workflow itself runs after the tag is pushed.
+REQUIRED_WORKFLOWS=("CI" "Platform Preview Data" "Windows Native Foundation")
 
 github_repo_from_url() {
     local url="$1" repo
@@ -75,10 +63,29 @@ remote_tag_exists() {
     [[ -n "$output" ]]
 }
 
+remote_main_sha() {
+    local line
+    line="$(git ls-remote --heads "$REMOTE" refs/heads/main 2>/dev/null)" \
+        || die "无法查询 $EXPECTED_REPO 的 main 分支。"
+    [[ -n "$line" ]] || die "$EXPECTED_REPO 不存在 main 分支。"
+    printf '%s' "${line%%[[:space:]]*}"
+}
+
+# A gate either stops the release or, in a dry run, is reported and skipped so
+# the plan can still be inspected from a feature branch.
+FAILED_GATES=0
+gate() {
+    if [[ "$DRY_RUN" == true ]]; then
+        warn "（dry-run 不阻断）$1"
+        FAILED_GATES=$((FAILED_GATES + 1))
+    else
+        die "$1"
+    fi
+}
+
 DRY_RUN=false
 ASSUME_YES=false
 POSITIONAL=()
-
 while (( $# > 0 )); do
     case "$1" in
         -n|--dry-run) DRY_RUN=true ;;
@@ -86,38 +93,43 @@ while (( $# > 0 )); do
         -h|--help) usage; exit 0 ;;
         --)
             shift
-            while (( $# > 0 )); do
-                POSITIONAL[${#POSITIONAL[@]}]="$1"
-                shift
-            done
+            POSITIONAL+=("$@")
             break
             ;;
         -*) die "未知选项: $1（使用 --help 查看用法）" ;;
-        *) POSITIONAL[${#POSITIONAL[@]}]="$1" ;;
+        *) POSITIONAL+=("$1") ;;
     esac
     shift
 done
 
-MODE="release"
-if (( ${#POSITIONAL[@]} > 0 )) && [[ "${POSITIONAL[0]}" == "preview" ]]; then
-    MODE="preview"
-    (( ${#POSITIONAL[@]} == 2 )) || die "预览版用法: $0 preview X.Y.Z"
-    VERSION_ARG="${POSITIONAL[1]}"
-    is_version "$VERSION_ARG" || die "预览版本号格式应为 x.y.z（不允许前导零）: $VERSION_ARG"
-else
-    (( ${#POSITIONAL[@]} <= 1 )) || die "只能指定一个版本或升级类型。"
-    VERSION_ARG="${POSITIONAL[0]:-patch}"
-fi
+(( ${#POSITIONAL[@]} > 0 )) || { usage; exit 1; }
+COMMAND="${POSITIONAL[0]}"
+ARG="${POSITIONAL[1]:-}"
+(( ${#POSITIONAL[@]} <= 2 )) || die "参数过多（使用 --help 查看用法）。"
 
-REMOTE="origin"
-EXPECTED_REPO="scholay/rimes"
+case "$COMMAND" in
+    preview) KIND="preview" ;;
+    stable)
+        KIND="stable"
+        [[ -z "$ARG" ]] || die "stable 不接受参数；直接发布指定正式版请用 ./scripts/release.sh X.Y.Z"
+        ;;
+    platform)
+        KIND="platform"
+        [[ -n "$ARG" ]] || die "用法: ./scripts/release.sh platform patch|minor|major|X.Y.Z"
+        ;;
+    patch|minor|major|[0-9]*)
+        KIND="stable"
+        [[ -z "$ARG" ]] || die "正式版只接受一个版本或升级类型。"
+        ARG="$COMMAND"
+        ;;
+    *) die "未知命令: $COMMAND（使用 --help 查看用法）" ;;
+esac
 
 cd "$(dirname "$0")/.."
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "当前目录不是 Git 仓库。"
-
-# Plugin versions, GitHub pins and both README tables share one catalog.
-python3 -B scripts/sync-buffer-plugin-catalog.py --check \
-    || die "预置缓冲插件 catalog / README / 下载 manifest 未同步。"
+command -v python3 >/dev/null || die "需要 python3。"
+command -v gh >/dev/null || die "需要 GitHub CLI（gh）来确认 CI 状态；请安装并 gh auth login。"
+TOOL="scripts/release/release_tool.py"
 
 git remote get-url "$REMOTE" >/dev/null 2>&1 || die "缺少发布远端 ${REMOTE}。"
 fetch_url="$(git remote get-url "$REMOTE")"
@@ -126,151 +138,130 @@ fetch_repo="$(github_repo_from_url "$fetch_url")" || die "$REMOTE fetch URL 不�
 push_repo="$(github_repo_from_url "$push_url")" || die "$REMOTE push URL 不是 GitHub 地址: $push_url"
 [[ "$fetch_repo" == "$EXPECTED_REPO" ]] || die "$REMOTE fetch URL 必须指向 ${EXPECTED_REPO}，实际为 ${fetch_repo}。"
 [[ "$push_repo" == "$EXPECTED_REPO" ]] || die "$REMOTE push URL 必须指向 ${EXPECTED_REPO}，实际为 ${push_repo}。"
-info "发布远端: $REMOTE ($push_url)"
+
+# --- Version plan -----------------------------------------------------------
+remote_tags="$(git ls-remote --tags --refs "$REMOTE" 2>/dev/null)" \
+    || die "无法读取 $EXPECTED_REPO 的远端标签；未执行任何发布操作。"
+plan_status=0
+plan_output="$(printf '%s\n' "$remote_tags" | python3 "$TOOL" next "$KIND" ${ARG:+"$ARG"} 2>&1)" \
+    || plan_status=$?
+(( plan_status == 0 )) || die "$plan_output"
+
+TAG="" VERSION="" PREVIOUS=""
+WARNINGS=()
+while IFS= read -r line; do
+    case "$line" in
+        TAG=*) TAG="${line#TAG=}" ;;
+        VERSION=*) VERSION="${line#VERSION=}" ;;
+        PREVIOUS=*) PREVIOUS="${line#PREVIOUS=}" ;;
+        WARNING=*) WARNINGS+=("${line#WARNING=}") ;;
+    esac
+done <<< "$plan_output"
+[[ -n "$TAG" && -n "$VERSION" ]] || die "无法解析版本计划: $plan_output"
+
+# --- Gates ------------------------------------------------------------------
+fetch_main="$(remote_main_sha)"
+git fetch --quiet "$REMOTE" main --tags || die "git fetch $REMOTE main 失败。"
 
 branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
-[[ "$branch" == "main" ]] || die "只能从 main 分支发布，当前分支: ${branch:-detached HEAD}。"
+[[ "$branch" == "main" ]] || gate "只能从 main 分支发布，当前分支: ${branch:-detached HEAD}。"
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+    git status --short >&2
+    gate "工作区不干净；发布脚本不会自动 add/commit。"
+fi
+[[ "$(git rev-parse HEAD)" == "$fetch_main" ]] \
+    || gate "本地 HEAD 不是 origin/main（$(git rev-parse --short "$fetch_main")）。先 git pull；本地新提交请走 PR。"
 
-dirty="$(git status --porcelain --untracked-files=all)"
-if [[ -n "$dirty" ]]; then
-    echo "$dirty" >&2
-    die "工作区不干净。请先单独提交、暂存或恢复这些改动；发布脚本不会自动 add/commit。"
+remote_tag_exists "$TAG" && die "远端 tag $TAG 已存在；发布脚本绝不会删除或覆盖远端标签。"
+git show-ref --verify --quiet "refs/tags/$TAG" && die "本地 tag $TAG 已存在；请先确认其来源，发布脚本不会重建标签。"
+
+python3 "$TOOL" check-plist || gate "Info.plist 版本号不是开发占位值。"
+if [[ "$KIND" != "platform" ]]; then
+    python3 -B scripts/sync-buffer-plugin-catalog.py --check >/dev/null \
+        || gate "预置缓冲插件 catalog / README 未同步。"
 fi
 
-plist_version=""
-latest_remote=""
-if [[ "$MODE" == "release" ]]; then
-    [[ -f Info.plist ]] || die "找不到 Info.plist。"
-    [[ -x /usr/libexec/PlistBuddy ]] || die "找不到 /usr/libexec/PlistBuddy；请在 macOS 上运行正式版发布脚本。"
-    plist_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist 2>/dev/null || true)"
-    is_version "$plist_version" || die "Info.plist 版本号不是严格的 x.y.z 格式: ${plist_version:-<空>}"
-    tag_pattern='refs/tags/v*'
-    tag_prefix='v'
-else
-    tag_pattern='refs/tags/platform-preview-v*'
-    tag_prefix='platform-preview-v'
+info "确认 origin/main $(git rev-parse --short "$fetch_main") 的 CI 结果..."
+if ! runs="$(gh api "repos/$EXPECTED_REPO/actions/runs?head_sha=$fetch_main&event=push&per_page=100" \
+        --jq '.workflow_runs[] | [.name, .status, (.conclusion // "")] | @tsv' 2>&1)"; then
+    die "无法读取 GitHub Actions 状态: $runs"
 fi
-
-if ! remote_refs="$(git ls-remote --tags --refs "$REMOTE" "$tag_pattern" 2>/dev/null)"; then
-    die "无法读取 $EXPECTED_REPO 的远端标签；未执行任何发布操作。"
-fi
-
-while IFS=$'\t' read -r _ ref; do
-    [[ -n "${ref:-}" ]] || continue
-    candidate="${ref#refs/tags/$tag_prefix}"
-    is_version "$candidate" || continue
-    if [[ -z "$latest_remote" ]] || version_gt "$candidate" "$latest_remote"; then
-        latest_remote="$candidate"
-    fi
-done <<< "$remote_refs"
-
-if [[ "$MODE" == "release" ]]; then
-    baseline="$plist_version"
-    if [[ -n "$latest_remote" ]] && version_gt "$latest_remote" "$baseline"; then
-        baseline="$latest_remote"
-    fi
-
-    info "Info.plist 版本: $plist_version"
-    if [[ -n "$latest_remote" ]]; then
-        info "远端最新正式 tag: v$latest_remote"
+for workflow in "${REQUIRED_WORKFLOWS[@]}"; do
+    rows="$(printf '%s\n' "$runs" | awk -F'\t' -v name="$workflow" '$1 == name')"
+    if printf '%s\n' "$rows" | awk -F'\t' '$3 == "success" { found = 1 } END { exit !found }'; then
+        success "CI · $workflow"
+    elif printf '%s\n' "$rows" | awk -F'\t' '$2 != "completed" { found = 1 } END { exit !found }'; then
+        gate "「$workflow」仍在运行；等它通过后再发布。"
+    elif [[ -z "$rows" ]]; then
+        gate "origin/main 没有「$workflow」的运行记录。"
     else
-        info "远端尚无严格匹配 vX.Y.Z 的正式 tag"
+        gate "「$workflow」没有通过；main 不可发布。"
     fi
-    info "版本递增基线: $baseline"
+done
 
-    case "$VERSION_ARG" in
-        patch|minor|major) new="$(bump "$baseline" "$VERSION_ARG")" ;;
-        *)
-            is_version "$VERSION_ARG" || die "版本号格式应为 x.y.z（不允许前导零）: $VERSION_ARG"
-            new="$VERSION_ARG"
-            ;;
-    esac
-else
-    new="$VERSION_ARG"
-    if [[ -n "$latest_remote" ]]; then
-        info "远端最新跨平台预览 tag: platform-preview-v$latest_remote"
-    else
-        info "远端尚无严格匹配 platform-preview-vX.Y.Z 的 tag"
-    fi
+if [[ "$KIND" == "stable" ]]; then
+    gh api "repos/$EXPECTED_REPO/environments/macos-release" >/dev/null 2>&1 \
+        || gate "正式版需要受保护的 macos-release Environment 与 Developer ID 凭据，当前仓库尚未配置。"
 fi
-tag="$tag_prefix$new"
 
-if [[ -n "$latest_remote" ]] && ! version_gt "$new" "$latest_remote"; then
-    die "$tag 不高于同类远端最新 tag ${tag_prefix}${latest_remote}；禁止覆盖或回退已发布版本。"
-fi
-if [[ "$MODE" == "release" ]] && version_gt "$plist_version" "$new"; then
-    die "$tag 低于 Info.plist 的当前版本 v${plist_version}；禁止版本回退。"
-fi
-remote_tag_exists "$tag" && die "远端 tag $tag 已存在；发布脚本绝不会删除或覆盖远端标签。"
-git show-ref --verify --quiet "refs/tags/$tag" && die "本地 tag $tag 已存在；请先确认其来源，发布脚本不会重建标签。"
-
-if ! remote_main_line="$(git ls-remote --heads "$REMOTE" refs/heads/main 2>/dev/null)"; then
-    die "无法查询 $EXPECTED_REPO 的 main 分支。"
-fi
-[[ -n "$remote_main_line" ]] || die "$EXPECTED_REPO 不存在 main 分支。"
-remote_main="${remote_main_line%%[[:space:]]*}"
-git cat-file -e "$remote_main^{commit}" 2>/dev/null || die "本地缺少远端 main 的最新提交。请先运行 git fetch origin main。"
-git merge-base --is-ancestor "$remote_main" HEAD || die "本地 main 不包含远端 main；请先同步并解决分叉。"
+# --- Plan -------------------------------------------------------------------
+case "$KIND" in
+    preview) channel="macOS 未签名预览版（Pre-release，不进入自动更新）" ;;
+    stable) channel="macOS 正式版（Developer ID 签名 + 公证，进入 latest 与自动更新）" ;;
+    platform) channel="Windows / Linux 数据预览版（Pre-release）" ;;
+esac
 
 echo ""
 info "发布计划:"
-echo "  仓库:    https://github.com/$EXPECTED_REPO"
-echo "  分支:    main ($(git rev-parse --short HEAD))"
-if [[ "$MODE" == "release" ]]; then
-    echo "  类型:    macOS 正式版"
-    echo "  版本:    $plist_version -> $new"
-else
-    echo "  类型:    Windows / Linux 数据预览版"
-    echo "  版本:    ${latest_remote:-<首次发布>} -> $new"
+echo "  仓库:     https://github.com/$EXPECTED_REPO"
+echo "  渠道:     $channel"
+echo "  上一版本: ${PREVIOUS:-<首次发布>}"
+echo "  新 tag:   $TAG"
+echo "  提交:     $(git log -1 --format='%h %s' "$fetch_main")"
+echo "  推送:     只推送 $TAG；不修改或提交任何文件"
+for warning in "${WARNINGS[@]+"${WARNINGS[@]}"}"; do
+    warn "$warning"
+done
+
+if [[ "$KIND" != "platform" ]]; then
+    echo ""
+    info "发布说明预览（Release 页面由工作流用同一规则生成）:"
+    python3 "$TOOL" notes --tag "$TAG" --ref "$fetch_main" ${PREVIOUS:+--from "$PREVIOUS"} | sed 's/^/  │ /'
 fi
-echo "  标签:    $tag"
-if [[ "$MODE" == "release" && "$plist_version" != "$new" ]]; then
-    echo "  本地提交: 仅更新 Info.plist"
-else
-    echo "  本地提交: 无"
-fi
-echo "  推送:    main 与 $tag 原子推送"
 
 if [[ "$DRY_RUN" == true ]]; then
     echo ""
-    success "dry-run 校验通过；没有修改文件、创建 tag 或推送远端。"
+    if (( FAILED_GATES > 0 )); then
+        warn "dry-run 完成：有 $FAILED_GATES 项门禁未满足，正式运行会被拒绝。"
+    else
+        success "dry-run 校验通过；没有创建或推送 tag。"
+    fi
     exit 0
 fi
 
 if [[ "$ASSUME_YES" != true ]]; then
     [[ -t 0 ]] || die "非交互环境必须显式传入 --yes。"
     echo ""
-    read -r -p "确认发布 $tag 到 ${EXPECTED_REPO}？(y/n) " -n 1 reply
+    read -r -p "确认发布 $TAG 到 ${EXPECTED_REPO}？(y/n) " -n 1 reply
     echo
     [[ "$reply" =~ ^[Yy]$ ]] || { warn "已取消"; exit 0; }
 fi
 
-# 确认后再次检查，缩小并发发布或编辑造成的竞态窗口。
-[[ -z "$(git status --porcelain --untracked-files=all)" ]] || die "确认后工作区发生变化，已中止。"
-remote_tag_exists "$tag" && die "确认后发现远端 tag $tag 已存在，已中止且不会覆盖。"
+# Re-check after confirmation to narrow the window for a concurrent merge or tag.
+[[ "$(remote_main_sha)" == "$fetch_main" ]] || die "确认期间 origin/main 已变化；请重新运行。"
+remote_tag_exists "$TAG" && die "确认期间远端出现了 $TAG；已中止且不会覆盖。"
 
-if [[ "$MODE" == "release" && "$plist_version" != "$new" ]]; then
-    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $new" Info.plist
-    updated_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)"
-    [[ "$updated_version" == "$new" ]] || die "Info.plist 版本更新校验失败。"
-    git add -- Info.plist
-    staged_files="$(git diff --cached --name-only)"
-    [[ "$staged_files" == "Info.plist" ]] || die "暂存区包含 Info.plist 以外的文件，已中止。"
-    git commit -m "chore: bump version to $new" -- Info.plist
-fi
-
-[[ -z "$(git status --porcelain --untracked-files=all)" ]] || die "创建 tag 前工作区不再干净，已中止。"
-remote_tag_exists "$tag" && die "创建 tag 前发现远端 tag $tag 已存在，已中止且不会覆盖。"
-
-release_commit="$(git rev-parse HEAD)"
-git tag "$tag" "$release_commit"
-
-info "原子推送 main 与 $tag 到 $EXPECTED_REPO..."
-if ! git push --atomic "$REMOTE" "HEAD:refs/heads/main" "refs/tags/$tag:refs/tags/$tag"; then
-    die "推送失败。远端未被部分更新；本地 tag $tag 保留以便人工检查。"
+git tag "$TAG" "$fetch_main"
+info "推送 $TAG 到 $EXPECTED_REPO..."
+if ! git push "$REMOTE" "refs/tags/$TAG:refs/tags/$TAG"; then
+    git tag -d "$TAG" >/dev/null
+    die "推送失败；远端未创建 tag，本地 tag 已删除。"
 fi
 
 echo ""
-success "已推送 ${tag}，GitHub Actions 正在构建。"
+success "已推送 ${TAG}，GitHub Actions 正在构建。"
 echo "  构建进度: https://github.com/$EXPECTED_REPO/actions"
-echo "  Release:  https://github.com/$EXPECTED_REPO/releases/tag/$tag"
+echo "  Release:  https://github.com/$EXPECTED_REPO/releases/tag/$TAG"
+if [[ "$KIND" != "platform" ]]; then
+    echo "  发布完成后，在下一个 PR 里运行 python3 $TOOL changelog --write 更新 CHANGELOG.md。"
+fi

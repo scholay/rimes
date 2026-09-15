@@ -206,6 +206,15 @@ cp Info.plist "$APP_PATH/Contents/Info.plist"
 # re-read the bundle's metadata instead of serving a stale cache. (Source
 # Info.plist is untouched, so git stays clean.)
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(date +%s)" "$APP_PATH/Contents/Info.plist" 2>/dev/null || true
+# Versions come only from release tags; the committed Info.plist carries the
+# 0.0.0-dev placeholder. Name a development build after where it sits relative
+# to the last tag (e.g. 0.5.0-preview.1-72-gabc1234-dirty). Anything that is not
+# a strict X.Y.Z keeps the updater from offering "updates" to a dev build.
+dev_version="$(git describe --tags --match 'v[0-9]*' --dirty 2>/dev/null || true)"
+if [ -n "$dev_version" ]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${dev_version#v}" \
+        "$APP_PATH/Contents/Info.plist" 2>/dev/null || true
+fi
 # A complete .app has a PkgInfo (both Squirrel and Sogou ship one).
 printf 'APPL????' > "$APP_PATH/Contents/PkgInfo"
 
