@@ -4,6 +4,26 @@
 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/) 生成，请勿手工编辑。
 每个版本的安装方式与校验和见 [GitHub Releases](https://github.com/scholay/rimes/releases)。
 
+## [v0.5.0-preview.3](https://github.com/scholay/rimes/releases/tag/v0.5.0-preview.3) — 2026-09-15
+
+### 合并的 PR
+
+- #17 内置呦呦音形折梅、寒梅原生并击方案
+- #21 更新 CHANGELOG（v0.5.0-preview.2）
+
+### 新功能
+
+- **chord:** native chord schemes that settle on key release (0930901)
+- **rime-data:** bundle 呦呦音形 折梅 and 寒梅 chord schemes (e6ace2c)
+
+### 文档
+
+- update CHANGELOG.md for v0.5.0-preview.2 (a9957f0)
+
+### 维护
+
+- run the chord and 呦呦音形 smokes in CI and on the assembled app (a805ad9)
+
 ## [v0.5.0-preview.2](https://github.com/scholay/rimes/releases/tag/v0.5.0-preview.2) — 2026-09-15
 
 ### 合并的 PR
