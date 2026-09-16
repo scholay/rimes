@@ -184,7 +184,7 @@ struct AITextGeneration {
 
 ```
                        ┌────────────────────────────────────────────────┐
- 外部世界               │          RIMES 进程（内部 ETInput）               │
+ 外部世界               │          RIMES 进程（单进程）                       │
                        │                                                │
  Claude/Codex ──MCP──▶ LocalGateway ─┐                                  │
  curl/脚本 ──HTTP────▶ (127.0.0.1)   ├─▶ InboundBus ─▶ 收件箱 UI         │

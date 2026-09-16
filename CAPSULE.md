@@ -27,7 +27,7 @@ Capsule 是与 Buffer、Mailbox 同级的 RIMES 本机内容库。当前支持 `
 
 - `entries/*.md` 是 Obsidian 可直接读取和编辑的普通 Markdown，front matter 保存 `capsule` 类型、版本、UUID、标题和更新时间。正文保存 Prompt/Memory/Note 内容、HTTP(S) URL，或 Skill/Image/PDF 的绝对路径。
 - 用户新建 Image/PDF 条目时，原始二进制仍位于用户管理的本机目录；从 iCloud 下载的媒体经 SHA-256 校验后按内容寻址 materialize 到 `capsule/assets/`。两者都不复制到仓库或应用包。编辑器只在选中条目后读取：图片通过 ImageIO 在后台生成最长边不超过 1600 px 的缩略图；PDF 通过 Core Graphics 在全局串行队列中只渲染第 1 页缩略图，并显示总页数，避免把整本大 PDF 交给输入法进程持续布局。迟到结果必须通过 generation、类型和路径复验后才能显示。
-- 首次初始化会加入一条 Memory：标题 `RIMES 默认词条`，正文 `RIMES`。`content-seed-v1` 保证只预设一次；用户删除后不会自动复活。
+- 首次初始化会加入一条 Note：标题 `RIMES 默认词条`，正文 `RIMES`。`content-seed-v1` 保证只预设一次；用户删除后不会自动复活。
 - `content-library-v1.json` 保存本机 Capsule 库 UUID。选择 iCloud 文件夹后，`capsule-sync/config-v1.json` 保存该文件夹的本机书签与库 UUID，`state-<library-id>.json` 保存逐条 revision、tombstone 与本机媒体 fingerprint；这些文件不保存 Password 明文、密文或 `master-key`。未设置同步时，相应文件或目录可以不存在。
 - `passwords/*.md` 只暴露标题、UUID 和更新时间。网址、App、用户名、当前密码与曾用密码都位于 ChaCha20-Poly1305 密文块中。
 - `capsule/`、`capsule-sync/` 及其子目录权限为 `0700`，主密钥、marker、配置、状态、资产与 Markdown 文档为 `0600`。这些数据都位于用户资料目录，不进入仓库。
@@ -74,8 +74,8 @@ Password 与 Skill 当前明确不参加 iCloud 同步。`passwords/`、裸 `mas
 和 Skill 的绝对路径均不进入同步扫描、状态文件、日志或云端目录；把前两者
 一起上传会失去现有密文边界，而上传 Skill 会暴露本机目录结构。
 未来只有在提供用户恢复短语包装密钥或正式签名的 iCloud Keychain 密钥传递后，
-才能安全开启跨设备密码解锁。Prompt、Memory、Note、URL、Image 与 PDF 六类
-普通条目可以同步。
+才能安全开启跨设备密码解锁。Note、Image 与 PDF 三类普通条目可以同步；
+已退役的 Prompt、Memory、URL 条目留在盘上，不再列出也不参与同步。
 
 当前本地开发签名没有 iCloud container entitlement，因此实现采用用户选择的
 iCloud Drive 文件夹，不硬编码隐藏的 CloudDocs 路径。所选目录必须是普通、
