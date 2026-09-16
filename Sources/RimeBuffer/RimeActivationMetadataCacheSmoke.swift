@@ -141,12 +141,3 @@ func runRimeActivationMetadataCacheSmokeTest() -> Bool {
         return fail(error.localizedDescription)
     }
 }
-
-#if RIME_ACTIVATION_CACHE_SMOKE_MAIN
-@main
-private enum RimeActivationMetadataCacheSmokeMain {
-    static func main() {
-        exit(runRimeActivationMetadataCacheSmokeTest() ? 0 : 1)
-    }
-}
-#endif
