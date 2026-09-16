@@ -1825,21 +1825,6 @@ private final class ClipboardHistoryPasteboardDouble: ClipboardHistoryPasteboard
     }
 }
 
-#if CLIPBOARD_HISTORY_STANDALONE_SMOKE
-@main
-private enum ClipboardHistorySmokeMain {
-    @MainActor
-    static func main() {
-        _ = NSApplication.shared
-        if ClipboardHistorySmoke.run() {
-            print("clipboard history smoke: OK")
-        } else {
-            exit(1)
-        }
-    }
-}
-#endif
-
 /// Activation policy and its feedback. A silent fallback to the pasteboard is
 /// what made this feel unreliable next to a dedicated paste utility: the
 /// gesture looked like it had failed when the content was ready and only the
