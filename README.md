@@ -172,3 +172,11 @@ Pre-release，不进入自动更新。Windows/Linux `platform-preview-vX.Y.Z` �
 RIMES 自有代码采用 [MIT License](LICENSE)。随包 Rime 方案、词库和 Lua/OpenCC 数据
 保留各自的 GPL/LGPL/CC 许可与署名；完整边界见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 `rime-data/licenses/`。
+
+## 赞助
+
+如果 RIMES 对你有帮助，欢迎微信扫码赞助（催更）：
+
+<p align="center">
+  <img src="images/sponsor-wechat.png" alt="微信赞助二维码" width="280">
+</p>
