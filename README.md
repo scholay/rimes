@@ -37,7 +37,7 @@
 | 设置 | `⌘⇧S` 仅在当前输入源属于 RIMES 时打开；Mailbox/Capsule 页面只提供快捷键、本机状态、同步与安全配置，不嵌入实际操作窗口 |
 | 实时翻译 | 默认 Apple 本地翻译（macOS 15+），也可走 AI 渠道 |
 | AI 生成 | Codex CLI / Claude Code CLI / OpenAI 兼容 API；结果只留在 Buffer 内，可选 Plain / Markdown / JSON，再由用户上屏 |
-| 意识流输入 | 拼音/并击 → 本地 Rime + Octagram 低延迟解码，复杂输入回退 AI → 最多 5 个互斥猜测 → 选定后投递 |
+| 意识流输入 | 拼音/并击由所选 AI 连接器生成最多 5 个互斥猜测；选定后才投递 |
 
 <!-- BEGIN PRESET BUFFER PLUGINS -->
 ## 预置缓冲插件

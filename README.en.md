@@ -37,8 +37,7 @@ After installation and an Aqua login, a one-shot background job uses `open -g` t
 | Settings | Open Settings with `⌘⇧S` only while the active input source belongs to RIMES; the Mailbox and Capsule pages contain shortcut, local-status, sync, and security configuration rather than their operational panes |
 | Live translation | Apple on-device translation by default (macOS 15+); AI connector optional |
 | AI generate | Codex CLI / Claude Code CLI / OpenAI-compatible API; results stay in Buffer with Plain / Markdown / JSON output and are delivered only by the user |
-| Stream input | Pinyin/chords → low-latency local Rime + Octagram, with AI fallback for complex input → up to 5 mutually exclusive guesses → deliver the chosen one |
-| Remote typing | Encrypted Mac ↔ Mac delivery; no shared Wi‑Fi or Apple ID required |
+| Stream input | Pinyin/chords are resolved by the selected AI connector into up to 5 mutually exclusive guesses; only the chosen result is delivered |
 
 <!-- BEGIN PRESET BUFFER PLUGINS -->
 ## Preset buffer plug-ins
@@ -167,6 +166,10 @@ All release channels are published in `scholay/rimes`: macOS `vX.Y.Z` is formal;
 `vX.Y.Z-preview.N` is an unsigned pre-release excluded from auto-update. Windows/Linux
 `platform-preview-vX.Y.Z` is always a pre-release.
 
+## Community
+
+- [RIMES on Linux.do](https://linux.do/u/leowangling/preferences/account)
+
 ## Contributors
 
 See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list.
@@ -183,3 +186,12 @@ RIMES-authored code is released under the [MIT License](LICENSE). Bundled Rime
 schemas, dictionaries, and Lua/OpenCC data retain their GPL/LGPL/CC licenses
 and attribution; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and
 `rime-data/licenses/` for the exact boundary.
+
+## Support
+
+If RIMES is useful to you, WeChat users can scan the code below to sponsor its
+continued development:
+
+<p align="center">
+  <img src="images/sponsor-wechat.png" alt="WeChat sponsorship QR code" width="280">
+</p>
