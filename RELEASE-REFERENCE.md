@@ -77,8 +77,9 @@ bypass 仍然保留，公开审批前仍必须完成同一签名安装包的真�
 admin bypass、没有 reviewer 或没有 `v*` policy 都会 fail-closed。工作流不要求两个阶段使用不同的
 reviewer；若另行采用团队独立复核策略，成员分离由仓库管理员配置。
 
-`release tags` ruleset 还必须覆盖 `refs/tags/v*` 的 **creation**，并只给指定发布主体 bypass；单独禁止删除或
-移动 tag 不能阻止直接创建 tag。GitHub Actions Artifact 在公开仓库中的访问规则不是发布禁运；它只是发布
+独立的 `release tag creation` ruleset 覆盖 `refs/tags/v*` 的 **creation**，只给发布账号 `scholay` bypass；
+原有 `release tags` ruleset 无 bypass，继续禁止所有人删除或移动已有 tag。两类规则分开配置，避免创建权限
+同时变成覆盖已有版本的权限。GitHub Actions Artifact 在公开仓库中的访问规则不是发布禁运；它只是发布
 权威门，用户和更新器的唯一来源仍是正式 GitHub Release。
 
 在该 Environment 的 secrets 中配置以下 8 项；P12 必须分别包含有效的 Developer ID Application /

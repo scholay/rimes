@@ -76,8 +76,9 @@ git switch main && git pull --ff-only
 真机验收通过后批准公开。当前由 `scholay` 发起并分别审核两次，允许 self-review；仍必须通过审批门，
 不能以管理员身份跳过审批。以后需要独立复核时，可以另行启用 prevent self-review 并指定其他审核者。
 
-此外，`release tags` ruleset 必须对 `refs/tags/v*` 增加 **creation** 限制，只把 bypass 权限给指定的
-发布主体；现有“禁止删除/移动”规则本身不能防止有人直接创建一个 tag。工作流会在导入凭据和创建 Release 前
+此外，独立的 `release tag creation` ruleset 对 `refs/tags/v*` 施加 **creation** 限制，只允许指定的
+发布账号 `scholay` 创建标签。原有 `release tags` ruleset 仍无 bypass，禁止所有人删除或移动已有标签；
+不要把创建标签的例外权限加到不可变规则上。工作流会在导入凭据和创建 Release 前
 再次读取两个 Environment，配置变弱或缺失就拒绝继续；不要用直接 `git push` 绕开 `release.sh`。
 
 ## 三、tag 推送之后
