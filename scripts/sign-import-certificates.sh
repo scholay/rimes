@@ -33,6 +33,24 @@ emit_env() {
     printf '%s=%s\n' "$name" "$value" >>"$RIMES_ENV_FILE"
 }
 
+add_signing_keychain_to_search_list() {
+    local signing_keychain="$1" current_list entry existing_keychain
+    local quoted_path='^[[:space:]]*"([^"]+)"[[:space:]]*$'
+    local search_list=("$signing_keychain")
+    current_list="$(/usr/bin/security list-keychains -d user)" \
+        || die 'could not read the user keychain search list'
+    while IFS= read -r entry; do
+        [[ -n "$entry" ]] || continue
+        [[ "$entry" =~ $quoted_path ]] \
+            || die 'unexpected user keychain search-list format'
+        existing_keychain="${BASH_REMATCH[1]}"
+        [[ "$existing_keychain" == "$signing_keychain" ]] \
+            || search_list+=("$existing_keychain")
+    done <<<"$current_list"
+    /usr/bin/security list-keychains -d user -s "${search_list[@]}" \
+        || die 'could not register the temporary signing keychain'
+}
+
 for required_name in \
     RIMES_DEVELOPER_ID_APPLICATION_P12_BASE64 \
     RIMES_DEVELOPER_ID_APPLICATION_P12_PASSWORD \
@@ -96,6 +114,11 @@ keychain_password="$(/usr/bin/openssl rand -hex 32)"
 /usr/bin/security create-keychain -p "$keychain_password" "$keychain"
 /usr/bin/security set-keychain-settings -lut 21600 "$keychain"
 /usr/bin/security unlock-keychain -p "$keychain_password" "$keychain"
+# A newly created keychain is not reliably in the hosted runner's user search
+# list across workflow steps. Register it explicitly as in GitHub's macOS
+# certificate guide, without dropping any existing keychains or changing the
+# default keychain. Deleting our temporary keychain removes its search entry.
+add_signing_keychain_to_search_list "$keychain"
 
 /usr/bin/security import "$application_p12" \
     -k "$keychain" \
@@ -139,6 +162,14 @@ case "$installer_identity" in
     *"($RIMES_DEVELOPER_TEAM_ID)") ;;
     *) die "Developer ID Installer certificate does not belong to the configured Team ID" ;;
 esac
+
+# The default find-identity policy is basic X.509. Passing that check alone is
+# not proof that codesign can use the Application identity on a fresh runner.
+codesigning_output="$(/usr/bin/security find-identity -v -p codesigning "$keychain")"
+if ! printf '%s\n' "$codesigning_output" | /usr/bin/grep -Fq "\"$application_identity\""; then
+    /usr/bin/security find-identity -p codesigning "$keychain" >&2 || true
+    die 'Developer ID Application identity is not valid for code signing'
+fi
 
 # The private keys now live in the temporary keychain. Remove the source p12
 # blobs immediately; only the notary API key must remain until both submissions

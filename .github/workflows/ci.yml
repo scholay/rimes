@@ -30,6 +30,8 @@ jobs:
         run: |
           bash -n scripts/release.sh
           bash -n scripts/rehearse-release-pkg.sh
+          bash -n scripts/sign-import-certificates.sh
+          bash -n scripts/sign-macos-app.sh
           scripts/rehearse-release-pkg.sh --help
 
       - name: Info.plist carries no committed version

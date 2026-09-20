@@ -99,6 +99,13 @@ Developer ID Installer 证书及其私钥：
 > 可用 `base64 -i certificate.p12 | tr -d '\n'` 生成适合粘贴的单行内容；P8 同理。
 > 不要把证书、私钥或密码提交到仓库。
 
+导出的 P12 应同时带上与签名证书匹配的 Apple 中间证书（当前为 Developer ID G2），
+避免依赖开发机已缓存而 fresh runner 未安装的证书链。只使用
+[Apple PKI](https://www.apple.com/certificateauthority/) 的官方中间证书；不要把叶证书设为“始终信任”。
+导入脚本按照 [GitHub macOS 签名指南](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications)
+显式将临时 keychain 加入 user search list，保留已有项和默认 keychain，并另外检查 Application identity
+通过 `codesigning` policy，而不把默认 basic X.509 检查当成可签名的证明。
+
 正式 workflow 只在 fresh signing runner 把两张证书导入一次性 keychain，只把证书 common name、
 Team ID 和临时路径传给后续步骤；P12 导入后立即删除，公证结束、signed-stage 上传前删除临时 keychain 与 P8；
 失败路径也会无条件清理。导入脚本拒绝多张同类型 identity、Team ID 不一致或缺少任一凭据的配置。
