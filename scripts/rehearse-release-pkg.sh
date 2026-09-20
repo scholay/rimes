@@ -153,7 +153,9 @@ payload_binary="$payload_app/Contents/MacOS/RIMES"
     || die 'payload parent input-source identifier is unexpected'
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :ComponentInputModeDict:tsVisibleInputModeOrderedArrayKey:0' "$payload_info")" == "$EXPECTED_MODE_ID" ]] \
     || die 'payload visible input-mode identifier is unexpected'
-/usr/bin/lipo "$payload_binary" -verify_arch arm64 x86_64
+# One arch per call; Xcode 27's lipo rejects two after -verify_arch.
+/usr/bin/lipo "$payload_binary" -verify_arch arm64
+/usr/bin/lipo "$payload_binary" -verify_arch x86_64
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$payload_app"
 payload_signature="$(/usr/bin/codesign --display --verbose=4 "$payload_app" 2>&1)"
 printf '%s\n' "$payload_signature" | /usr/bin/grep -Fq 'Authority=Developer ID Application:' \

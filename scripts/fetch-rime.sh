@@ -176,7 +176,11 @@ for index in "${!runtime_files[@]}"; do
     [[ "$(/usr/bin/shasum -a 256 "$runtime" | /usr/bin/awk '{print $1}')" \
         == "${expected_runtime_sha256[$index]}" ]] \
         || die "reviewed runtime hash mismatch: $runtime"
-    /usr/bin/lipo "$runtime" -verify_arch arm64 x86_64 \
+    # One architecture per call: Xcode 27's lipo reads a second arch after
+    # -verify_arch as another input file and fails with "requires exactly one
+    # input file". The single-arch form works on every toolchain.
+    /usr/bin/lipo "$runtime" -verify_arch arm64 \
+        && /usr/bin/lipo "$runtime" -verify_arch x86_64 \
         || die "runtime is not universal: $runtime"
     /usr/bin/codesign --verify --strict --verbose=2 "$runtime" \
         || die "runtime signature is invalid: $runtime"
