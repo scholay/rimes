@@ -3,6 +3,14 @@ import Vision
 import UniformTypeIdentifiers
 
 final class CaptureCanvas: NSView {
+    /// The editor panel has no title bar, so it is movable by its background.
+    /// That made every drag on the canvas move the window instead of drawing:
+    /// AppKit runs its own event loop for a background drag and the view
+    /// never sees mouseDragged, so an annotation kept its start point and was
+    /// committed zero-sized — the tools looked dead while the log showed a
+    /// clean mouseDown/mouseUp pair. Chrome still drags the window; the
+    /// drawing surface does not.
+    override var mouseDownCanMoveWindow: Bool { false }
     var image: CGImage? { didSet { needsDisplay = true } }
     var documentSize = CGSize(width: 1, height: 1)
     var tool: CaptureTool = .select
@@ -34,6 +42,11 @@ final class CaptureCanvas: NSView {
                        y: min(documentSize.height, max(0,(point.y-rect.minY)/max(1,rect.height)*documentSize.height)))
     }
     override func mouseDown(with event: NSEvent) {
+        // DIAGNOSTIC: drawing reported dead. This says whether the canvas is
+        // reached at all, which tool it thinks is active, and whether preview
+        // mode is swallowing the press.
+        IMELog.write("capture canvas mouseDown tool=\(tool.rawValue) "
+            + "previewOnly=\(previewOnly) size=\(documentSize)")
         guard !previewOnly else { return }
         let p = point(event)
         if tool == .select { previousPoint = p; pick?(p); if event.clickCount == 2 { editSelection?() }; return }
@@ -57,6 +70,9 @@ final class CaptureCanvas: NSView {
             let matches = textBoxes.filter { $0.intersects(node.rect.insetBy(dx: -3, dy: -3)) }
             if let first = matches.first { let rect = matches.dropFirst().reduce(first) { $0.union($1) }; node.points = [rect.origin, CGPoint(x: rect.maxX, y: rect.maxY)] }
         }
+        IMELog.write("capture canvas mouseUp tool=\(tool.rawValue) "
+            + "rect=\(node.rect) color=\(node.color) width=\(node.width) "
+            + "hasSink=\(complete != nil)")
         complete?(node); needsDisplay = true
     }
     override func draw(_ dirtyRect: NSRect) {
@@ -182,8 +198,13 @@ final class CaptureEditor {
             DispatchQueue.main.async {
                 guard token == self.renderGeneration else { return }
                 switch result {
-                case .success(let image): self.canvas.image = image
-                case .failure(let error): self.status.stringValue = error.localizedDescription
+                case .success(let image):
+                    IMELog.write("capture render ok \(image.width)x\(image.height) "
+                        + "annotations=\(value.annotations.count)")
+                    self.canvas.image = image
+                case .failure(let error):
+                    IMELog.write("capture render FAILED \(error.localizedDescription)")
+                    self.status.stringValue = error.localizedDescription
                 }
             }
         }
@@ -237,6 +258,7 @@ final class CaptureEditor {
             }
             let button = CaptureToolButton(tool: tool) { [weak self] picked in
                 guard let self else { return }
+                IMELog.write("capture tool picked \(picked.rawValue)")
                 self.canvas.tool = picked
                 self.preview = false
                 self.modeControl?.selectedSegment = 0
@@ -462,6 +484,7 @@ final class CaptureEditor {
         }
         if node.tool == .counter { node.text = String((document?.annotations.filter { $0.tool == .counter }.count ?? 0)+1) }
         mutate { $0.annotations.append(node) }
+        IMELog.write("capture annotation stored count=\(document?.annotations.count ?? -1)")
     }
     private func undoEdit() { guard let previous = undo.popLast(), let document else { return }; redo.append(document); self.document = previous; selected = nil; selectedLayer = nil; canvas.selectedRect = nil; render() }
     private func redoEdit() { guard let next = redo.popLast(), let document else { return }; undo.append(document); self.document = next; selected = nil; selectedLayer = nil; canvas.selectedRect = nil; render() }

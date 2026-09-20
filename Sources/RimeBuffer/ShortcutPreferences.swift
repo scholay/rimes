@@ -142,6 +142,7 @@ enum RimeShortcutAction: String, CaseIterable {
     case toggleWorkbench
     case toggleClipboardHistory
     case captureScreen
+    case captureArea
     case openMailbox
     case openSettings
     case previousPlugin
@@ -149,7 +150,8 @@ enum RimeShortcutAction: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .captureScreen: return "打开 Capsule 捕获"
+        case .captureScreen: return "打开 Capsule 捕获面板"
+        case .captureArea: return "直接框选截图"
         case .deliverBuffer: return "投递缓冲内容"
         case .toggleWorkbench: return "显示或隐藏工作台"
         case .toggleClipboardHistory: return "显示或隐藏 Capsule"
@@ -162,7 +164,12 @@ enum RimeShortcutAction: String, CaseIterable {
 
     var detail: String {
         switch self {
-        case .captureScreen: return "默认未绑定；按 Delete 恢复未绑定状态"
+        case .captureScreen:
+            return "默认 ⌘⇧5，与系统「截屏与录屏选项」相同；"
+                + "需先在系统设置 → 键盘 → 键盘快捷键 → 截屏中关闭同名项"
+        case .captureArea:
+            return "默认 ⌘⇧4，与系统「将所选区域的图片存储为文件」相同；"
+                + "需先在系统设置中关闭同名项"
         case .deliverBuffer:
             return "轻按发送下一块；按住约 0.6 秒发送全部"
         case .toggleWorkbench:
@@ -182,7 +189,19 @@ enum RimeShortcutAction: String, CaseIterable {
 
     var defaultShortcut: RimeKeyboardShortcut {
         switch self {
-        case .captureScreen: return RimeKeyboardShortcut(keyCode: UInt16.max, modifiers: [.command])
+        // The two macOS screenshot shortcuts. macOS owns them until the user
+        // turns the matching rows off in System Settings, and until then
+        // RegisterEventHotKey fails — reported rather than silently ignored.
+        case .captureScreen:
+            return RimeKeyboardShortcut(
+                keyCode: UInt16(kVK_ANSI_5),
+                modifiers: [.command, .shift]
+            )
+        case .captureArea:
+            return RimeKeyboardShortcut(
+                keyCode: UInt16(kVK_ANSI_4),
+                modifiers: [.command, .shift]
+            )
         case .deliverBuffer:
             return RimeKeyboardShortcut(
                 keyCode: UInt16(kVK_Return),

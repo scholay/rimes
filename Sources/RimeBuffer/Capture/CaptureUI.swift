@@ -98,7 +98,102 @@ final class CaptureControlAction: NSObject {
     @objc func fire() { perform() }
 }
 
+/// An icon button for the capture strip: same square geometry as the editor
+/// tool rail, with the name kept as the tooltip. `isOn` draws the accent fill
+/// so a toggle such as freeze reads as engaged.
+final class CaptureGlyphButton: NSButton {
+    /// Assignable so a toggle can refer to itself when it flips.
+    var onClick: () -> Void
+    private let prominent: Bool
+    var isOn = false { didSet { needsDisplay = true } }
+
+    init(symbol: String,
+         tooltip: String,
+         prominent: Bool = false,
+         action: @escaping () -> Void = {}) {
+        onClick = action
+        self.prominent = prominent
+        super.init(frame: .zero)
+        isBordered = false
+        title = ""
+        image = RimeUI.symbol(symbol, pointSize: 14, weight: .regular)
+        target = self
+        self.action = #selector(invoke)
+        toolTip = tooltip
+        setAccessibilityLabel(tooltip)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+    override var intrinsicContentSize: NSSize { NSSize(width: 34, height: 30) }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+    @objc private func invoke() { onClick() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let body = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: body, xRadius: 7, yRadius: 7)
+        if isOn || prominent {
+            RimeUI.accentGreen.setFill()
+        } else if isHighlighted {
+            RimeUI.surface2.setFill()
+        } else {
+            RimeUI.surface3.setFill()
+        }
+        path.fill()
+        if !(isOn || prominent) {
+            RimeUI.border.setStroke()
+            path.stroke()
+        }
+        let tint = (isOn || prominent)
+            ? RimeUI.accentForegroundColor
+            : RimeUI.textPrimary
+        guard let image else { return }
+        let art = image.withSymbolConfiguration(
+            NSImage.SymbolConfiguration(paletteColors: [tint])
+        ) ?? image
+        art.draw(in: CGRect(x: (bounds.width - 16) / 2,
+                            y: (bounds.height - 16) / 2,
+                            width: 16,
+                            height: 16))
+    }
+}
+
+/// Reveals its controls only while the pointer is inside, so a result
+/// overlay is a thumbnail at rest and a toolbar when reached for.
+final class CaptureHoverView: NSView {
+    var onHover: ((Bool) -> Void)?
+    private var tracking: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
+}
+
 enum CaptureUI {
+    /// A vertical hairline between groups in a horizontal strip.
+    static func verticalSeparator(height: CGFloat = 20) -> NSView {
+        let line = NSView()
+        line.wantsLayer = true
+        line.layer?.backgroundColor = RimeUI.border.cgColor
+        line.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            line.widthAnchor.constraint(equalToConstant: 1),
+            line.heightAnchor.constraint(equalToConstant: height),
+        ])
+        return line
+    }
+
     /// A label/control pair whose labels all line up, which a plain row of
     /// mismatched intrinsic widths does not.
     static func field(_ title: String, _ control: NSView,
@@ -244,6 +339,39 @@ final class CaptureInspectorScroll: NSScrollView {
 final class CaptureDragImageView: NSImageView, NSDraggingSource {
     var file: URL?
     var clicked: ((NSEvent) -> Void)?
+    /// Crop to fill the frame instead of fitting inside it. Captures arrive
+    /// in every shape — a wide strip, a tall window, a small region — and
+    /// fitting them into one box letterboxes each one differently, so a
+    /// column of cards has art floating at a different size in every card.
+    /// Filling and cropping keeps the cards identical; the top-left is kept
+    /// because that is where a screenshot's subject usually is.
+    var fillsFrame = false { didSet { needsDisplay = true } }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard fillsFrame, let image, image.size.width > 0, image.size.height > 0 else {
+            super.draw(dirtyRect)
+            return
+        }
+        let scale = max(bounds.width / image.size.width,
+                        bounds.height / image.size.height)
+        let size = NSSize(width: image.size.width * scale,
+                          height: image.size.height * scale)
+        // Anchor top-left, clipped to the card.
+        let target = NSRect(x: bounds.minX,
+                            y: bounds.maxY - size.height,
+                            width: size.width,
+                            height: size.height)
+        NSGraphicsContext.current?.saveGraphicsState()
+        NSBezierPath(rect: bounds).setClip()
+        image.draw(in: target,
+                   from: .zero,
+                   operation: .sourceOver,
+                   fraction: 1,
+                   respectFlipped: true,
+                   hints: [.interpolation: NSImageInterpolation.high.rawValue])
+        NSGraphicsContext.current?.restoreGraphicsState()
+    }
+
     override func mouseDown(with event: NSEvent) {
         if let clicked { clicked(event) } else { super.mouseDown(with: event) }
     }

@@ -132,7 +132,14 @@ private final class CaptureHistoryCard: NSView {
         self.record = record; self.file = file; self.previewFile = previewFile; super.init(frame:.zero)
         wantsLayer = true; layer?.cornerRadius = 11; layer?.borderWidth = 1; layer?.backgroundColor = RimeUI.surface3.cgColor
         image.clicked = { [weak self] event in if event.clickCount >= 2 { self?.open?() } else { self?.choose?() } }
-        image.file = file; image.imageScaling = .scaleProportionallyUpOrDown
+        // Same rule as the result overlay: fill the thumbnail box and crop,
+        // so every card in the row is the same shape. Fitting the artwork
+        // inside left a dark band whose size changed with each capture.
+        image.file = file
+        image.fillsFrame = true
+        image.wantsLayer = true
+        image.layer?.cornerRadius = 6
+        image.layer?.masksToBounds = true
         image.widthAnchor.constraint(equalToConstant:186).isActive = true; image.heightAnchor.constraint(equalToConstant:72).isActive = true
         let title = CaptureUI.label(String(record.title.prefix(25)),size:11)
         let duration = record.kind == .video ? String(format: " · %02d:%02d", Int(record.duration)/60, Int(record.duration)%60) : ""

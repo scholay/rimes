@@ -441,7 +441,14 @@ final class CapsuleMediaPreviewLoader {
             let result = Self.loadSynchronously(kind: kind, path: path, maximumPixelSize: maximumPixelSize)
             guard operation?.isCancelled == false else { return }
             OperationQueue.main.addOperation { [weak operation] in
-                guard operation?.isCancelled == false else { return }
+                // Deliver unless the caller actually cancelled. This read
+                // used to be `== false`, which is also false once the
+                // operation has been released — and the queue releases it as
+                // soon as it finishes. Callers that kept the returned
+                // Operation got their preview; callers that did not got
+                // silence and an empty view, which is what left the capture
+                // result overlay black.
+                guard operation?.isCancelled != true else { return }
                 completion(result)
             }
         }

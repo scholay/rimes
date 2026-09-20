@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import ScreenCaptureKit
 import AVFoundation
 
@@ -101,7 +102,20 @@ enum CaptureSmoke {
             let videoURL = root.appendingPathComponent("sample.mp4"); try Data([0,1,2]).write(to:videoURL)
             _ = try content.put(CapsuleContentWriteRequest(type:.video,title:"Local video",content:videoURL.path))
             try require(try content.synchronizationDocuments().allSatisfy { $0.record.summary.type != .video },"videos excluded from cloud")
-            try require(RimeShortcutPreferences.shortcut(for:.captureScreen,defaults:UserDefaults(suiteName:UUID().uuidString)!).keyCode == UInt16.max,"capture shortcut initially unbound")
+            // The capture shortcuts deliberately claim the two macOS
+            // screenshot combinations: ⌘⇧5 opens the strip, ⌘⇧4 goes
+            // straight to a region. macOS keeps them until the user turns
+            // the matching rows off in System Settings, so registration can
+            // fail — CaptureHotKey records that rather than going quiet.
+            let fresh = UserDefaults(suiteName: UUID().uuidString)!
+            let panelShortcut = RimeShortcutPreferences.shortcut(for: .captureScreen, defaults: fresh)
+            let areaShortcut = RimeShortcutPreferences.shortcut(for: .captureArea, defaults: fresh)
+            try require(panelShortcut.keyCode == UInt16(kVK_ANSI_5)
+                && panelShortcut.modifiers == [.command, .shift],
+                "capture panel shortcut defaults to ⌘⇧5")
+            try require(areaShortcut.keyCode == UInt16(kVK_ANSI_4)
+                && areaShortcut.modifiers == [.command, .shift],
+                "capture area shortcut defaults to ⌘⇧4")
             try cloudProjectRoundTrip(root: root.appendingPathComponent("project-sync"))
             print("capture-smoke: OK (lifecycle, redaction, immutable source, projects, scroll, layout, local video)")
             return true

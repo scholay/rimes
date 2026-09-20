@@ -10,6 +10,8 @@ final class CaptureCoordinator {
     private var launcher: CapturePanel?
     private var selectors: [CapturePanel] = []
     private var overlays: [UUID: CapturePanel] = [:]
+    /// Stacking order; the dictionary alone cannot say which card is newest.
+    private var overlayOrder: [UUID] = []
     private var pins: [UUID: CapturePanel] = [:]
     private var editors: [UUID: CaptureEditor] = [:]
     private var otherPanels: [CapturePanel] = []
@@ -102,6 +104,7 @@ final class CaptureCoordinator {
         guard !sessionProtected else { return }
         pins.values.forEach { $0.orderFrontRegardless() }
         temporarilyHidden.forEach { $0.orderFrontRegardless() }; temporarilyHidden.removeAll()
+        layoutOverlays()
     }
 
     private func keepPanel(_ panel: CapturePanel) {
@@ -121,24 +124,58 @@ final class CaptureCoordinator {
         sourceName = sourceApplication?.localizedName ?? ""
         ClipboardHistoryWindowController.shared.hide()
         if let launcher, launcher.isVisible { launcher.makeKeyAndOrderFront(nil); return }
-        let panel = CapturePanel(size: NSSize(width: 540, height: 280))
+        let panel = CapturePanel(size: NSSize(width: 812, height: 62))
         let delay = NSPopUpButton(); delay.addItems(withTitles: ["立即", "3 秒", "5 秒", "10 秒"])
         let ratio = NSPopUpButton(); ratio.addItems(withTitles: ["自由比例", "1:1", "4:3", "16:9", "9:16"])
         let width = NSTextField(string: ""); width.placeholderString = "宽 pt"; width.widthAnchor.constraint(equalToConstant: 65).isActive = true
         let height = NSTextField(string: ""); height.placeholderString = "高 pt"; height.widthAnchor.constraint(equalToConstant: 65).isActive = true
-        let freeze = NSButton(checkboxWithTitle: "冻结选区画面", target: nil, action: nil); freeze.state = .on
+        // The glyph is the control: clicking it flips the state it draws.
+        let freezeToggle = CaptureGlyphButton(symbol: "snowflake",
+                                              tooltip: "冻结选区画面")
+        freezeToggle.isOn = true
+        freezeToggle.onClick = { [weak freezeToggle] in freezeToggle?.isOn.toggle() }
         let run: (String) -> Void = { [weak self, weak panel] mode in
             let seconds = [0, 3, 5, 10][delay.indexOfSelectedItem]
             let ratios: [CGFloat?] = [nil, 1, 4 / 3, 16 / 9, 9 / 16]
             let size = width.doubleValue > 0 && height.doubleValue > 0 ? CGSize(width: min(16384, width.doubleValue), height: min(16384, height.doubleValue)) : nil
             panel?.close()
-            self?.begin(mode, delay: seconds, ratio: ratios[ratio.indexOfSelectedItem], size: size, freeze: freeze.state == .on)
+            self?.begin(mode, delay: seconds, ratio: ratios[ratio.indexOfSelectedItem], size: size, freeze: freezeToggle.isOn)
         }
-        let title = CaptureUI.row([CaptureUI.label("Capsule · 捕获", size: 16), CaptureButton("关闭", symbol: "xmark") { [weak panel] in panel?.close() }])
-        let first = CaptureUI.row([CaptureButton("区域", symbol: "viewfinder") { run("area") }, CaptureButton("窗口", symbol: "macwindow") { run("window") }, CaptureButton("全屏", symbol: "display") { run("screen") }])
-        let second = CaptureUI.row([CaptureButton("滚动", symbol: "arrow.up.arrow.down") { run("scroll") }, CaptureButton("取字", symbol: "text.viewfinder") { run("ocr") }, CaptureButton("录屏", symbol: "record.circle") { [weak self, weak panel] in panel?.close(); self?.showRecorder() }])
-        let footer = CaptureUI.row([CaptureButton("重截上次区域") { run("previous") }, CaptureButton("恢复浮层") { [weak self] in self?.restoreOverlay() }, CaptureButton("打开工程") { self.openProject() }, CaptureButton("设置") { [weak self] in self?.showOptions() }])
-        CaptureUI.fill(CaptureUI.column([title, first, second, CaptureUI.row([delay, ratio, width, height]), freeze, footer]), in: panel.contentView!)
+        // One horizontal strip: capture modes, then capture options, then the
+        // things you reach for afterwards. Icons carry the meaning and the
+        // names survive as tooltips, so the panel stops being a wall of
+        // Chinese labels at four different widths.
+        delay.toolTip = "延时"
+        ratio.toolTip = "选区比例"
+        width.toolTip = "固定宽度 (pt)"
+        height.toolTip = "固定高度 (pt)"
+        let strip = CaptureUI.row([
+            CaptureGlyphButton(symbol: "viewfinder", tooltip: "区域 ⌘⇧4",
+                               prominent: true) { run("area") },
+            CaptureGlyphButton(symbol: "macwindow", tooltip: "窗口") { run("window") },
+            CaptureGlyphButton(symbol: "display", tooltip: "全屏") { run("screen") },
+            CaptureUI.verticalSeparator(),
+            CaptureGlyphButton(symbol: "arrow.up.arrow.down", tooltip: "滚动截图") { run("scroll") },
+            CaptureGlyphButton(symbol: "text.viewfinder", tooltip: "取字 OCR") { run("ocr") },
+            CaptureGlyphButton(symbol: "record.circle", tooltip: "录屏") { [weak self, weak panel] in
+                panel?.close(); self?.showRecorder()
+            },
+            CaptureUI.verticalSeparator(),
+            delay, ratio, width, height, freezeToggle,
+            CaptureUI.verticalSeparator(),
+            CaptureGlyphButton(symbol: "arrow.counterclockwise", tooltip: "重截上次区域") { run("previous") },
+            CaptureGlyphButton(symbol: "rectangle.on.rectangle", tooltip: "恢复浮层") { [weak self] in
+                self?.restoreOverlay()
+            },
+            CaptureGlyphButton(symbol: "folder", tooltip: "打开工程") { self.openProject() },
+            CaptureGlyphButton(symbol: "gearshape", tooltip: "捕获设置") { [weak self] in
+                self?.showOptions()
+            },
+            CaptureUI.verticalSeparator(),
+            CaptureGlyphButton(symbol: "xmark", tooltip: "关闭") { [weak panel] in panel?.close() },
+        ], spacing: 6)
+        strip.alignment = .centerY
+        CaptureUI.fill(strip, in: panel.contentView!, inset: 12)
         launcher = panel
         panel.closed = { [weak self, weak panel] in self?.launcher = nil; panel?.contentView = nil }
         panel.present()
@@ -154,8 +191,14 @@ final class CaptureCoordinator {
         generation = UUID(); let token = generation
         selectors.forEach { $0.close() }; selectors.removeAll()
         ClipboardHistoryWindowController.shared.hide()
-        Array(overlays.values).forEach { $0.close() }; pins.values.forEach { $0.orderOut(nil) }
-        temporarilyHidden = editors.values.map(\.panel).filter(\.isVisible) + otherPanels.filter(\.isVisible)
+        // Result overlays used to be closed here, which is why only ever one
+        // was on screen: each capture destroyed the stack it was about to
+        // add to. They are hidden for the duration like every other panel
+        // and restored with them, so the results accumulate.
+        pins.values.forEach { $0.orderOut(nil) }
+        temporarilyHidden = overlays.values.filter(\.isVisible)
+            + editors.values.map(\.panel).filter(\.isVisible)
+            + otherPanels.filter(\.isVisible)
         temporarilyHidden.forEach { $0.orderOut(nil) }
         Task {
             do {
@@ -259,32 +302,170 @@ final class CaptureCoordinator {
 
     func showOverlay(_ record: CaptureRecord) {
         guard !sessionProtected else { return }
+        IMELog.write("capture overlay show kind=\(record.kind.label) "
+            + "thumbnail=\(record.thumbnail != nil) stack=\(overlays.count)")
         do {
             let store = try store
             if let old = overlays[record.id] { old.orderFrontRegardless(); return }
             let scale = max(0.8, min(1.5, UserDefaults.standard.object(forKey: "capture.overlay.scale") as? Double ?? 1))
-            let panel = CapturePanel(size: NSSize(width: 330*scale, height: 115+148*scale), key: false)
-            let preview = CaptureDragImageView(); preview.imageScaling = .scaleProportionallyUpOrDown
+            // Smaller than before so a stack of them fits down one edge:
+            // the thumbnail is the whole card, and the controls arrive on
+            // hover instead of taking a permanent row each.
+            let width = 224 * scale
+            let height = 128 * scale
+            let panel = CapturePanel(size: NSSize(width: width, height: height), key: false)
+            let body = CaptureHoverView()
+            let preview = CaptureDragImageView()
+            preview.fillsFrame = true
             preview.file = store.url(record)
-            preview.heightAnchor.constraint(equalToConstant: 148*scale).isActive = true
-            preview.widthAnchor.constraint(equalToConstant: 300*scale).isActive = true
-            CapsuleMediaPreviewLoader.shared.load(kind: record.thumbnail == nil ? record.kind.capsuleKind : .image, path: store.previewURL(record).path, maximumPixelSize: 512) { result in
-                if case let .image(image) = result { preview.image = NSImage(cgImage: image, size: .zero) }
+            CaptureUI.fill(preview, in: body, inset: 0)
+            // Every card is the same rectangle. An NSImageView reports its
+            // image's size as its intrinsic size, so without these the card
+            // grew to whatever it happened to be showing: cards of different
+            // sizes, positions computed from a height the panel no longer
+            // had, and neighbours overlapping each other.
+            body.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                body.widthAnchor.constraint(equalToConstant: width),
+                body.heightAnchor.constraint(equalToConstant: height),
+            ])
+            for axis in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
+                preview.setContentHuggingPriority(.defaultLow, for: axis)
+                preview.setContentCompressionResistancePriority(.defaultLow, for: axis)
             }
-            let header = CaptureUI.row([CaptureUI.label(record.kind.label + (record.incomplete ? " · 未完成" : "")), CaptureButton("关闭", symbol: "xmark") { [weak panel] in panel?.close() }])
-            let actions = CaptureUI.row([CaptureButton("复制") { self.copy(record) }, CaptureButton(record.kind.capsuleKind == .video ? "播放" : "标注") { self.edit(record) }, CaptureButton("收藏") { self.collect(record) }, CaptureButton("更多") { self.showActions(record) }], spacing: 4)
-            CaptureUI.fill(CaptureUI.column([header, preview, actions], spacing: 6), in: panel.contentView!)
+            let previewLoad = loadOverlayPreview(record, store: store, into: preview)
+
+            let close = CaptureGlyphButton(symbol: "xmark", tooltip: "关闭") { [weak panel] in
+                panel?.close()
+            }
+            let actions = CaptureUI.row([
+                CaptureGlyphButton(symbol: "doc.on.doc", tooltip: "复制") { self.copy(record) },
+                CaptureGlyphButton(
+                    symbol: record.kind.capsuleKind == .video ? "play.fill" : "pencil.tip.crop.circle",
+                    tooltip: record.kind.capsuleKind == .video ? "播放" : "标注"
+                ) { self.edit(record) },
+                CaptureGlyphButton(symbol: "tray.and.arrow.down", tooltip: "收入 Capsule") { self.collect(record) },
+                CaptureGlyphButton(symbol: "ellipsis", tooltip: "更多") { self.showActions(record) },
+            ], spacing: 4)
+            for control in [close, actions] {
+                control.translatesAutoresizingMaskIntoConstraints = false
+                control.alphaValue = 0
+                body.addSubview(control)
+            }
+            NSLayoutConstraint.activate([
+                close.topAnchor.constraint(equalTo: body.topAnchor, constant: 6),
+                close.trailingAnchor.constraint(equalTo: body.trailingAnchor, constant: -6),
+                actions.centerXAnchor.constraint(equalTo: body.centerXAnchor),
+                actions.bottomAnchor.constraint(equalTo: body.bottomAnchor, constant: -6),
+            ])
+            body.onHover = { [weak close, weak actions] inside in
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.12
+                    close?.animator().alphaValue = inside ? 1 : 0
+                    actions?.animator().alphaValue = inside ? 1 : 0
+                }
+            }
+            CaptureUI.fill(body, in: panel.contentView!, inset: 0)
+
             guard store.acquire(record.id) else { throw CaptureError.message("资产正在清理，请刷新捕获历史") }
-            panel.closed = { [weak self] in store.release(record.id); self?.lastClosed = record.id; self?.overlays.removeValue(forKey: record.id) }
+            panel.closed = { [weak self] in
+                previewLoad.cancel()
+                store.release(record.id)
+                self?.lastClosed = record.id
+                self?.overlays.removeValue(forKey: record.id)
+                self?.overlayOrder.removeAll { $0 == record.id }
+                self?.layoutOverlays()
+            }
             overlays[record.id] = panel
-            let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main!
-            let left = UserDefaults.standard.bool(forKey: "capture.overlay.left")
-            panel.setFrameOrigin(CGPoint(x: left ? screen.visibleFrame.minX + 18 : screen.visibleFrame.maxX - panel.frame.width - 18, y: screen.visibleFrame.minY + 18 + CGFloat((overlays.count - 1) % 3) * 28))
+            overlayOrder.append(record.id)
             panel.present(center: false)
+            layoutOverlays()
+            // If a card is still blank a moment later, say what state it is
+            // in rather than leaving it to guesswork.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak panel, weak preview] in
+                guard let panel, let preview else { return }
+                IMELog.write("capture overlay settled visible=\(panel.isVisible) "
+                    + "alpha=\(panel.alphaValue) "
+                    + "occluded=\(!panel.occlusionState.contains(.visible)) "
+                    + "hasImage=\(preview.image != nil) "
+                    + "origin=\(Int(panel.frame.minX)),\(Int(panel.frame.minY))")
+            }
             queue.async { _ = try? store.prune() }
             let seconds = UserDefaults.standard.double(forKey: "capture.overlay.seconds")
             if seconds > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak panel] in panel?.close() } }
         } catch { CaptureUI.error(error) }
+    }
+
+    /// The overlay used to show the rendered preview only. When that file is
+    /// not written yet — or the loader declines the type — nothing was set
+    /// and the card came up black. Fall back to the captured file itself and
+    /// say so in the log rather than presenting an empty rectangle.
+    @discardableResult
+    private func loadOverlayPreview(_ record: CaptureRecord,
+                                    store: CaptureStore,
+                                    into view: NSImageView) -> Operation {
+        let original = store.url(record)
+        return CapsuleMediaPreviewLoader.shared.load(
+            kind: record.thumbnail == nil ? record.kind.capsuleKind : .image,
+            path: store.previewURL(record).path,
+            maximumPixelSize: 512
+        ) { result in
+            if case let .image(image) = result {
+                IMELog.write("capture overlay preview loaded "
+                    + "\(image.width)x\(image.height)")
+                view.image = NSImage(cgImage: image, size: .zero)
+                // The image lands about 30ms after the panel is presented.
+                // CaptureDragImageView draws it itself when fillsFrame is
+                // set, bypassing the cell that would normally invalidate, so
+                // the newest card stayed blank until something else forced a
+                // redraw — which is exactly why entering capture mode and
+                // pressing Esc "fixed" it: that re-orders every card.
+                view.needsDisplay = true
+                view.window?.viewsNeedDisplay = true
+                view.window?.displayIfNeeded()
+                return
+            }
+            if let fallback = NSImage(contentsOf: original) {
+                IMELog.write("capture overlay preview unavailable; using the original")
+                view.image = fallback
+                view.needsDisplay = true
+                view.window?.viewsNeedDisplay = true
+                view.window?.displayIfNeeded()
+            } else {
+                IMELog.write("capture overlay has no displayable preview for "
+                    + "\(record.kind.label)")
+            }
+        }
+    }
+
+    /// Results stack up one edge, newest nearest the corner, and reflow when
+    /// one is dismissed. A fixed three-step cascade overlapped them and lost
+    /// everything past the third.
+    private func layoutOverlays() {
+        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
+            ?? NSScreen.main
+        guard let visible = screen?.visibleFrame else { return }
+        let onLeft = UserDefaults.standard.object(forKey: "capture.overlay.left") as? Bool ?? true
+        var y = visible.minY + 18
+        for id in overlayOrder.reversed() {
+            // Only cards that are actually on screen take a slot. A panel
+            // that is hidden — during a capture, or before it is presented —
+            // used to reserve the bottom position and show nothing there,
+            // which read as a missing card with an empty space under the
+            // column.
+            guard let panel = overlays[id], panel.isVisible else { continue }
+            let x = onLeft
+                ? visible.minX + 18
+                : visible.maxX - panel.frame.width - 18
+            panel.setFrameOrigin(CGPoint(x: x, y: y))
+            // What the Esc path does, and what made a blank card appear.
+            panel.orderFrontRegardless()
+            IMELog.write("capture overlay slot y=\(Int(y)) "
+                + "size=\(Int(panel.frame.width))x\(Int(panel.frame.height)) "
+                + "visible=\(panel.isVisible)")
+            y += panel.frame.height + 8
+            if y > visible.maxY - panel.frame.height { break }
+        }
     }
 
     func showActions(_ record: CaptureRecord) {

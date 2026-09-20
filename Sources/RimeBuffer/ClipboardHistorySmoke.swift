@@ -157,7 +157,11 @@ enum ClipboardHistorySmoke {
         )
         host.contentView = pane
         pane.layoutSubtreeIfNeeded()
-        pane.showSearchCaretForCapture()
+        // In a window but never clicked: an unfocused field shows no caret.
+        guard !pane.snapshotForSmoke().searchCaretVisible else { return false }
+
+        pane.setSearchFocused(true)
+        pane.layoutSubtreeIfNeeded()
         let empty = pane.snapshotForSmoke()
         guard empty.searchCaretVisible else { return false }
 
@@ -165,9 +169,46 @@ enum ClipboardHistorySmoke {
         pane.layoutSubtreeIfNeeded()
         pane.showSearchCaretForCapture()
         let typed = pane.snapshotForSmoke()
-        return typed.searchCaretVisible
-            && typed.queryCharacterCount == 9
-            && typed.searchCaretX > empty.searchCaretX
+        guard typed.searchCaretVisible,
+              typed.queryCharacterCount == 9,
+              typed.searchCaretX > empty.searchCaretX else { return false }
+
+        // Clicking a card or the background takes the focus away again.
+        pane.setSearchFocused(false)
+        pane.layoutSubtreeIfNeeded()
+        return !pane.snapshotForSmoke().searchCaretVisible
+    }
+
+    /// Both bands were positioned by hand and drifted apart.
+    @MainActor
+    static func capturesBandProbe() -> Bool {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "rimes-band-probe-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        guard let store = try? ClipboardHistoryStore(rootDirectory: root) else {
+            return false
+        }
+        let model = ClipboardHistoryModel(
+            configuration: .init(),
+            pasteboard: ClipboardHistoryPasteboardDouble(),
+            clock: Date.init,
+            sourceApplicationName: { "Safari" },
+            sourceApplicationBundleIdentifier: { "com.apple.Safari" },
+            store: store,
+            schedulesAutomaticPolling: false
+        )
+        model.start()
+        let pane = ClipboardHistoryPaneView(model: model)
+        pane.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: ClipboardHistoryWindowMetrics.preferredWidth,
+            height: ClipboardHistoryWindowMetrics.preferredHeight
+        )
+        pane.layoutSubtreeIfNeeded()
+        return pane.capturesBandMatchesRecentForSmoke
     }
 
     static func run() -> Bool {
@@ -195,6 +236,10 @@ enum ClipboardHistorySmoke {
         expect(
             clipboardHistoryStandalonePanelKeyboardProbe(),
             "standalone Clipboard panel cannot own native search input"
+        )
+        expect(
+            capturesBandProbe(),
+            "the captures tab must occupy the same band as Recent"
         )
         expect(
             searchCaretProbe(),
