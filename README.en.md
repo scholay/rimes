@@ -98,8 +98,8 @@ Developer Program membership or by seeing one certificate on a developer Mac. It
   from the same Team: the former signs the app and bundled Mach-O, and the latter signs the `.pkg`;
 - two protected GitHub Environments: both must have at least one reviewer, prevent self-review, disallow
   administrator bypass, and use selected branch/tag policy allowing only `v*`; `macos-release` is
-  signing/notarization only, while `macos-publish` is the second publish approval with **no secrets** and
-  should use non-overlapping reviewers;
+  signing/notarization only, while `macos-publish` is the second publish approval with **no secrets**.
+  The same reviewer may approve both stages separately;
 - the two P12 files and passwords, Team ID, and App Store Connect notarization API P8, Key ID, and
   Issuer ID stored only in `macos-release`.
 

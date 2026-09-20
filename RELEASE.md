@@ -72,6 +72,9 @@ git switch main && git pull --ff-only
   self-review / administrator bypass，并以 selected branch/tag policy 允许 `v*`。前者的受保护 job 要求
   Application / Installer 两份证书、同一 Team ID 与公证凭据完整可用，后者不得存放这些凭据。
 
+两个 Environment 表示两次批准，**不要求两名审核者**；同一个 reviewer 可以先批准签名，再在同一安装包的
+真机验收通过后批准公开。当前选择的 prevent self-review 策略要求该 reviewer 账号与发起 workflow 的账号不同。
+
 此外，`release tags` ruleset 必须对 `refs/tags/v*` 增加 **creation** 限制，只把 bypass 权限给指定的
 发布主体；现有“禁止删除/移动”规则本身不能防止有人直接创建一个 tag。工作流会在导入凭据和创建 Release 前
 再次读取两个 Environment，配置变弱或缺失就拒绝继续；不要用直接 `git push` 绕开 `release.sh`。

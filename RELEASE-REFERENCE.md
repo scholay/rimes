@@ -65,12 +65,16 @@ Gatekeeper 策略。signed-stage 出现后，维护者必须下载其中的**精
 - `macos-release`：签名/公证门，必须配置至少一位 required reviewer、**prevent self-review**、**禁止
   administrator bypass**，并以 selected branch/tag policy 允许 `v*`；这里才保存下表八项 Secrets。
 - `macos-publish`：公开发布门，也必须配置上述 reviewer / self-review / admin-bypass / `v*` policy，且
-  **不要配置任何 Developer ID 或 notary Secret**。若签名保管人与发布批准人必须是不同的人，配置不重叠的
-  reviewer team；GitHub 的普通 required-reviewer 规则只要求名单中的一人批准。
+  **不要配置任何 Developer ID 或 notary Secret**。GitHub 的 required-reviewer 规则只要求名单中的一人批准；
+  两个 Environment 可以使用同一个 reviewer，由其分别批准签名和发布，不要求两位独立审核者。
+
+本项目的 prevent self-review 是所选发布策略，并非 Apple 或 GitHub 强制要求：发起 workflow 的账号不能批准
+自己的运行。例如账号 A 发起发布，账号 B 可以批准签名，完成真机安装验收后再批准公开。同一人管理两个账号
+可以执行这套流程，但不构成两个人的独立复核；若团队以后需要独立复核，再配置不同的人或不重叠的 reviewer team。
 
 正式工作流在导入凭据和公开 Release 前，会通过 GitHub API 重新断言以上 Environment 控制；缺失、允许
-self-review / admin bypass、没有 reviewer 或没有 `v*` policy 都会 fail-closed。GitHub Environment 无法自动
-证明两个 team 的成员不重叠，必须由仓库管理员在配置时保证。
+self-review / admin bypass、没有 reviewer 或没有 `v*` policy 都会 fail-closed。工作流不要求两个阶段使用不同的
+reviewer；若另行采用团队独立复核策略，成员分离由仓库管理员配置。
 
 `release tags` ruleset 还必须覆盖 `refs/tags/v*` 的 **creation**，并只给指定发布主体 bypass；单独禁止删除或
 移动 tag 不能阻止直接创建 tag。GitHub Actions Artifact 在公开仓库中的访问规则不是发布禁运；它只是发布

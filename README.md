@@ -95,7 +95,7 @@ Mac 可能由 MDM 禁止这个例外。完整步骤与风险边界见
   及其 bundled Mach-O，后者签名 `.pkg`；
 - 两个受保护的 GitHub Environment：两者都必须有至少一位 reviewer、禁止 self-review、禁止 administrator
   bypass，并用 selected branch/tag policy 只允许 `v*`；`macos-release` 只负责签名/公证，`macos-publish`
-  只负责第二次发布审批、**不存任何密钥**，并应使用不重叠的 reviewer；
+  只负责第二次发布审批、**不存任何密钥**。两个阶段可以由同一个 reviewer 分别批准；
 - 仅放在 `macos-release` 的两份 P12、其密码、Team ID，以及 App Store Connect 公证 API 的 P8、Key ID
   和 Issuer ID。
 
