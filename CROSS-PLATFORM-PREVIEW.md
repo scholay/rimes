@@ -135,14 +135,14 @@ install, verify, deploy, and uninstall commands.
 
 ## CI behavior
 
-`.github/workflows/platform-preview.yml` runs on pushes, pull requests, and
-manual dispatch. It runs the CLI self-tests and the same
+`.github/workflows/platform-preview.yml` runs weekly and by manual dispatch.
+It runs the CLI self-tests and the same
 stage/package/inspect sequence on
 `ubuntu-latest`, `windows-latest`, and `macos-15`, then uploads short-lived,
 data-only workflow artifacts with manifests and checksums. Separate native
 Windows and Linux jobs also exercise each package's isolated
-install/verify/uninstall transaction smoke before a commit can be considered
-ready for a preview tag.
+install/verify/uninstall transaction smoke. These are maintenance evidence,
+not required checks for a PR, macOS preview, or formal macOS Release.
 
 The workflow has read-only repository permissions. It never creates a GitHub
 Release and never labels these artifacts as complete native applications.
@@ -155,6 +155,8 @@ and also rebuilds the unchanged macOS target before creating a GitHub
 release workflow, and a prerelease is excluded from the macOS updater's
 `/releases/latest` channel.
 
-Create the tag through `./scripts/release.sh platform X.Y.Z` (or `platform patch|minor|major`); the script refuses
-dirty or diverged worktrees and verifies that both `origin` URLs resolve to the
-canonical `scholay/rimes` repository before pushing.
+Create a platform tag only through an explicit maintenance decision with
+`./scripts/release.sh platform X.Y.Z` (or `platform patch|minor|major`); the
+script refuses dirty or diverged worktrees and verifies that both `origin` URLs
+resolve to the canonical `scholay/rimes` repository before pushing. This
+separate preview channel never unblocks or blocks the macOS release path.

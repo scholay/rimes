@@ -148,7 +148,8 @@ tail -f ~/rimebuffer.log          # 行为日志
 
 ### Windows / Linux 输入方案预览
 
-Windows 与 Linux 目前提供独立的 **Data / Input-Schemes Preview**。它复用 RIMES 的五套
+Windows 与 Linux 目前提供独立的 **Data / Input-Schemes Preview**，作为手动/每周的维护兼容性检查；
+它不再阻断 main 合并、macOS 预览或正式 macOS Release。该通道复用 RIMES 的五套
 核心 Rime 方案、词库、Lua，以及随包保留的可选并击方案数据，但需要用户先安装 Windows
 [小狼毫 Weasel](https://github.com/rime/weasel)、Linux
 [Fcitx5 Rime](https://github.com/fcitx/fcitx5-rime) 或
@@ -177,7 +178,7 @@ Windows 11 实机验证。它目前仍是 commit-only 开发里程碑，尚无�
 | [RELEASE.md](RELEASE.md) | 发布流程：渠道、一条命令发布、节奏与版本号规则 |
 | [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md) | 发布技术参考：签名、安装器、应用内更新、CI |
 | [RELEASE-HISTORY.md](RELEASE-HISTORY.md) | 已关闭的发布通道、旧仓库迁移与改名记录 |
-| [CHANGELOG.md](CHANGELOG.md) | 由 tag 与提交信息生成的逐版本变更 |
+| [CHANGELOG.md](CHANGELOG.md) | 由公开 GitHub Release 与提交信息生成的逐版本变更 |
 
 ## 自动更新
 
@@ -190,7 +191,7 @@ GitHub Release；未签名的 `vX.Y.Z-preview.N` 不会进入该通道。
 ./scripts/release.sh --dry-run preview  # 预览计划、CI 门禁与发布说明
 ./scripts/release.sh preview            # macOS 未签名预览版 vX.Y.Z-preview.N
 ./scripts/release.sh stable             # 预览线转正为 vX.Y.Z（需 Developer ID）
-./scripts/release.sh platform minor     # Windows/Linux 数据预览版
+./scripts/release.sh platform minor     # 显式维护用 Windows/Linux 数据预览（不阻断 macOS）
 ```
 
 所有 Release 都发布在 `scholay/rimes`：macOS `vX.Y.Z` 是正式版；`vX.Y.Z-preview.N` 是未签名

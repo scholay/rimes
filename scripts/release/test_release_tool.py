@@ -132,6 +132,63 @@ class RehearsalAndLatestTests(unittest.TestCase):
             tool.latest_release(releases[:1])
 
 
+class PublicReleaseSourceTests(unittest.TestCase):
+    @staticmethod
+    def response(payload):
+        result = mock.MagicMock()
+        result.read.return_value = json.dumps(payload).encode("utf-8")
+        result.__enter__.return_value = result
+        return result
+
+    def test_normalizes_rest_and_gh_records_and_excludes_drafts(self):
+        releases = [
+            {"tag_name": "v0.5.0-preview.3", "draft": False, "prerelease": True},
+            {"tagName": "v0.5.1", "isDraft": False, "isPrerelease": False},
+            {"tag_name": "v0.5.2", "draft": True},
+            {"tag_name": "platform-preview-v0.2.0", "draft": False},
+        ]
+        self.assertEqual(
+            tool.public_release_tag_names(releases),
+            ["v0.5.0-preview.3", "v0.5.1"],
+        )
+        self.assertEqual(tool.latest_release(releases), "0.5.1")
+
+    def test_reads_paginated_releases_without_a_gh_dependency(self):
+        first = [{"tag_name": f"v1.0.{index}", "draft": False}
+                 for index in range(tool.GITHUB_RELEASE_PAGE_SIZE)]
+        second = [{"tag_name": "v2.0.0", "draft": False}]
+        with mock.patch.object(
+            tool.urlrequest,
+            "urlopen",
+            side_effect=[self.response(first), self.response(second)],
+        ) as opener:
+            records = tool.github_release_records()
+        self.assertEqual(records, first + second)
+        self.assertEqual(opener.call_count, 2)
+        self.assertIn("page=1", opener.call_args_list[0].args[0].full_url)
+        self.assertIn("page=2", opener.call_args_list[1].args[0].full_url)
+
+    def test_network_or_json_failure_never_falls_back_to_git_tags(self):
+        with mock.patch.object(tool.urlrequest, "urlopen", side_effect=tool.urlerror.URLError("offline")):
+            with self.assertRaisesRegex(tool.ReleaseError, "无法读取 GitHub Releases"):
+                tool.github_release_records()
+        invalid = mock.MagicMock()
+        invalid.read.return_value = b"not json"
+        invalid.__enter__.return_value = invalid
+        with mock.patch.object(tool.urlrequest, "urlopen", return_value=invalid):
+            with self.assertRaisesRegex(tool.ReleaseError, "无效 JSON"):
+                tool.github_release_records()
+
+    def test_offline_release_json_is_supported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "releases.json"
+            fixture.write_text('[{"tag_name":"v0.5.0-preview.3","draft":false}]', encoding="utf-8")
+            self.assertEqual(
+                tool.public_release_tag_names(tool.release_records_from_json(fixture)),
+                ["v0.5.0-preview.3"],
+            )
+
+
 class CommitRulesTests(unittest.TestCase):
     def commit(self, subject: str, body: str = "") -> tool.Commit:
         return tool.Commit("abc1234", subject, body)
@@ -172,6 +229,13 @@ class GitHistoryTests(unittest.TestCase):
         self.run_git("merge", "-q", "--no-ff", "topic", "-m", "Merge #17: 呦呦音形")
         self.run_git("tag", "v0.5.0-preview.1")
         self.commit("Shrink the capsule")
+        # v0.5.0 is an immutable but cancelled/unpublished tag. Public notes
+        # must not silently use it as a comparison baseline.
+        self.run_git("tag", "v0.5.0")
+        self.releases = [
+            {"tag_name": "v0.4.3", "draft": False, "prerelease": True},
+            {"tag_name": "v0.5.0-preview.1", "draft": False, "prerelease": True},
+        ]
         self.patch = mock.patch.object(tool, "REPO_ROOT", self.root)
         self.patch.start()
 
@@ -188,7 +252,7 @@ class GitHistoryTests(unittest.TestCase):
         self.run_git("commit", "-q", "--allow-empty", "-m", subject)
 
     def test_notes_group_commits_and_list_merged_prs(self):
-        notes = tool.release_notes("v0.5.0-preview.1")
+        notes = tool.release_notes("v0.5.0-preview.1", releases=self.releases)
         self.assertIn("自 v0.4.3 以来", notes)
         self.assertIn("- #17 呦呦音形", notes)
         self.assertIn("### 新功能\n\n- **chord:** add yoyo schemes", notes)
@@ -198,22 +262,32 @@ class GitHistoryTests(unittest.TestCase):
         self.assertIn("compare/v0.4.3...v0.5.0-preview.1", notes)
 
     def test_notes_for_an_untagged_candidate(self):
-        notes = tool.release_notes("v0.5.0-preview.2", ref="HEAD")
+        notes = tool.release_notes("v0.5.0-preview.2", ref="HEAD", releases=self.releases)
         self.assertIn("自 v0.5.0-preview.1 以来", notes)
         self.assertIn("### 其他\n\n- Shrink the capsule", notes)
 
+    def test_notes_ignore_cancelled_tags_when_selecting_the_public_baseline(self):
+        notes = tool.release_notes("v0.5.1", ref="HEAD", releases=self.releases)
+        self.assertIn("自 v0.5.0-preview.1 以来", notes)
+        self.assertIn("compare/v0.5.0-preview.1...v0.5.1", notes)
+        self.assertNotIn("v0.5.0...v0.5.1", notes)
+
     def test_changelog_lists_tags_newest_first(self):
-        text = tool.render_changelog()
+        text = tool.render_changelog(self.releases)
         self.assertLess(text.index("## [v0.5.0-preview.1]"), text.index("## [v0.4.3]"))
         self.assertIn("— 2026-09-01", text)
+        self.assertNotIn("## [v0.5.0]", text)
 
-    def test_changelog_ignores_tags_that_origin_does_not_publish(self):
-        text = tool.render_changelog(["v0.5.0-preview.1"])
+    def test_changelog_ignores_tags_that_are_not_public_releases(self):
+        text = tool.render_changelog([{"tag_name": "v0.5.0-preview.1", "draft": False}])
         self.assertNotIn("## [v0.4.3]", text)
         self.assertIn("- **chord:** add yoyo schemes", text)
         self.assertIn("- initial import", text)
-        with self.assertRaisesRegex(tool.ReleaseError, "本地缺少 origin 的 tag"):
-            tool.render_changelog(["v0.5.0-preview.1", "v0.6.0-preview.1"])
+        with self.assertRaisesRegex(tool.ReleaseError, "本地缺少公开 GitHub Release 的 tag"):
+            tool.render_changelog([
+                {"tag_name": "v0.5.0-preview.1", "draft": False},
+                {"tag_name": "v0.6.0-preview.1", "draft": False},
+            ])
 
     def test_lint_commits_flags_non_conventional_subjects(self):
         problems = tool.lint_commits("v0.4.3", "HEAD")
@@ -309,6 +383,9 @@ class FormalPackageOnlyWorkflowTests(unittest.TestCase):
     def setUpClass(cls):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/release.yml").read_text()
+        cls.preview_job = workflow.split("  publish_unsigned_preview:", 1)[1].split(
+            "  sign_and_stage:", 1
+        )[0]
         cls.signing_job = workflow.split("  sign_and_stage:", 1)[1].split(
             "  publish_staged_release:", 1
         )[0]
@@ -341,6 +418,46 @@ class FormalPackageOnlyWorkflowTests(unittest.TestCase):
         self.assertIn("四个成员", self.reference_doc)
         self.assertIn("正式 Release 不包含 `RIMES-X.Y.Z.zip`", self.reference_doc)
         self.assertNotIn("逐字节复核五个成员", self.reference_doc)
+
+    def test_release_note_generation_receives_the_github_api_token(self):
+        for job in (self.preview_job, self.signing_job):
+            with self.subTest(job=job[:48]):
+                self.assertIn("GITHUB_TOKEN: ${{ github.token }}", job)
+                self.assertIn("scripts/release/release_tool.py notes", job)
+
+
+class MacOSReleaseGatePolicyTests(unittest.TestCase):
+    """Keep experimental cross-platform checks out of the macOS release gate."""
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[2]
+        cls.release_script = (root / "scripts/release.sh").read_text()
+        cls.release_workflow = (root / ".github/workflows/release.yml").read_text()
+        cls.platform_workflow = (root / ".github/workflows/platform-preview.yml").read_text()
+        cls.windows_workflow = (root / ".github/workflows/windows-native.yml").read_text()
+
+    def test_release_script_requires_only_the_macos_ci_workflow(self):
+        self.assertIn('REQUIRED_WORKFLOWS=("CI")', self.release_script)
+        self.assertNotIn('"Platform Preview Data"', self.release_script.split("REQUIRED_WORKFLOWS=", 1)[1].split("\n", 1)[0])
+        self.assertNotIn('"Windows Native Foundation"', self.release_script.split("REQUIRED_WORKFLOWS=", 1)[1].split("\n", 1)[0])
+
+    def test_cross_platform_workflows_are_scheduled_or_manual_maintenance_only(self):
+        for workflow in (self.platform_workflow, self.windows_workflow):
+            with self.subTest(workflow=workflow.splitlines()[0]):
+                trigger = workflow.split("permissions:", 1)[0]
+                self.assertIn("schedule:", trigger)
+                self.assertIn("workflow_dispatch:", trigger)
+                self.assertNotIn("push:", trigger)
+                self.assertNotIn("pull_request:", trigger)
+
+    def test_formal_release_jobs_remain_on_macos(self):
+        names = ("build_and_smoke", "sign_and_stage", "publish_staged_release")
+        for index, name in enumerate(names):
+            job = self.release_workflow.split(f"  {name}:", 1)[1]
+            if index + 1 < len(names):
+                job = job.split(f"  {names[index + 1]}:", 1)[0]
+            self.assertIn("runs-on: macos-15", job)
 
 
 if __name__ == "__main__":

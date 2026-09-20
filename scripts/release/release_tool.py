@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Version, release-note, and commit-message rules for RIMES releases.
 
-A pushed tag is the only record of a version. Everything here is derived from
-tags and commit history, so it can run identically on a laptop, in CI, and in
-the release workflow. Only the Python standard library is used.
+Tags are immutable version identities, while GitHub Releases are the public
+publication record. Version allocation reads tags; public release notes and
+CHANGELOG entries read only non-draft GitHub Releases plus local commit
+history. Only the Python standard library is used.
 
 Subcommands:
   next {preview,stable,platform} [patch|minor|major|X.Y.Z]
@@ -16,10 +17,11 @@ Subcommands:
   latest-release [--exclude VERSION]
       Read `gh release list --json tagName,isDraft` from stdin and print the
       highest published macOS version.
-  notes --tag TAG [--from TAG] [--ref REF]
-      Print grouped release notes for TAG from local git history.
-  changelog [--write | --check]
-      Regenerate CHANGELOG.md from every macOS tag published on origin.
+  notes --tag TAG [--from TAG] [--ref REF] [--releases-json PATH]
+      Print grouped release notes for TAG from local git history. Without an
+      explicit --from, compare to the preceding public GitHub Release.
+  changelog [--write | --check] [--releases-json PATH]
+      Regenerate CHANGELOG.md from every public macOS GitHub Release.
   lint-commits BASE HEAD
       Fail when a non-merge commit in BASE..HEAD is not a Conventional Commit.
   check-plist [PATH]
@@ -30,10 +32,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import plistlib
 import re
 import subprocess
 import sys
+from urllib import error as urlerror
+from urllib import request as urlrequest
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,6 +46,8 @@ REPO = "scholay/rimes"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 DEV_PLACEHOLDER_VERSION = "0.0.0-dev"
+GITHUB_RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases"
+GITHUB_RELEASE_PAGE_SIZE = 100
 
 _NUM = r"(0|[1-9][0-9]*)"
 MAC_TAG = re.compile(rf"^v{_NUM}\.{_NUM}\.{_NUM}(?:-preview\.([1-9][0-9]*))?$")
@@ -284,14 +291,33 @@ def rehearsal_version(names: list[str]) -> str:
         return plan_preview(tags, "patch").version
 
 
+def public_release_tag_names(releases: list[dict]) -> list[str]:
+    """Return public macOS tag names from GitHub REST or gh JSON records.
+
+    The REST API uses snake_case fields, whereas `gh release list --json`
+    returns camelCase fields. Supporting both keeps the command-line helper
+    compatible while making the REST API the canonical public source.
+    """
+    names = []
+    for release in releases:
+        tag = release.get("tag_name", release.get("tagName"))
+        draft = release.get("draft", release.get("isDraft", False))
+        if not isinstance(tag, str) or not isinstance(draft, bool):
+            raise ReleaseError("GitHub Release 记录缺少合法的 tag 或 draft 字段。")
+        if not draft and parse_mac_tag(tag):
+            names.append(tag)
+    return names
+
+
+def public_mac_versions(releases: list[dict]) -> list[MacVersion]:
+    return sorted(
+        (version for version in map(parse_mac_tag, public_release_tag_names(releases)) if version),
+        key=lambda version: version.key,
+    )
+
+
 def latest_release(releases: list[dict], exclude: str | None = None) -> str:
-    versions = [
-        version
-        for release in releases
-        if not release.get("isDraft")
-        for version in [parse_mac_tag(str(release.get("tagName", "")))]
-        if version and str(version) != exclude
-    ]
+    versions = [version for version in public_mac_versions(releases) if str(version) != exclude]
     if not versions:
         raise ReleaseError("没有已发布的 macOS Release。")
     return str(max(versions, key=lambda version: version.key))
@@ -384,26 +410,84 @@ def local_mac_tags() -> list[MacVersion]:
     return sorted((version for version in versions if version), key=lambda version: version.key)
 
 
-def origin_tag_names() -> list[str]:
-    """Tags published on origin.
+def github_release_records() -> list[dict]:
+    """Read every GitHub Release using only the standard library.
 
-    A clone can hold tags that were never pushed to the canonical repository
-    (v0.1.0-v0.4.1 were released from the retired young-bo-i/rime-buffer), so
-    anything that must match between machines and CI reads origin instead.
+    Public release history must never be inferred from raw git tags: an
+    immutable tag can legitimately represent a cancelled attempt. An optional
+    token raises the API quota in CI, but ordinary maintainers need no gh CLI
+    or credential to inspect this public repository.
     """
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "rimes-release-tool",
+    }
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    releases: list[dict] = []
+    page = 1
+    while True:
+        url = f"{GITHUB_RELEASES_URL}?per_page={GITHUB_RELEASE_PAGE_SIZE}&page={page}"
+        try:
+            request = urlrequest.Request(url, headers=headers)
+            with urlrequest.urlopen(request, timeout=15) as response:  # noqa: S310 - fixed GitHub API URL
+                payload = json.loads(response.read().decode("utf-8"))
+        except (urlerror.HTTPError, urlerror.URLError, TimeoutError, UnicodeDecodeError) as exc:
+            raise ReleaseError(f"无法读取 GitHub Releases：{exc}") from exc
+        except json.JSONDecodeError as exc:
+            raise ReleaseError(f"GitHub Releases 返回了无效 JSON：{exc}") from exc
+        if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+            raise ReleaseError("GitHub Releases 返回了无效的记录列表。")
+        releases.extend(payload)
+        if len(payload) < GITHUB_RELEASE_PAGE_SIZE:
+            return releases
+        page += 1
+
+
+def release_records_from_json(path: Path) -> list[dict]:
     try:
-        return tag_names(git("ls-remote", "--tags", "--refs", "origin").splitlines())
-    except subprocess.CalledProcessError as error:
-        raise ReleaseError(f"无法读取 origin 的 tag：{error.stderr.strip()}") from error
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ReleaseError(f"无法读取 GitHub Releases JSON：{exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ReleaseError(f"GitHub Releases JSON 无效：{exc}") from exc
+    if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+        raise ReleaseError("GitHub Releases JSON 必须是对象数组。")
+    return payload
 
 
-def release_notes(tag: str, start: str | None = None, ref: str | None = None) -> str:
+def public_release_start(candidate: MacVersion, releases: list[dict]) -> str | None:
+    earlier = [version for version in public_mac_versions(releases) if version.key < candidate.key]
+    return earlier[-1].tag if earlier else None
+
+
+def require_local_release_tags(tags: list[MacVersion]) -> None:
+    local = set(local_mac_tags())
+    missing = set(tags) - local
+    if missing:
+        raise ReleaseError(
+            "本地缺少公开 GitHub Release 的 tag："
+            + ", ".join(sorted(version.tag for version in missing))
+            + "。请先运行 git fetch origin --tags。"
+        )
+
+
+def release_notes(
+    tag: str,
+    start: str | None = None,
+    ref: str | None = None,
+    releases: list[dict] | None = None,
+) -> str:
     candidate = parse_mac_tag(tag)
     if candidate is None:
         raise ReleaseError(f"不是 macOS 发布 tag：{tag}")
     if start is None:
-        names = [version.tag for version in local_mac_tags() if version != candidate]
-        start = TagSet(names).previous_for(candidate)
+        published = releases if releases is not None else github_release_records()
+        versions = public_mac_versions(published)
+        require_local_release_tags(versions)
+        start = public_release_start(candidate, published)
     end = ref or tag
     compare = (
         f"https://github.com/{REPO}/compare/{start}...{tag}" if start
@@ -413,18 +497,10 @@ def release_notes(tag: str, start: str | None = None, ref: str | None = None) ->
     return f"## 变更（{since}）\n\n{render_changes(start, end)}\n\n**完整对比**：{compare}\n"
 
 
-def render_changelog(names: list[str] | None = None) -> str:
-    local = local_mac_tags()
-    if names is not None:
-        published = {version for version in map(parse_mac_tag, names) if version}
-        missing = published - set(local)
-        if missing:
-            raise ReleaseError(
-                "本地缺少 origin 的 tag：" + ", ".join(sorted(v.tag for v in missing))
-                + "。请先运行 git fetch origin --tags。"
-            )
-        local = [version for version in local if version in published]
-    tags = local
+def render_changelog(releases: list[dict] | None = None) -> str:
+    records = releases if releases is not None else github_release_records()
+    tags = public_mac_versions(records)
+    require_local_release_tags(tags)
     sections = []
     for index, version in enumerate(tags):
         previous = tags[index - 1].tag if index else None
@@ -435,7 +511,7 @@ def render_changelog(names: list[str] | None = None) -> str:
         )
     header = (
         "# 更新日志\n\n"
-        "本文件由 `python3 scripts/release/release_tool.py changelog --write` 根据发布 tag 与\n"
+        "本文件由 `python3 scripts/release/release_tool.py changelog --write` 根据公开 GitHub Release 与\n"
         "[Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/) 生成，请勿手工编辑。\n"
         "每个版本的安装方式与校验和见 [GitHub Releases](https://github.com/scholay/rimes/releases)。\n"
     )
@@ -486,11 +562,21 @@ def main(argv: list[str] | None = None) -> int:
     notes_parser.add_argument("--tag", required=True)
     notes_parser.add_argument("--from", dest="start")
     notes_parser.add_argument("--ref")
+    notes_parser.add_argument(
+        "--releases-json",
+        type=Path,
+        help="离线读取 GitHub Releases JSON（对象数组），不访问网络。",
+    )
 
     changelog_parser = commands.add_parser("changelog")
     mode = changelog_parser.add_mutually_exclusive_group()
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--check", action="store_true")
+    changelog_parser.add_argument(
+        "--releases-json",
+        type=Path,
+        help="离线读取 GitHub Releases JSON（对象数组），不访问网络。",
+    )
 
     lint_parser = commands.add_parser("lint-commits")
     lint_parser.add_argument("base")
@@ -508,9 +594,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "latest-release":
             print(latest_release(json.load(sys.stdin), args.exclude))
         elif args.command == "notes":
-            sys.stdout.write(release_notes(args.tag, args.start, args.ref))
+            releases = release_records_from_json(args.releases_json) if args.releases_json else None
+            sys.stdout.write(release_notes(args.tag, args.start, args.ref, releases))
         elif args.command == "changelog":
-            text = render_changelog(origin_tag_names())
+            releases = release_records_from_json(args.releases_json) if args.releases_json else None
+            text = render_changelog(releases)
             if args.check:
                 current = CHANGELOG.read_text(encoding="utf-8") if CHANGELOG.exists() else ""
                 if current != text:

@@ -144,14 +144,14 @@ CI 和 `scripts/release.sh` 都会用 `--check` 阻止版本或文档漂移。�
 
 | 工作流 | 触发 | 内容 |
 |---|---|---|
-| `CI`（[ci.yml](.github/workflows/ci.yml)） | push / PR 到 main | 「Release tooling」：发布工具单元测试、`release.sh` 语法、`Info.plist` 版本占位、PR 提交信息、CHANGELOG 落后警告；「build」：`swift build` 与纯 Swift smoke |
-| `Platform Preview Data` | push / PR 到 main | 跨平台数据闭包校验与 Windows / Linux 包事务 |
-| `Windows Native Foundation` | push / PR 到 main | Windows 原生 x64 / x86 构建与测试 |
+| `CI`（[ci.yml](.github/workflows/ci.yml)） | push / PR 到 main | 发布工具单元测试、`release.sh` 语法、`Info.plist` 版本占位、PR 提交信息、公开 Release 驱动的 CHANGELOG 警告；以及 macOS `swift build` 与纯 Swift smoke |
+| `Platform Preview Data` | 每周 / 手动 | 跨平台数据闭包校验与 Windows / Linux 包事务；维护性检查，不阻断 macOS 发布 |
+| `Windows Native Foundation` | 每周 / 手动 | Windows 原生 x64 / x86 构建与测试；维护性检查，不阻断 macOS 发布 |
 | `Release macOS`（演练） | 打包相关 PR、每日定时、手动 | 完整通用构建、打包、从最新 Release 升级安装，不发布 |
 | `Release macOS`（发布） | `v*` tag | 见第一节 |
 
-main 的 ruleset 要求 PR 合并前前三个工作流的全部检查通过；`Release macOS` 演练带路径过滤，不作为
-必需检查，由定时运行兜底。
+main 的 ruleset 只要求 `CI` 的 `Release tooling` 与 macOS `build` 成功；`Release macOS` 演练带路径过滤，
+不作为必需检查，由定时运行兜底。Windows / Linux 维护 workflow 不属于 PR 或 macOS 发布门禁。
 
 ## 六、安装器（[`scripts/make-pkg.sh`](scripts/make-pkg.sh)）
 
@@ -245,10 +245,11 @@ scripts/rehearse-release-pkg.sh --pkg /absolute/path/RIMES-X.Y.Z.pkg --install-g
 ## 八、Windows / Linux 输入方案预览
 
 跨平台 Data / Input-Schemes Preview 使用独立的 `platform-preview-vX.Y.Z` 标签和
-`.github/workflows/platform-preview-release.yml`，由 `./scripts/release.sh platform patch|minor|major|X.Y.Z`
-创建。日常数据验证另由只读的 `.github/workflows/platform-preview.yml` 负责。该标签不会匹配 macOS 发布所用的
-`vX.Y.Z` 规则；生成的 GitHub Release 必须标记为 **Pre-release**，因此也不会进入 macOS 客户端
-查询的 `/releases/latest` 自动更新通道。
+`.github/workflows/platform-preview-release.yml`，由维护者显式运行 `./scripts/release.sh platform
+patch|minor|major|X.Y.Z` 创建。日常数据验证由只读的 `.github/workflows/platform-preview.yml` 每周或手动运行；
+它们不会成为 main、macOS 预览或正式 macOS Release 的门禁。该标签不会匹配 macOS 发布所用的 `vX.Y.Z` 规则；
+生成的 GitHub Release 必须标记为 **Pre-release**，因此也不会进入 macOS 客户端查询的 `/releases/latest`
+自动更新通道。
 
 预览工作流在 Windows、Linux 与 macOS runner 上共同校验审核过的 Rime 数据闭包，并在
 原生 Windows/Linux runner 上执行安装、校验、卸载文件事务。发布资产只是面向

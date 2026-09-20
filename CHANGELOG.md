@@ -1,6 +1,6 @@
 # 更新日志
 
-本文件由 `python3 scripts/release/release_tool.py changelog --write` 根据发布 tag 与
+本文件由 `python3 scripts/release/release_tool.py changelog --write` 根据公开 GitHub Release 与
 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/) 生成，请勿手工编辑。
 每个版本的安装方式与校验和见 [GitHub Releases](https://github.com/scholay/rimes/releases)。
 
