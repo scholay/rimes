@@ -45,9 +45,11 @@ jobs:
         run: python3 scripts/release/release_tool.py lint-commits "$BASE_SHA" "$HEAD_SHA"
 
       - name: CHANGELOG covers every release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           if ! python3 scripts/release/release_tool.py changelog --check; then
-            echo "::warning file=CHANGELOG.md::CHANGELOG.md is missing the latest release. Run python3 scripts/release/release_tool.py changelog --write in this or the next PR."
+            echo "::warning file=CHANGELOG.md::CHANGELOG.md is missing a public GitHub Release, or its public release history could not be read. Run python3 scripts/release/release_tool.py changelog --write after verifying GitHub Releases."
           fi
 
   build:

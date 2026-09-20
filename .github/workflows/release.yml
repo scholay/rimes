@@ -1075,6 +1075,7 @@ jobs:
       - name: Reauthorize vacancy and create UNSIGNED pre-release
         env:
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
+          GITHUB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: scholay/rimes
         run: |
@@ -1745,6 +1746,7 @@ jobs:
       - name: Stage immutable signed release assets
         id: stage
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           PKG: ${{ steps.pkg.outputs.PKG }}
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
           PKG_SHA256: ${{ steps.pkg.outputs.PKG_SHA256 }}

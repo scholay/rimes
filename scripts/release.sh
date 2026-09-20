@@ -2,7 +2,8 @@
 # =============================================================================
 # RIMES 发布脚本 —— 所有渠道的唯一入口
 #
-# 版本号只来自 tag。脚本从远端 tag 计算下一个版本，确认 origin/main 的 CI 全绿，
+# 版本号只来自 tag。脚本从远端 tag 计算下一个版本，确认 origin/main 的 macOS
+# 发布就绪检查通过，
 # 在 origin/main 上创建 tag 并只推送这个 tag；不修改、不提交任何文件。
 # tag 推送后由 GitHub Actions 构建、验证并创建 Release。
 #
@@ -38,9 +39,10 @@ usage() {
 
 REMOTE="origin"
 EXPECTED_REPO="scholay/rimes"
-# Workflows that run on every push to main. A release commit must have passed
-# all of them; the release workflow itself runs after the tag is pushed.
-REQUIRED_WORKFLOWS=("CI" "Platform Preview Data" "Windows Native Foundation")
+# The product release gate is macOS-only. CI includes the macOS build/runtime
+# smoke plus portable release-tooling checks. Windows/Linux preview workflows
+# remain maintenance checks, but never block a macOS preview or formal release.
+REQUIRED_WORKFLOWS=("CI")
 
 github_repo_from_url() {
     local url="$1" repo
@@ -255,7 +257,7 @@ echo ""
 info "发布计划:"
 echo "  仓库:     https://github.com/$EXPECTED_REPO"
 echo "  渠道:     $channel"
-echo "  上一版本: ${PREVIOUS:-<首次发布>}"
+echo "  上一 tag:  ${PREVIOUS:-<首次发布>}（仅版本命名，不代表公开 Release）"
 echo "  新 tag:   $TAG"
 echo "  提交:     $(git log -1 --format='%h %s' "$fetch_main")"
 echo "  推送:     只推送 ${TAG}；不修改或提交任何文件"
@@ -265,8 +267,8 @@ done
 
 if [[ "$KIND" != "platform" ]]; then
     echo ""
-    info "发布说明预览（Release 页面由工作流用同一规则生成）:"
-    python3 "$TOOL" notes --tag "$TAG" --ref "$fetch_main" ${PREVIOUS:+--from "$PREVIOUS"} | sed 's/^/  │ /'
+    info "发布说明预览（只以公开 GitHub Release 为比较基线）:"
+    python3 "$TOOL" notes --tag "$TAG" --ref "$fetch_main" | sed 's/^/  │ /'
 fi
 
 if [[ "$DRY_RUN" == true ]]; then

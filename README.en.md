@@ -160,7 +160,9 @@ More smoke targets and the release pipeline are documented in [RELEASE.md](RELEA
 
 ### Windows / Linux input-schemes preview
 
-Windows and Linux currently receive a separate **Data / Input-Schemes Preview**. It reuses
+Windows and Linux currently receive a separate **Data / Input-Schemes Preview** as a
+manual/weekly maintenance compatibility check; it no longer blocks main merges, macOS previews,
+or formal macOS Releases. It reuses
 RIMES's five core Rime schemas, dictionaries, Lua modules, plus the packaged optional Chording
 schema data, but
 requires an existing installation of [Weasel](https://github.com/rime/weasel) on Windows or
@@ -194,7 +196,7 @@ for the exact boundary, safety model, and validation commands.
 | [RELEASE.md](RELEASE.md) | Release process: channels, one-command releases, cadence, version rules |
 | [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md) | Release reference: signing, installer, in-app updates, CI |
 | [RELEASE-HISTORY.md](RELEASE-HISTORY.md) | Retired release channels, repository migration, and the rename |
-| [CHANGELOG.md](CHANGELOG.md) | Per-version changes generated from tags and commit messages |
+| [CHANGELOG.md](CHANGELOG.md) | Per-version changes generated from public GitHub Releases and commit messages |
 
 ## Auto-update
 
@@ -209,7 +211,7 @@ There is one release entry point, and versions come only from tags (process in
 ./scripts/release.sh --dry-run preview  # show the plan, CI gates, and release notes
 ./scripts/release.sh preview            # unsigned macOS preview vX.Y.Z-preview.N
 ./scripts/release.sh stable             # promote the preview line to vX.Y.Z (needs Developer ID)
-./scripts/release.sh platform minor     # Windows/Linux data preview
+./scripts/release.sh platform minor     # explicit maintenance Windows/Linux preview; never blocks macOS
 ```
 
 All release channels are published in `scholay/rimes`: macOS `vX.Y.Z` is formal;

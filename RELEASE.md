@@ -1,6 +1,6 @@
 # 发布流程
 
-**合并到 main → CI 全绿 → `./scripts/release.sh <渠道>` → tag → 签名暂存 → 真机同路验收 → 第二次批准 → GitHub Release。**
+**合并到 main → macOS CI 全绿 → `./scripts/release.sh <渠道>` → tag → 签名暂存 → 真机同路验收 → 第二次批准 → GitHub Release。**
 
 版本号只来自 tag。发布脚本不修改、不提交任何文件，只在 `origin/main` 上创建并推送一个 tag；
 构建、验证、发布说明和 Release 全部由 GitHub Actions 按同一套规则完成。唯一发布中心是
@@ -25,7 +25,10 @@ flowchart LR
 |---|---|---|---|---|
 | macOS 预览版 | `vX.Y.Z-preview.N` | `./scripts/release.sh preview` | 未签名 PKG + `SHA256SUMS`，Pre-release | 手动安装，见 [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) |
 | macOS 正式版 | `vX.Y.Z` | `./scripts/release.sh stable` | Developer ID 签名并公证的 PKG + `SHA256SUMS`，Latest | 应用内自动更新 |
-| Windows / Linux 数据预览 | `platform-preview-vX.Y.Z` | `./scripts/release.sh platform minor` | 数据与脚本包，Pre-release | 手动安装，见 [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) |
+| Windows / Linux 数据预览（维护通道） | `platform-preview-vX.Y.Z` | `./scripts/release.sh platform minor` | 数据与脚本包，Pre-release | 手动安装，见 [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) |
+
+> 当前标准：**macOS 是唯一的产品与正式发布门禁。** Windows / Linux 的数据包与原生基础层保留为
+> 手动/每周维护检查和独立预览，不阻断 main 合并、macOS 预览或正式 macOS Release。
 
 > Developer Program 资格或一张 Developer ID 证书本身不能把预览版变成正式版。首个正式
 > `vX.Y.Z` 必须同时具备同一 Team 的 **Developer ID Application + Developer ID Installer** 证书及私钥、
@@ -39,7 +42,7 @@ flowchart LR
 1. **一个 PR 只做一件事。** 提交信息使用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/)：
    `feat(scope): …`、`fix: …`、`perf:`、`refactor:`、`docs:`、`test:`、`build:`、`ci:`、`chore:`、`style:`、`revert:`。
    发布说明由提交信息生成，CI 的「Release tooling」会拒绝不合规的提交。
-2. **不直接推送 main。** main 受 ruleset 保护：合并必须经过 PR，且所有 CI 检查通过。
+2. **不直接推送 main。** main 受 ruleset 保护：合并必须经过 PR，且必需的 macOS CI 检查通过。
 3. **每合并一个用户可见的功能或修复，就发布一个预览版；最迟每周一次。** 发布本身不需要改任何文件。
 4. 一条预览线经过真机验证后，只有完整的正式发布前提都满足时才能用 `stable` 转正；Developer ID
    可用并不单独构成发布授权。
@@ -59,13 +62,14 @@ git switch main && git pull --ff-only
 | `preview X.Y.Z` | 开始指定的预览线；低于进行中的预览线会被拒绝 |
 | `stable` | 把进行中的预览线转正：`v0.5.0-preview.N` → `v0.5.0` |
 | `patch\|minor\|major` 或 `X.Y.Z` | 直接发布正式版 |
-| `platform patch\|minor\|major\|X.Y.Z` | Windows / Linux 数据预览 |
+| `platform patch\|minor\|major\|X.Y.Z` | Windows / Linux 维护预览；不构成 macOS 发布门禁 |
 
 脚本在推送前逐项检查，任何一项不满足都会拒绝（`--dry-run` 只报告）：
 
 - `origin` 的 fetch / push 地址都指向 `scholay/rimes`；
 - 当前在 `main`，工作区干净，`HEAD` 等于 `origin/main`；
-- `origin/main` 这个提交的 `CI`、`Platform Preview Data`、`Windows Native Foundation` 都已通过；
+- `origin/main` 这个提交的 `CI` 已通过（其中包含 macOS build/runtime smoke 与发布工具校验）；
+- Windows / Linux workflow 只在手动或每周维护运行；其结果不阻断 macOS preview/stable tag；
 - 新 tag 不存在，并高于同渠道已发布的版本；
 - `Info.plist` 版本仍是占位值，预置插件 catalog 已同步；
 - 正式版还要求 `macos-release` 与 `macos-publish` 都存在；二者都要有非空 required reviewers、禁止
@@ -96,8 +100,8 @@ git switch main && git pull --ff-only
 4. **维护者同路验收与发布**：维护者下载 staged pkg，先验证后用 macOS Installer 真实安装；只有验收通过才批准
    无密钥的 `macos-publish`。它核验 artifact ID/digest、manifest 与逐文件 SHA-256，绝不重签、重打包或
    重公证，然后以完全相同的字节创建 Latest，并下载公开资产再次读回校验。
-5. **发布说明** = 安装与校验说明 + 自动生成的「变更」：自上一版本以来的提交按类型分组，列出合并的 PR
-   和完整对比链接。预览版对比上一个 tag，正式版对比上一个正式版。
+5. **发布说明** = 安装与校验说明 + 自动生成的「变更」：自上一个**公开 GitHub macOS Release**以来的提交
+   按类型分组，列出合并的 PR 和完整对比链接。取消或未公开的 tag 绝不作为比较基线。
 
 工作流失败时**不要删除 tag 重来**：修复后发布下一个版本号。tag、资产与 SHA-256 一经发布即不可变，
 ruleset 必须禁止删除或移动 `v*` 与 `platform-preview-v*` tag；正式 `v*` 还必须限制创建权限。
@@ -148,8 +152,8 @@ Release 的同一批资产读回校验。signed-stage 只是一道发布权威�
 ## 七、更新日志
 
 每个 Release 的正文都带有变更列表。[`CHANGELOG.md`](CHANGELOG.md) 由
-`python3 scripts/release/release_tool.py changelog --write` 从 tag 生成：发布后在下一个 PR 里顺手更新，
-CI 在它落后时会给出警告。
+`python3 scripts/release/release_tool.py changelog --write` 从公开 GitHub Release 与提交历史生成：发布后在下一个
+PR 里顺手更新，CI 在它落后或公开记录无法读取时会给出警告。
 
 ## 八、暂不提供
 
