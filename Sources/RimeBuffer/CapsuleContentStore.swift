@@ -8,6 +8,7 @@ enum CapsuleEntryKind: String, Codable, CaseIterable, Hashable {
     case note
     case image
     case pdf
+    case video
 
     /// Kinds this build no longer offers. Their files stay on disk untouched;
     /// listing skips them so one retired record cannot hide every current one.
@@ -20,6 +21,7 @@ enum CapsuleEntryKind: String, Codable, CaseIterable, Hashable {
         case .note: return "Note"
         case .image: return "Image"
         case .pdf: return "PDF"
+        case .video: return "视频"
         }
     }
 
@@ -32,6 +34,7 @@ enum CapsuleEntryKind: String, Codable, CaseIterable, Hashable {
         case .note: return "笔记"
         case .image: return "图片"
         case .pdf: return "PDF"
+        case .video: return "视频"
         }
     }
 
@@ -39,14 +42,14 @@ enum CapsuleEntryKind: String, Codable, CaseIterable, Hashable {
         switch self {
         case .note:
             return true
-        case .password, .skill, .image, .pdf:
+        case .password, .skill, .image, .pdf, .video:
             return false
         }
     }
 
     var storesLocalPath: Bool {
         switch self {
-        case .skill, .image, .pdf:
+        case .skill, .image, .pdf, .video:
             return true
         case .password, .note:
             return false
@@ -87,6 +90,8 @@ struct CapsuleContentRecord: Equatable {
         switch summary.type {
         case .image:
             return "Image · " + URL(fileURLWithPath: content).lastPathComponent
+        case .video:
+            return "Video · " + URL(fileURLWithPath: content).lastPathComponent
         case .pdf:
             return "PDF · " + URL(fileURLWithPath: content).lastPathComponent
         case .password, .skill, .note:
@@ -377,7 +382,7 @@ final class CapsuleContentStore {
                 // Skill bodies are device-local absolute paths. Uploading them
                 // would disclose the Mac's directory layout while producing a
                 // record that cannot be resolved safely on another device.
-                guard record.summary.type != .skill else { return nil }
+                guard record.summary.type != .skill, record.summary.type != .video else { return nil }
                 let url = record.summary.fileURL
                 try requireSafeRegularFile(
                     url,

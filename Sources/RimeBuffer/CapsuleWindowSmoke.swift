@@ -296,7 +296,7 @@ func runCapsuleWindowSmokeTest() -> Bool {
             NSSize(width: 620, height: 430),
         ]
         let fixedFormKinds: Set<CapsuleEntryKind> = [
-            .skill, .image, .pdf, .password,
+            .skill, .image, .video, .pdf, .password,
         ]
         for size in layoutSizes {
             // AppKit does not drive resize passes for an unattached root view.

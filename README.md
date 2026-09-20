@@ -224,3 +224,5 @@ RIMES 自有代码采用 [MIT License](LICENSE)。随包 Rime 方案、词库和
 <p align="center">
   <img src="images/sponsor-wechat.png" alt="微信赞助二维码" width="280">
 </p>
+
+Capsule 捕获、图像编辑和录屏的使用说明、存储约定与验收状态见 [CAPTURE.md](CAPTURE.md)。

@@ -85,7 +85,19 @@ enum ClipboardHistorySmoke {
         guard pane.snapshotForSmoke().renderedThumbnailCount > 0 else {
             return false
         }
+        // Host the pane in a real (offscreen) window before capturing. The
+        // search caret and the focused search border exist only when the rail
+        // has a window, so a windowless preview silently dropped both and
+        // could not have shown that the search box looked dead.
+        let host = NSWindow(
+            contentRect: pane.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        host.contentView = pane
         pane.layoutSubtreeIfNeeded()
+        pane.showSearchCaretForCapture()
         pane.displayIfNeeded()
         guard let bitmap = pane.bitmapImageRepForCachingDisplay(in: pane.bounds) else {
             return false
@@ -100,6 +112,62 @@ enum ClipboardHistorySmoke {
         } catch {
             return false
         }
+    }
+
+    /// Under RIMES the search box is a label, so AppKit draws no insertion
+    /// point: the box accepted text while looking dead. Assert the caret
+    /// exists once the rail has a window, and that it advances as the query
+    /// grows — a caret pinned at the left edge would look equally broken.
+    @MainActor
+    static func searchCaretProbe() -> Bool {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "rimes-caret-probe-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        guard let store = try? ClipboardHistoryStore(rootDirectory: root) else {
+            return false
+        }
+        let model = ClipboardHistoryModel(
+            configuration: .init(),
+            pasteboard: ClipboardHistoryPasteboardDouble(),
+            clock: Date.init,
+            sourceApplicationName: { "Safari" },
+            sourceApplicationBundleIdentifier: { "com.apple.Safari" },
+            store: store,
+            schedulesAutomaticPolling: false
+        )
+        model.start()
+        let pane = ClipboardHistoryPaneView(model: model)
+        pane.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: ClipboardHistoryWindowMetrics.preferredWidth,
+            height: ClipboardHistoryWindowMetrics.preferredHeight
+        )
+        // No window: nothing is focused, so there must be no caret.
+        pane.layoutSubtreeIfNeeded()
+        guard !pane.snapshotForSmoke().searchCaretVisible else { return false }
+
+        let host = NSWindow(
+            contentRect: pane.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        host.contentView = pane
+        pane.layoutSubtreeIfNeeded()
+        pane.showSearchCaretForCapture()
+        let empty = pane.snapshotForSmoke()
+        guard empty.searchCaretVisible else { return false }
+
+        _ = pane.appendSearchText("clipboard")
+        pane.layoutSubtreeIfNeeded()
+        pane.showSearchCaretForCapture()
+        let typed = pane.snapshotForSmoke()
+        return typed.searchCaretVisible
+            && typed.queryCharacterCount == 9
+            && typed.searchCaretX > empty.searchCaretX
     }
 
     static func run() -> Bool {
@@ -127,6 +195,10 @@ enum ClipboardHistorySmoke {
         expect(
             clipboardHistoryStandalonePanelKeyboardProbe(),
             "standalone Clipboard panel cannot own native search input"
+        )
+        expect(
+            searchCaretProbe(),
+            "borrowed-Rime search box must show a caret that follows the query"
         )
         expect(
             ClipboardHistoryPresentationMode.resolve(

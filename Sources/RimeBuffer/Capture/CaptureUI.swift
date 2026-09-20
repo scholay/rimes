@@ -1,0 +1,223 @@
+import AppKit
+import Carbon.HIToolbox
+import UniformTypeIdentifiers
+
+final class CaptureButton: NSButton {
+    var perform: () -> Void
+    init(_ title: String, symbol: String? = nil, action: @escaping () -> Void) {
+        perform = action
+        super.init(frame: .zero)
+        self.title = title
+        bezelStyle = .rounded; isBordered = false
+        font = .systemFont(ofSize: 12)
+        target = self
+        self.action = #selector(invoke)
+        if let symbol { image = RimeUI.symbol(symbol, pointSize: 13, weight: .regular); imagePosition = .imageLeading }
+        setAccessibilityLabel(title)
+    }
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: max(42, (title as NSString).size(withAttributes: [.font: font ?? NSFont.systemFont(ofSize: 12)]).width + (image == nil ? 20 : 40)), height: 28)
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        let primary = title == "收入 Capsule" || title == "开始录制"
+        let fill = primary ? RimeUI.accentGreen : (isHighlighted ? RimeUI.surface2 : RimeUI.surface3)
+        fill.setFill(); NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 7, yRadius: 7).fill()
+        RimeUI.border.setStroke(); NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 7, yRadius: 7).stroke()
+        let foreground = primary ? RimeUI.accentForegroundColor : RimeUI.textPrimary
+        let attributes: [NSAttributedString.Key: Any] = [.font: font ?? NSFont.systemFont(ofSize: 12), .foregroundColor: isEnabled ? foreground : RimeUI.textMuted]
+        let size = (title as NSString).size(withAttributes: attributes)
+        let x = image == nil ? (bounds.width-size.width)/2 : 29
+        (title as NSString).draw(at: CGPoint(x: x, y: (bounds.height-size.height)/2), withAttributes: attributes)
+        if let image { (image.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [foreground])) ?? image).draw(in: CGRect(x: 9, y: (bounds.height-14)/2, width: 14, height: 14)) }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    @objc private func invoke() { perform() }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+enum CaptureUI {
+    static func label(_ value: String, size: CGFloat = 12) -> NSTextField {
+        let label = NSTextField(labelWithString: value)
+        label.font = .systemFont(ofSize: size)
+        label.textColor = RimeUI.textPrimary
+        return label
+    }
+    static func row(_ views: [NSView], spacing: CGFloat = 8) -> NSStackView {
+        let row = NSStackView(views: views)
+        row.orientation = .horizontal; row.alignment = .centerY; row.spacing = spacing
+        return row
+    }
+    static func column(_ views: [NSView], spacing: CGFloat = 12) -> NSStackView {
+        let stack = NSStackView(views: views)
+        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = spacing
+        return stack
+    }
+    static func fill(_ child: NSView, in parent: NSView, inset: CGFloat = 14) {
+        parent.addSubview(child); child.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            child.leadingAnchor.constraint(equalTo: parent.leadingAnchor, constant: inset),
+            child.trailingAnchor.constraint(equalTo: parent.trailingAnchor, constant: -inset),
+            child.topAnchor.constraint(equalTo: parent.topAnchor, constant: inset),
+            child.bottomAnchor.constraint(equalTo: parent.bottomAnchor, constant: -inset),
+        ])
+    }
+    static func error(_ error: Error, window: NSWindow? = nil) {
+        let alert = NSAlert(); alert.messageText = "Capsule"; alert.informativeText = error.localizedDescription
+        if let window, window.isVisible { alert.beginSheetModal(for: window) }
+        else { alert.runModal() }
+    }
+}
+
+/// Shared chrome for new Capsule windows. Only key-capable surfaces acquire
+/// standalone focus; passive overlays never claim an input-method target.
+class CapturePanel: NSPanel, NSWindowDelegate {
+    var closed: (() -> Void)?
+    var escapeCloses = true
+    var shouldClose: (() -> Bool)?
+    private let acceptsKeyboard: Bool
+    private var registered = false
+    private var themeObserver: NSObjectProtocol?
+    init(size: NSSize, key: Bool = true) {
+        acceptsKeyboard = key
+        super.init(contentRect: NSRect(origin: .zero, size: size),
+                   styleMask: key ? [.titled, .fullSizeContentView, .resizable] : [.borderless, .nonactivatingPanel],
+                   backing: .buffered, defer: false)
+        titleVisibility = .hidden; titlebarAppearsTransparent = true
+        for type: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] { standardWindowButton(type)?.isHidden = true }
+        isReleasedWhenClosed = false; isMovableByWindowBackground = true; hasShadow = true; hidesOnDeactivate = false
+        backgroundColor = RimeUI.surface; appearance = RimeUI.appKitAppearance
+        contentView?.wantsLayer = true; contentView?.layer?.cornerRadius = 14
+        contentView?.layer?.masksToBounds = true
+        level = .floating; collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
+        delegate = self
+        themeObserver = NotificationCenter.default.addObserver(forName: .rimeAppearanceDidChange, object: nil, queue: .main) { [weak self] _ in self?.updateTheme() }
+    }
+    deinit { if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) } }
+    private func updateTheme() {
+        appearance = RimeUI.appKitAppearance; backgroundColor = RimeUI.surface
+        func visit(_ view: NSView) {
+            if let label = view as? NSTextField { label.textColor = RimeUI.textPrimary }
+            if let text = view as? NSTextView { text.textColor = RimeUI.textPrimary; text.backgroundColor = RimeUI.surface2 }
+            view.needsDisplay = true; view.subviews.forEach(visit)
+        }
+        if let contentView { visit(contentView) }
+    }
+    override var canBecomeKey: Bool { acceptsKeyboard }
+    override var canBecomeMain: Bool { acceptsKeyboard }
+    func present(center: Bool = true) {
+        if center { self.center() }
+        appearance = RimeUI.appKitAppearance
+        if acceptsKeyboard {
+            StandaloneWindowFocusCoordinator.shared.windowWillPresent(self)
+            registered = true
+            NSApp.activate(ignoringOtherApps: true)
+            makeKeyAndOrderFront(nil)
+        } else { orderFrontRegardless() }
+    }
+    override func cancelOperation(_ sender: Any?) { if escapeCloses { close() } }
+    func windowShouldClose(_ sender: NSWindow) -> Bool { shouldClose?() ?? true }
+    func windowDidBecomeKey(_ notification: Notification) {
+        if !registered { StandaloneWindowFocusCoordinator.shared.windowWillPresent(self); registered = true }
+    }
+    func windowWillClose(_ notification: Notification) {
+        if registered { StandaloneWindowFocusCoordinator.shared.windowWillClose(self); registered = false }
+        closed?()
+    }
+}
+
+final class CaptureInspectorScroll: NSScrollView {
+    private let stack: NSView
+    private final class Document: NSView { override var isFlipped: Bool { true } }
+    init(_ stack: NSView) {
+        self.stack = stack
+        super.init(frame: .zero)
+        drawsBackground = false; hasVerticalScroller = true
+        let document = Document(); document.addSubview(stack); documentView = document
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func layout() {
+        super.layout()
+        let height = max(contentSize.height, stack.fittingSize.height)
+        documentView?.frame = CGRect(x: 0, y: 0, width: contentSize.width, height: height)
+        stack.frame = CGRect(x: 0, y: 0, width: contentSize.width, height: stack.fittingSize.height)
+    }
+}
+
+final class CaptureDragImageView: NSImageView, NSDraggingSource {
+    var file: URL?
+    var clicked: ((NSEvent) -> Void)?
+    override func mouseDown(with event: NSEvent) {
+        if let clicked { clicked(event) } else { super.mouseDown(with: event) }
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard let file else { return }
+        let item = NSDraggingItem(pasteboardWriter: file as NSURL)
+        item.setDraggingFrame(bounds, contents: image)
+        beginDraggingSession(with: [item], event: event, source: self)
+    }
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+}
+
+/// File promises keep export rendering off the main thread and freeze the
+/// document at drag start, including every redaction and unsaved edit.
+final class CaptureCurrentDragView: NSView, NSDraggingSource {
+    var snapshot: (() -> (CaptureDocument, URL, CaptureStore, UUID)?)?
+    override var intrinsicContentSize: NSSize { NSSize(width: 72, height: 28) }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) {}
+    override func draw(_ dirtyRect: NSRect) {
+        RimeUI.surface3.setFill(); NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
+        ("拖出图片" as NSString).draw(at: CGPoint(x: 11, y: 7), withAttributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: RimeUI.textPrimary])
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard let (document, directory, store, id) = snapshot?() else { return }
+        let provider = CaptureImagePromise(document: document, directory: directory, store: store, id: id)
+        let item = NSDraggingItem(pasteboardWriter: provider)
+        item.setDraggingFrame(bounds, contents: NSImage(named: NSImage.multipleDocumentsName))
+        beginDraggingSession(with: [item], event: event, source: self)
+    }
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+}
+
+private final class CaptureImagePromise: NSFilePromiseProvider, NSFilePromiseProviderDelegate {
+    private let document: CaptureDocument
+    private let directory: URL
+    private let store: CaptureStore
+    private let id: UUID
+    private let acquired: Bool
+    private let worker = OperationQueue()
+    init(document: CaptureDocument, directory: URL, store: CaptureStore, id: UUID) {
+        self.document = document; self.directory = directory; self.store = store; self.id = id
+        acquired = store.acquire(id)
+        super.init()
+        fileType = UTType.png.identifier
+        delegate = self; worker.maxConcurrentOperationCount = 1; worker.qualityOfService = .userInitiated
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    deinit { if acquired { store.release(id) } }
+    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, fileNameForType fileType: String) -> String { "Capsule-\(UUID().uuidString.prefix(8)).png" }
+    func operationQueue(for filePromiseProvider: NSFilePromiseProvider) -> OperationQueue { worker }
+    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping (Error?) -> Void) {
+        guard acquired else { completionHandler(CaptureError.message("资产已进入清理，请刷新后重试")); return }
+        do { try CaptureImageIO.write(CaptureRenderer.render(document, directory: directory), to: url); completionHandler(nil) }
+        catch { completionHandler(error) }
+    }
+}
+
+final class CapturePinPanel: CapturePanel {
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKey: Bool { !ignoresMouseEvents }
+    override func keyDown(with event: NSEvent) {
+        var point = frame.origin
+        let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
+        switch event.keyCode {
+        case 123: point.x -= step
+        case 124: point.x += step
+        case 125: point.y -= step
+        case 126: point.y += step
+        case 53: close(); return
+        default: return
+        }
+        setFrameOrigin(point)
+    }
+}

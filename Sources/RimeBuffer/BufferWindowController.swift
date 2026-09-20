@@ -2134,6 +2134,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     }
     private var autoSendTimer: Timer?
     private var autoSendClock = BufferAutoSendClock()
+    private var captureImportRequiresExplicitDelivery = Set<UUID>()
     private var sourceActionCenterYConstraint: NSLayoutConstraint?
     private var hiddenForSession = false
     private var sessionInactive = false
@@ -2827,6 +2828,20 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         )
         pauseAndHide(settleCapturedComposition: false)
         return true
+    }
+
+    /// Explicit capture OCR import only stages text; it never sends to a host.
+    func importCaptureText(_ text: String) {
+        guard !sessionProtectionActive, !IsSecureEventInputEnabled(),
+              !text.isEmpty, !text.contains("\0"), text.utf8.count <= 1_048_576 else { return }
+        BufferPluginSelectionStore.shared.clear()
+        BufferModel.shared.routeDirectPreservingContent(reason: "explicit capture text import")
+        let before = Dictionary(uniqueKeysWithValues: BufferModel.shared.blocks.map { ($0.id, $0.text) })
+        guard BufferModel.shared.insertPastedText(text, origin: .clipboard) else { return }
+        for block in BufferModel.shared.blocks where before[block.id] != block.text { captureImportRequiresExplicitDelivery.insert(block.id) }
+        autoSendClock.reset()
+        if !isVisible { show() }
+        refresh()
     }
 
     @discardableResult
@@ -5989,6 +6004,12 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             return nil
         }
         let source = BufferDeliveryContentRouter.current()
+        if source === BufferModel.shared {
+            captureImportRequiresExplicitDelivery.formIntersection(Set(BufferModel.shared.blocks.map(\.id)))
+            if let head = source.deliveryPendingBlocks.first, captureImportRequiresExplicitDelivery.contains(head.id) {
+                autoSendClock.reset(); bufferRail.setAutoSendFade([:]); return nil
+            }
+        }
         autoSendClock.synchronize(
             sourceIdentity: ObjectIdentifier(source),
             workspaceID: source.deliveryWorkspaceID,

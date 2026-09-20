@@ -158,6 +158,7 @@ private struct CapsuleCloudParsedDocument {
     let updatedAt: Date
     let content: String
     let assetName: String?
+    let projectName: String?
     let data: Data
     let revision: String
     let frontMatterLines: [String]
@@ -625,6 +626,7 @@ private enum CapsuleCloudDocumentCodec {
               let type = CapsuleEntryKind(rawValue: typeRaw),
               type != .password,
               type != .skill,
+              type != .video,
               let idRaw = fields["id"],
               let id = UUID(uuidString: try decodeScalar(idRaw)),
               let titleRaw = fields["title"],
@@ -662,6 +664,13 @@ private enum CapsuleCloudDocumentCodec {
             }
             assetName = decoded
         }
+        let projectName = try fields["sync_project"].map { try decodeScalar($0) }
+        if let name = projectName {
+            guard name == URL(fileURLWithPath: name).lastPathComponent,
+                  name.hasSuffix(".rimesproject"), assetHash(from: name) != nil else {
+                throw CapsuleCloudSyncError.malformedDocument(fileURL.path)
+            }
+        }
         return CapsuleCloudParsedDocument(
             id: id,
             type: type,
@@ -669,6 +678,7 @@ private enum CapsuleCloudDocumentCodec {
             updatedAt: updatedAt,
             content: content,
             assetName: assetName,
+            projectName: projectName,
             data: data,
             revision: CapsuleCloudIO.revision(data),
             frontMatterLines: Array(lines[0...end])
@@ -677,7 +687,8 @@ private enum CapsuleCloudDocumentCodec {
 
     static func cloudData(
         from local: CapsuleContentSyncDocument,
-        assetName: String?
+        assetName: String?,
+        projectName: String? = nil
     ) throws -> Data {
         guard local.record.summary.type == .image
                 || local.record.summary.type == .pdf else {
@@ -727,6 +738,8 @@ private enum CapsuleCloudDocumentCodec {
                 "sync_original_name: \(encodeScalar(originalName))"
             )
         }
+        frontMatter.removeAll { frontMatterKey($0) == "sync_project" }
+        if let projectName { frontMatter.append("sync_project: \(encodeScalar(projectName))") }
         frontMatter.append("---")
         let body = "![[../assets/\(assetName)]]"
         return Data((frontMatter.joined(separator: "\n")
@@ -789,7 +802,7 @@ private enum CapsuleCloudDocumentCodec {
             return allowedImageExtensions.contains(ext)
         case .pdf:
             return ext == "pdf"
-        case .password, .skill, .note:
+        case .password, .skill, .note, .video:
             return false
         }
     }
@@ -1201,6 +1214,10 @@ final class CapsuleCloudSyncEngine {
                 let cloudChanged = baseline?.cloudRevision == nil
                     || baseline?.cloudRevision != cloud.revision
                 if !localChanged && !cloudChanged {
+                    if let project = cloud.projectName,
+                       !fileManager.fileExists(atPath: cloudLayout.assetsURL.appendingPathComponent(project).path) {
+                        deferred += 1; deferredIDs.insert(id); continue
+                    }
                     if missingManagedAssetNeedsRestoration(
                         local: local,
                         cloud: cloud,
@@ -1618,9 +1635,29 @@ final class CapsuleCloudSyncEngine {
             }
             assetName = name
         }
+        var projectName: String?
+        if type == .image {
+            let projectURL = URL(fileURLWithPath: local.record.content).appendingPathExtension("rimesproject")
+            if fileManager.fileExists(atPath: projectURL.path) {
+                let data = try CapsuleCloudIO.secureRead(projectURL, maximumBytes: CapsuleCloudIO.maximumAssetBytes)
+                try CaptureProjectPackage.validate(data)
+                let hash = CapsuleCloudIO.revision(data)
+                let name = hash + ".rimesproject"
+                let destination = cloudLayout.assetsURL.appendingPathComponent(name)
+                if fileManager.fileExists(atPath: destination.path) {
+                    let existing = try CapsuleCloudIO.coordinatedRead(destination, maximumBytes: CapsuleCloudIO.maximumAssetBytes)
+                    guard CapsuleCloudIO.revision(existing) == hash else { throw CapsuleCloudSyncError.unsafeItem(destination.path) }
+                } else { try CapsuleCloudIO.coordinatedWrite(data, to: destination, expectedRevision: nil) }
+                projectName = name
+            } else if String(data: local.data, encoding: .utf8)?.contains("sync_project:") == true
+                        || (sourceIsCaptureProject(local.record.content)) {
+                throw CapsuleCloudSyncError.mediaUnavailable("可编辑工程依赖缺失")
+            }
+        }
         let data = try CapsuleCloudDocumentCodec.cloudData(
             from: local,
-            assetName: assetName
+            assetName: assetName,
+            projectName: projectName
         )
         return try CapsuleCloudDocumentCodec.parse(
             data,
@@ -1642,7 +1679,8 @@ final class CapsuleCloudSyncEngine {
             }
             let data = try CapsuleCloudDocumentCodec.cloudData(
                 from: local,
-                assetName: assetName
+                assetName: assetName,
+                projectName: cloud?.projectName
             )
             payload = try CapsuleCloudDocumentCodec.parse(
                 data,
@@ -1676,6 +1714,7 @@ final class CapsuleCloudSyncEngine {
     ) throws -> CapsuleContentSyncDocument {
         let localData: Data
         if cloud.type == .image || cloud.type == .pdf {
+            try ensureCloudMediaAvailable(cloud)
             guard let assetName = cloud.assetName else {
                 throw CapsuleCloudSyncError.malformedDocument(
                     cloudLayout.entryURL(id: cloud.id).path
@@ -1781,7 +1820,24 @@ final class CapsuleCloudSyncEngine {
                 cloudLayout.entryURL(id: cloud.id).path
             )
         }
-        _ = try materializeAsset(named: assetName, type: cloud.type)
+        let path = try materializeAsset(named: assetName, type: cloud.type)
+        if let project = cloud.projectName {
+            let source = cloudLayout.assetsURL.appendingPathComponent(project)
+            guard fileManager.fileExists(atPath: source.path) else { throw CapsuleCloudSyncError.mediaUnavailable(project) }
+            if cloudAssetIsAwaitingDownload(source) { throw CapsuleCloudSyncError.mediaUnavailable(project) }
+            let data = try CapsuleCloudIO.coordinatedRead(source, maximumBytes: CapsuleCloudIO.maximumAssetBytes)
+            guard CapsuleCloudIO.revision(data) == CapsuleCloudDocumentCodec.assetHash(from: project) else {
+                throw CapsuleCloudSyncError.unsafeItem(source.path)
+            }
+            try CaptureProjectPackage.validate(data)
+            try CapsuleCloudIO.atomicWrite(data, to: URL(fileURLWithPath: path).appendingPathExtension("rimesproject"))
+        }
+    }
+
+    private func sourceIsCaptureProject(_ path: String) -> Bool {
+        let url = URL(fileURLWithPath: path)
+        return url.lastPathComponent.hasPrefix("render-")
+            && fileManager.fileExists(atPath: url.deletingLastPathComponent().appendingPathComponent("record.json").path)
     }
 
     private func semanticallyEqual(
@@ -1795,7 +1851,8 @@ final class CapsuleCloudSyncEngine {
             guard let assetName = cloud.assetName else { return false }
             payloadData = try CapsuleCloudDocumentCodec.cloudData(
                 from: local,
-                assetName: assetName
+                assetName: assetName,
+                projectName: cloud.projectName
             )
         } else {
             do {
@@ -1838,13 +1895,22 @@ final class CapsuleCloudSyncEngine {
                 fingerprint: nil
             )
         }
-        let fingerprint = [
+        var fingerprint = [
             String(UInt64(metadata.st_dev)),
             String(UInt64(metadata.st_ino)),
             String(Int64(metadata.st_size)),
             String(Int64(metadata.st_mtimespec.tv_sec)),
             String(Int64(metadata.st_mtimespec.tv_nsec)),
         ].joined(separator: ":")
+        let projectURL = url.appendingPathExtension("rimesproject")
+        var project = stat()
+        if projectURL.path.withCString({ lstat($0, &project) }) == 0 {
+            guard (project.st_mode & S_IFMT) == S_IFREG, project.st_size > 0,
+                  project.st_size <= CapsuleCloudIO.maximumAssetBytes else { return CapsuleLocalAssetObservation(pathHash: pathHash, fingerprint: nil) }
+            fingerprint += ":project:\(project.st_ino):\(project.st_size):\(project.st_mtimespec.tv_sec):\(project.st_mtimespec.tv_nsec)"
+        } else if String(data: local.data, encoding: .utf8)?.contains("sync_project:") == true || sourceIsCaptureProject(local.record.content) {
+            return CapsuleLocalAssetObservation(pathHash: pathHash, fingerprint: nil)
+        }
         return CapsuleLocalAssetObservation(
             pathHash: pathHash,
             fingerprint: fingerprint

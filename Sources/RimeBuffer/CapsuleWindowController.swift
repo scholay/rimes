@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import CoreGraphics
 import CryptoKit
 import Darwin
@@ -217,7 +218,7 @@ enum CapsuleFilePasteboardWriter {
                 originalImageType: nil,
                 originalImageData: nil
             )
-        case .pdf:
+        case .pdf, .video:
             try validateOrdinaryFile(url)
             return CapsuleFilePasteboardPayload(
                 kind: kind,
@@ -428,6 +429,7 @@ final class CapsuleMediaPreviewLoader {
     func load(
         kind: CapsuleEntryKind,
         path: String,
+        maximumPixelSize: Int = 1600,
         completion: @escaping (CapsuleMediaPreviewResult) -> Void
     ) -> Operation {
         // The queue is process-global and serial. Cancellation belongs to the
@@ -436,7 +438,7 @@ final class CapsuleMediaPreviewLoader {
         let operation = BlockOperation()
         operation.addExecutionBlock { [weak operation] in
             guard operation?.isCancelled == false else { return }
-            let result = Self.loadSynchronously(kind: kind, path: path)
+            let result = Self.loadSynchronously(kind: kind, path: path, maximumPixelSize: maximumPixelSize)
             guard operation?.isCancelled == false else { return }
             OperationQueue.main.addOperation { [weak operation] in
                 guard operation?.isCancelled == false else { return }
@@ -449,9 +451,10 @@ final class CapsuleMediaPreviewLoader {
 
     static func loadSynchronously(
         kind: CapsuleEntryKind,
-        path: String
+        path: String,
+        maximumPixelSize: Int = 1600
     ) -> CapsuleMediaPreviewResult {
-        guard kind == .image || kind == .pdf,
+        guard kind == .image || kind == .pdf || kind == .video,
               NSString(string: path).isAbsolutePath else {
             return .unavailable
         }
@@ -490,7 +493,7 @@ final class CapsuleMediaPreviewLoader {
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
                 kCGImageSourceShouldCacheImmediately: true,
-                kCGImageSourceThumbnailMaxPixelSize: maximumThumbnailPixels,
+                kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
             ] as CFDictionary
             guard let image = CGImageSourceCreateThumbnailAtIndex(
                 source,
@@ -499,6 +502,13 @@ final class CapsuleMediaPreviewLoader {
             ) else {
                 return .unavailable
             }
+            return .image(image)
+        case .video:
+            if url.pathExtension.lowercased() == "gif", let image = try? CaptureImageIO.read(url, maximum: maximumPixelSize) { return .image(image) }
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: maximumPixelSize, height: maximumPixelSize)
+            guard let image = try? generator.copyCGImage(at: .zero, actualTime: nil) else { return .unavailable }
             return .image(image)
         case .pdf:
             guard size <= UInt64(maximumPDFBytes),
@@ -518,8 +528,8 @@ final class CapsuleMediaPreviewLoader {
                 return .unavailable
             }
             let scale = min(
-                CGFloat(maximumThumbnailPixels) / pageBox.width,
-                CGFloat(maximumThumbnailPixels) / pageBox.height,
+                CGFloat(maximumPixelSize) / pageBox.width,
+                CGFloat(maximumPixelSize) / pageBox.height,
                 1
             )
             let width = max(1, Int(ceil(pageBox.width * scale)))
@@ -731,7 +741,7 @@ struct CapsuleWindowDraft: Equatable {
             guard NSString(string: content).isAbsolutePath else {
                 throw CapsuleWindowDraftError.relativeSkillPath
             }
-        case .image, .pdf:
+        case .image, .pdf, .video:
             guard !content.isEmpty else {
                 throw CapsuleWindowDraftError.missingContent
             }
@@ -743,7 +753,7 @@ struct CapsuleWindowDraft: Equatable {
             let ext = URL(fileURLWithPath: content).pathExtension.lowercased()
             let accepted: Set<String> = kind == .pdf
                 ? ["pdf"]
-                : [
+                : kind == .video ? ["mp4", "mov", "m4v", "gif"] : [
                     "png", "jpg", "jpeg", "heic", "webp", "tif",
                     "tiff", "gif", "bmp",
                 ]
@@ -804,7 +814,7 @@ final class CapsuleWindowRepository {
                     fileURL: summary.fileURL
                 )
             }
-        case .skill, .note, .image, .pdf:
+        case .skill, .note, .image, .pdf, .video:
             return try contentStore.listRecords().filter { record in
                 record.summary.type == kind
                     && Self.matches(
@@ -841,7 +851,7 @@ final class CapsuleWindowRepository {
                 content: record.secret.body,
                 loadedRevision: after
             )
-        case .skill, .note, .image, .pdf:
+        case .skill, .note, .image, .pdf, .video:
             let before = try Self.fileRevision(row.fileURL)
             let record = try contentStore.record(id: row.id)
             let after = try Self.fileRevision(record.summary.fileURL)
@@ -892,7 +902,7 @@ final class CapsuleWindowRepository {
                 revision: try Self.fileRevision(summary.fileURL),
                 fileURL: summary.fileURL
             )
-        case .skill, .note, .image, .pdf:
+        case .skill, .note, .image, .pdf, .video:
             let summary: CapsuleContentSummary
             do {
                 summary = try contentStore.put(
@@ -934,7 +944,7 @@ final class CapsuleWindowRepository {
                     id: row.id,
                     expectedRevision: expectedRevision
                 )
-            case .skill, .note, .image, .pdf:
+            case .skill, .note, .image, .pdf, .video:
                 try contentStore.remove(
                     id: row.id,
                     expectedRevision: expectedRevision
@@ -1907,7 +1917,7 @@ final class CapsulePaneViewController: NSViewController,
     /// smoke output. Callers can compare their NSWindow geometry before and
     /// after `mediaPreviewIsReadyForSmoke` becomes true.
     func beginMediaPreviewForSmoke(kind: CapsuleEntryKind, path: String) {
-        precondition(kind == .image || kind == .pdf)
+        precondition(kind == .image || kind == .pdf || kind == .video)
         _ = view
         cancelPendingReload()
         passwordRevealTimer?.invalidate()
@@ -2001,7 +2011,7 @@ final class CapsulePaneViewController: NSViewController,
                 && inner.maxY <= outer.maxY + 0.5
                 && inner.height > 0
         }
-        let fileKind = kind == .image || kind == .pdf || kind == .skill
+        let fileKind = kind == .image || kind == .pdf || kind == .video || kind == .skill
 
         return CapsulePaneLayoutSnapshot(
             rootFrame: view.frame,
@@ -2133,7 +2143,7 @@ final class CapsulePaneViewController: NSViewController,
             ).isEmpty
         }
         guard field === assetPathField,
-              draft.kind == .image || draft.kind == .pdf,
+              draft.kind == .image || draft.kind == .pdf || draft.kind == .video,
               let preview = assetPreviewContainer else { return }
         // Keep the preview guard in sync with the visible field immediately.
         // Otherwise a late decode for the old path can repaint this editor.
@@ -2463,7 +2473,7 @@ final class CapsulePaneViewController: NSViewController,
             row.alignment = .centerY
             row.spacing = 8
             firstDetailFormRow = addField(label: "ABSOLUTE PATH", field: row)
-        case .image, .pdf:
+        case .image, .pdf, .video:
             addAssetFields(kind: draft.kind)
         case .password:
             addPasswordFields()
@@ -2616,11 +2626,11 @@ final class CapsulePaneViewController: NSViewController,
     }
 
     private func addAssetFields(kind: CapsuleEntryKind) {
-        precondition(kind == .image || kind == .pdf)
+        precondition(kind == .image || kind == .pdf || kind == .video)
         let pathField = NSTextField(string: draft.content)
         pathField.placeholderString = kind == .image
             ? "/Users/name/Pictures/example.png"
-            : "/Users/name/Documents/example.pdf"
+            : kind == .video ? "/Users/name/Movies/example.mp4" : "/Users/name/Documents/example.pdf"
         pathField.font = MailboxTerminalTypography.font(ofSize: 11)
         pathField.setAccessibilityLabel("\(kind.displayName) 绝对路径")
         pathField.delegate = self
@@ -2631,7 +2641,7 @@ final class CapsulePaneViewController: NSViewController,
         assetPathField = pathField
 
         let chooseButton = RimePointingHandButton(
-            title: kind == .image ? "选择图片…" : "选择 PDF…",
+            title: kind == .image ? "选择图片…" : kind == .video ? "选择视频…" : "选择 PDF…",
             target: self,
             action: #selector(chooseAssetFile)
         )
@@ -2642,7 +2652,7 @@ final class CapsulePaneViewController: NSViewController,
             title: kind == .image ? "复制图片" : "复制文件",
             accessibilityLabel: kind == .image
                 ? "复制 Capsule 图片"
-                : "复制 Capsule PDF 文件"
+                : kind == .video ? "复制 Capsule 视频文件" : "复制 Capsule PDF 文件"
         )
         let pathRow = NSStackView(views: [pathField, chooseButton, copyButton])
         pathRow.orientation = .horizontal
@@ -2960,7 +2970,7 @@ final class CapsulePaneViewController: NSViewController,
             draft.content = contentTextView?.string ?? draft.content
         case .skill:
             draft.content = skillPathField?.stringValue ?? draft.content
-        case .image, .pdf:
+        case .image, .pdf, .video:
             draft.content = assetPathField?.stringValue ?? draft.content
         case .password:
             // Only read back a body the user could actually see; a concealed
@@ -3162,7 +3172,7 @@ final class CapsulePaneViewController: NSViewController,
     }
 
     @objc private func chooseAssetFile() {
-        guard draft.kind == .image || draft.kind == .pdf,
+        guard draft.kind == .image || draft.kind == .pdf || draft.kind == .video,
               let window = view.window else { return }
         captureDraftFromFields()
         let kind = draft.kind
@@ -3174,7 +3184,7 @@ final class CapsulePaneViewController: NSViewController,
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = false
         panel.resolvesAliases = false
-        panel.allowedContentTypes = kind == .image ? [.image] : [.pdf]
+        panel.allowedContentTypes = kind == .image ? [.image] : kind == .video ? [.movie, .gif] : [.pdf]
         if !draft.content.isEmpty {
             panel.directoryURL = URL(fileURLWithPath: draft.content)
                 .deletingLastPathComponent()
@@ -3193,7 +3203,7 @@ final class CapsulePaneViewController: NSViewController,
     @objc private func copyCurrentFile() {
         captureDraftFromFields()
         let kind = draft.kind
-        guard kind == .image || kind == .pdf || kind == .skill else {
+        guard kind == .image || kind == .pdf || kind == .video || kind == .skill else {
             setStatus(
                 CapsuleFilePasteboardError.unsupportedKind.localizedDescription,
                 isError: true
@@ -3226,6 +3236,8 @@ final class CapsulePaneViewController: NSViewController,
                         switch kind {
                         case .image:
                             self.setStatus("已复制图片")
+                        case .video:
+                            self.setStatus("已复制视频文件")
                         case .pdf:
                             self.setStatus("已复制 PDF 文件")
                         case .skill:

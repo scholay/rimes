@@ -691,6 +691,26 @@ if CommandLine.arguments.contains("mailbox-store-smoke") {
 if CommandLine.arguments.contains("mailbox-window-smoke") {
     exit(runMailboxWindowSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("capture-smoke") {
+    _ = NSApplication.shared
+    exit(CaptureSmoke.run() ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "capture-media-smoke"), CommandLine.arguments.count > index + 1 {
+    Task { exit(await CaptureSmoke.media(CommandLine.arguments[index + 1]) ? 0 : 1) }
+    NSApplication.shared.run()
+    exit(1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "capture-preview"), CommandLine.arguments.indices.contains(index + 1) {
+    _ = NSApplication.shared
+    exit(MainActor.assumeIsolated { CaptureSmoke.preview(CommandLine.arguments[index + 1]) } ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "capture-live-smoke") {
+    let app = NSApplication.shared
+    let seconds = CommandLine.arguments.indices.contains(index + 1) ? Int(CommandLine.arguments[index + 1]) ?? 5 : 5
+    Task { @MainActor in exit(await CaptureSmoke.live(seconds: seconds) ? 0 : 1) }
+    app.run()
+    exit(1)
+}
 if CommandLine.arguments.contains("capsule-window-smoke") {
     exit(runCapsuleWindowSmokeTest() ? 0 : 1)
 }
@@ -1304,6 +1324,7 @@ if imkServer == nil {
 }
 // A Carbon hot key is process-global and remains independent from IMK's normal
 // Command-key passthrough. Retain the controller for the entire server lifetime.
+CaptureHotKey.shared.start()
 let globalHotKeyController = GlobalHotKeyController.shared
 _ = globalHotKeyController.setRuntimeEnabledForInputSource(
     RimeInputSourceAuthority.currentSourceIsOwn()

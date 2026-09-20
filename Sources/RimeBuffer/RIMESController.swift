@@ -3044,6 +3044,14 @@ final class RIMESController: IMKInputController {
         guard adoptEventFocus(client: client,
                               eventTimestamp: event.timestamp,
                               eventType: event.type) else {
+            // DIAGNOSTIC: keyDown reaches the clipboard route only after this
+            // guard, so a rejection here silently starves the rail's search.
+            if event.type == .keyDown,
+               ClipboardHistoryWindowController.shared.isVisible {
+                IMELog.write(
+                    "clipboard starved: focus adoption rejected key=\(event.keyCode)"
+                )
+            }
             let rejectedModifiers = event.modifierFlags
                 .intersection(.deviceIndependentFlagsMask)
             let releasedModifiers = lastModifiers

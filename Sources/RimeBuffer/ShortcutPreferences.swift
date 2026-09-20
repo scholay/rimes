@@ -35,6 +35,7 @@ struct RimeKeyboardShortcut: Codable, Equatable {
     }
 
     var displayTitle: String {
+        if keyCode == UInt16.max { return "未绑定" }
         var title = ""
         if modifiers.contains(.control) { title += "⌃" }
         if modifiers.contains(.option) { title += "⌥" }
@@ -140,6 +141,7 @@ enum RimeShortcutAction: String, CaseIterable {
     case deliverBuffer
     case toggleWorkbench
     case toggleClipboardHistory
+    case captureScreen
     case openMailbox
     case openSettings
     case previousPlugin
@@ -147,6 +149,7 @@ enum RimeShortcutAction: String, CaseIterable {
 
     var title: String {
         switch self {
+        case .captureScreen: return "打开 Capsule 捕获"
         case .deliverBuffer: return "投递缓冲内容"
         case .toggleWorkbench: return "显示或隐藏工作台"
         case .toggleClipboardHistory: return "显示或隐藏 Capsule"
@@ -159,6 +162,7 @@ enum RimeShortcutAction: String, CaseIterable {
 
     var detail: String {
         switch self {
+        case .captureScreen: return "默认未绑定；按 Delete 恢复未绑定状态"
         case .deliverBuffer:
             return "轻按发送下一块；按住约 0.6 秒发送全部"
         case .toggleWorkbench:
@@ -178,6 +182,7 @@ enum RimeShortcutAction: String, CaseIterable {
 
     var defaultShortcut: RimeKeyboardShortcut {
         switch self {
+        case .captureScreen: return RimeKeyboardShortcut(keyCode: UInt16.max, modifiers: [.command])
         case .deliverBuffer:
             return RimeKeyboardShortcut(
                 keyCode: UInt16(kVK_Return),
