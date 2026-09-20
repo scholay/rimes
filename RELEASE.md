@@ -133,6 +133,7 @@ scripts/rehearse-release-pkg.sh --pkg /absolute/path/RIMES-X.Y.Z.pkg --install-g
 ```
 
 第一个命令不安装；第二个命令打开用户也会看到的 Installer，并在安装完成后复核输入源、签名、公证和回执。
+脚本等待更新后的 PackageKit 回执，最多 15 分钟，不要求退出 Installer；若取消安装，可按 Ctrl-C 结束验收等待。
 通过后记录 tag、资产 SHA-256、macOS 版本和测试设备，再批准 `macos-publish`。公开后 workflow 还会下载正式
 Release 的同一批资产读回校验。signed-stage 只是一道发布权威门：GitHub Actions artifact 的访问规则不等于发布
 禁运，面向用户的唯一来源始终是 GitHub Release。

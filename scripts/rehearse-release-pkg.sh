@@ -26,6 +26,24 @@ die() {
     exit 1
 }
 
+read_install_receipt() {
+    /usr/sbin/pkgutil --pkg-info "$EXPECTED_BUNDLE_ID" 2>/dev/null || true
+}
+
+wait_for_install_receipt() {
+    local before="$1" expected_version="$2" timeout_seconds="${3:-900}"
+    local deadline=$((SECONDS + timeout_seconds)) current
+    while (( SECONDS < deadline )); do
+        current="$(read_install_receipt)"
+        if [[ -n "$current" && "$current" != "$before" ]] \
+            && printf '%s\n' "$current" | /usr/bin/grep -Fxq "version: $expected_version"; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
 usage() {
     cat <<'USAGE'
 Usage:
@@ -163,11 +181,17 @@ cat <<'WARNING'
     Do not use it with unsaved input-method work or on a Mac where a different
     user depends on a development installation.
 WARNING
-receipt_before="$(/usr/sbin/pkgutil --pkg-info "$EXPECTED_BUNDLE_ID" 2>/dev/null || true)"
+receipt_before="$(read_install_receipt)"
 case "$install_mode" in
     gui)
-        /usr/bin/open -W "$package_path" \
-            || die 'macOS Installer did not complete successfully'
+        /usr/bin/open "$package_path" \
+            || die 'could not open the package in macOS Installer'
+        # Installer can remain running after its wizard closes. Observe the
+        # committed PackageKit receipt instead of waiting for the app to quit.
+        echo '==> waiting up to 15 minutes for the updated PackageKit receipt'
+        echo '    Complete Installer normally; after cancelling, press Ctrl-C to stop this verification.'
+        wait_for_install_receipt "$receipt_before" "$version" \
+            || die 'no updated receipt appeared; installation was cancelled, failed, or timed out'
         ;;
     packagekit)
         /usr/bin/sudo /usr/sbin/installer -pkg "$package_path" -target /
