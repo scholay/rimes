@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "status": "development-only",
+  "assets": [
+    {"name":"librime", "source":"https://github.com/rime/librime/tree/33e78140250125871856cdc5b42ddc6a5fcd3cd4", "license":"BSD-3-Clause", "status":"verified", "evidence":"Licenses/librime-BSD.txt; dependencies.lock.json pins dependency sources"},
+    {"name":"pinyin_simp", "source":"https://github.com/rime/rime-pinyin-simp/tree/0c6861ef7420ee780270ca6d993d18d4101049d0", "license":"Apache-2.0", "status":"verified", "evidence":"Licenses/pinyin_simp-APACHE-2.0.txt; dictionary kept verbatim"},
+    {"name":"wubi86", "source":"https://github.com/rime/rime-wubi/tree/152a0d3f3efe40cae216d1e3b338242446848d07", "license":"LGPL-3.0", "status":"pending", "evidence":"License and source are included. App Store/TestFlight distribution terms and upstream table provenance still need review; do not assume MIT covers this asset."},
+    {"name":"flyyao", "source":"chord-keymaps/Isaac2025.json at 20651da", "license":"provenance review pending", "status":"pending", "evidence":"426 mappings imported without changes; repository attribution alone does not establish upstream redistribution permission."}
+  ],
+  "releasePrerequisites": [
+    {"name":"Apple Developer Program and App Store Connect app", "verified":false},
+    {"name":"Shared Keychain and App Group on signed physical iPhone", "verified":false},
+    {"name":"Physical iPhone input, privacy and performance acceptance", "verified":false},
+    {"name":"Hosted privacy policy, support contact and TestFlight review information", "verified":false}
+  ]
+}

@@ -1,0 +1,10 @@
+Resources/EngineData/build/
+Resources/EngineData/checksums.json
+Resources/EngineData/installation.yaml
+Resources/EngineData/user.yaml
+*.xcarchive/
+*.ipa
+build/
+xcuserdata/
+Resources/EngineData/pinyin_simp.dict.yaml
+Resources/EngineData/wubi86.dict.yaml

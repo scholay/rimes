@@ -1,0 +1,31 @@
+# RIMES iOS original minimal schema (MIT). No desktop includes or Lua.
+schema:
+  schema_id: rimes_wubi
+  name: RIMES wubi
+  version: "0.1.0"
+switches:
+  - name: ascii_mode
+    reset: 0
+engine:
+  processors: [ascii_composer, speller, punctuator, selector, navigator, express_editor]
+  segmentors: [ascii_segmentor, abc_segmentor, punct_segmentor, fallback_segmentor]
+  translators: [punct_translator, table_translator]
+speller:
+  alphabet: abcdefghijklmnopqrstuvwxyz
+  delimiter: " '"
+  algebra: []
+translator:
+  dictionary: wubi86
+  prism: rimes_wubi
+  enable_user_dict: true
+  enable_sentence: true
+  enable_completion: true
+  preedit_format: []
+punctuator:
+  half_shape:
+    ',': '，'
+    '.': '。'
+    '?': '？'
+    '!': '！'
+    ':': '：'
+    ';': '；'

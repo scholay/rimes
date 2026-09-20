@@ -1,0 +1,741 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		061AF7384B28E8EF7F2FFC29 /* RIMESKeyboard.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B5C6E4AD5FD1AD736D377EAB /* RIMESKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		12ED10B7FAED3657E4132730 /* RimesCore in Frameworks */ = {isa = PBXBuildFile; productRef = 166AC455F71B32F8A88BEBA0 /* RimesCore */; };
+		15C8E9DF2F87DE79FBB21672 /* RimeMobile.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3EAB21FD96993A6C23136780 /* RimeMobile.mm */; };
+		177FBCAB4803C1E06B767D5E /* RimesCore in Frameworks */ = {isa = PBXBuildFile; productRef = BD70F7451E25B54A49DF7E2C /* RimesCore */; };
+		272E9A702E215BA565D36909 /* EngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05F694330D783C5822C8798A /* EngineTests.swift */; };
+		34ED8AECFF8B222576516BC0 /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00BED878670FDB179561899 /* Settings.swift */; };
+		3B433873A2CDC9AFA98CC523 /* EngineData in Resources */ = {isa = PBXBuildFile; fileRef = FC8031DB5E05D900912B3101 /* EngineData */; };
+		3C33666CE829A6A1E01AD044 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 74F4E20EEDD01DC7F5CC2F6A /* Assets.xcassets */; };
+		3E11FAC0D97F5886CDCC43B0 /* ProxyTextDelivery.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC2A712CDC7868E1C11B6DAA /* ProxyTextDelivery.swift */; };
+		49D0B8B96EA1C4435CFC0051 /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00BED878670FDB179561899 /* Settings.swift */; };
+		5127AF8F2477691DBF3B141A /* Rime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = D2AE2CA88B327774FC437F4A /* Rime.xcframework */; };
+		630E928793178DCD96B5DD17 /* MobileEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E21B5038BEE6B784ABA0CB35 /* MobileEngine.swift */; };
+		6676C678F69E9C29144B1955 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD234B056A3AB0890E5F757B /* KeyboardViewController.swift */; };
+		72D3C6D0179CC33FE13C8DA4 /* RimesCore in Frameworks */ = {isa = PBXBuildFile; productRef = 62445D535B1D7A6366C0234B /* RimesCore */; };
+		734B504D58D64C71145A9D92 /* Rime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = D2AE2CA88B327774FC437F4A /* Rime.xcframework */; };
+		7B44FFB1E8A3171A6FC96728 /* THIRD_PARTY.txt in Resources */ = {isa = PBXBuildFile; fileRef = 8C9250B1ED23E7A955B90C53 /* THIRD_PARTY.txt */; };
+		7C801FD873B35BEC029F7469 /* ProxyTextDelivery.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC2A712CDC7868E1C11B6DAA /* ProxyTextDelivery.swift */; };
+		7E4183786A0A39941DB4FE2A /* EngineData in Resources */ = {isa = PBXBuildFile; fileRef = FC8031DB5E05D900912B3101 /* EngineData */; };
+		91E6E22CA8D776230DF306A3 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2C7665ECABBBF5946A99BE50 /* PrivacyInfo.xcprivacy */; };
+		92849E5F457028B115B1FF68 /* RimesApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDCAEBF5822184603F11002A /* RimesApp.swift */; };
+		983BF5641DF0DEB2422295E5 /* MobileEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E21B5038BEE6B784ABA0CB35 /* MobileEngine.swift */; };
+		A4903D0AB35165B2EC3A3B2C /* KeySurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = B579639B42DCF0E4CECDE063 /* KeySurface.swift */; };
+		B128CD8F9F802BF9045E8BE2 /* RimeMobile.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3EAB21FD96993A6C23136780 /* RimeMobile.mm */; };
+		D601A3A1318186EE51DB5690 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2C7665ECABBBF5946A99BE50 /* PrivacyInfo.xcprivacy */; };
+		E614C97975864D22B5670551 /* DevelopmentSmoke.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89364C5C5A24F3CA907FAF2E /* DevelopmentSmoke.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		5DD2D981B312B20451AA19E0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 3C24AC1759D20490388A0068 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EC4CCCDBB1A3610A10D396CE;
+			remoteInfo = RIMESKeyboard;
+		};
+		8EB539F69DB17A3C6A0EDA44 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 3C24AC1759D20490388A0068 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E60D4567B3E06117E9AAFC00;
+			remoteInfo = RIMES;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		FCD79B9223FA07C65DF13BA2 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				061AF7384B28E8EF7F2FFC29 /* RIMESKeyboard.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		05F694330D783C5822C8798A /* EngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineTests.swift; sourceTree = "<group>"; };
+		2663C56751557C40F55C6B96 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		2C7665ECABBBF5946A99BE50 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		328406AEBF3F70DBFC497D85 /* RIMESKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RIMESKeyboard.entitlements; sourceTree = "<group>"; };
+		3EAB21FD96993A6C23136780 /* RimeMobile.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = RimeMobile.mm; sourceTree = "<group>"; };
+		5BA81208AC7C835E461080D2 /* RIMESTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = RIMESTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		74F4E20EEDD01DC7F5CC2F6A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		89364C5C5A24F3CA907FAF2E /* DevelopmentSmoke.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevelopmentSmoke.swift; sourceTree = "<group>"; };
+		8C9250B1ED23E7A955B90C53 /* THIRD_PARTY.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = THIRD_PARTY.txt; sourceTree = "<group>"; };
+		9D160F8F1C1D6930650DD221 /* RimeMobile.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RimeMobile.h; sourceTree = "<group>"; };
+		A4B419A120442590CD0E3351 /* RIMES.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RIMES.entitlements; sourceTree = "<group>"; };
+		B00BED878670FDB179561899 /* Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings.swift; sourceTree = "<group>"; };
+		B579639B42DCF0E4CECDE063 /* KeySurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeySurface.swift; sourceTree = "<group>"; };
+		B5C6E4AD5FD1AD736D377EAB /* RIMESKeyboard.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = RIMESKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		BD234B056A3AB0890E5F757B /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
+		C382D89140A17145FACC18AB /* RIMES.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = RIMES.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		CDCAEBF5822184603F11002A /* RimesApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimesApp.swift; sourceTree = "<group>"; };
+		D2AE2CA88B327774FC437F4A /* Rime.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = Rime.xcframework; path = ../../Vendor/Rime.xcframework; sourceTree = "<group>"; };
+		E21B5038BEE6B784ABA0CB35 /* MobileEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileEngine.swift; sourceTree = "<group>"; };
+		F19BE59861921D5B014A41BC /* Shared */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Shared; path = ../../Shared; sourceTree = SOURCE_ROOT; };
+		FC2A712CDC7868E1C11B6DAA /* ProxyTextDelivery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyTextDelivery.swift; sourceTree = "<group>"; };
+		FC8031DB5E05D900912B3101 /* EngineData */ = {isa = PBXFileReference; lastKnownFileType = folder; name = EngineData; path = Resources/EngineData; sourceTree = SOURCE_ROOT; };
+		FE341F6EF7C61004FFDE9930 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		2AEA6A2D1F906036AB679637 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				177FBCAB4803C1E06B767D5E /* RimesCore in Frameworks */,
+				5127AF8F2477691DBF3B141A /* Rime.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6AFD3E209F6F9A3E44410C20 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				12ED10B7FAED3657E4132730 /* RimesCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		71E4DFEF2620E99EE22CB08A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				72D3C6D0179CC33FE13C8DA4 /* RimesCore in Frameworks */,
+				734B504D58D64C71145A9D92 /* Rime.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		2D0C4AAB754A8350F799B7B0 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				05F694330D783C5822C8798A /* EngineTests.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		387A71BA5FD448CD645263D3 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				74F4E20EEDD01DC7F5CC2F6A /* Assets.xcassets */,
+				FC8031DB5E05D900912B3101 /* EngineData */,
+				2C7665ECABBBF5946A99BE50 /* PrivacyInfo.xcprivacy */,
+				8C9250B1ED23E7A955B90C53 /* THIRD_PARTY.txt */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		5BEBAB5D78AE5563654D99A9 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				F19BE59861921D5B014A41BC /* Shared */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		782E5DE769252B2EBCC73EEE /* Bridge */ = {
+			isa = PBXGroup;
+			children = (
+				9D160F8F1C1D6930650DD221 /* RimeMobile.h */,
+				3EAB21FD96993A6C23136780 /* RimeMobile.mm */,
+			);
+			path = Bridge;
+			sourceTree = "<group>";
+		};
+		81BBE2E73753EA2DFD465D26 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				89364C5C5A24F3CA907FAF2E /* DevelopmentSmoke.swift */,
+				FE341F6EF7C61004FFDE9930 /* Info.plist */,
+				A4B419A120442590CD0E3351 /* RIMES.entitlements */,
+				CDCAEBF5822184603F11002A /* RimesApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		9CEB379C21A4F9696282CEAE /* Support */ = {
+			isa = PBXGroup;
+			children = (
+				E21B5038BEE6B784ABA0CB35 /* MobileEngine.swift */,
+				FC2A712CDC7868E1C11B6DAA /* ProxyTextDelivery.swift */,
+				B00BED878670FDB179561899 /* Settings.swift */,
+			);
+			path = Support;
+			sourceTree = "<group>";
+		};
+		B99FA2709306C1CA36C0D12D /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				D2AE2CA88B327774FC437F4A /* Rime.xcframework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		E006F8C810FC1155AC23FB96 = {
+			isa = PBXGroup;
+			children = (
+				81BBE2E73753EA2DFD465D26 /* App */,
+				782E5DE769252B2EBCC73EEE /* Bridge */,
+				FB5C935122DB3171C66C2192 /* Keyboard */,
+				5BEBAB5D78AE5563654D99A9 /* Packages */,
+				387A71BA5FD448CD645263D3 /* Resources */,
+				9CEB379C21A4F9696282CEAE /* Support */,
+				2D0C4AAB754A8350F799B7B0 /* Tests */,
+				B99FA2709306C1CA36C0D12D /* Frameworks */,
+				F81C4162F605889A72648880 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		F81C4162F605889A72648880 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C382D89140A17145FACC18AB /* RIMES.app */,
+				B5C6E4AD5FD1AD736D377EAB /* RIMESKeyboard.appex */,
+				5BA81208AC7C835E461080D2 /* RIMESTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		FB5C935122DB3171C66C2192 /* Keyboard */ = {
+			isa = PBXGroup;
+			children = (
+				2663C56751557C40F55C6B96 /* Info.plist */,
+				BD234B056A3AB0890E5F757B /* KeyboardViewController.swift */,
+				B579639B42DCF0E4CECDE063 /* KeySurface.swift */,
+				328406AEBF3F70DBFC497D85 /* RIMESKeyboard.entitlements */,
+			);
+			path = Keyboard;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A545E26831EAAA08403AD624 /* RIMESTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3F62F4107BC697E2FB928204 /* Build configuration list for PBXNativeTarget "RIMESTests" */;
+			buildPhases = (
+				DA1A17106AD51E9CB8F8BE4C /* Sources */,
+				6AFD3E209F6F9A3E44410C20 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AB02CCFDB17827E307FD56CA /* PBXTargetDependency */,
+			);
+			name = RIMESTests;
+			packageProductDependencies = (
+				166AC455F71B32F8A88BEBA0 /* RimesCore */,
+			);
+			productName = RIMESTests;
+			productReference = 5BA81208AC7C835E461080D2 /* RIMESTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		E60D4567B3E06117E9AAFC00 /* RIMES */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BAB4AF4244CF3EB3A2A2235E /* Build configuration list for PBXNativeTarget "RIMES" */;
+			buildPhases = (
+				833A50CA7435C17956D0F7F5 /* Sources */,
+				6B3A3452CC8393E902841226 /* Resources */,
+				71E4DFEF2620E99EE22CB08A /* Frameworks */,
+				FCD79B9223FA07C65DF13BA2 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				18576031FBB751E567318A63 /* PBXTargetDependency */,
+			);
+			name = RIMES;
+			packageProductDependencies = (
+				62445D535B1D7A6366C0234B /* RimesCore */,
+			);
+			productName = RIMES;
+			productReference = C382D89140A17145FACC18AB /* RIMES.app */;
+			productType = "com.apple.product-type.application";
+		};
+		EC4CCCDBB1A3610A10D396CE /* RIMESKeyboard */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E7D43311CE52E9C1FE3DA162 /* Build configuration list for PBXNativeTarget "RIMESKeyboard" */;
+			buildPhases = (
+				F998648C6C5D76E39EC0A066 /* Sources */,
+				030147F5D9FBC309F7C561EA /* Resources */,
+				2AEA6A2D1F906036AB679637 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = RIMESKeyboard;
+			packageProductDependencies = (
+				BD70F7451E25B54A49DF7E2C /* RimesCore */,
+			);
+			productName = RIMESKeyboard;
+			productReference = B5C6E4AD5FD1AD736D377EAB /* RIMESKeyboard.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		3C24AC1759D20490388A0068 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					A545E26831EAAA08403AD624 = {
+						ProvisioningStyle = Automatic;
+					};
+					E60D4567B3E06117E9AAFC00 = {
+						ProvisioningStyle = Automatic;
+					};
+					EC4CCCDBB1A3610A10D396CE = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = B7ABE11F39E0602339736CB7 /* Build configuration list for PBXProject "RIMES" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = E006F8C810FC1155AC23FB96;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5EF4D559F659289BBCA690C3 /* XCLocalSwiftPackageReference "../../Shared" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = F81C4162F605889A72648880 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				E60D4567B3E06117E9AAFC00 /* RIMES */,
+				EC4CCCDBB1A3610A10D396CE /* RIMESKeyboard */,
+				A545E26831EAAA08403AD624 /* RIMESTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		030147F5D9FBC309F7C561EA /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3B433873A2CDC9AFA98CC523 /* EngineData in Resources */,
+				91E6E22CA8D776230DF306A3 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6B3A3452CC8393E902841226 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3C33666CE829A6A1E01AD044 /* Assets.xcassets in Resources */,
+				7E4183786A0A39941DB4FE2A /* EngineData in Resources */,
+				D601A3A1318186EE51DB5690 /* PrivacyInfo.xcprivacy in Resources */,
+				7B44FFB1E8A3171A6FC96728 /* THIRD_PARTY.txt in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		833A50CA7435C17956D0F7F5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E614C97975864D22B5670551 /* DevelopmentSmoke.swift in Sources */,
+				983BF5641DF0DEB2422295E5 /* MobileEngine.swift in Sources */,
+				3E11FAC0D97F5886CDCC43B0 /* ProxyTextDelivery.swift in Sources */,
+				B128CD8F9F802BF9045E8BE2 /* RimeMobile.mm in Sources */,
+				92849E5F457028B115B1FF68 /* RimesApp.swift in Sources */,
+				49D0B8B96EA1C4435CFC0051 /* Settings.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DA1A17106AD51E9CB8F8BE4C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				272E9A702E215BA565D36909 /* EngineTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F998648C6C5D76E39EC0A066 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A4903D0AB35165B2EC3A3B2C /* KeySurface.swift in Sources */,
+				6676C678F69E9C29144B1955 /* KeyboardViewController.swift in Sources */,
+				630E928793178DCD96B5DD17 /* MobileEngine.swift in Sources */,
+				7C801FD873B35BEC029F7469 /* ProxyTextDelivery.swift in Sources */,
+				15C8E9DF2F87DE79FBB21672 /* RimeMobile.mm in Sources */,
+				34ED8AECFF8B222576516BC0 /* Settings.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		18576031FBB751E567318A63 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EC4CCCDBB1A3610A10D396CE /* RIMESKeyboard */;
+			targetProxy = 5DD2D981B312B20451AA19E0 /* PBXContainerItemProxy */;
+		};
+		AB02CCFDB17827E307FD56CA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E60D4567B3E06117E9AAFC00 /* RIMES */;
+			targetProxy = 8EB539F69DB17A3C6A0EDA44 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		1D8363B7BA51EADB7BB0EB09 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/RIMES.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"../../Vendor\"",
+				);
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.scholay.rimes.ios;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		2AFFE4D8583036C14314042B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/RIMES.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"../../Vendor\"",
+				);
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.scholay.rimes.ios;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		54C9743EFC8F4C8FB3644495 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/../../Vendor/ios-build/headers";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lc++",
+					"-all_load",
+				);
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				RIMES_APP_GROUP = group.org.scholay.rimes.ios;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OBJC_BRIDGING_HEADER = Bridge/RimeMobile.h;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		5C53D80F9324C5AB0567CF25 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.scholay.rimes.ios.tests;
+				SDKROOT = iphoneos;
+				SWIFT_OBJC_BRIDGING_HEADER = "";
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RIMES.app/RIMES";
+			};
+			name = Debug;
+		};
+		B0F06B13FEB3BE22A414813B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.scholay.rimes.ios.tests;
+				SDKROOT = iphoneos;
+				SWIFT_OBJC_BRIDGING_HEADER = "";
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RIMES.app/RIMES";
+			};
+			name = Release;
+		};
+		B9FE632B3EDFB0A6B7D90AD5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Keyboard/RIMESKeyboard.entitlements;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"../../Vendor\"",
+				);
+				INFOPLIST_FILE = Keyboard/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.scholay.rimes.ios.keyboard;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		D0D9008810B1CF5489B7ACC1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Keyboard/RIMESKeyboard.entitlements;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"../../Vendor\"",
+				);
+				INFOPLIST_FILE = Keyboard/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.scholay.rimes.ios.keyboard;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		F3B96FA5145061D78C7E2CC1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/../../Vendor/ios-build/headers";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lc++",
+					"-all_load",
+				);
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				RIMES_APP_GROUP = group.org.scholay.rimes.ios;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OBJC_BRIDGING_HEADER = Bridge/RimeMobile.h;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3F62F4107BC697E2FB928204 /* Build configuration list for PBXNativeTarget "RIMESTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5C53D80F9324C5AB0567CF25 /* Debug */,
+				B0F06B13FEB3BE22A414813B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B7ABE11F39E0602339736CB7 /* Build configuration list for PBXProject "RIMES" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				54C9743EFC8F4C8FB3644495 /* Debug */,
+				F3B96FA5145061D78C7E2CC1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		BAB4AF4244CF3EB3A2A2235E /* Build configuration list for PBXNativeTarget "RIMES" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1D8363B7BA51EADB7BB0EB09 /* Debug */,
+				2AFFE4D8583036C14314042B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E7D43311CE52E9C1FE3DA162 /* Build configuration list for PBXNativeTarget "RIMESKeyboard" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B9FE632B3EDFB0A6B7D90AD5 /* Debug */,
+				D0D9008810B1CF5489B7ACC1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		5EF4D559F659289BBCA690C3 /* XCLocalSwiftPackageReference "../../Shared" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../Shared;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		166AC455F71B32F8A88BEBA0 /* RimesCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RimesCore;
+		};
+		62445D535B1D7A6366C0234B /* RimesCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RimesCore;
+		};
+		BD70F7451E25B54A49DF7E2C /* RimesCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RimesCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 3C24AC1759D20490388A0068 /* Project object */;
+}

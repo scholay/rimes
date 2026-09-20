@@ -1,0 +1,50 @@
+{
+  "librime": {
+    "url": "https://github.com/rime/librime.git",
+    "tag": "1.17.0",
+    "commit": "33e78140250125871856cdc5b42ddc6a5fcd3cd4"
+  },
+  "submodules": {
+    "leveldb": "99b3c03b3284f5886f9ef9a4ef703d57373e61be",
+    "marisa-trie": "3e87d53b78e15f2f43783d5e376561a8c9722051",
+    "opencc": "556ed22496d650bd0b13b6c163be9814637970ae",
+    "yaml-cpp": "2f86d13775d119edbb69af52e5f566fd65c6953b"
+  },
+  "boost": {
+    "url": "https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.bz2",
+    "sha256": "1bed88e40401b2cb7a1f76d4bab499e352fa4d0c5f31c0dbae64e24d34d7513b"
+  },
+  "xcodegen": {
+    "url": "https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip",
+    "sha256": "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806"
+  },
+  "data": [
+    {
+      "path": "platforms/ios/Resources/EngineData/wubi86.dict.yaml",
+      "url": "https://raw.githubusercontent.com/rime/rime-wubi/152a0d3f3efe40cae216d1e3b338242446848d07/wubi86.dict.yaml",
+      "sha256": "f833d86b72341fe82e069a425b6625f29ef85f1bc0f34f6fb7975fe514888b5a"
+    },
+    {
+      "path": "platforms/ios/Resources/EngineData/pinyin_simp.dict.yaml",
+      "url": "https://raw.githubusercontent.com/rime/rime-pinyin-simp/0c6861ef7420ee780270ca6d993d18d4101049d0/pinyin_simp.dict.yaml",
+      "sha256": "e341598343a0f0f2035bb1aafc34a7f3bb7887deeecb3f60796262aaa2983e6b"
+    },
+    {
+      "path": "platforms/ios/Licenses/pinyin_simp-APACHE-2.0.txt",
+      "url": "https://raw.githubusercontent.com/rime/rime-pinyin-simp/0c6861ef7420ee780270ca6d993d18d4101049d0/LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "platforms/ios/Licenses/rapidjson-1.1.0-MIT.txt",
+      "url": "https://raw.githubusercontent.com/Tencent/rapidjson/v1.1.0/license.txt",
+      "sha256": "a140e5d46fe734a1c78f1a3c3ef207871dd75648be71fdda8e309b23ab8b1f32"
+    }
+  ],
+  "localInputs": [
+    {
+      "path": "chord-keymaps/Isaac2025.json",
+      "revision": "20651da",
+      "sha256": "f2d1c551a99b9758041736786f97ba104108bdedeb9d6d7d9872338d68e6fc22"
+    }
+  ]
+}

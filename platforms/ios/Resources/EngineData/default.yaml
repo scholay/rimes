@@ -1,0 +1,7 @@
+config_version: "1.0"
+schema_list:
+  - schema: rimes_pinyin
+  - schema: rimes_ziranma
+  - schema: rimes_wubi
+menu:
+  page_size: 9
