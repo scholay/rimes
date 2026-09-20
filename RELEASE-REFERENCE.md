@@ -3,7 +3,7 @@
 日常发布只需要看 [RELEASE.md](RELEASE.md)。本文记录发布链路各环节的设计与约束，修改工作流、
 安装器、更新器或签名配置前先读这里。
 
-## 一、release.yml 的双 runner 设计
+## 一、release.yml 的三段隔离设计
 
 tag 推送后，[`.github/workflows/release.yml`](.github/workflows/release.yml) 使用彼此隔离的 runner：
 
@@ -11,9 +11,13 @@ tag 推送后，[`.github/workflows/release.yml`](.github/workflows/release.yml)
   签名 app 的 runtime smoke，再把 app、构建上下文和校验和作为短期 handoff Artifact 传出。
 - **`publish_unsigned_preview`**（`vX.Y.Z-preview.N`）是另一台无 secrets 的全新 runner，只做被动的成员集、
   权限、版本、架构、签名状态与 SHA-256 复核，不执行 handoff 中的 app，然后创建 Pre-release。
-- **`sign_and_publish`**（`vX.Y.Z`）是全新 runner，才进入受保护的 `macos-release` Environment。它先按严格的
+- **`sign_and_stage`**（`vX.Y.Z`）是全新 runner，才进入受保护的 `macos-release` Environment。它先按严格的
   成员 / 路径 / 权限 / 大小规则解包 app 并被动校验，通过后才导入签名与公证凭据；凭据所在 runner
-  不执行 handoff 中的 app。
+  不执行 handoff 中的 app。签名、公证、staple 和最终资产复核通过后，它先销毁临时 keychain / P8，再产生
+  不可变 signed-stage Artifact。
+- **`publish_staged_release`** 是第三台全新 runner，进入不含任何签名/公证 Secrets 的受保护
+  `macos-publish` Environment。required reviewer 必须先审阅维护者的真机验收记录；该 job 只认证 stage 的
+  artifact ID/digest/运行号/commit，逐字节复核五个成员并从中发布，绝不 checkout、重建、重签或重公证。
 
 构建步骤：
 
@@ -29,12 +33,20 @@ tag 推送后，[`.github/workflows/release.yml`](.github/workflows/release.yml)
 5. 正式版：用同一张 Developer ID Application 证书逐个重签所有 bundled Mach-O，再以 hardened runtime
    签 app；提交公证、等待 `Accepted` 并 staple，之后创建保留签名与票据的 `RIMES-X.Y.Z.zip`；以
    Developer ID Installer 签署 `RIMES-X.Y.Z.pkg`，再次公证并 staple。
-6. 对最终资产执行 `codesign`、`pkgutil`、`stapler` 与 `spctl` 校验，通过后才创建 Release；发布前先销毁
-   临时 keychain / P8。发布使用受控的 `gh` CLI，所有外部 Actions 都固定到完整 commit SHA。
+6. 对最终资产执行 `codesign`、`pkgutil`、`stapler` 与 `spctl` 校验；随后销毁临时 keychain / P8，
+   才把 pkg、zip、`SHA256SUMS`、`RELEASE-NOTES.md` 与严格 manifest 作为 signed-stage 上传。第二道 job 使用
+   受控的 `gh` CLI 从该 stage 创建 Release，并下载正式资产读回校验；所有外部 Actions 都固定到完整 commit SHA。
+
+`build_and_smoke` 执行的是 ad-hoc smoke bundle；正式 runner 会在之后重新签名、重新打包和公证。
+因此 build / smoke 成功不能替代对正式字节的验收：正式 workflow 会被动校验最终 pkg 的签名、票据和
+Gatekeeper 策略。signed-stage 出现后，维护者必须下载其中的**精确** `RIMES-X.Y.Z.pkg`，而不是用 checkout
+重打包或普通演练 Artifact，并在批准 `macos-publish` 前通过 `scripts/rehearse-release-pkg.sh` 做真实安装。
+发布器会证明随后公开的 Release 资产与该 stage 是同一批字节。
 
 授权规则：
 
-- 正式版 tag 必须精确指向当时的 `origin/main`，签名前与销毁密钥后各复核一次，Release 必须仍为空位。
+- 正式版 tag 必须在签名前精确指向当时的 `origin/main`；签名完成后 tag 不得移动，stage 与发布前各复核
+  其 commit，Release 必须仍为空位。主线随后有新提交不会改变已审计 tag 的字节。
 - 预览版 tag 必须指向已在 main 上的提交，tag 在发布前不得移动，Release 必须仍为空位。
 - 预览版 Release 只包含 `RIMES-X.Y.Z-preview.N.pkg` 与 `SHA256SUMS`，标记为 Pre-release、`latest=false`，
   正文写明 unsigned / not notarized 并链接 `UNSIGNED-PREVIEW.md`。
@@ -42,12 +54,33 @@ tag 推送后，[`.github/workflows/release.yml`](.github/workflows/release.yml)
 
 ## 二、正式发布环境与 Secrets
 
-> 当前仓库尚未配置 `macos-release` Environment 与发布 Secrets，开发机也没有 Developer ID
-> Application / Installer 身份。补齐前不得创建 `vX.Y.Z` 正式 tag，也不得把预览产物标记为正式 Release。
-> 首个正式版必须使用高于所有既有版本的新版本号，绝不能在已发布版本上补签后覆盖原字节。
+> Apple Developer Program 资格或开发机上可见的一张 Developer ID identity，都不是正式发布已就绪的
+> 证据。首个 `vX.Y.Z` 前必须完整配置下述两张证书及私钥、受保护的 `macos-release` 与
+> `macos-publish` Environment 和全部公证凭据，并让正式 workflow 成功生成、校验和发布签名公证的 pkg。此前公开 macOS 渠道只能发布
+> 未签名 Pre-release，绝不能标记为正式 Release 或 Latest。首个正式版必须使用高于所有既有版本的
+> 新版本号，绝不能在已发布版本上补签后覆盖原字节。
 
-先创建受保护的 GitHub Environment `macos-release`：开启 required reviewers，并把 deployment
-branch / tag rule 限制到 `vX.Y.Z` tag。tag ruleset 已禁止删除或移动发布 tag。
+先创建两个受保护的 GitHub Environment：
+
+- `macos-release`：签名/公证门，必须配置至少一位 required reviewer、**禁止
+  administrator bypass**，并以 selected branch/tag policy 允许 `v*`；这里才保存下表八项 Secrets。
+- `macos-publish`：公开发布门，也必须配置上述 reviewer / admin-bypass / `v*` policy，且
+  **不要配置任何 Developer ID 或 notary Secret**。GitHub 的 required-reviewer 规则只要求名单中的一人批准；
+  两个 Environment 可以使用同一个 reviewer，由其分别批准签名和发布，不要求两位独立审核者。
+
+当前采用单维护者流程：两个 Environment 的 required reviewer 都配置为 `scholay`，
+`prevent_self_review=false`，允许该账号发起发布并分别批准签名与公开。两次人工审批和禁止 administrator
+bypass 仍然保留，公开审批前仍必须完成同一签名安装包的真机验收。这不是两个人的独立复核；若团队以后需要
+独立复核，再启用 prevent self-review，并配置不同的人或不重叠的 reviewer team。
+
+正式工作流在导入凭据和公开 Release 前，会通过 GitHub API 重新断言以上 Environment 控制；缺失、允许
+admin bypass、没有 reviewer 或没有 `v*` policy 都会 fail-closed。工作流不要求两个阶段使用不同的
+reviewer；若另行采用团队独立复核策略，成员分离由仓库管理员配置。
+
+独立的 `release tag creation` ruleset 覆盖 `refs/tags/v*` 的 **creation**，只给发布账号 `scholay` bypass；
+原有 `release tags` ruleset 无 bypass，继续禁止所有人删除或移动已有 tag。两类规则分开配置，避免创建权限
+同时变成覆盖已有版本的权限。GitHub Actions Artifact 在公开仓库中的访问规则不是发布禁运；它只是发布
+权威门，用户和更新器的唯一来源仍是正式 GitHub Release。
 
 在该 Environment 的 secrets 中配置以下 8 项；P12 必须分别包含有效的 Developer ID Application /
 Developer ID Installer 证书及其私钥：
@@ -67,7 +100,7 @@ Developer ID Installer 证书及其私钥：
 > 不要把证书、私钥或密码提交到仓库。
 
 正式 workflow 只在 fresh signing runner 把两张证书导入一次性 keychain，只把证书 common name、
-Team ID 和临时路径传给后续步骤；P12 导入后立即删除，公证结束、Release 上传前删除临时 keychain 与 P8；
+Team ID 和临时路径传给后续步骤；P12 导入后立即删除，公证结束、signed-stage 上传前删除临时 keychain 与 P8；
 失败路径也会无条件清理。导入脚本拒绝多张同类型 identity、Team ID 不一致或缺少任一凭据的配置。
 
 ## 三、自包含 librime（[`scripts/fetch-rime.sh`](scripts/fetch-rime.sh)）
@@ -161,6 +194,26 @@ bootstrap；TIS 激活留到 GUI 会话建立后处理。任何路径都不结�
 只复制不移动，原目录保留作回退。父输入法与
 子 mode 不能共用同一个 TIS id，否则父项无法启用、`TISSelectInputSource` 会返回 `paramErr`。
 macOS 会把这些 id 写入受保护的 TIS 偏好，因此后续不要随意改动。
+
+### 开发安装与正式包安装：二选一
+
+`build_install.sh` 是开发维护通道：它从 checkout 构建并把可变的开发版安装给当前用户；它不是
+正式资产，也不能用于证明正式 Release 的安装质量。普通用户的正式包通道只接受 GitHub 正式 Release
+中下载的精确 `RIMES-X.Y.Z.pkg` 与 `SHA256SUMS`，由 Installer 安装到 `/Library/Input Methods`。
+同一用户或正式包测试机一次只能选择一条通道；不要让开发安装覆盖正式包。
+
+在第二道批准前，维护者可从 signed-stage 下载同一份 pkg，依次运行：
+
+```bash
+scripts/rehearse-release-pkg.sh --pkg /absolute/path/RIMES-X.Y.Z.pkg
+scripts/rehearse-release-pkg.sh --pkg /absolute/path/RIMES-X.Y.Z.pkg --install-gui
+```
+
+默认命令只做签名、公证、Gatekeeper、payload 与架构检查；`--install-gui` 才会打开与用户相同的 Installer，
+并在安装后验证固定路径、回执和真实输入源。它会退休当前 GUI 用户的开发 app / agent，因此必须使用测试账号
+或可恢复测试 Mac。记录 tag、stage asset SHA-256、macOS 版本和测试设备；reviewer 审阅这些证据后才批准
+`macos-publish`。发布 job 不执行本地 checkout 代码，只认证已封存 stage 并读回公开 Release；这两层都不能
+用开发 build/smoke 或普通演练 Artifact 替代。
 
 ## 七、应用内自动更新（[`UpdateManager.swift`](Sources/RimeBuffer/UpdateManager.swift)）
 

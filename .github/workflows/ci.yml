@@ -27,7 +27,10 @@ jobs:
         run: python3 -m unittest discover -s scripts/release -p "test*.py" -v
 
       - name: Release script syntax
-        run: bash -n scripts/release.sh
+        run: |
+          bash -n scripts/release.sh
+          bash -n scripts/rehearse-release-pkg.sh
+          scripts/rehearse-release-pkg.sh --help
 
       - name: Info.plist carries no committed version
         run: python3 scripts/release/release_tool.py check-plist
@@ -128,6 +131,7 @@ jobs:
           bash -n scripts/make-pkg.sh
           bash -n scripts/fetch-rime.sh
           bash -n scripts/release.sh
+          bash -n scripts/rehearse-release-pkg.sh
           bash -n scripts/pkg/scripts/rimes-install-common.sh
           bash -n scripts/pkg/scripts/rimes-user-activation-agent.sh
           bash -n scripts/pkg/scripts/rimes-companion-launch-agent.sh
@@ -147,6 +151,18 @@ jobs:
           )
           assert companion_install < companion_resident < tis_activation
           assert build_install.count('--prepare-update') >= 2
+          assert '"Apple Development:"*)' in build_install
+          assert '/"Apple Development: /' in build_install
+          assert 'Developer ID identities are reserved for formal release packages.' in build_install
+
+          release_workflow = Path(".github/workflows/release.yml").read_text()
+          assert release_workflow.count('must have a populated required_reviewers rule') == 2
+          assert release_workflow.count('must disallow administrator bypass') == 2
+          assert release_workflow.count('must allow the formal tag pattern v*') == 2
+          assert 'Could not destroy the temporary signing keychain; refusing to stage release assets.' in release_workflow
+          publish_job = release_workflow.split('  publish_staged_release:', 1)[1]
+          assert 'actions/checkout@' not in publish_job
+          assert 'scripts/rehearse-release-pkg.sh' not in publish_job
 
           preinstall = Path("scripts/pkg/scripts/preinstall").read_text()
           account_audit = preinstall.index('audit-system-conflicts "$ALLOWED_CONSOLE_UID"')
