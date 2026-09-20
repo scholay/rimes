@@ -1172,6 +1172,10 @@ jobs:
 
   sign_and_stage:
     name: Sign, verify, and stage macOS
+    # Backstop for the notary wait. notarize-macos.sh bounds its own wait, so
+    # reaching this means something outside that wait hung; without it the
+    # default is six hours of a held runner and a held release.
+    timeout-minutes: 75
     needs: build_and_smoke
     if: >-
       needs.build_and_smoke.result == 'success' &&

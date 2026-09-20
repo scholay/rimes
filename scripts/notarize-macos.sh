@@ -51,6 +51,19 @@ else
         || die "pkg is not signed with Developer ID Installer"
 fi
 
+# Bounds the local wait. The submission is unaffected by it: Apple keeps
+# processing, and the id above retrieves the verdict afterwards.
+notary_timeout="${RIMES_NOTARY_TIMEOUT:-30m}"
+[[ "$notary_timeout" =~ ^[0-9]+[smh]?$ ]] \
+    || die "invalid RIMES_NOTARY_TIMEOUT: $notary_timeout"
+
+notarytool() {
+    /usr/bin/xcrun notarytool "$@" \
+        --key "$notary_key" \
+        --key-id "$notary_key_id" \
+        --issuer "$notary_issuer_id"
+}
+
 temporary_parent="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 [[ "$temporary_parent" == /* ]] || die "temporary directory must be an absolute path"
 temporary_dir="$(/usr/bin/mktemp -d "$temporary_parent/rimes-notary.XXXXXX")"
@@ -63,26 +76,45 @@ if [[ "$kind" == app ]]; then
     /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$target" "$submission"
 fi
 
+submit_json="$temporary_dir/notary-submit.json"
+
+# Submitting and waiting used to be one `--wait` call whose stdout went
+# straight to a file. That combination hides the submission id until Apple
+# answers, so a slow or stuck submission produces no output at all: v0.5.1
+# sat here for 33 minutes and was cancelled, leaving nothing to query and no
+# way to tell a backlog from a rejection. Submit first, print the id, then
+# wait on it separately with a bound.
 set +e
-/usr/bin/xcrun notarytool submit "$submission" \
-    --key "$notary_key" \
-    --key-id "$notary_key_id" \
-    --issuer "$notary_issuer_id" \
-    --wait \
-    --output-format json >"$result_json"
+notarytool submit "$submission" --no-wait --output-format json >"$submit_json"
 submit_status=$?
+set -e
+submission_id="$(/usr/bin/plutil -extract id raw -o - "$submit_json" 2>/dev/null || true)"
+if [[ "$submit_status" -ne 0 || -z "$submission_id" ]]; then
+    die "notary submission was refused before it was queued (exit=$submit_status)"
+fi
+
+# The id is the only durable handle on the submission. Print it before the
+# wait so it survives a cancelled job, a lost temporary directory, and a
+# timeout.
+echo "notarize-macos: submitted $target"
+echo "notarize-macos: submission id=$submission_id (waiting up to $notary_timeout)"
+echo "notarize-macos: query it any time with:"
+echo "  xcrun notarytool info $submission_id --key <key> --key-id <id> --issuer <issuer>"
+
+set +e
+notarytool wait "$submission_id" \
+    --timeout "$notary_timeout" \
+    --output-format json >"$result_json"
+wait_status=$?
 set -e
 
 notary_status="$(/usr/bin/plutil -extract status raw -o - "$result_json" 2>/dev/null || true)"
-submission_id="$(/usr/bin/plutil -extract id raw -o - "$result_json" 2>/dev/null || true)"
-if [[ "$submit_status" -ne 0 || "$notary_status" != Accepted ]]; then
-    if [[ -n "$submission_id" ]]; then
-        /usr/bin/xcrun notarytool log "$submission_id" \
-            --key "$notary_key" \
-            --key-id "$notary_key_id" \
-            --issuer "$notary_issuer_id" || true
-    fi
-    die "notary submission was not accepted (status=${notary_status:-unknown}, id=${submission_id:-unknown})"
+if [[ "$wait_status" -ne 0 || "$notary_status" != Accepted ]]; then
+    # Report what Apple knows on every failing path, timeout included; the
+    # submission keeps processing server-side after a local timeout.
+    notarytool info "$submission_id" || true
+    notarytool log "$submission_id" || true
+    die "notary submission was not accepted (status=${notary_status:-unknown}, id=$submission_id, exit=$wait_status)"
 fi
 
 /usr/bin/xcrun stapler staple -v "$target"
