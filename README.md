@@ -68,9 +68,9 @@
 
 ### 未签名公开预览版（`vX.Y.Z-preview.N`）
 
-在取得 Apple Developer Program 资格前，社区可以从官方仓库
-[GitHub Releases](https://github.com/scholay/rimes/releases) 中最新的 **Pre-release**
-下载 `RIMES-X.Y.Z-preview.N.pkg`。这个包**没有 Developer ID 签名、没有经过 Apple 公证，Apple
+目前公开的 macOS 渠道仍只有社区测试用的未签名 **Pre-release**。在首个正式版成功发布前，请从官方仓库
+[GitHub Releases](https://github.com/scholay/rimes/releases) 中最新的 Pre-release 下载
+`RIMES-X.Y.Z-preview.N.pkg`。这个包**没有 Developer ID 签名、没有经过 Apple 公证，Apple
 无法验证它**；它不是正式版。只从 `scholay/rimes` 下载，并在安装前把本机计算的 SHA-256
 与该 Release 公布的值逐字核对。
 
@@ -82,18 +82,59 @@ Mac 可能由 MDM 禁止这个例外。完整步骤与风险边界见
 [Apple 官方说明](https://support.apple.com/zh-cn/102445)。
 
 预览版不进入应用内自动更新通道：新预览版需要手动下载安装，每个 Release 页面都列出了变更。
-将来发布 Developer ID 签名并经 Apple 公证的正式版后，预览版用户需要从官方 Release 手动安装一次。
+首个 Developer ID 签名并经 Apple 公证的正式版发布后，预览版用户需要从官方 Release 手动安装一次。
 
 ### 正式版
 
-取得 Developer ID 后，正式版仍只通过 [GitHub Releases](https://github.com/scholay/rimes/releases)
-提供经 Developer ID 签名和 Apple 公证的 `RIMES-版本号.pkg`。安装器会把
+首个 `vX.Y.Z` 正式版只有在完整的受保护发布链路成功后才会出现在
+[GitHub Releases](https://github.com/scholay/rimes/releases)。它提供经 Developer ID 签名和 Apple
+公证的 `RIMES-版本号.pkg`。正式发布不是“已加入 Developer Program”或“某台开发机能看到一个证书”
+即可完成；发布前必须同时具备：
+
+- 含私钥且属于同一 Team 的 **Developer ID Application** 与 **Developer ID Installer** 证书；前者签名 app
+  及其 bundled Mach-O，后者签名 `.pkg`；
+- 两个受保护的 GitHub Environment：两者都必须有至少一位 reviewer、禁止 self-review、禁止 administrator
+  bypass，并用 selected branch/tag policy 只允许 `v*`；`macos-release` 只负责签名/公证，`macos-publish`
+  只负责第二次发布审批、**不存任何密钥**，并应使用不重叠的 reviewer；
+- 仅放在 `macos-release` 的两份 P12、其密码、Team ID，以及 App Store Connect 公证 API 的 P8、Key ID
+  和 Issuer ID。
+
+缺少任何一项，正式 workflow 都会 fail-closed，公开渠道仍只能发布未签名预览版。完整的凭据清单与
+发布门禁见 [RELEASE.md](RELEASE.md) 和 [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md)。正式安装器会把
 `RIMES.app` 固定放进 `/Library/Input Methods`（同时移除早期版本的 `ETInput.app`），并在当前 GUI 用户会话中按 parent → child
 的顺序注册、启用和尝试切换。若新版 macOS 的输入法菜单未立即刷新，安装本身仍会正常完成；
 注销并重新登录后再在系统设置中确认「RIMES」即可。不要手动结束 `TextInputMenuAgent` 或
 `imklaunchagent`。
 
-开发者本机：
+#### 两条互斥的安装通道
+
+同一位用户或正式包测试机一次只能使用一条通道；不要让本地开发安装覆盖正式包，也不要用本地构建代替
+正式包的验收。
+
+- **开发维护通道**：只面向 checkout 中的开发者，使用 `build_install.sh` 安装当前源码构建到当前用户。
+  它是会随 Git 状态变化的开发版，不是待发布的正式资产；需要保留本机用户数据时使用：
+
+  ```bash
+  RB_KEEP_USERDB=1 RIMES_SIGN_IDENTITY='Apple Development: <Name> (<TEAM_ID>)' ./build_install.sh
+  ```
+
+- **正式包通道**：普通用户只从 GitHub 正式 Release 下载精确 `RIMES-X.Y.Z.pkg` 与
+  `SHA256SUMS`，由系统安装到 `/Library/Input Methods`。维护者在公开前可下载签名 workflow 在
+  清除全部签名材料后生成的 immutable signed-stage，运行同一个精确 pkg 的验收；通过后才批准
+  `macos-publish`，它会核验 artifact ID/digest/哈希并发布完全相同的字节。signed-stage 是发布门，
+  不是面向用户的下载渠道；公开 Release 才是用户和安装器的权威来源。
+
+  ```bash
+  scripts/rehearse-release-pkg.sh --pkg /绝对路径/RIMES-X.Y.Z.pkg
+  scripts/rehearse-release-pkg.sh --pkg /绝对路径/RIMES-X.Y.Z.pkg --install-gui
+  ```
+
+  第一个命令不安装，第二个才打开与用户相同的 macOS Installer；它会退休当前 GUI 用户的开发版，因此应在
+  测试账号或可恢复的测试 Mac 上执行。公开后 workflow 还会把正式 Release 下载回来逐字节复核。
+
+正式安装器会在可安全核验时退休当前 GUI 用户的开发版，因此这不是两条可以并存、互相覆盖的路径。
+
+开发维护通道的日常快捷命令：
 
 ```bash
 ./build_install.sh                # 构建 + 安装到当前用户 + 注册

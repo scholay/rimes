@@ -68,9 +68,9 @@ Chording preserves the legacy ID and learning progress, with a single behavior s
 
 ### Unsigned public preview (`vX.Y.Z-preview.N`)
 
-Until the project can join the Apple Developer Program, community testers may download
-`RIMES-X.Y.Z-preview.N.pkg` from the newest **Pre-release** on the official
-[GitHub Releases](https://github.com/scholay/rimes/releases) page.
+The public macOS channel currently contains only unsigned community-test **Pre-releases**. Until
+the first formal release has been successfully published, download `RIMES-X.Y.Z-preview.N.pkg`
+from the newest Pre-release on the official [GitHub Releases](https://github.com/scholay/rimes/releases) page.
 This package is **unsigned, not notarized, and not verified by Apple**; it is not a formal
 release. Download only from `scholay/rimes`, then compare the package's locally calculated
 SHA-256 with the value published on that Release page.
@@ -84,21 +84,68 @@ computer”. An organization-managed Mac may block this exception through MDM. S
 [Apple's official guidance](https://support.apple.com/zh-cn/102445).
 
 Previews cannot use in-app updates: install each new preview manually; every Release page lists
-its changes. When a Developer ID-signed and Apple-notarized release becomes available, preview
+its changes. When the first Developer ID-signed and Apple-notarized formal release is published, preview
 users must download and install it manually once from the official Release page.
 
 ### Formal releases
 
-After Developer ID becomes available, formal releases will continue to provide only
-Developer ID-signed and Apple-notarized `RIMES-<version>.pkg` files through
-[GitHub Releases](https://github.com/scholay/rimes/releases). The installer fixes
+The first formal `vX.Y.Z` release appears on [GitHub Releases](https://github.com/scholay/rimes/releases)
+only after the protected release chain succeeds. It provides a Developer ID-signed and
+Apple-notarized `RIMES-<version>.pkg`. Formal release readiness is not established merely by Apple
+Developer Program membership or by seeing one certificate on a developer Mac. It requires all of:
+
+- **Developer ID Application** and **Developer ID Installer** certificates with their private keys
+  from the same Team: the former signs the app and bundled Mach-O, and the latter signs the `.pkg`;
+- two protected GitHub Environments: both must have at least one reviewer, prevent self-review, disallow
+  administrator bypass, and use selected branch/tag policy allowing only `v*`; `macos-release` is
+  signing/notarization only, while `macos-publish` is the second publish approval with **no secrets** and
+  should use non-overlapping reviewers;
+- the two P12 files and passwords, Team ID, and App Store Connect notarization API P8, Key ID, and
+  Issuer ID stored only in `macos-release`.
+
+If any prerequisite is absent, the formal workflow fails closed and the public channel remains an
+unsigned preview channel. [RELEASE.md](RELEASE.md) and [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md)
+describe the full credential set and release gates. The installer fixes
 `RIMES.app` at `/Library/Input Methods` (removing an earlier `ETInput.app`), then registers and enables the
 parent/child input sources in order and makes one best-effort switch to “RIMES”. If a recent
 macOS release does not refresh the input menu immediately, installation still succeeds; log
 out and back in, then confirm RIMES in System Settings. Do not terminate
 `TextInputMenuAgent` or `imklaunchagent`.
 
-Developers:
+#### Two mutually exclusive install lanes
+
+Use only one lane for a user or a formal-package test Mac. Do not overwrite a formal package with a
+local developer install, and do not treat a local build as formal-package acceptance.
+
+- **Developer-maintenance lane:** for a checkout only, `build_install.sh` builds and installs the
+  current source for the current user. It changes with Git state and is not a release candidate. To
+  preserve local user data, use:
+
+  ```bash
+  RB_KEEP_USERDB=1 RIMES_SIGN_IDENTITY='Apple Development: <Name> (<TEAM_ID>)' ./build_install.sh
+  ```
+
+- **Formal-package lane:** ordinary users download only the exact `RIMES-X.Y.Z.pkg` and
+  `SHA256SUMS` from the formal GitHub Release, which macOS installs under `/Library/Input Methods`.
+  Before publication, a maintainer may download the immutable signed stage made by the signing workflow
+  only after it has removed all signing material, and rehearse that exact pkg. Once it passes,
+  `macos-publish` verifies the artifact ID/digest/hashes and publishes the identical bytes. The
+  signed stage is a release gate, not a user download channel; the public GitHub Release remains the
+  authority for users and the updater.
+
+  ```bash
+  scripts/rehearse-release-pkg.sh --pkg /absolute/path/RIMES-X.Y.Z.pkg
+  scripts/rehearse-release-pkg.sh --pkg /absolute/path/RIMES-X.Y.Z.pkg --install-gui
+  ```
+
+  The first command does not install; the second opens the same macOS Installer users receive. It retires
+  the current GUI user's developer copy, so use a test account or a recoverable test Mac. After publication
+  the workflow downloads the official Release again and verifies the exact bytes.
+
+The formal installer can retire the current GUI user's safely verified developer install, so the two
+lanes are not concurrent or interchangeable.
+
+Everyday developer-maintenance shortcuts:
 
 ```bash
 ./build_install.sh                # build + install for current user + register

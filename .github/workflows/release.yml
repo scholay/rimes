@@ -25,6 +25,7 @@ on:
       - 'scripts/fetch-rime.sh'
       - 'scripts/make-pkg.sh'
       - 'scripts/sign-macos-app.sh'
+      - 'scripts/rehearse-release-pkg.sh'
       - 'scripts/pkg/**'
       - 'scripts/release.sh'
       - 'scripts/release/**'
@@ -1167,8 +1168,8 @@ jobs:
             printf '%s\n' "$latest_probe" | grep -Fq 'HTTP 404'
           fi
 
-  sign_and_publish:
-    name: Sign, verify, and publish macOS
+  sign_and_stage:
+    name: Sign, verify, and stage macOS
     needs: build_and_smoke
     if: >-
       needs.build_and_smoke.result == 'success' &&
@@ -1176,11 +1177,76 @@ jobs:
       github.repository == 'scholay/rimes'
     runs-on: macos-15
     # Only this fresh runner reaches the protected environment. Configure it
-    # with required reviewers and a deployment rule limited to vX.Y.Z tags.
+    # with non-self-reviewing reviewers, no admin bypass, and a v* deployment
+    # rule. The first step below rechecks those server-side controls before
+    # any protected signing material can be imported.
     environment: macos-release
     permissions:
-      contents: write
+      contents: read
+      actions: read
+    outputs:
+      artifact_name: ${{ steps.stage.outputs.name }}
+      artifact_id: ${{ steps.upload_stage.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload_stage.outputs.artifact-digest }}
+      pkg: ${{ steps.pkg.outputs.PKG }}
+      pkg_sha256: ${{ steps.pkg.outputs.PKG_SHA256 }}
+      app_zip: ${{ steps.package.outputs.ZIP }}
+      app_zip_sha256: ${{ steps.package.outputs.SHA256 }}
     steps:
+      - name: Require protected signing environment before secrets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: scholay/rimes
+          ENVIRONMENT_NAME: macos-release
+        run: |
+          set -euo pipefail
+          environment_json="$RUNNER_TEMP/rimes-$ENVIRONMENT_NAME-environment.json"
+          branch_policies_json="$RUNNER_TEMP/rimes-$ENVIRONMENT_NAME-branch-policies.json"
+          gh api "repos/$GH_REPO/environments/$ENVIRONMENT_NAME" >"$environment_json"
+          gh api "repos/$GH_REPO/environments/$ENVIRONMENT_NAME/deployment-branch-policies?per_page=100" \
+            >"$branch_policies_json"
+          python3 - "$environment_json" "$branch_policies_json" "$ENVIRONMENT_NAME" <<'PY'
+          import json
+          import sys
+
+          environment_path, policies_path, name = sys.argv[1:]
+          with open(environment_path, encoding="utf-8") as stream:
+              environment = json.load(stream)
+          with open(policies_path, encoding="utf-8") as stream:
+              policies = json.load(stream)
+
+          if environment.get("name") != name:
+              raise SystemExit(f"environment lookup returned the wrong name: {environment.get('name')!r}")
+          reviewer_rules = [
+              rule
+              for rule in environment.get("protection_rules", [])
+              if rule.get("type") == "required_reviewers"
+              and isinstance(rule.get("reviewers"), list)
+              and rule["reviewers"]
+              and rule.get("prevent_self_review") is True
+          ]
+          if not reviewer_rules:
+              raise SystemExit(
+                  f"{name} must have a populated required_reviewers rule with "
+                  "prevent_self_review=true"
+              )
+          if environment.get("can_admins_bypass") is not False:
+              raise SystemExit(f"{name} must disallow administrator bypass")
+          deployment_policy = environment.get("deployment_branch_policy")
+          if not isinstance(deployment_policy, dict) or (
+              deployment_policy.get("custom_branch_policies") is not True
+              or deployment_policy.get("protected_branches") is not False
+          ):
+              raise SystemExit(f"{name} must use selected branch/tag deployment policies")
+          names = {
+              policy.get("name")
+              for policy in policies.get("branch_policies", [])
+              if isinstance(policy, dict) and isinstance(policy.get("name"), str)
+          }
+          if "v*" not in names:
+              raise SystemExit(f"{name} must allow the formal tag pattern v*")
+          PY
+
       - name: Checkout exact release source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -1690,7 +1756,14 @@ jobs:
             echo "Signing-material marker is missing before publication." >&2
             exit 1
           }
-          security delete-keychain "$signing_dir/rimes-signing.keychain-db" >/dev/null 2>&1 || true
+          security delete-keychain "$signing_dir/rimes-signing.keychain-db" >/dev/null 2>&1 || {
+            echo 'Could not destroy the temporary signing keychain; refusing to stage release assets.' >&2
+            exit 1
+          }
+          [[ ! -e "$signing_dir/rimes-signing.keychain-db" ]] || {
+            echo 'Temporary signing keychain remains after deletion; refusing to stage release assets.' >&2
+            exit 1
+          }
           rm -f \
             "$signing_dir/developer-id-application.p12" \
             "$signing_dir/developer-id-installer.p12" \
@@ -1699,7 +1772,7 @@ jobs:
             "$marker"
           rmdir "$signing_dir"
 
-      - name: Revalidate canonical tag and vacant Release after key destruction
+      - name: Revalidate canonical tag and vacant Release before staging
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: scholay/rimes
@@ -1715,25 +1788,50 @@ jobs:
             exit 1
           fi
 
-      - name: Create Release
+      - name: Stage immutable signed release assets
+        id: stage
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: scholay/rimes
           PKG: ${{ steps.pkg.outputs.PKG }}
           APP_ZIP: ${{ steps.package.outputs.ZIP }}
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
+          PKG_SHA256: ${{ steps.pkg.outputs.PKG_SHA256 }}
+          APP_ZIP_SHA256: ${{ steps.package.outputs.SHA256 }}
         run: |
           set -euo pipefail
-          notes="$RUNNER_TEMP/rimes-release-notes.md"
+          die() {
+            echo "formal stage: $*" >&2
+            exit 1
+          }
+          [[ "$PKG" == "RIMES-$VERSION.pkg" && "$APP_ZIP" == "RIMES-$VERSION.zip" ]] \
+            || die 'unexpected formal asset name'
+          [[ "$PKG_SHA256" =~ ^[0-9a-f]{64}$ && "$APP_ZIP_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+            || die 'invalid formal asset digest'
+          stage="$RUNNER_TEMP/rimes-signed-release-stage"
+          [[ ! -e "$stage" ]] || die "staging path already exists: $stage"
+          umask 077
+          mkdir -m 700 "$stage"
+          cp "$PKG" "$stage/$PKG"
+          cp "$APP_ZIP" "$stage/$APP_ZIP"
+          actual_pkg_sha="$(shasum -a 256 "$stage/$PKG" | awk '{print $1}')"
+          actual_zip_sha="$(shasum -a 256 "$stage/$APP_ZIP" | awk '{print $1}')"
+          [[ "$actual_pkg_sha" == "$PKG_SHA256" && "$actual_zip_sha" == "$APP_ZIP_SHA256" ]] \
+            || die 'copy changed a signed release asset'
+          {
+            printf '%s  %s\n' "$actual_pkg_sha" "$PKG"
+            printf '%s  %s\n' "$actual_zip_sha" "$APP_ZIP"
+          } | LC_ALL=C sort -k2 >"$stage/SHA256SUMS"
+          (cd "$stage" && shasum -a 256 -c SHA256SUMS)
+
+          notes="$stage/RELEASE-NOTES.md"
           cat >"$notes" <<'EOF'
-          ## RIMES v${{ needs.build_and_smoke.outputs.version }}
+          ## RIMES vVERSION_PLACEHOLDER
 
           现代 macOS 中文输入法（IMK + librime）。**自包含**：librime 引擎与 Rime
           词库已打包在 app 内，**无需单独安装 Squirrel**，装一个就能用。通用二进制
           （Apple Silicon + Intel）。
 
           ### 安装（推荐：向导式安装器）
-          下载 **`RIMES-${{ needs.build_and_smoke.outputs.version }}.pkg`** → 双击 → 按向导安装
+          下载 **`RIMES-VERSION_PLACEHOLDER.pkg`** → 双击 → 按向导安装
           （输入管理员密码，装到 `/Library/Input Methods`；有普通 GUI 登录会话时会尝试注册、启用和切换）。
           安装器及内含 app 已使用 Developer ID 签名、通过 Apple 公证并附加公证票据。
           多数情况下安装完成后可直接用输入菜单或 `Ctrl-Space` 切换到「RIMES」；
@@ -1748,18 +1846,55 @@ jobs:
           ### 校验和
           | 文件 | SHA256 |
           |------|--------|
-          | PKG | `${{ steps.pkg.outputs.PKG_SHA256 }}` |
-          | ZIP | `${{ steps.package.outputs.SHA256 }}` |
+          | PKG | `PKG_SHA256_PLACEHOLDER` |
+          | ZIP | `ZIP_SHA256_PLACEHOLDER` |
           EOF
+          /usr/bin/sed -i '' \
+            -e "s/VERSION_PLACEHOLDER/$VERSION/g" \
+            -e "s/PKG_SHA256_PLACEHOLDER/$PKG_SHA256/g" \
+            -e "s/ZIP_SHA256_PLACEHOLDER/$APP_ZIP_SHA256/g" \
+            "$notes"
           printf '\n' >>"$notes"
           python3 scripts/release/release_tool.py notes --tag "$GITHUB_REF_NAME" >>"$notes"
 
-          gh release create "$GITHUB_REF_NAME" --repo "$GH_REPO" \
-            "$PKG" "$APP_ZIP" \
-            --verify-tag \
-            --latest \
-            --title "RIMES v${VERSION}" \
-            --notes-file "$notes"
+          pkg_bytes="$(stat -f%z "$stage/$PKG")"
+          zip_bytes="$(stat -f%z "$stage/$APP_ZIP")"
+          notes_bytes="$(stat -f%z "$notes")"
+          notes_sha="$(shasum -a 256 "$notes" | awk '{print $1}')"
+          [[ "$pkg_bytes" =~ ^[1-9][0-9]*$ && "$zip_bytes" =~ ^[1-9][0-9]*$ \
+              && "$notes_bytes" =~ ^[1-9][0-9]*$ ]] || die 'invalid staged byte count'
+          printf '%s\n' 'schema=rimes-signed-release-v1' 'repository=scholay/rimes' \
+            "run_id=$GITHUB_RUN_ID" "commit=$GITHUB_SHA" "tag=$GITHUB_REF_NAME" \
+            "version=$VERSION" "pkg=$PKG" "pkg_sha256=$actual_pkg_sha" \
+            "pkg_bytes=$pkg_bytes" "zip=$APP_ZIP" "zip_sha256=$actual_zip_sha" \
+            "zip_bytes=$zip_bytes" 'notes=RELEASE-NOTES.md' "notes_sha256=$notes_sha" \
+            "notes_bytes=$notes_bytes" >"$stage/release-manifest.txt"
+
+          expected="$RUNNER_TEMP/rimes-signed-stage-expected.txt"
+          actual="$RUNNER_TEMP/rimes-signed-stage-actual.txt"
+          printf '%s\n' "$PKG" "$APP_ZIP" SHA256SUMS RELEASE-NOTES.md release-manifest.txt \
+            | LC_ALL=C sort >"$expected"
+          find "$stage" -mindepth 1 -maxdepth 1 -exec basename {} \; \
+            | LC_ALL=C sort >"$actual"
+          cmp "$expected" "$actual"
+          if find "$stage" -mindepth 1 \
+              \( -type l -o \( ! -type f ! -type d \) \) -print -quit | grep -q .; then
+            die 'signed release stage contains a symlink or special file'
+          fi
+
+          artifact_name="RIMES-$VERSION-signed-stage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          echo "name=$artifact_name" >>"$GITHUB_OUTPUT"
+
+      - name: Upload immutable signed release stage
+        id: upload_stage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.stage.outputs.name }}
+          path: ${{ runner.temp }}/rimes-signed-release-stage
+          if-no-files-found: error
+          retention-days: 31
+          compression-level: 0
+          overwrite: false
 
       - name: Always remove temporary signing material
         if: always()
@@ -1782,3 +1917,241 @@ jobs:
             echo "Signing directory contains an unexpected file; refusing broad cleanup." >&2
             exit 1
           }
+
+  publish_staged_release:
+    name: Approve and publish staged macOS release
+    needs: [build_and_smoke, sign_and_stage]
+    if: >-
+      needs.build_and_smoke.result == 'success' &&
+      needs.sign_and_stage.result == 'success' &&
+      needs.build_and_smoke.outputs.is_release == 'true' &&
+      github.repository == 'scholay/rimes'
+    runs-on: macos-15
+    # This separate environment holds no signing or notarization credentials.
+    # Required reviewers must inspect recorded real-Mac signed-stage rehearsal
+    # evidence before approving this publish-only job. Its first step also
+    # refuses a missing or weakened server-side environment configuration.
+    environment: macos-publish
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Require protected publish environment before release mutation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: scholay/rimes
+          ENVIRONMENT_NAME: macos-publish
+        run: |
+          set -euo pipefail
+          environment_json="$RUNNER_TEMP/rimes-$ENVIRONMENT_NAME-environment.json"
+          branch_policies_json="$RUNNER_TEMP/rimes-$ENVIRONMENT_NAME-branch-policies.json"
+          gh api "repos/$GH_REPO/environments/$ENVIRONMENT_NAME" >"$environment_json"
+          gh api "repos/$GH_REPO/environments/$ENVIRONMENT_NAME/deployment-branch-policies?per_page=100" \
+            >"$branch_policies_json"
+          python3 - "$environment_json" "$branch_policies_json" "$ENVIRONMENT_NAME" <<'PY'
+          import json
+          import sys
+
+          environment_path, policies_path, name = sys.argv[1:]
+          with open(environment_path, encoding="utf-8") as stream:
+              environment = json.load(stream)
+          with open(policies_path, encoding="utf-8") as stream:
+              policies = json.load(stream)
+
+          if environment.get("name") != name:
+              raise SystemExit(f"environment lookup returned the wrong name: {environment.get('name')!r}")
+          reviewer_rules = [
+              rule
+              for rule in environment.get("protection_rules", [])
+              if rule.get("type") == "required_reviewers"
+              and isinstance(rule.get("reviewers"), list)
+              and rule["reviewers"]
+              and rule.get("prevent_self_review") is True
+          ]
+          if not reviewer_rules:
+              raise SystemExit(
+                  f"{name} must have a populated required_reviewers rule with "
+                  "prevent_self_review=true"
+              )
+          if environment.get("can_admins_bypass") is not False:
+              raise SystemExit(f"{name} must disallow administrator bypass")
+          deployment_policy = environment.get("deployment_branch_policy")
+          if not isinstance(deployment_policy, dict) or (
+              deployment_policy.get("custom_branch_policies") is not True
+              or deployment_policy.get("protected_branches") is not False
+          ):
+              raise SystemExit(f"{name} must use selected branch/tag deployment policies")
+          names = {
+              policy.get("name")
+              for policy in policies.get("branch_policies", [])
+              if isinstance(policy, dict) and isinstance(policy.get("name"), str)
+          }
+          if "v*" not in names:
+              raise SystemExit(f"{name} must allow the formal tag pattern v*")
+          PY
+
+      - name: Authenticate the exact immutable signed stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: scholay/rimes
+          STAGE_ID: ${{ needs.sign_and_stage.outputs.artifact_id }}
+          STAGE_NAME: ${{ needs.sign_and_stage.outputs.artifact_name }}
+          STAGE_DIGEST: ${{ needs.sign_and_stage.outputs.artifact_digest }}
+        run: |
+          set -euo pipefail
+          [[ "$STAGE_ID" =~ ^[1-9][0-9]*$ && "$STAGE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          endpoint="repos/$GH_REPO/actions/artifacts/$STAGE_ID"
+          [[ "$(gh api "$endpoint" --jq .id)" == "$STAGE_ID" ]]
+          [[ "$(gh api "$endpoint" --jq .name)" == "$STAGE_NAME" ]]
+          [[ "$(gh api "$endpoint" --jq .expired)" == false ]]
+          [[ "$(gh api "$endpoint" --jq .workflow_run.id)" == "$GITHUB_RUN_ID" ]]
+          [[ "$(gh api "$endpoint" --jq .workflow_run.head_sha)" == "$GITHUB_SHA" ]]
+          [[ "$(gh api "$endpoint" --jq .digest)" == "sha256:$STAGE_DIGEST" ]]
+
+      - name: Download the named immutable signed stage
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          # v4.1.8 lacks artifact-ids. The preceding REST check authenticates
+          # this unique, immutable v4 artifact before name-based download.
+          name: ${{ needs.sign_and_stage.outputs.artifact_name }}
+          path: ${{ runner.temp }}/rimes-signed-release-stage
+          github-token: ${{ github.token }}
+
+      - name: Verify staged bytes before publication
+        env:
+          VERSION: ${{ needs.build_and_smoke.outputs.version }}
+          PKG: ${{ needs.sign_and_stage.outputs.pkg }}
+          APP_ZIP: ${{ needs.sign_and_stage.outputs.app_zip }}
+          EXPECTED_PKG_SHA: ${{ needs.sign_and_stage.outputs.pkg_sha256 }}
+          EXPECTED_ZIP_SHA: ${{ needs.sign_and_stage.outputs.app_zip_sha256 }}
+        run: |
+          set -euo pipefail
+          die() {
+            echo "publish staged release: $*" >&2
+            exit 1
+          }
+          [[ "$PKG" == "RIMES-$VERSION.pkg" && "$APP_ZIP" == "RIMES-$VERSION.zip" ]] \
+            || die 'unexpected staged asset name'
+          [[ "$EXPECTED_PKG_SHA" =~ ^[0-9a-f]{64}$ && "$EXPECTED_ZIP_SHA" =~ ^[0-9a-f]{64}$ ]] \
+            || die 'invalid staged asset digest'
+          stage="$RUNNER_TEMP/rimes-signed-release-stage"
+          manifest="$stage/release-manifest.txt"
+          notes="$stage/RELEASE-NOTES.md"
+          [[ -d "$stage" && ! -L "$stage" && -f "$manifest" && ! -L "$manifest" \
+              && -f "$notes" && ! -L "$notes" ]] || die 'missing regular stage root, manifest, or notes'
+
+          expected_members="$RUNNER_TEMP/rimes-signed-stage-members.expected"
+          actual_members="$RUNNER_TEMP/rimes-signed-stage-members.actual"
+          printf '%s\n' "$PKG" "$APP_ZIP" SHA256SUMS RELEASE-NOTES.md release-manifest.txt \
+            | LC_ALL=C sort >"$expected_members"
+          find "$stage" -mindepth 1 -maxdepth 1 -exec basename {} \; \
+            | LC_ALL=C sort >"$actual_members"
+          cmp "$expected_members" "$actual_members"
+          if find "$stage" -mindepth 1 \
+              \( -type l -o \( ! -type f ! -type d \) \) -print -quit | grep -q .; then
+            die 'signed release stage contains a symlink or special file'
+          fi
+
+          [[ -f "$stage/$PKG" && ! -L "$stage/$PKG" && -f "$stage/$APP_ZIP" \
+              && ! -L "$stage/$APP_ZIP" && -f "$stage/SHA256SUMS" \
+              && ! -L "$stage/SHA256SUMS" ]] || die 'a staged asset is not a regular file'
+          pkg_bytes="$(stat -f%z "$stage/$PKG")"
+          zip_bytes="$(stat -f%z "$stage/$APP_ZIP")"
+          notes_bytes="$(stat -f%z "$notes")"
+          notes_sha="$(shasum -a 256 "$notes" | awk '{print $1}')"
+          [[ "$pkg_bytes" =~ ^[1-9][0-9]*$ && "$pkg_bytes" -le 536870912 \
+              && "$zip_bytes" =~ ^[1-9][0-9]*$ && "$zip_bytes" -le 536870912 \
+              && "$notes_bytes" =~ ^[1-9][0-9]*$ ]] || die 'staged asset byte count is invalid'
+
+          expected_sums="$RUNNER_TEMP/rimes-signed-stage-sums.expected"
+          {
+            printf '%s  %s\n' "$EXPECTED_PKG_SHA" "$PKG"
+            printf '%s  %s\n' "$EXPECTED_ZIP_SHA" "$APP_ZIP"
+          } | LC_ALL=C sort -k2 >"$expected_sums"
+          cmp "$expected_sums" "$stage/SHA256SUMS"
+          (cd "$stage" && shasum -a 256 -c SHA256SUMS)
+
+          expected_manifest="$RUNNER_TEMP/rimes-signed-stage-manifest.expected"
+          printf '%s\n' 'schema=rimes-signed-release-v1' 'repository=scholay/rimes' \
+            "run_id=$GITHUB_RUN_ID" "commit=$GITHUB_SHA" "tag=$GITHUB_REF_NAME" \
+            "version=$VERSION" "pkg=$PKG" "pkg_sha256=$EXPECTED_PKG_SHA" \
+            "pkg_bytes=$pkg_bytes" "zip=$APP_ZIP" "zip_sha256=$EXPECTED_ZIP_SHA" \
+            "zip_bytes=$zip_bytes" 'notes=RELEASE-NOTES.md' "notes_sha256=$notes_sha" \
+            "notes_bytes=$notes_bytes" >"$expected_manifest"
+          cmp "$expected_manifest" "$manifest"
+
+          /usr/bin/unzip -tq "$stage/$APP_ZIP"
+          pkg_signature="$(/usr/sbin/pkgutil --check-signature "$stage/$PKG" 2>&1)"
+          printf '%s\n' "$pkg_signature"
+          printf '%s\n' "$pkg_signature" | /usr/bin/grep -Fq 'Developer ID Installer:'
+          /usr/bin/xcrun stapler validate -v "$stage/$PKG"
+          /usr/sbin/spctl --assess --type install --verbose=4 "$stage/$PKG"
+
+      - name: Reauthorize canonical tag and vacant Release after package review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: scholay/rimes
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_TYPE" == tag ]]
+          remote_sha="$(gh api "repos/$GH_REPO/commits/$GITHUB_REF_NAME" --jq .sha)"
+          [[ "$remote_sha" == "$GITHUB_SHA" ]] || {
+            echo "The immutable release tag moved after staging." >&2
+            exit 1
+          }
+          if gh release view "$GITHUB_REF_NAME" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to replace assets: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+      - name: Create Release from the reviewed staged bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: scholay/rimes
+          VERSION: ${{ needs.build_and_smoke.outputs.version }}
+          PKG: ${{ needs.sign_and_stage.outputs.pkg }}
+          APP_ZIP: ${{ needs.sign_and_stage.outputs.app_zip }}
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/rimes-signed-release-stage"
+          gh release create "$GITHUB_REF_NAME" --repo "$GH_REPO" \
+            "$stage/$PKG" "$stage/$APP_ZIP" "$stage/SHA256SUMS" \
+            --verify-tag \
+            --latest \
+            --title "RIMES v$VERSION" \
+            --notes-file "$stage/RELEASE-NOTES.md"
+
+      - name: Read back the official Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: scholay/rimes
+          PKG: ${{ needs.sign_and_stage.outputs.pkg }}
+          APP_ZIP: ${{ needs.sign_and_stage.outputs.app_zip }}
+          EXPECTED_PKG_SHA: ${{ needs.sign_and_stage.outputs.pkg_sha256 }}
+          EXPECTED_ZIP_SHA: ${{ needs.sign_and_stage.outputs.app_zip_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$(gh release view "$GITHUB_REF_NAME" --repo "$GH_REPO" --json isDraft --jq .isDraft)" == false ]]
+          [[ "$(gh release view "$GITHUB_REF_NAME" --repo "$GH_REPO" --json isPrerelease --jq .isPrerelease)" == false ]]
+          [[ "$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" == "$GITHUB_REF_NAME" ]]
+
+          expected_assets="$RUNNER_TEMP/rimes-published-assets.expected"
+          actual_assets="$RUNNER_TEMP/rimes-published-assets.actual"
+          printf '%s\n' "$PKG" "$APP_ZIP" SHA256SUMS | LC_ALL=C sort >"$expected_assets"
+          gh release view "$GITHUB_REF_NAME" --repo "$GH_REPO" --json assets --jq '.assets[].name' \
+            | LC_ALL=C sort >"$actual_assets"
+          cmp "$expected_assets" "$actual_assets"
+
+          readback="$RUNNER_TEMP/rimes-published-readback"
+          [[ ! -e "$readback" ]]
+          mkdir -m 700 "$readback"
+          gh release download "$GITHUB_REF_NAME" --repo "$GH_REPO" \
+            --pattern "$PKG" --pattern "$APP_ZIP" --pattern SHA256SUMS --dir "$readback"
+          [[ "$(shasum -a 256 "$readback/$PKG" | awk '{print $1}')" == "$EXPECTED_PKG_SHA" ]]
+          [[ "$(shasum -a 256 "$readback/$APP_ZIP" | awk '{print $1}')" == "$EXPECTED_ZIP_SHA" ]]
+          expected_sums="$RUNNER_TEMP/rimes-published-sums.expected"
+          {
+            printf '%s  %s\n' "$EXPECTED_PKG_SHA" "$PKG"
+            printf '%s  %s\n' "$EXPECTED_ZIP_SHA" "$APP_ZIP"
+          } | LC_ALL=C sort -k2 >"$expected_sums"
+          cmp "$expected_sums" "$readback/SHA256SUMS"

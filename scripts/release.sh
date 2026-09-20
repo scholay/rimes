@@ -21,7 +21,8 @@
 #   -y, --yes       跳过交互确认（用于受控自动化）
 #   -h, --help      显示本说明
 #
-# 正式版需要 Developer ID 与受保护的 macos-release Environment；缺失时脚本拒绝发布。
+# 正式版需要 Developer ID signing Environment 和独立的 publish Environment；
+# 缺失时脚本拒绝发布。
 # =============================================================================
 set -euo pipefail
 
@@ -200,8 +201,47 @@ for workflow in "${REQUIRED_WORKFLOWS[@]}"; do
 done
 
 if [[ "$KIND" == "stable" ]]; then
-    gh api "repos/$EXPECTED_REPO/environments/macos-release" >/dev/null 2>&1 \
-        || gate "正式版需要受保护的 macos-release Environment 与 Developer ID 凭据，当前仓库尚未配置。"
+    for formal_environment in macos-release macos-publish; do
+        gh api "repos/$EXPECTED_REPO/environments/$formal_environment" >/dev/null 2>&1 \
+            || gate "正式版需要受保护的 $formal_environment Environment；当前仓库尚未完整配置。"
+        reviewer_rules="$(gh api "repos/$EXPECTED_REPO/environments/$formal_environment" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers" and ((.reviewers // []) | length > 0) and .prevent_self_review == true)] | length' 2>/dev/null || true)"
+        [[ "$reviewer_rules" =~ ^[1-9][0-9]*$ ]] \
+            || gate "正式版要求 $formal_environment 至少配置一条有 reviewer、禁止 self-review 的保护规则。"
+        can_admins_bypass="$(gh api "repos/$EXPECTED_REPO/environments/$formal_environment" \
+            --jq '.can_admins_bypass' 2>/dev/null || true)"
+        [[ "$can_admins_bypass" == false ]] \
+            || gate "正式版要求 $formal_environment 禁止 administrator bypass。"
+        custom_branch_policies="$(gh api "repos/$EXPECTED_REPO/environments/$formal_environment" \
+            --jq '.deployment_branch_policy.custom_branch_policies' 2>/dev/null || true)"
+        [[ "$custom_branch_policies" == true ]] \
+            || gate "正式版要求 $formal_environment 使用 selected branch/tag deployment policies。"
+        formal_tag_policy="$(gh api "repos/$EXPECTED_REPO/environments/$formal_environment/deployment-branch-policies?per_page=100" \
+            --jq '[.branch_policies[]?.name] | index("v*") != null' 2>/dev/null || true)"
+        [[ "$formal_tag_policy" == true ]] \
+            || gate "正式版要求 $formal_environment 允许 formal tag 模式 v*。"
+    done
+
+    # A protected Environment is the release authority once a tag exists, but
+    # do not leave an accidental direct `git push origin vX.Y.Z` able to create
+    # a permanent, unusable release tag. The active tag ruleset must require a
+    # designated bypass actor for creation. GitHub still makes the final caller
+    # authorization decision when the tag is pushed.
+    creation_restriction=false
+    ruleset_ids="$(gh api --paginate "repos/$EXPECTED_REPO/rulesets?per_page=100" \
+        --jq '.[] | select(.target == "tag" and .enforcement == "active") | .id' 2>/dev/null || true)"
+    while IFS= read -r ruleset_id; do
+        [[ "$ruleset_id" =~ ^[1-9][0-9]*$ ]] || continue
+        ruleset_controls="$(gh api "repos/$EXPECTED_REPO/rulesets/$ruleset_id" \
+            --jq '[((.conditions.ref_name.include // []) | index("refs/tags/v*") != null), (([.rules[]?.type] | index("creation")) != null), ((.bypass_actors // []) | length > 0)] | all' \
+            2>/dev/null || true)"
+        if [[ "$ruleset_controls" == true ]]; then
+            creation_restriction=true
+            break
+        fi
+    done <<< "$ruleset_ids"
+    [[ "$creation_restriction" == true ]] \
+        || gate "正式版要求 active tag ruleset 覆盖 refs/tags/v*、启用 creation，并仅为指定发布主体配置 bypass。"
 fi
 
 # --- Plan -------------------------------------------------------------------
@@ -218,7 +258,7 @@ echo "  渠道:     $channel"
 echo "  上一版本: ${PREVIOUS:-<首次发布>}"
 echo "  新 tag:   $TAG"
 echo "  提交:     $(git log -1 --format='%h %s' "$fetch_main")"
-echo "  推送:     只推送 $TAG；不修改或提交任何文件"
+echo "  推送:     只推送 ${TAG}；不修改或提交任何文件"
 for warning in "${WARNINGS[@]+"${WARNINGS[@]}"}"; do
     warn "$warning"
 done

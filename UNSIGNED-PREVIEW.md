@@ -1,6 +1,6 @@
 # RIMES 未签名预览版安装说明
 
-> 预览版（tag 形如 `vX.Y.Z-preview.N`）是在项目取得 Apple Developer Program 资格前提供的公开测试版。
+> 预览版（tag 形如 `vX.Y.Z-preview.N`）是在首个完整签名、公证的正式版成功发布前提供的公开测试版。
 > 它不是正式版：PKG 没有 Developer ID 签名、没有经过 Apple 公证，Apple 无法验证开发者
 > 身份或确认这份软件通过了公证检查。
 
@@ -86,6 +86,7 @@ xattr -cr ...
 ## 六、将来升级正式版
 
 预览版是 GitHub **Pre-release**，且不满足 RIMES 更新器的 Developer ID / 公证校验，因此应用内自动
-更新不可用。项目获得 Developer ID 后会用新的、更高版本号发布签名并公证的正式 PKG，不会替换任何
-既有预览版的字节。届时请从官方 GitHub Release 手动下载安装一次；之后的正式版即可应用内更新。
+更新不可用。完整的 Developer ID、Installer、公证与受保护发布链路就绪后，会用新的、更高版本号发布签名并
+公证的正式 PKG，不会替换任何既有预览版的字节。届时请从官方 GitHub Release 手动下载安装一次；之后的
+正式版即可应用内更新。
 不要继续分发或安装旧的未签名预览包。

@@ -1,6 +1,6 @@
 # 发布流程
 
-**合并到 main → CI 全绿 → `./scripts/release.sh <渠道>` → tag 触发工作流 → GitHub Release。**
+**合并到 main → CI 全绿 → `./scripts/release.sh <渠道>` → tag → 签名暂存 → 真机同路验收 → 第二次批准 → GitHub Release。**
 
 版本号只来自 tag。发布脚本不修改、不提交任何文件，只在 `origin/main` 上创建并推送一个 tag；
 构建、验证、发布说明和 Release 全部由 GitHub Actions 按同一套规则完成。唯一发布中心是
@@ -12,7 +12,11 @@ flowchart LR
   main -->|release.sh 校验 CI 并推送 tag| tag["vX.Y.Z-preview.N / vX.Y.Z"]
   tag --> build["无 secrets runner：构建、smoke、升级安装"]
   build -->|预览版| pre["Pre-release（未签名）"]
-  build -->|正式版| sign["macos-release：签名、公证"] --> latest["Latest Release + 自动更新"]
+  build -->|正式版| sign["macos-release：签名、公证"]
+  sign --> stage["不可变 signed-stage（已销毁密钥）"]
+  stage --> rehearse["维护者真机：同一 .pkg"]
+  rehearse --> publish["macos-publish：第二次批准，无密钥"]
+  publish --> latest["Latest Release + 自动更新"]
 ```
 
 ## 渠道
@@ -20,12 +24,15 @@ flowchart LR
 | 渠道 | tag | 命令 | 产物 | 用户如何升级 |
 |---|---|---|---|---|
 | macOS 预览版 | `vX.Y.Z-preview.N` | `./scripts/release.sh preview` | 未签名 PKG + `SHA256SUMS`，Pre-release | 手动安装，见 [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) |
-| macOS 正式版 | `vX.Y.Z` | `./scripts/release.sh stable` | Developer ID 签名并公证的 PKG / ZIP，Latest | 应用内自动更新 |
+| macOS 正式版 | `vX.Y.Z` | `./scripts/release.sh stable` | Developer ID 签名并公证的 PKG / ZIP + `SHA256SUMS`，Latest | 应用内自动更新 |
 | Windows / Linux 数据预览 | `platform-preview-vX.Y.Z` | `./scripts/release.sh platform minor` | 数据与脚本包，Pre-release | 手动安装，见 [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) |
 
-> 正式版需要 Developer ID 与受保护的 `macos-release` Environment（见
-> [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md#二正式发布环境与-secrets)）。仓库目前尚未配置，
-> 所以现在只发布预览版；`release.sh` 与工作流都会拒绝正式版。
+> Developer Program 资格或一张 Developer ID 证书本身不能把预览版变成正式版。首个正式
+> `vX.Y.Z` 必须同时具备同一 Team 的 **Developer ID Application + Developer ID Installer** 证书及私钥、
+> 受保护的 `macos-release`（签名与公证）和 `macos-publish`（第二次发布批准、无密钥）Environment，
+> 以及 App Store Connect 公证凭据；任一缺失都会 fail-closed。
+> 在首个正式包成功发布前，公开 macOS 渠道仍只能是未签名 Pre-release，绝不能把预览版标记为 Latest。
+> 完整清单见 [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md#二正式发布环境与-secrets)。
 
 ## 一、日常节奏
 
@@ -34,7 +41,8 @@ flowchart LR
    发布说明由提交信息生成，CI 的「Release tooling」会拒绝不合规的提交。
 2. **不直接推送 main。** main 受 ruleset 保护：合并必须经过 PR，且所有 CI 检查通过。
 3. **每合并一个用户可见的功能或修复，就发布一个预览版；最迟每周一次。** 发布本身不需要改任何文件。
-4. 一条预览线经过真机验证后，用 `stable` 转正（需要 Developer ID）。
+4. 一条预览线经过真机验证后，只有完整的正式发布前提都满足时才能用 `stable` 转正；Developer ID
+   可用并不单独构成发布授权。
 
 ## 二、发布一个版本
 
@@ -60,7 +68,13 @@ git switch main && git pull --ff-only
 - `origin/main` 这个提交的 `CI`、`Platform Preview Data`、`Windows Native Foundation` 都已通过；
 - 新 tag 不存在，并高于同渠道已发布的版本；
 - `Info.plist` 版本仍是占位值，预置插件 catalog 已同步；
-- 正式版还要求 `macos-release` Environment 已配置。
+- 正式版还要求 `macos-release` 与 `macos-publish` 都存在；二者都要有非空 required reviewers、禁止
+  self-review / administrator bypass，并以 selected branch/tag policy 允许 `v*`。前者的受保护 job 要求
+  Application / Installer 两份证书、同一 Team ID 与公证凭据完整可用，后者不得存放这些凭据。
+
+此外，`release tags` ruleset 必须对 `refs/tags/v*` 增加 **creation** 限制，只把 bypass 权限给指定的
+发布主体；现有“禁止删除/移动”规则本身不能防止有人直接创建一个 tag。工作流会在导入凭据和创建 Release 前
+再次读取两个 Environment，配置变弱或缺失就拒绝继续；不要用直接 `git push` 绕开 `release.sh`。
 
 ## 三、tag 推送之后
 
@@ -71,12 +85,17 @@ git switch main && git pull --ff-only
    runtime smoke。
 2. **预览版**：打未签名 PKG；在一次性 runner 上先安装**最新已发布的 Release**，再安装新包，验证旧 bundle
    已被退役、回执、签名与架构；随后另一台无 secrets 的 runner 被动复核字节并创建 Pre-release。
-3. **正式版**：全新 runner 进入受保护的 `macos-release`，签名、公证、校验后创建 Latest Release。
-4. **发布说明** = 安装与校验说明 + 自动生成的「变更」：自上一版本以来的提交按类型分组，列出合并的 PR
+3. **正式版签名与暂存**：全新 runner 进入受保护的 `macos-release`，以 Developer ID Application 签 app、
+   以 Developer ID Installer 签精确 `RIMES-X.Y.Z.pkg`，分别公证并校验；它销毁 keychain / P8 后才上传
+   不可变的 five-file signed-stage（pkg、zip、`SHA256SUMS`、说明、manifest）。
+4. **维护者同路验收与发布**：维护者下载 staged pkg，先验证后用 macOS Installer 真实安装；只有验收通过才批准
+   无密钥的 `macos-publish`。它核验 artifact ID/digest、manifest 与逐文件 SHA-256，绝不重签、重打包或
+   重公证，然后以完全相同的字节创建 Latest，并下载公开资产再次读回校验。
+5. **发布说明** = 安装与校验说明 + 自动生成的「变更」：自上一版本以来的提交按类型分组，列出合并的 PR
    和完整对比链接。预览版对比上一个 tag，正式版对比上一个正式版。
 
 工作流失败时**不要删除 tag 重来**：修复后发布下一个版本号。tag、资产与 SHA-256 一经发布即不可变，
-ruleset 禁止删除或移动 `v*` 与 `platform-preview-v*` tag。
+ruleset 必须禁止删除或移动 `v*` 与 `platform-preview-v*` tag；正式 `v*` 还必须限制创建权限。
 
 ## 四、发布前演练
 
@@ -89,27 +108,52 @@ ruleset 禁止删除或移动 `v*` 与 `platform-preview-v*` tag。
 
 演练默认使用下一次 `release.sh preview` 会得到的版本号，所以演练通过就等于下一个预览版的构建已经过一遍。
 
-## 五、版本号规则
+## 五、维护者安装通道与正式包一致性
+
+开发维护与正式包验证是两条**互斥**的安装通道；同一用户或正式包测试机一次只选其一。
+
+- **开发维护通道**：`build_install.sh` 面向 checkout 中的当前源码，安装当前用户开发版。它的版本随
+  `git describe` 变化；即使本地 smoke 通过，也不能证明正式发布资产。
+- **正式包通道**：用户只使用 GitHub 正式 Release 中的精确 `RIMES-X.Y.Z.pkg` 与 `SHA256SUMS`，由
+  Installer 安装到 `/Library/Input Methods`。发布前的维护者只可使用签名 job 已清理密钥后生成的 immutable
+  signed-stage，不能用本地重打包或普通演练 Artifact 替代它；正式安装器会在能安全核验时退休当前 GUI 用户的
+  开发版，因此两条路径不能并存或互相覆盖。
+
+发布工作流会在签名 runner 上被动校验已经签名、公证和 staple 的正式资产，但这不替代维护者的
+发布一致性测试。signed-stage 出现后，维护者应运行：
+
+```bash
+scripts/rehearse-release-pkg.sh --pkg /absolute/path/RIMES-X.Y.Z.pkg
+scripts/rehearse-release-pkg.sh --pkg /absolute/path/RIMES-X.Y.Z.pkg --install-gui
+```
+
+第一个命令不安装；第二个命令打开用户也会看到的 Installer，并在安装完成后复核输入源、签名、公证和回执。
+通过后记录 tag、资产 SHA-256、macOS 版本和测试设备，再批准 `macos-publish`。公开后 workflow 还会下载正式
+Release 的同一批资产读回校验。signed-stage 只是一道发布权威门：GitHub Actions artifact 的访问规则不等于发布
+禁运，面向用户的唯一来源始终是 GitHub Release。
+
+## 六、版本号规则
 
 - **tag 是唯一来源。** 仓库里的 `Info.plist` 固定为 `0.0.0-dev`，CI 会拒绝提交真实版本号；
   `build_install.sh` 的开发安装用 `git describe` 命名（如 `0.5.0-preview.1-73-ge4490c8`）。
 - 排序：`X.Y.Z-preview.N` 低于 `X.Y.Z`；预览号从 1 开始递增，禁止回退。
 - 应用内更新只认严格的 `X.Y.Z`；预览版和开发版不会收到更新提示。
 
-## 六、更新日志
+## 七、更新日志
 
 每个 Release 的正文都带有变更列表。[`CHANGELOG.md`](CHANGELOG.md) 由
 `python3 scripts/release/release_tool.py changelog --write` 从 tag 生成：发布后在下一个 PR 里顺手更新，
 CI 在它落后时会给出警告。
 
-## 七、暂不提供
+## 八、暂不提供
 
-Homebrew cask 和可用的应用内更新要等 Developer ID。没有签名时，把包放进 Homebrew 就意味着让用户
-移除隔离属性、绕过 Gatekeeper，这正是 [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) 禁止的做法。
+Homebrew cask 和可用的应用内更新要等首个完整签名、公证的正式版成功发布；Developer ID 单独可用
+并不解除这项门禁。没有签名时，把包放进 Homebrew 就意味着让用户移除隔离属性、绕过 Gatekeeper，
+这正是 [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) 禁止的做法。
 
 ## 相关文档
 
-- [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md)：双 runner 签名设计、Environment 与 Secrets、自包含 librime、
+- [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md)：三段式签名/暂存/发布设计、Environment 与 Secrets、自包含 librime、
   安装器、应用内更新、CI、跨平台预览。
 - [RELEASE-HISTORY.md](RELEASE-HISTORY.md)：已关闭的发布通道、旧仓库迁移与 RIMES 改名。
 - [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md)：面向用户的预览版下载、校验与安装说明。
