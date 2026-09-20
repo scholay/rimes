@@ -24,7 +24,7 @@ flowchart LR
 | 渠道 | tag | 命令 | 产物 | 用户如何升级 |
 |---|---|---|---|---|
 | macOS 预览版 | `vX.Y.Z-preview.N` | `./scripts/release.sh preview` | 未签名 PKG + `SHA256SUMS`，Pre-release | 手动安装，见 [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) |
-| macOS 正式版 | `vX.Y.Z` | `./scripts/release.sh stable` | Developer ID 签名并公证的 PKG / ZIP + `SHA256SUMS`，Latest | 应用内自动更新 |
+| macOS 正式版 | `vX.Y.Z` | `./scripts/release.sh stable` | Developer ID 签名并公证的 PKG + `SHA256SUMS`，Latest | 应用内自动更新 |
 | Windows / Linux 数据预览 | `platform-preview-vX.Y.Z` | `./scripts/release.sh platform minor` | 数据与脚本包，Pre-release | 手动安装，见 [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) |
 
 > Developer Program 资格或一张 Developer ID 证书本身不能把预览版变成正式版。首个正式
@@ -91,8 +91,8 @@ git switch main && git pull --ff-only
 2. **预览版**：打未签名 PKG；在一次性 runner 上先安装**最新已发布的 Release**，再安装新包，验证旧 bundle
    已被退役、回执、签名与架构；随后另一台无 secrets 的 runner 被动复核字节并创建 Pre-release。
 3. **正式版签名与暂存**：全新 runner 进入受保护的 `macos-release`，以 Developer ID Application 签 app、
-   以 Developer ID Installer 签精确 `RIMES-X.Y.Z.pkg`，分别公证并校验；它销毁 keychain / P8 后才上传
-   不可变的 five-file signed-stage（pkg、zip、`SHA256SUMS`、说明、manifest）。
+   以 Developer ID Installer 签精确 `RIMES-X.Y.Z.pkg`，只公证并校验这个用户实际接收的最终 PKG；它销毁
+   keychain / P8 后才上传不可变的 four-file signed-stage（pkg、`SHA256SUMS`、说明、manifest）。
 4. **维护者同路验收与发布**：维护者下载 staged pkg，先验证后用 macOS Installer 真实安装；只有验收通过才批准
    无密钥的 `macos-publish`。它核验 artifact ID/digest、manifest 与逐文件 SHA-256，绝不重签、重打包或
    重公证，然后以完全相同的字节创建 Latest，并下载公开资产再次读回校验。

@@ -124,6 +124,7 @@ Mac 可能由 MDM 禁止这个例外。完整步骤与风险边界见
   清除全部签名材料后生成的 immutable signed-stage，运行同一个精确 pkg 的验收；通过后才批准
   `macos-publish`，它会核验 artifact ID/digest/哈希并发布完全相同的字节。signed-stage 是发布门，
   不是面向用户的下载渠道；公开 Release 才是用户和安装器的权威来源。
+  正式通道不发布可直接解压的 App ZIP，避免绕过 Installer 的输入法注册与迁移流程。
 
   ```bash
   scripts/rehearse-release-pkg.sh --pkg /绝对路径/RIMES-X.Y.Z.pkg

@@ -80,8 +80,9 @@ verify_one() {
     fi
 }
 
-# Extended attributes that cannot ship are removed before signing. Never clear
-# them after stapling, because the notarization ticket must survive packaging.
+# Extended attributes that cannot ship are removed before signing. The final
+# installer package is the notarized distribution container, so nothing may
+# mutate its signed payload after this point except package creation.
 /usr/bin/xattr -cr "$app"
 
 mach_o_count=0

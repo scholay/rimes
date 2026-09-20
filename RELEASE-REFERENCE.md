@@ -17,7 +17,7 @@ tag 推送后，[`.github/workflows/release.yml`](.github/workflows/release.yml)
   不可变 signed-stage Artifact。
 - **`publish_staged_release`** 是第三台全新 runner，进入不含任何签名/公证 Secrets 的受保护
   `macos-publish` Environment。required reviewer 必须先审阅维护者的真机验收记录；该 job 只认证 stage 的
-  artifact ID/digest/运行号/commit，逐字节复核五个成员并从中发布，绝不 checkout、重建、重签或重公证。
+  artifact ID/digest/运行号/commit，逐字节复核四个成员并从中发布，绝不 checkout、重建、重签或重公证。
 
 构建步骤：
 
@@ -30,12 +30,13 @@ tag 推送后，[`.github/workflows/release.yml`](.github/workflows/release.yml)
 4. 预览版与演练：打未签名 PKG，在一次性 runner 上先安装最新已发布 Release，再真实执行
    `sudo installer` 安装新包，验证 PackageKit 退出状态、固定路径、输入法 metadata、通用架构、安装回执，
    以及升级后 `/Library/Input Methods` 只剩 `RIMES.app` 一个 RIMES 身份。
-5. 正式版：用同一张 Developer ID Application 证书逐个重签所有 bundled Mach-O，再以 hardened runtime
-   签 app；提交公证、等待 `Accepted` 并 staple，之后创建保留签名与票据的 `RIMES-X.Y.Z.zip`；以
-   Developer ID Installer 签署 `RIMES-X.Y.Z.pkg`，再次公证并 staple。
-6. 对最终资产执行 `codesign`、`pkgutil`、`stapler` 与 `spctl` 校验；随后销毁临时 keychain / P8，
-   才把 pkg、zip、`SHA256SUMS`、`RELEASE-NOTES.md` 与严格 manifest 作为 signed-stage 上传。第二道 job 使用
-   受控的 `gh` CLI 从该 stage 创建 Release，并下载正式资产读回校验；所有外部 Actions 都固定到完整 commit SHA。
+5. 正式版：用 Developer ID Application 证书逐个重签所有 bundled Mach-O，再以 hardened runtime
+   签 app；以 Developer ID Installer 签署 `RIMES-X.Y.Z.pkg`。用户实际接收的最终 PKG 是最外层分发容器，
+   因此只提交该 PKG 公证、等待 `Accepted` 并 staple；不创建或发布可直接解压的 App ZIP。
+6. 对最终 PKG 及其展开后的 Developer ID 签名 payload 执行 `codesign`、`pkgutil`、`stapler` 与 `spctl`
+   校验；随后销毁临时 keychain / P8，才把 pkg、`SHA256SUMS`、`RELEASE-NOTES.md` 与严格 manifest 作为
+   four-file signed-stage 上传。第二道 job 使用受控的 `gh` CLI 从该 stage 创建仅含 pkg 与 `SHA256SUMS` 的
+   Release，并下载正式资产读回校验；所有外部 Actions 都固定到完整 commit SHA。
 
 `build_and_smoke` 执行的是 ad-hoc smoke bundle；正式 runner 会在之后重新签名、重新打包和公证。
 因此 build / smoke 成功不能替代对正式字节的验收：正式 workflow 会被动校验最终 pkg 的签名、票据和
@@ -239,7 +240,7 @@ scripts/rehearse-release-pkg.sh --pkg /absolute/path/RIMES-X.Y.Z.pkg --install-g
 
 版本比较只接受严格的 `X.Y.Z`：当前版本或 Release 版本不是这个形状（预览版、`0.0.0-dev` 占位值、
 `git describe` 命名的开发版）时，不会提示更新；只有 tag 版本**严格大于**当前运行版本时才提示。
-Release 中的 `RIMES-X.Y.Z.zip` 只是签名 app 归档，更新器不消费 ZIP。
+正式 Release 不包含 `RIMES-X.Y.Z.zip`；更新器只消费精确、已签名并已公证的 PKG。
 
 ## 八、Windows / Linux 输入方案预览
 

@@ -133,6 +133,8 @@ local developer install, and do not treat a local build as formal-package accept
   `macos-publish` verifies the artifact ID/digest/hashes and publishes the identical bytes. The
   signed stage is a release gate, not a user download channel; the public GitHub Release remains the
   authority for users and the updater.
+  This lane does not publish a directly extractable App ZIP, which would bypass Installer registration
+  and migration.
 
   ```bash
   scripts/rehearse-release-pkg.sh --pkg /absolute/path/RIMES-X.Y.Z.pkg

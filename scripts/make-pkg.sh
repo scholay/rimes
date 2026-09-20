@@ -44,7 +44,6 @@ app_short_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionStri
     || die "app version ($app_short_version) does not match package version ($VERSION)"
 
 require_signing="$(parse_boolean "${RIMES_REQUIRE_SIGNING:-0}")"
-require_notarization="$(parse_boolean "${RIMES_REQUIRE_NOTARIZATION:-0}")"
 installer_identity="${RIMES_INSTALLER_IDENTITY:-}"
 signed_package=false
 if [[ -n "$installer_identity" ]]; then
@@ -66,12 +65,6 @@ if [[ "$signed_package" == true ]]; then
         *) die "Installer identity does not match RIMES_TEAM_ID" ;;
     esac
     /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
-fi
-
-if [[ "$require_notarization" == true ]]; then
-    [[ "$signed_package" == true ]] \
-        || die "a notarized release app cannot be placed in an unsigned package"
-    /usr/bin/xcrun stapler validate -v "$APP"
 fi
 
 TMP="$(mktemp -d)"
@@ -160,9 +153,6 @@ mkdir -p "$TMP/root"
 
 if [[ "$signed_package" == true ]]; then
     /usr/bin/codesign --verify --deep --strict --verbose=2 "$TMP/root/RIMES.app"
-fi
-if [[ "$require_notarization" == true ]]; then
-    /usr/bin/xcrun stapler validate -v "$TMP/root/RIMES.app"
 fi
 
 pkgbuild \
