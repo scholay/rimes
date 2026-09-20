@@ -1206,6 +1206,7 @@ private final class MailboxConversationViewController: NSViewController,
             .aiTextConnectorDidChange,
             .aiTextGenerationPreferencesDidChange,
             .openAICompatibleConfigurationDidChange,
+            .aiProviderProfilesDidChange,
         ]
         connectorStateObservers = names.map { name in
             NotificationCenter.default.addObserver(

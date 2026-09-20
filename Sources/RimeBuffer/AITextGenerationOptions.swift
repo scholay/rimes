@@ -75,17 +75,22 @@ struct AITextGenerationSelection: Equatable {
     /// Nil deliberately means the connector's verified default. Never persist
     /// a pretend CLI model merely because it appeared in the React fixture.
     let modelID: String?
+    /// Non-secret, revision-pinned route for a generic Provider request.
+    /// CLI connectors intentionally retain nil here.
+    let providerRoute: AIProviderRouteReference?
     let mode: AITextGenerationMode
     let destination: AITextGenerationDestination
     let format: AITextContentFormat
 
     init(connectorKind: AITextProviderKind,
          modelID: String?,
+         providerRoute: AIProviderRouteReference? = nil,
          mode: AITextGenerationMode,
          destination: AITextGenerationDestination,
          format: AITextContentFormat) {
         self.connectorKind = connectorKind
         self.modelID = modelID
+        self.providerRoute = providerRoute
         self.mode = mode
         // Keep the parameter for source compatibility with saved v2 callers,
         // but never let it recreate the retired Buffer -> Mailbox route.
@@ -99,11 +104,13 @@ struct AITextGenerationSelection: Equatable {
     /// output now means inline Plain rather than reviving the old routing path.
     init(connectorKind: AITextProviderKind,
          modelID: String?,
+         providerRoute: AIProviderRouteReference? = nil,
          mode: AITextGenerationMode,
          output: AITextGenerationOutput) {
         self.init(
             connectorKind: connectorKind,
             modelID: modelID,
+            providerRoute: providerRoute,
             mode: mode,
             destination: .inline,
             format: AITextContentFormat(legacyOutput: output)
@@ -454,16 +461,38 @@ final class AITextGenerationPreferenceStore {
         )
     }
 
-    /// Resolves the exact selection used at a request boundary. The OpenAI
-    /// connector already has one verified model in its private configuration;
-    /// use that as the fallback when the compact selector has no override.
-    /// CLI connectors deliberately retain nil as their default model because
-    /// the current native adapters do not yet advertise a model catalog.
+    /// Resolves the exact selection used at a request boundary. Generic
+    /// Provider routes are resolved from the multi-profile catalog here, so
+    /// their profile revision is frozen before a request starts. CLI
+    /// connectors deliberately retain nil because their native adapters do
+    /// not advertise a model catalog.
     func requestSelection(
         connectorKind: AITextProviderKind,
-        openAIConfigurationStore: OpenAICompatibleConfigurationStore = .shared
+        openAIConfigurationStore: OpenAICompatibleConfigurationStore = .shared,
+        providerCatalogStore: AIProviderProfileCatalogStore? = .shared,
+        connectorSelectionStore: AITextConnectorSelectionStore = .shared
     ) throws -> AITextGenerationSelection {
         let stored = selection(connectorKind: connectorKind)
+        if connectorKind == .openAICompatible,
+           let providerCatalogStore,
+           let routeReference = try connectorSelectionStore.selectedProviderRouteReference(
+                catalogStore: providerCatalogStore
+           ) {
+            let resolved = try providerCatalogStore.resolve(routeReference)
+            guard resolved.route.adapter == .openAIChatCompletions,
+                  resolved.route.capabilities.contains(.textGeneration),
+                  resolved.route.capabilities.contains(.streamingText) else {
+                throw AITextGenerationPlanError.invalidModel
+            }
+            return try Self.normalized(AITextGenerationSelection(
+                connectorKind: connectorKind,
+                modelID: resolved.route.modelID,
+                providerRoute: routeReference,
+                mode: stored.mode,
+                destination: stored.destination,
+                format: stored.format
+            ))
+        }
         let resolvedModel: String?
         if stored.modelID != nil || connectorKind != .openAICompatible {
             resolvedModel = stored.modelID
@@ -473,6 +502,7 @@ final class AITextGenerationPreferenceStore {
         return try Self.normalized(AITextGenerationSelection(
             connectorKind: connectorKind,
             modelID: resolvedModel,
+            providerRoute: nil,
             mode: stored.mode,
             destination: stored.destination,
             format: stored.format
@@ -485,6 +515,7 @@ final class AITextGenerationPreferenceStore {
         AITextGenerationSelection(
             connectorKind: selection.connectorKind,
             modelID: try validatedModel(selection.modelID),
+            providerRoute: selection.providerRoute,
             mode: selection.mode,
             destination: selection.destination,
             format: selection.format

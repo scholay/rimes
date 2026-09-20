@@ -62,6 +62,56 @@ func runMailboxStoreSmokeTest() -> Bool {
             attributes: [.posixPermissions: 0o700]
         )
 
+        // Schema-v1 sources did not carry a provider profile/model route.
+        // Keep them readable without changing Mailbox's document version,
+        // while proving a newer route reference survives a durable reload.
+        let legacySourceData = Data(
+            """
+            {"kind":"openAICompatible","displayName":"OpenAI API","identifier":"legacy","model":"legacy-model","replyCapability":"aiContinuation"}
+            """.utf8
+        )
+        let legacySource = try JSONDecoder().decode(
+            MailboxSource.self,
+            from: legacySourceData
+        )
+        guard legacySource.providerRoute == nil else {
+            return fail("legacy source gained a provider route")
+        }
+        let expectedRoute = AIProviderRouteReference(
+            profileID: UUID(),
+            routeID: UUID(),
+            profileRevision: 1
+        )
+        let snapshottedSource = MailboxSource.openAICompatible(
+            identifier: "provider-profile",
+            model: "routed-model",
+            displayName: "Provider",
+            providerRoute: expectedRoute
+        )
+        let routeSnapshotRoot = root.appendingPathComponent(
+            "route-snapshot",
+            isDirectory: true
+        )
+        let routeSnapshotStore = try MailboxStore(
+            storageRoot: routeSnapshotRoot,
+            limits: capacityLimits(2),
+            dateProvider: { now }
+        )
+        let routeSnapshotHandle = try routeSnapshotStore.beginAIConversation(
+            source: snapshottedSource,
+            prompt: "route snapshot"
+        )
+        let reopenedRouteSnapshotStore = try MailboxStore(
+            storageRoot: routeSnapshotRoot,
+            limits: capacityLimits(2),
+            dateProvider: { now }
+        )
+        guard let restoredRouteSnapshotThread = reopenedRouteSnapshotStore.thread(
+            id: routeSnapshotHandle.threadID
+        ), restoredRouteSnapshotThread.source.providerRoute == expectedRoute else {
+            return fail("provider route snapshot persistence")
+        }
+
         // Starting a provider task must never persist a user turn unless the
         // matching terminal assistant message can also fit. The failed
         // admissions below leave the candidate document unchanged.
