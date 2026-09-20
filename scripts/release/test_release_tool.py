@@ -302,5 +302,46 @@ class EnvironmentApprovalTests(unittest.TestCase):
                 self.validate(check, self.fixture(), {"branch_policies": [{"name": "main"}]})
 
 
+class FormalPackageOnlyWorkflowTests(unittest.TestCase):
+    """Keep the supported Installer path as the only formal notarization lane."""
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/release.yml").read_text()
+        cls.signing_job = workflow.split("  sign_and_stage:", 1)[1].split(
+            "  publish_staged_release:", 1
+        )[0]
+        cls.publish_job = workflow.split("  publish_staged_release:", 1)[1]
+        cls.package_script = (root / "scripts/make-pkg.sh").read_text()
+        cls.rehearsal_script = (root / "scripts/rehearse-release-pkg.sh").read_text()
+        cls.reference_doc = (root / "RELEASE-REFERENCE.md").read_text()
+
+    def test_formal_job_notarizes_only_the_final_package(self):
+        self.assertIn('notarize-macos.sh pkg "RIMES-${VERSION}.pkg"', self.signing_job)
+        self.assertNotIn("notarize-macos.sh app", self.signing_job)
+        self.assertNotIn("RIMES-${VERSION}.zip", self.signing_job)
+        self.assertNotIn("app_zip", self.signing_job)
+        self.assertNotIn('stapler validate -v "$payload_app"', self.signing_job)
+
+    def test_stage_and_public_release_contain_only_the_installer_asset(self):
+        self.assertIn('"$PKG" SHA256SUMS RELEASE-NOTES.md release-manifest.txt', self.signing_job)
+        self.assertIn('"$stage/$PKG" "$stage/SHA256SUMS"', self.publish_job)
+        self.assertNotIn("APP_ZIP", self.publish_job)
+        self.assertNotIn("RIMES-${VERSION}.zip", self.publish_job)
+
+    def test_package_and_rehearsal_validate_the_notarized_outer_container(self):
+        self.assertNotIn("RIMES_REQUIRE_NOTARIZATION", self.package_script)
+        self.assertIn('stapler validate -v "$package_path"', self.rehearsal_script)
+        self.assertNotIn('stapler validate -v "$payload_app"', self.rehearsal_script)
+        self.assertNotIn('stapler validate -v "$installed_app"', self.rehearsal_script)
+
+    def test_reference_document_matches_the_package_only_policy(self):
+        self.assertIn("只提交该 PKG 公证", self.reference_doc)
+        self.assertIn("四个成员", self.reference_doc)
+        self.assertIn("正式 Release 不包含 `RIMES-X.Y.Z.zip`", self.reference_doc)
+        self.assertNotIn("逐字节复核五个成员", self.reference_doc)
+
+
 if __name__ == "__main__":
     unittest.main()

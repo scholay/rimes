@@ -166,10 +166,8 @@ payload_team_id="$(printf '%s\n' "$payload_signature" \
     || die 'payload app does not expose a valid signing Team ID'
 printf '%s\n' "$package_signature" | /usr/bin/grep -Fq "($payload_team_id)" \
     || die 'installer and application certificates do not share one Team ID'
-/usr/bin/xcrun stapler validate -v "$payload_app"
-/usr/sbin/spctl --assess --type execute --verbose=4 "$payload_app"
 
-echo "==> verified Developer ID + notarization for team $payload_team_id"
+echo "==> verified Developer ID-signed payload and notarized installer for team $payload_team_id"
 if [[ -z "$install_mode" ]]; then
     echo '==> verification completed; no system installation was requested.'
     exit 0
@@ -214,8 +212,6 @@ printf '%s\n' "$installed_signature" | /usr/bin/grep -Fq 'Authority=Developer ID
     || die 'installed app is not Developer ID Application signed'
 printf '%s\n' "$installed_signature" | /usr/bin/grep -Fq "TeamIdentifier=$payload_team_id" \
     || die 'installed app signing Team ID differs from the verified package payload'
-/usr/bin/xcrun stapler validate -v "$installed_app"
-/usr/sbin/spctl --assess --type execute --verbose=4 "$installed_app"
 receipt="$(/usr/sbin/pkgutil --pkg-info "$EXPECTED_BUNDLE_ID")" \
     || die 'PackageKit receipt is missing after installation'
 [[ "$receipt" != "$receipt_before" ]] \

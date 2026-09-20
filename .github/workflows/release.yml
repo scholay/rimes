@@ -351,8 +351,9 @@ jobs:
           done
 
       # Rehearsals and unsigned previews are ad-hoc signed and never enter the
-      # protected signing environment. A formal vX.Y.Z tag skips this path and
-      # is packaged only on the fresh signing runner.
+      # protected signing environment. The temporary APP_ZIP below is only an
+      # internal handoff/verification artifact; a formal vX.Y.Z tag skips this
+      # path and never publishes an extractable app archive.
       - name: Package manual ad-hoc artifacts
         if: steps.version.outputs.IS_RELEASE != 'true'
         id: manual_package
@@ -1191,8 +1192,6 @@ jobs:
       artifact_digest: ${{ steps.upload_stage.outputs.artifact-digest }}
       pkg: ${{ steps.pkg.outputs.PKG }}
       pkg_sha256: ${{ steps.pkg.outputs.PKG_SHA256 }}
-      app_zip: ${{ steps.package.outputs.ZIP }}
-      app_zip_sha256: ${{ steps.package.outputs.SHA256 }}
     steps:
       - name: Require protected signing environment before secrets
         env:
@@ -1566,33 +1565,13 @@ jobs:
           RIMES_REQUIRE_SIGNING: 'true'
         run: ./scripts/sign-macos-app.sh "$RIMES_APP_PATH"
 
-      - name: Notarize and staple the app
-        env:
-          RIMES_REQUIRE_NOTARIZATION: 'true'
-        run: ./scripts/notarize-macos.sh app "$RIMES_APP_PATH"
-
-      - name: Package ZIP
-        id: package
-        env:
-          VERSION: ${{ needs.build_and_smoke.outputs.version }}
-        run: |
-          set -euo pipefail
-          ZIP="RIMES-${VERSION}.zip"
-          # Preserve the Developer ID signature and the already-stapled
-          # notarization ticket. Manual artifacts are built in build_and_smoke.
-          ditto -c -k --sequesterRsrc --keepParent "$RIMES_APP_PATH" "$ZIP"
-          SHA256=$(shasum -a 256 "$ZIP" | awk '{print $1}')
-          echo "ZIP=$ZIP" >> "$GITHUB_OUTPUT"
-          echo "SHA256=$SHA256" >> "$GITHUB_OUTPUT"
-          echo "ZIP: $ZIP  SHA256: $SHA256"
-
       # Guided .pkg installer — installs to /Library/Input Methods and registers
-      # the input source (the drag-from-Downloads path hits App Translocation).
+      # the input source. It is RIMES's direct user-facing outer container, so
+      # it is the only formal asset that is notarized and published.
       - name: Build installer (.pkg)
         env:
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
           RIMES_REQUIRE_SIGNING: 'true'
-          RIMES_REQUIRE_NOTARIZATION: 'true'
         run: |
           set -euo pipefail
           ./scripts/make-pkg.sh "$VERSION" "$RIMES_APP_PATH" "RIMES-${VERSION}.pkg"
@@ -1619,69 +1598,27 @@ jobs:
           echo "PKG_SHA256=$PKG_SHA256" >> "$GITHUB_OUTPUT"
           echo "PKG: $PKG  SHA256: $PKG_SHA256"
 
-      - name: Reopen and verify the exact macOS release assets
+      - name: Reopen and verify the exact macOS release package
         env:
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
           PKG: ${{ steps.pkg.outputs.PKG }}
           PKG_SHA256: ${{ steps.pkg.outputs.PKG_SHA256 }}
-          APP_ZIP: ${{ steps.package.outputs.ZIP }}
-          APP_ZIP_SHA256: ${{ steps.package.outputs.SHA256 }}
         run: |
           set -euo pipefail
           [[ "$(basename "$PKG")" == "RIMES-${VERSION}.pkg" ]]
-          [[ "$(basename "$APP_ZIP")" == "RIMES-${VERSION}.zip" ]]
-
-          for asset in "$PKG" "$APP_ZIP"; do
-            [[ -f "$asset" && ! -L "$asset" && -s "$asset" ]] || {
-              echo "Release asset is missing, empty, or a symlink: $asset" >&2
-              exit 1
-            }
-            asset_bytes="$(stat -f%z "$asset")"
-            [[ "$asset_bytes" -le 536870912 ]] || {
-              echo "Release asset exceeds the 512 MiB updater limit: $asset" >&2
-              exit 1
-            }
-          done
+          [[ -f "$PKG" && ! -L "$PKG" && -s "$PKG" ]] || {
+            echo "Release package is missing, empty, or a symlink: $PKG" >&2
+            exit 1
+          }
+          package_bytes="$(stat -f%z "$PKG")"
+          [[ "$package_bytes" -le 536870912 ]] || {
+            echo "Release package exceeds the 512 MiB updater limit: $PKG" >&2
+            exit 1
+          }
           [[ "$(shasum -a 256 "$PKG" | awk '{print $1}')" == "$PKG_SHA256" ]]
-          [[ "$(shasum -a 256 "$APP_ZIP" | awk '{print $1}')" == "$APP_ZIP_SHA256" ]]
 
-          unzip -tq "$APP_ZIP"
           verify_root="$(mktemp -d "$RUNNER_TEMP/rimes-macos-release.XXXXXX")"
           trap 'rm -rf "$verify_root"' EXIT
-          ditto -x -k "$APP_ZIP" "$verify_root/app"
-          extracted_app="$verify_root/app/RIMES.app"
-          extracted_bin="$extracted_app/Contents/MacOS/RIMES"
-          [[ -x "$extracted_bin" ]]
-          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$extracted_app/Contents/Info.plist")" == "$VERSION" ]]
-          lipo "$extracted_bin" -verify_arch arm64 x86_64
-          codesign --verify --deep --strict --verbose=2 "$extracted_app"
-
-          [[ "${RIMES_TEAM_ID:-}" =~ ^[A-Z0-9]{10}$ ]]
-          [[ "${RIMES_APPLICATION_IDENTITY:-}" == "Developer ID Application:"* ]]
-          app_signature="$(codesign --display --verbose=4 "$extracted_app" 2>&1)"
-          printf '%s\n' "$app_signature" | grep -Fq "Authority=$RIMES_APPLICATION_IDENTITY"
-          printf '%s\n' "$app_signature" | grep -Fq "TeamIdentifier=$RIMES_TEAM_ID"
-          printf '%s\n' "$app_signature" | grep -Eq 'flags=.*runtime'
-
-          nested_mach_o_count=0
-          while IFS= read -r -d '' nested_file; do
-            if file -b "$nested_file" | grep -Fq 'Mach-O'; then
-              lipo "$nested_file" -verify_arch arm64 x86_64
-              codesign --verify --strict --verbose=2 "$nested_file"
-              nested_signature="$(codesign --display --verbose=4 "$nested_file" 2>&1)"
-              printf '%s\n' "$nested_signature" | grep -Fq "Authority=$RIMES_APPLICATION_IDENTITY"
-              printf '%s\n' "$nested_signature" | grep -Fq "TeamIdentifier=$RIMES_TEAM_ID"
-              printf '%s\n' "$nested_signature" | grep -Eq 'flags=.*runtime'
-              nested_mach_o_count=$((nested_mach_o_count + 1))
-            fi
-          done < <(find "$extracted_app/Contents/Frameworks" -type f -print0)
-          [[ "$nested_mach_o_count" -gt 0 ]]
-
-          # These verify the stapled ticket and Gatekeeper's execute policy on
-          # the exact app bytes recovered from the published ZIP.
-          xcrun stapler validate -v "$extracted_app"
-          spctl --assess --type execute --verbose=4 "$extracted_app"
-
           xar -tf "$PKG" | grep -x 'Distribution' >/dev/null
           pkgutil --payload-files "$PKG" \
             | grep -E '(^|/)RIMES\.app/Contents/MacOS/RIMES$' >/dev/null
@@ -1719,6 +1656,25 @@ jobs:
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$payload_app/Contents/Info.plist")" == "$VERSION" ]]
           lipo "$payload_app/Contents/MacOS/RIMES" -verify_arch arm64 x86_64
           codesign --verify --deep --strict --verbose=2 "$payload_app"
+          [[ "${RIMES_TEAM_ID:-}" =~ ^[A-Z0-9]{10}$ ]]
+          [[ "${RIMES_APPLICATION_IDENTITY:-}" == "Developer ID Application:"* ]]
+          payload_signature="$(codesign --display --verbose=4 "$payload_app" 2>&1)"
+          printf '%s\n' "$payload_signature" | grep -Fq "Authority=$RIMES_APPLICATION_IDENTITY"
+          printf '%s\n' "$payload_signature" | grep -Fq "TeamIdentifier=$RIMES_TEAM_ID"
+          printf '%s\n' "$payload_signature" | grep -Eq 'flags=.*runtime'
+          nested_mach_o_count=0
+          while IFS= read -r -d '' nested_file; do
+            if file -b "$nested_file" | grep -Fq 'Mach-O'; then
+              lipo "$nested_file" -verify_arch arm64 x86_64
+              codesign --verify --strict --verbose=2 "$nested_file"
+              nested_signature="$(codesign --display --verbose=4 "$nested_file" 2>&1)"
+              printf '%s\n' "$nested_signature" | grep -Fq "Authority=$RIMES_APPLICATION_IDENTITY"
+              printf '%s\n' "$nested_signature" | grep -Fq "TeamIdentifier=$RIMES_TEAM_ID"
+              printf '%s\n' "$nested_signature" | grep -Eq 'flags=.*runtime'
+              nested_mach_o_count=$((nested_mach_o_count + 1))
+            fi
+          done < <(find "$payload_app/Contents/Frameworks" -type f -print0)
+          [[ "$nested_mach_o_count" -gt 0 ]]
           for installer_helper in rimes-timeout rimes-update-handoff; do
             helper_path="$component_dir/Scripts/$installer_helper"
             lipo "$helper_path" -verify_arch arm64 x86_64
@@ -1740,7 +1696,6 @@ jobs:
             printf '%s\n' "$helper_signature" | grep -Fq "TeamIdentifier=$RIMES_TEAM_ID"
             printf '%s\n' "$helper_signature" | grep -Eq 'flags=.*runtime'
           done
-          xcrun stapler validate -v "$payload_app"
           xcrun stapler validate -v "$PKG"
           spctl --assess --type install --verbose=4 "$PKG"
 
@@ -1791,34 +1746,24 @@ jobs:
         id: stage
         env:
           PKG: ${{ steps.pkg.outputs.PKG }}
-          APP_ZIP: ${{ steps.package.outputs.ZIP }}
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
           PKG_SHA256: ${{ steps.pkg.outputs.PKG_SHA256 }}
-          APP_ZIP_SHA256: ${{ steps.package.outputs.SHA256 }}
         run: |
           set -euo pipefail
           die() {
             echo "formal stage: $*" >&2
             exit 1
           }
-          [[ "$PKG" == "RIMES-$VERSION.pkg" && "$APP_ZIP" == "RIMES-$VERSION.zip" ]] \
-            || die 'unexpected formal asset name'
-          [[ "$PKG_SHA256" =~ ^[0-9a-f]{64}$ && "$APP_ZIP_SHA256" =~ ^[0-9a-f]{64}$ ]] \
-            || die 'invalid formal asset digest'
+          [[ "$PKG" == "RIMES-$VERSION.pkg" ]] || die 'unexpected formal package name'
+          [[ "$PKG_SHA256" =~ ^[0-9a-f]{64}$ ]] || die 'invalid formal package digest'
           stage="$RUNNER_TEMP/rimes-signed-release-stage"
           [[ ! -e "$stage" ]] || die "staging path already exists: $stage"
           umask 077
           mkdir -m 700 "$stage"
           cp "$PKG" "$stage/$PKG"
-          cp "$APP_ZIP" "$stage/$APP_ZIP"
           actual_pkg_sha="$(shasum -a 256 "$stage/$PKG" | awk '{print $1}')"
-          actual_zip_sha="$(shasum -a 256 "$stage/$APP_ZIP" | awk '{print $1}')"
-          [[ "$actual_pkg_sha" == "$PKG_SHA256" && "$actual_zip_sha" == "$APP_ZIP_SHA256" ]] \
-            || die 'copy changed a signed release asset'
-          {
-            printf '%s  %s\n' "$actual_pkg_sha" "$PKG"
-            printf '%s  %s\n' "$actual_zip_sha" "$APP_ZIP"
-          } | LC_ALL=C sort -k2 >"$stage/SHA256SUMS"
+          [[ "$actual_pkg_sha" == "$PKG_SHA256" ]] || die 'copy changed the signed release package'
+          printf '%s  %s\n' "$actual_pkg_sha" "$PKG" >"$stage/SHA256SUMS"
           (cd "$stage" && shasum -a 256 -c SHA256SUMS)
 
           notes="$stage/RELEASE-NOTES.md"
@@ -1846,32 +1791,28 @@ jobs:
           | 文件 | SHA256 |
           |------|--------|
           | PKG | `PKG_SHA256_PLACEHOLDER` |
-          | ZIP | `ZIP_SHA256_PLACEHOLDER` |
           EOF
           /usr/bin/sed -i '' \
             -e "s/VERSION_PLACEHOLDER/$VERSION/g" \
             -e "s/PKG_SHA256_PLACEHOLDER/$PKG_SHA256/g" \
-            -e "s/ZIP_SHA256_PLACEHOLDER/$APP_ZIP_SHA256/g" \
             "$notes"
           printf '\n' >>"$notes"
           python3 scripts/release/release_tool.py notes --tag "$GITHUB_REF_NAME" >>"$notes"
 
           pkg_bytes="$(stat -f%z "$stage/$PKG")"
-          zip_bytes="$(stat -f%z "$stage/$APP_ZIP")"
           notes_bytes="$(stat -f%z "$notes")"
           notes_sha="$(shasum -a 256 "$notes" | awk '{print $1}')"
-          [[ "$pkg_bytes" =~ ^[1-9][0-9]*$ && "$zip_bytes" =~ ^[1-9][0-9]*$ \
-              && "$notes_bytes" =~ ^[1-9][0-9]*$ ]] || die 'invalid staged byte count'
-          printf '%s\n' 'schema=rimes-signed-release-v1' 'repository=scholay/rimes' \
+          [[ "$pkg_bytes" =~ ^[1-9][0-9]*$ && "$notes_bytes" =~ ^[1-9][0-9]*$ ]] \
+            || die 'invalid staged byte count'
+          printf '%s\n' 'schema=rimes-signed-pkg-release-v1' 'repository=scholay/rimes' \
             "run_id=$GITHUB_RUN_ID" "commit=$GITHUB_SHA" "tag=$GITHUB_REF_NAME" \
             "version=$VERSION" "pkg=$PKG" "pkg_sha256=$actual_pkg_sha" \
-            "pkg_bytes=$pkg_bytes" "zip=$APP_ZIP" "zip_sha256=$actual_zip_sha" \
-            "zip_bytes=$zip_bytes" 'notes=RELEASE-NOTES.md' "notes_sha256=$notes_sha" \
+            "pkg_bytes=$pkg_bytes" 'notes=RELEASE-NOTES.md' "notes_sha256=$notes_sha" \
             "notes_bytes=$notes_bytes" >"$stage/release-manifest.txt"
 
           expected="$RUNNER_TEMP/rimes-signed-stage-expected.txt"
           actual="$RUNNER_TEMP/rimes-signed-stage-actual.txt"
-          printf '%s\n' "$PKG" "$APP_ZIP" SHA256SUMS RELEASE-NOTES.md release-manifest.txt \
+          printf '%s\n' "$PKG" SHA256SUMS RELEASE-NOTES.md release-manifest.txt \
             | LC_ALL=C sort >"$expected"
           find "$stage" -mindepth 1 -maxdepth 1 -exec basename {} \; \
             | LC_ALL=C sort >"$actual"
@@ -2018,19 +1959,15 @@ jobs:
         env:
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
           PKG: ${{ needs.sign_and_stage.outputs.pkg }}
-          APP_ZIP: ${{ needs.sign_and_stage.outputs.app_zip }}
           EXPECTED_PKG_SHA: ${{ needs.sign_and_stage.outputs.pkg_sha256 }}
-          EXPECTED_ZIP_SHA: ${{ needs.sign_and_stage.outputs.app_zip_sha256 }}
         run: |
           set -euo pipefail
           die() {
             echo "publish staged release: $*" >&2
             exit 1
           }
-          [[ "$PKG" == "RIMES-$VERSION.pkg" && "$APP_ZIP" == "RIMES-$VERSION.zip" ]] \
-            || die 'unexpected staged asset name'
-          [[ "$EXPECTED_PKG_SHA" =~ ^[0-9a-f]{64}$ && "$EXPECTED_ZIP_SHA" =~ ^[0-9a-f]{64}$ ]] \
-            || die 'invalid staged asset digest'
+          [[ "$PKG" == "RIMES-$VERSION.pkg" ]] || die 'unexpected staged package name'
+          [[ "$EXPECTED_PKG_SHA" =~ ^[0-9a-f]{64}$ ]] || die 'invalid staged package digest'
           stage="$RUNNER_TEMP/rimes-signed-release-stage"
           manifest="$stage/release-manifest.txt"
           notes="$stage/RELEASE-NOTES.md"
@@ -2039,7 +1976,7 @@ jobs:
 
           expected_members="$RUNNER_TEMP/rimes-signed-stage-members.expected"
           actual_members="$RUNNER_TEMP/rimes-signed-stage-members.actual"
-          printf '%s\n' "$PKG" "$APP_ZIP" SHA256SUMS RELEASE-NOTES.md release-manifest.txt \
+          printf '%s\n' "$PKG" SHA256SUMS RELEASE-NOTES.md release-manifest.txt \
             | LC_ALL=C sort >"$expected_members"
           find "$stage" -mindepth 1 -maxdepth 1 -exec basename {} \; \
             | LC_ALL=C sort >"$actual_members"
@@ -2049,35 +1986,27 @@ jobs:
             die 'signed release stage contains a symlink or special file'
           fi
 
-          [[ -f "$stage/$PKG" && ! -L "$stage/$PKG" && -f "$stage/$APP_ZIP" \
-              && ! -L "$stage/$APP_ZIP" && -f "$stage/SHA256SUMS" \
+          [[ -f "$stage/$PKG" && ! -L "$stage/$PKG" && -f "$stage/SHA256SUMS" \
               && ! -L "$stage/SHA256SUMS" ]] || die 'a staged asset is not a regular file'
           pkg_bytes="$(stat -f%z "$stage/$PKG")"
-          zip_bytes="$(stat -f%z "$stage/$APP_ZIP")"
           notes_bytes="$(stat -f%z "$notes")"
           notes_sha="$(shasum -a 256 "$notes" | awk '{print $1}')"
           [[ "$pkg_bytes" =~ ^[1-9][0-9]*$ && "$pkg_bytes" -le 536870912 \
-              && "$zip_bytes" =~ ^[1-9][0-9]*$ && "$zip_bytes" -le 536870912 \
               && "$notes_bytes" =~ ^[1-9][0-9]*$ ]] || die 'staged asset byte count is invalid'
 
           expected_sums="$RUNNER_TEMP/rimes-signed-stage-sums.expected"
-          {
-            printf '%s  %s\n' "$EXPECTED_PKG_SHA" "$PKG"
-            printf '%s  %s\n' "$EXPECTED_ZIP_SHA" "$APP_ZIP"
-          } | LC_ALL=C sort -k2 >"$expected_sums"
+          printf '%s  %s\n' "$EXPECTED_PKG_SHA" "$PKG" >"$expected_sums"
           cmp "$expected_sums" "$stage/SHA256SUMS"
           (cd "$stage" && shasum -a 256 -c SHA256SUMS)
 
           expected_manifest="$RUNNER_TEMP/rimes-signed-stage-manifest.expected"
-          printf '%s\n' 'schema=rimes-signed-release-v1' 'repository=scholay/rimes' \
+          printf '%s\n' 'schema=rimes-signed-pkg-release-v1' 'repository=scholay/rimes' \
             "run_id=$GITHUB_RUN_ID" "commit=$GITHUB_SHA" "tag=$GITHUB_REF_NAME" \
             "version=$VERSION" "pkg=$PKG" "pkg_sha256=$EXPECTED_PKG_SHA" \
-            "pkg_bytes=$pkg_bytes" "zip=$APP_ZIP" "zip_sha256=$EXPECTED_ZIP_SHA" \
-            "zip_bytes=$zip_bytes" 'notes=RELEASE-NOTES.md' "notes_sha256=$notes_sha" \
+            "pkg_bytes=$pkg_bytes" 'notes=RELEASE-NOTES.md' "notes_sha256=$notes_sha" \
             "notes_bytes=$notes_bytes" >"$expected_manifest"
           cmp "$expected_manifest" "$manifest"
 
-          /usr/bin/unzip -tq "$stage/$APP_ZIP"
           pkg_signature="$(/usr/sbin/pkgutil --check-signature "$stage/$PKG" 2>&1)"
           printf '%s\n' "$pkg_signature"
           printf '%s\n' "$pkg_signature" | /usr/bin/grep -Fq 'Developer ID Installer:'
@@ -2107,12 +2036,11 @@ jobs:
           GH_REPO: scholay/rimes
           VERSION: ${{ needs.build_and_smoke.outputs.version }}
           PKG: ${{ needs.sign_and_stage.outputs.pkg }}
-          APP_ZIP: ${{ needs.sign_and_stage.outputs.app_zip }}
         run: |
           set -euo pipefail
           stage="$RUNNER_TEMP/rimes-signed-release-stage"
           gh release create "$GITHUB_REF_NAME" --repo "$GH_REPO" \
-            "$stage/$PKG" "$stage/$APP_ZIP" "$stage/SHA256SUMS" \
+            "$stage/$PKG" "$stage/SHA256SUMS" \
             --verify-tag \
             --latest \
             --title "RIMES v$VERSION" \
@@ -2123,9 +2051,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: scholay/rimes
           PKG: ${{ needs.sign_and_stage.outputs.pkg }}
-          APP_ZIP: ${{ needs.sign_and_stage.outputs.app_zip }}
           EXPECTED_PKG_SHA: ${{ needs.sign_and_stage.outputs.pkg_sha256 }}
-          EXPECTED_ZIP_SHA: ${{ needs.sign_and_stage.outputs.app_zip_sha256 }}
         run: |
           set -euo pipefail
           [[ "$(gh release view "$GITHUB_REF_NAME" --repo "$GH_REPO" --json isDraft --jq .isDraft)" == false ]]
@@ -2134,7 +2060,7 @@ jobs:
 
           expected_assets="$RUNNER_TEMP/rimes-published-assets.expected"
           actual_assets="$RUNNER_TEMP/rimes-published-assets.actual"
-          printf '%s\n' "$PKG" "$APP_ZIP" SHA256SUMS | LC_ALL=C sort >"$expected_assets"
+          printf '%s\n' "$PKG" SHA256SUMS | LC_ALL=C sort >"$expected_assets"
           gh release view "$GITHUB_REF_NAME" --repo "$GH_REPO" --json assets --jq '.assets[].name' \
             | LC_ALL=C sort >"$actual_assets"
           cmp "$expected_assets" "$actual_assets"
@@ -2143,12 +2069,8 @@ jobs:
           [[ ! -e "$readback" ]]
           mkdir -m 700 "$readback"
           gh release download "$GITHUB_REF_NAME" --repo "$GH_REPO" \
-            --pattern "$PKG" --pattern "$APP_ZIP" --pattern SHA256SUMS --dir "$readback"
+            --pattern "$PKG" --pattern SHA256SUMS --dir "$readback"
           [[ "$(shasum -a 256 "$readback/$PKG" | awk '{print $1}')" == "$EXPECTED_PKG_SHA" ]]
-          [[ "$(shasum -a 256 "$readback/$APP_ZIP" | awk '{print $1}')" == "$EXPECTED_ZIP_SHA" ]]
           expected_sums="$RUNNER_TEMP/rimes-published-sums.expected"
-          {
-            printf '%s  %s\n' "$EXPECTED_PKG_SHA" "$PKG"
-            printf '%s  %s\n' "$EXPECTED_ZIP_SHA" "$APP_ZIP"
-          } | LC_ALL=C sort -k2 >"$expected_sums"
+          printf '%s  %s\n' "$EXPECTED_PKG_SHA" "$PKG" >"$expected_sums"
           cmp "$expected_sums" "$readback/SHA256SUMS"
