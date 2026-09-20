@@ -205,9 +205,9 @@ if [[ "$KIND" == "stable" ]]; then
         gh api "repos/$EXPECTED_REPO/environments/$formal_environment" >/dev/null 2>&1 \
             || gate "正式版需要受保护的 $formal_environment Environment；当前仓库尚未完整配置。"
         reviewer_rules="$(gh api "repos/$EXPECTED_REPO/environments/$formal_environment" \
-            --jq '[.protection_rules[]? | select(.type == "required_reviewers" and ((.reviewers // []) | length > 0) and .prevent_self_review == true)] | length' 2>/dev/null || true)"
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers" and ((.reviewers // []) | length > 0))] | length' 2>/dev/null || true)"
         [[ "$reviewer_rules" =~ ^[1-9][0-9]*$ ]] \
-            || gate "正式版要求 $formal_environment 至少配置一条有 reviewer、禁止 self-review 的保护规则。"
+            || gate "正式版要求 $formal_environment 至少配置一条有 reviewer 的人工审批保护规则。"
         can_admins_bypass="$(gh api "repos/$EXPECTED_REPO/environments/$formal_environment" \
             --jq '.can_admins_bypass' 2>/dev/null || true)"
         [[ "$can_admins_bypass" == false ]] \

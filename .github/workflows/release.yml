@@ -1177,8 +1177,9 @@ jobs:
       github.repository == 'scholay/rimes'
     runs-on: macos-15
     # Only this fresh runner reaches the protected environment. Configure it
-    # with non-self-reviewing reviewers, no admin bypass, and a v* deployment
-    # rule. The first step below rechecks those server-side controls before
+    # with required reviewers, no admin bypass, and a v* deployment rule.
+    # A maintainer may approve their own run through the explicit review gate.
+    # The first step below rechecks those server-side controls before
     # any protected signing material can be imported.
     environment: macos-release
     permissions:
@@ -1223,12 +1224,10 @@ jobs:
               if rule.get("type") == "required_reviewers"
               and isinstance(rule.get("reviewers"), list)
               and rule["reviewers"]
-              and rule.get("prevent_self_review") is True
           ]
           if not reviewer_rules:
               raise SystemExit(
-                  f"{name} must have a populated required_reviewers rule with "
-                  "prevent_self_review=true"
+                  f"{name} must have a populated required_reviewers rule"
               )
           if environment.get("can_admins_bypass") is not False:
               raise SystemExit(f"{name} must disallow administrator bypass")
@@ -1966,12 +1965,10 @@ jobs:
               if rule.get("type") == "required_reviewers"
               and isinstance(rule.get("reviewers"), list)
               and rule["reviewers"]
-              and rule.get("prevent_self_review") is True
           ]
           if not reviewer_rules:
               raise SystemExit(
-                  f"{name} must have a populated required_reviewers rule with "
-                  "prevent_self_review=true"
+                  f"{name} must have a populated required_reviewers rule"
               )
           if environment.get("can_admins_bypass") is not False:
               raise SystemExit(f"{name} must disallow administrator bypass")

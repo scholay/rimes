@@ -69,11 +69,12 @@ git switch main && git pull --ff-only
 - 新 tag 不存在，并高于同渠道已发布的版本；
 - `Info.plist` 版本仍是占位值，预置插件 catalog 已同步；
 - 正式版还要求 `macos-release` 与 `macos-publish` 都存在；二者都要有非空 required reviewers、禁止
-  self-review / administrator bypass，并以 selected branch/tag policy 允许 `v*`。前者的受保护 job 要求
+  administrator bypass，并以 selected branch/tag policy 允许 `v*`。前者的受保护 job 要求
   Application / Installer 两份证书、同一 Team ID 与公证凭据完整可用，后者不得存放这些凭据。
 
 两个 Environment 表示两次批准，**不要求两名审核者**；同一个 reviewer 可以先批准签名，再在同一安装包的
-真机验收通过后批准公开。当前选择的 prevent self-review 策略要求该 reviewer 账号与发起 workflow 的账号不同。
+真机验收通过后批准公开。当前由 `scholay` 发起并分别审核两次，允许 self-review；仍必须通过审批门，
+不能以管理员身份跳过审批。以后需要独立复核时，可以另行启用 prevent self-review 并指定其他审核者。
 
 此外，`release tags` ruleset 必须对 `refs/tags/v*` 增加 **creation** 限制，只把 bypass 权限给指定的
 发布主体；现有“禁止删除/移动”规则本身不能防止有人直接创建一个 tag。工作流会在导入凭据和创建 Release 前

@@ -3,11 +3,15 @@
 
 from __future__ import annotations
 
+import copy
+import io
+import json
 import os
 import plistlib
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -225,6 +229,77 @@ class PlistTests(unittest.TestCase):
             self.assertIsNone(tool.check_plist(path))
             path.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "0.4.2"}))
             self.assertIn("0.4.2", tool.check_plist(path))
+
+
+class EnvironmentApprovalTests(unittest.TestCase):
+    """Exercise the actual passive checks in both protected workflow jobs."""
+
+    @classmethod
+    def setUpClass(cls):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/release.yml").read_text()
+        marker = 'python3 - "$environment_json" "$branch_policies_json" "$ENVIRONMENT_NAME" <<\'PY\'\n'
+        blocks = workflow.split(marker)[1:]
+        if len(blocks) != 2:
+            raise AssertionError("Both signing and publishing must validate their environment")
+        cls.checks = [
+            compile(textwrap.dedent(block.split("\n          PY\n", 1)[0]), "environment-policy", "exec")
+            for block in blocks
+        ]
+
+    def fixture(self):
+        return {
+            "name": "macos-release",
+            "can_admins_bypass": False,
+            "protection_rules": [{
+                "type": "required_reviewers",
+                "reviewers": [{"type": "User", "reviewer": {"login": "scholay"}}],
+                "prevent_self_review": False,
+            }],
+            "deployment_branch_policy": {
+                "custom_branch_policies": True, "protected_branches": False,
+            },
+        }
+
+    def validate(self, check, environment, policies=None):
+        documents = {
+            "environment.json": json.dumps(environment),
+            "policies.json": json.dumps(policies if policies is not None else {
+                "branch_policies": [{"name": "v*", "type": "tag"}],
+            }),
+        }
+        with mock.patch.object(sys, "argv", ["check", "environment.json", "policies.json", "macos-release"]), \
+                mock.patch("builtins.open", side_effect=lambda path, **kwargs: io.StringIO(documents[path])):
+            exec(check, {})
+
+    def test_allows_explicit_review_by_the_initiator_or_an_independent_reviewer(self):
+        for check in self.checks:
+            for prevent_self_review in (False, True):
+                with self.subTest(check=check, prevent_self_review=prevent_self_review):
+                    environment = self.fixture()
+                    environment["protection_rules"][0]["prevent_self_review"] = prevent_self_review
+                    self.validate(check, environment)
+
+    def test_still_requires_reviewers_no_admin_bypass_and_selected_deployments(self):
+        for check in self.checks:
+            for field, value in (
+                ("protection_rules", []),
+                ("protection_rules", [{"type": "required_reviewers", "reviewers": []}]),
+                ("can_admins_bypass", True),
+                ("can_admins_bypass", None),
+                ("deployment_branch_policy", None),
+                ("deployment_branch_policy", {"custom_branch_policies": False, "protected_branches": True}),
+                ("name", "wrong-environment"),
+            ):
+                with self.subTest(field=field, value=value):
+                    environment = copy.deepcopy(self.fixture())
+                    environment[field] = value
+                    with self.assertRaises(SystemExit):
+                        self.validate(check, environment)
+
+    def test_still_requires_the_release_tag_pattern(self):
+        for check in self.checks:
+            with self.assertRaises(SystemExit):
+                self.validate(check, self.fixture(), {"branch_policies": [{"name": "main"}]})
 
 
 if __name__ == "__main__":

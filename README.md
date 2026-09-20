@@ -93,9 +93,10 @@ Mac 可能由 MDM 禁止这个例外。完整步骤与风险边界见
 
 - 含私钥且属于同一 Team 的 **Developer ID Application** 与 **Developer ID Installer** 证书；前者签名 app
   及其 bundled Mach-O，后者签名 `.pkg`；
-- 两个受保护的 GitHub Environment：两者都必须有至少一位 reviewer、禁止 self-review、禁止 administrator
+- 两个受保护的 GitHub Environment：两者都必须有至少一位 reviewer、禁止 administrator
   bypass，并用 selected branch/tag policy 只允许 `v*`；`macos-release` 只负责签名/公证，`macos-publish`
-  只负责第二次发布审批、**不存任何密钥**。两个阶段可以由同一个 reviewer 分别批准；
+  只负责第二次发布审批、**不存任何密钥**。当前由 `scholay` 发起并分别批准两个阶段，允许 self-review，
+  但仍须在公开前完成同一签名安装包的真机验收；
 - 仅放在 `macos-release` 的两份 P12、其密码、Team ID，以及 App Store Connect 公证 API 的 P8、Key ID
   和 Issuer ID。
 
