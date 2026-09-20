@@ -42,6 +42,9 @@ entitlements can be exercised; device builds are unsigned until a team is config
 Open `RIMES.xcodeproj` in Xcode after building. `project.yml` is the editable project
 source; regenerate with `Vendor/ios-build/xcodegen/bin/xcodegen generate --spec
 platforms/ios/project.yml` from the repository root. `Shared/` is a local Swift package.
+The project now selects the development team verified during the first physical
+iPhone installation. Other maintainers should select their own team in Xcode or
+override `DEVELOPMENT_TEAM` when building. No credentials or profiles are committed.
 
 For core tests only:
 

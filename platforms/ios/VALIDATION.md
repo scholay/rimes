@@ -72,3 +72,29 @@ extension memory pressure, or P95 acceptance on an iPhone.
 The original checkout's ten modified macOS source files were preserved. This work
 was performed in a separate worktree, and the running desktop input method was not
 replaced or restarted.
+
+## Physical installation update — 2026-09-21
+
+The earlier device/environment blockers above describe the initial validation run.
+This later local installation achieved the following additional evidence:
+
+- Xcode 27 can now enumerate physical and simulator destinations. The connected
+  device was an iPhone 15 Pro on iOS 26.7; Developer Mode was confirmed enabled.
+- After the user renewed Xcode account authentication, both development profiles
+  included this iPhone and `group.org.scholay.rimes.ios`. Shared Keychain entitlements
+  were present. The project records the verified development team and explicit
+  App Group capability to support repeatable local signing.
+- Corrected generated bundle metadata that had retained XcodeGen's default `1.0`.
+  Both final signed bundles now report **0.1.0 (1)**; source verification checks
+  the version/build substitutions.
+- The signed app and embedded keyboard extension passed signature verification.
+  CoreDevice installed the app successfully, and the device's installed-app query
+  read back `org.scholay.rimes.ios`, version 0.1.0, build 1.
+- App launch succeeded. Its explicit synthetic engine smoke was copied back from
+  the physical app container: Pinyin, Ziranma, Wubi and Keychain read/write/delete
+  all passed. See `validation/iphone15pro-local-install.json`.
+
+This is a **local development installation**, not TestFlight. Main-app engine and
+Keychain checks do not prove keyboard activation, cross-process sharing, thumb
+ergonomics, all host apps, permission revocation, or keyboard latency/memory targets.
+Those acceptance items and the distribution-rights gate remain open.

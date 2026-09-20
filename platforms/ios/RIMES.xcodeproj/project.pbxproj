@@ -297,12 +297,15 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					A545E26831EAAA08403AD624 = {
+						DevelopmentTeam = 585J2TL9U6;
 						ProvisioningStyle = Automatic;
 					};
 					E60D4567B3E06117E9AAFC00 = {
+						DevelopmentTeam = 585J2TL9U6;
 						ProvisioningStyle = Automatic;
 					};
 					EC4CCCDBB1A3610A10D396CE = {
+						DevelopmentTeam = 585J2TL9U6;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -485,6 +488,7 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 585J2TL9U6;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -642,6 +646,7 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 585J2TL9U6;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;

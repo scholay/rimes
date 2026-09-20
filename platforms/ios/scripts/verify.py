@@ -15,6 +15,12 @@ for name in ['rimes_pinyin','rimes_ziranma','rimes_wubi']:
 assert not any(p.suffix in ['.lua','.dylib'] or 'yoyo' in p.name or 'flypy' in p.name for p in data.rglob('*'))
 for name in ['App/Info.plist','Keyboard/Info.plist']:
     p=plistlib.loads((ios/name).read_bytes()); assert p['CFBundleLocalizations']==['en','zh-Hans']
+    assert p['CFBundleShortVersionString']=='$(MARKETING_VERSION)'
+    assert p['CFBundleVersion']=='$(CURRENT_PROJECT_VERSION)'
+for name in ['App/RIMES.entitlements','Keyboard/RIMESKeyboard.entitlements']:
+    p=plistlib.loads((ios/name).read_bytes())
+    assert p['com.apple.security.application-groups']==['group.org.scholay.rimes.ios']
+    assert p['keychain-access-groups']==['$(AppIdentifierPrefix)org.scholay.rimes.ios.shared']
 p=plistlib.loads((ios/'Keyboard/Info.plist').read_bytes())
 assert p['NSExtension']['NSExtensionAttributes']['RequestsOpenAccess'] is True
 manifest=plistlib.loads((ios/'Resources/PrivacyInfo.xcprivacy').read_bytes())

@@ -1,0 +1,57 @@
+{
+  "recordedAt": "2026-09-20T23:19:02.240739+00:00",
+  "device": "iPhone 15 Pro",
+  "osVersion": "26.7",
+  "bundleIdentifier": "org.scholay.rimes.ios",
+  "version": "0.1.0",
+  "build": "1",
+  "installationSource": "local Apple Development signing via CoreDevice",
+  "signatureVerified": true,
+  "deviceAppInventoryVerified": true,
+  "appLaunchSucceeded": true,
+  "developerMode": "enabled",
+  "testFlight": false,
+  "fullKeyboardAcceptance": false,
+  "engineSmoke": {
+    "allPassed": true,
+    "checks": [
+      {
+        "keyMilliseconds": [
+          0.8310833333382561,
+          0.196833333319546,
+          0.20141666666972924,
+          0.2837916666749152,
+          0.06525000000578984
+        ],
+        "passed": true,
+        "schema": "rimes_pinyin"
+      },
+      {
+        "keyMilliseconds": [
+          0.09395833333769588,
+          0.3413333333242008,
+          0.22604166667861136,
+          0.3545833333475912
+        ],
+        "passed": true,
+        "schema": "rimes_ziranma"
+      },
+      {
+        "keyMilliseconds": [
+          1.7762916666583806,
+          0.7128333333525916
+        ],
+        "passed": true,
+        "schema": "rimes_wubi"
+      },
+      {
+        "keychain": true,
+        "passed": true
+      }
+    ],
+    "deviceModel": "iPhone",
+    "engineInitializationMilliseconds": 40.59270833334949,
+    "environment": "iOS device engine smoke, not full keyboard acceptance",
+    "osVersion": "26.7"
+  }
+}
