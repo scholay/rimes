@@ -130,7 +130,9 @@ for helper in rimes-timeout rimes-update-handoff; do
     /bin/chmod 755 "$helper_path"
     /usr/bin/codesign "${helper_sign_args[@]}" "$helper_path"
     /usr/bin/codesign --verify --strict --verbose=2 "$helper_path"
-    /usr/bin/lipo "$helper_path" -verify_arch arm64 x86_64
+    # One arch per call; Xcode 27's lipo rejects two after -verify_arch.
+    /usr/bin/lipo "$helper_path" -verify_arch arm64
+    /usr/bin/lipo "$helper_path" -verify_arch x86_64
     if [[ -n "$application_identity" ]]; then
         helper_signature="$(/usr/bin/codesign --display --verbose=4 "$helper_path" 2>&1)"
         printf '%s\n' "$helper_signature" \
