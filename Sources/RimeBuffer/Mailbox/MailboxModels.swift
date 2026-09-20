@@ -135,9 +135,20 @@ enum MailboxReplyCapability: String, Codable {
 /// Frozen choice for the first turn of a Mailbox-native conversation. A nil
 /// model intentionally means the connector's verified default; CLI connectors
 /// do not currently expose a model catalog and must not be given invented IDs.
+/// A catalog-backed API route carries a non-secret revisioned reference so a
+/// later reply cannot silently move to the currently selected provider.
 struct MailboxNewConversationSelection: Equatable {
     let connectorKind: AITextProviderKind
     let modelID: String?
+    let providerRoute: AIProviderRouteReference?
+
+    init(connectorKind: AITextProviderKind,
+         modelID: String?,
+         providerRoute: AIProviderRouteReference? = nil) {
+        self.connectorKind = connectorKind
+        self.modelID = modelID
+        self.providerRoute = providerRoute
+    }
 }
 
 struct MailboxNewConversationModelOption: Equatable {
@@ -202,7 +213,7 @@ enum MailboxNewConversationModelCatalog {
     }
 
     static func liveOptions() -> [MailboxNewConversationModelOption] {
-        options(
+        let legacyOptions = options(
             selectedKind: AITextConnectorSelectionStore.shared.selectedKind,
             selectionResolver: {
                 try AITextGenerationPreferenceStore.shared.requestSelection(
@@ -213,6 +224,67 @@ enum MailboxNewConversationModelCatalog {
                 AITextConnectorRegistry.shared.availability(for: $0)
             }
         )
+        let catalogStore = AIProviderProfileCatalogStore.shared
+        let catalog: AIProviderProfileCatalog
+        do {
+            catalog = try catalogStore.loadMigratingLegacyOpenAICompatibleIfNeeded()
+        } catch {
+            // Retain the old three-connector picker if a catalog cannot be
+            // read. It has no route reference, so it cannot accidentally
+            // claim to represent an unavailable dynamic Provider.
+            return legacyOptions
+        }
+
+        let mailboxBinding = catalog.binding(for: .mailbox)
+        let selectedGenericRoute: AIProviderRouteReference?
+        do {
+            selectedGenericRoute = try AITextConnectorSelectionStore.shared
+                .selectedProviderRouteReference(catalogStore: catalogStore)
+        } catch {
+            selectedGenericRoute = nil
+        }
+        var routeOptions: [MailboxNewConversationModelOption] = []
+        for profile in catalog.profiles where profile.isEnabled {
+            for route in profile.routes where route.isEnabled
+                    && route.adapter == .openAIChatCompletions
+                    && route.hasSelectedModel
+                    && route.capabilities.contains(.textGeneration)
+                    && route.capabilities.contains(.streamingText) {
+                guard let reference = profile.reference(for: route.id),
+                      let modelID = route.modelID else {
+                    continue
+                }
+                let unavailableReason: String?
+                do {
+                    _ = try catalogStore.resolve(reference)
+                    unavailableReason = nil
+                } catch {
+                    unavailableReason = "该 Provider 模型路由当前不可用"
+                }
+                let isMailboxBinding = mailboxBinding?.profileID == profile.id
+                    && mailboxBinding?.routeID == route.id
+                let isPreferred = isMailboxBinding
+                    || (mailboxBinding == nil && selectedGenericRoute == reference)
+                routeOptions.append(MailboxNewConversationModelOption(
+                    selection: MailboxNewConversationSelection(
+                        connectorKind: .openAICompatible,
+                        modelID: modelID,
+                        providerRoute: reference
+                    ),
+                    title: "\(profile.displayName) · \(route.displayName) · \(modelID)"
+                        + (unavailableReason == nil ? "" : " · 未连接"),
+                    isPreferred: isPreferred,
+                    unavailableReason: unavailableReason
+                ))
+            }
+        }
+
+        guard !routeOptions.isEmpty else { return legacyOptions }
+        // Catalog-backed API routes replace the singleton generic option. The
+        // CLI options stay available and continue to use their own adapters.
+        return legacyOptions.filter {
+            $0.selection.connectorKind != .openAICompatible
+        } + routeOptions
     }
 }
 
@@ -223,17 +295,23 @@ struct MailboxSource: Codable, Equatable {
     let displayName: String
     let identifier: String?
     let model: String?
+    /// Non-secret provider/model identity frozen when the conversation starts.
+    /// This remains optional so schema-v1 Mailbox documents, which predate the
+    /// profile catalog, decode without rewriting their historical source.
+    let providerRoute: AIProviderRouteReference?
     let replyCapability: MailboxReplyCapability
 
     init(kind: MailboxSourceKind,
          displayName: String,
          identifier: String? = nil,
          model: String? = nil,
+         providerRoute: AIProviderRouteReference? = nil,
          replyCapability: MailboxReplyCapability) {
         self.kind = kind
         self.displayName = displayName
         self.identifier = identifier
         self.model = model
+        self.providerRoute = providerRoute
         self.replyCapability = replyCapability
     }
 
@@ -259,13 +337,15 @@ struct MailboxSource: Codable, Equatable {
 
     static func openAICompatible(identifier: String? = nil,
                                  model: String? = nil,
-                                 displayName: String = "OpenAI API")
+                                 displayName: String = "OpenAI API",
+                                 providerRoute: AIProviderRouteReference? = nil)
         -> MailboxSource {
         MailboxSource(
             kind: .openAICompatible,
             displayName: displayName,
             identifier: identifier,
             model: model,
+            providerRoute: providerRoute,
             replyCapability: .aiContinuation
         )
     }
