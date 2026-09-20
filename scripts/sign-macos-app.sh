@@ -53,7 +53,15 @@ else
 fi
 
 sign_one() {
-    /usr/bin/codesign "${sign_args[@]}" "$1"
+    if /usr/bin/codesign "${sign_args[@]}" "$1"; then
+        return 0
+    fi
+    if [[ "$formal" == true ]]; then
+        # Public certificate diagnostics only; never print a keychain dump or
+        # private-key material when a hosted runner cannot resolve an identity.
+        /usr/bin/security find-identity -p codesigning "$RIMES_SIGNING_KEYCHAIN" >&2 || true
+    fi
+    die "codesign failed for: $1"
 }
 
 verify_one() {
