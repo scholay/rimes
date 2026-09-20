@@ -156,7 +156,7 @@ jobs:
           assert 'Developer ID identities are reserved for formal release packages.' in build_install
 
           release_workflow = Path(".github/workflows/release.yml").read_text()
-          assert release_workflow.count('prevent_self_review=true') == 2
+          assert release_workflow.count('must have a populated required_reviewers rule') == 2
           assert release_workflow.count('must disallow administrator bypass') == 2
           assert release_workflow.count('must allow the formal tag pattern v*') == 2
           assert 'Could not destroy the temporary signing keychain; refusing to stage release assets.' in release_workflow
