@@ -123,7 +123,7 @@ case "$COMMAND" in
         [[ -z "$ARG" ]] || die "正式版只接受一个版本或升级类型。"
         ARG="$COMMAND"
         ;;
-    *) die "未知命令: $COMMAND（使用 --help 查看用法）" ;;
+    *) die "未知命令: ${COMMAND}（使用 --help 查看用法）" ;;
 esac
 
 cd "$(dirname "$0")/.."
@@ -192,11 +192,11 @@ for workflow in "${REQUIRED_WORKFLOWS[@]}"; do
     if printf '%s\n' "$rows" | awk -F'\t' '$3 == "success" { found = 1 } END { exit !found }'; then
         success "CI · $workflow"
     elif printf '%s\n' "$rows" | awk -F'\t' '$2 != "completed" { found = 1 } END { exit !found }'; then
-        gate "「$workflow」仍在运行；等它通过后再发布。"
+        gate "「${workflow}」仍在运行；等它通过后再发布。"
     elif [[ -z "$rows" ]]; then
-        gate "origin/main 没有「$workflow」的运行记录。"
+        gate "origin/main 没有「${workflow}」的运行记录。"
     else
-        gate "「$workflow」没有通过；main 不可发布。"
+        gate "「${workflow}」没有通过；main 不可发布。"
     fi
 done
 
@@ -289,7 +289,7 @@ fi
 
 # Re-check after confirmation to narrow the window for a concurrent merge or tag.
 [[ "$(remote_main_sha)" == "$fetch_main" ]] || die "确认期间 origin/main 已变化；请重新运行。"
-remote_tag_exists "$TAG" && die "确认期间远端出现了 $TAG；已中止且不会覆盖。"
+remote_tag_exists "$TAG" && die "确认期间远端出现了 ${TAG}；已中止且不会覆盖。"
 
 git tag "$TAG" "$fetch_main"
 info "推送 $TAG 到 $EXPECTED_REPO..."
