@@ -1044,6 +1044,15 @@ final class MailboxStore {
                                 maximum: maximumSourceFieldCharacters) else {
             return false
         }
+        if let providerRoute = source.providerRoute {
+            // Profile/model route snapshots are meaningful only for the
+            // catalog-backed API connector. CLI sources retain their existing
+            // process-owned selection and must never acquire a profile route.
+            guard source.kind == .openAICompatible,
+                  providerRoute.profileRevision > 0 else {
+                return false
+            }
+        }
         if source.kind.isAIConnector {
             return source.replyCapability == .aiContinuation
         }

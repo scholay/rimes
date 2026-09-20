@@ -281,6 +281,7 @@ private enum AITextMailboxGenerationSmoke {
             && inlineOutputMenuOnly()
             && inlineSelectionSnapshotAndRouting()
             && directConversationStart()
+            && dynamicProviderRouteFreezeAndRecovery()
             && mailboxJSONValidation()
             && mailboxCapacityAdmission()
             && backgroundTerminalLifecycle()
@@ -692,6 +693,178 @@ private enum AITextMailboxGenerationSmoke {
             && emptyError == .invalidMessage
             && oversizedError == .invalidMessage
             && source.stagedText == "buffer-must-remain"
+    }
+
+    /// A dynamic API conversation must retain its exact profile/model revision
+    /// for every turn. If that revision becomes stale, or a new-style source
+    /// somehow loses its route reference, Mailbox must not fall back to the
+    /// current OpenAI-compatible selection.
+    private static func dynamicProviderRouteFreezeAndRecovery() -> Bool {
+        let profileID = UUID()
+        let routeID = UUID()
+        let reference = AIProviderRouteReference(
+            profileID: profileID,
+            routeID: routeID,
+            profileRevision: 1
+        )
+        let route = AIModelRoute(
+            id: routeID,
+            displayName: "Frozen chat",
+            modelID: "frozen-model",
+            adapter: .openAIChatCompletions,
+            capabilities: [.textGeneration, .streamingText]
+        )
+        let profile = AIProviderProfile(
+            id: profileID,
+            displayName: "Frozen Provider",
+            baseURL: "https://provider.example/v1",
+            routes: [route],
+            requiresAPIKey: true,
+            revision: 1
+        )
+        let resolved = AIProviderResolvedRoute(
+            reference: reference,
+            profile: profile,
+            route: route,
+            apiKey: nil
+        )
+        let legacyReference = AIProviderRouteReference(
+            profileID: AIProviderProfile.legacyOpenAICompatibleID,
+            routeID: AIProviderProfile.legacyOpenAICompatibleRouteID,
+            profileRevision: 1
+        )
+        let legacyRoute = AIModelRoute(
+            id: legacyReference.routeID,
+            displayName: "Migrated legacy chat",
+            modelID: "legacy-stable-model",
+            adapter: .openAIChatCompletions,
+            capabilities: [.textGeneration, .streamingText]
+        )
+        let legacyProfile = AIProviderProfile(
+            id: legacyReference.profileID,
+            displayName: "CometAPI",
+            baseURL: "https://legacy.example/v1",
+            routes: [legacyRoute],
+            requiresAPIKey: true,
+            revision: 1
+        )
+        let resolvedLegacy = AIProviderResolvedRoute(
+            reference: legacyReference,
+            profile: legacyProfile,
+            route: legacyRoute,
+            apiKey: nil
+        )
+        let provider = AITextMailboxSmokeProvider(kind: .openAICompatible)
+        let store = AITextMailboxSmokeStore()
+        var routeIsAvailable = true
+        let coordinator = AITextMailboxGenerationCoordinator(
+            dependencies: .init(
+                store: store,
+                providerResolver: { kind in
+                    kind == .openAICompatible ? provider : nil
+                },
+                providerRouteResolver: { requested in
+                    if requested == reference, routeIsAvailable {
+                        return resolved
+                    }
+                    if requested == legacyReference {
+                        return resolvedLegacy
+                    }
+                    throw AIProviderProfileStoreError.staleRoute
+                },
+                legacyProviderRouteReferenceResolver: { legacyReference }
+            )
+        )
+
+        let handle: MailboxGenerationHandle
+        do {
+            handle = try coordinator.startConversation(
+                connectorKind: .openAICompatible,
+                modelID: "ignored-model",
+                providerRoute: reference,
+                prompt: "first routed question"
+            )
+        } catch {
+            return false
+        }
+        guard provider.requests.count == 1,
+              provider.requests[0].modelID == "frozen-model",
+              provider.requests[0].providerRoute == reference,
+              let thread = store.thread(id: handle.threadID),
+              thread.source.providerRoute == reference,
+              thread.source.identifier == profileID.uuidString else {
+            return false
+        }
+        provider.finish(.success([
+            AITextProviderBlock(index: 0, text: "first routed answer", title: nil),
+        ]), request: 0)
+
+        routeIsAvailable = false
+        let requestCountBeforeStaleReply = provider.requests.count
+        let messageCountBeforeStaleReply = thread.messages.count + 1
+        do {
+            _ = try coordinator.submitComposer(
+                threadID: handle.threadID,
+                body: "must not reroute"
+            )
+            return false
+        } catch let error as AITextMailboxGenerationError {
+            guard case .connectorUnavailable = error else { return false }
+        } catch {
+            return false
+        }
+        guard provider.requests.count == requestCountBeforeStaleReply,
+              store.thread(id: handle.threadID)?.messages.count
+                == messageCountBeforeStaleReply else {
+            return false
+        }
+
+        let missingReferenceThread = store.addAIThread(
+            source: .openAICompatible(
+                identifier: profileID.uuidString,
+                model: "frozen-model",
+                displayName: "Frozen Provider"
+            ),
+            format: .plain
+        )
+        do {
+            _ = try coordinator.submitComposer(
+                threadID: missingReferenceThread,
+                body: "missing route"
+            )
+            return false
+        } catch let error as AITextMailboxGenerationError {
+            guard case .connectorUnavailable = error else { return false }
+        } catch {
+            return false
+        }
+        guard provider.requests.count == requestCountBeforeStaleReply else {
+            return false
+        }
+
+        // Pre-catalog sources remain compatible only through their stable
+        // migrated legacy route—not through the currently selected provider.
+        let legacyThread = store.addAIThread(
+            source: .openAICompatible(model: "legacy-model"),
+            format: .plain
+        )
+        do {
+            _ = try coordinator.submitComposer(
+                threadID: legacyThread,
+                body: "legacy continuation"
+            )
+        } catch {
+            return false
+        }
+        guard provider.requests.count == requestCountBeforeStaleReply + 1,
+              provider.requests.last?.modelID == "legacy-stable-model",
+              provider.requests.last?.providerRoute == legacyReference else {
+            return false
+        }
+        provider.finish(.success([
+            AITextProviderBlock(index: 0, text: "legacy answer", title: nil),
+        ]), request: requestCountBeforeStaleReply)
+        return coordinator.activeJobCount == 0
     }
 
     private static func mailboxJSONValidation() -> Bool {

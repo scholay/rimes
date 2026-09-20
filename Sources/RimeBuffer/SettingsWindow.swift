@@ -509,6 +509,59 @@ enum SettingsWindowPresentationRules {
     }
 }
 
+/// The gateway remains one local MCP server; these choices only change the
+/// client-side configuration format shown in Settings.
+private enum GatewayClientConfiguration: Int, CaseIterable {
+    case cursor
+    case codex
+    case claudeCode
+    case genericMCP
+
+    static let redactedToken = "••••••••"
+
+    var title: String {
+        switch self {
+        case .cursor: return "Cursor"
+        case .codex: return "Codex"
+        case .claudeCode: return "Claude Code"
+        case .genericMCP: return "通用 MCP"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .cursor:
+            return "粘贴到项目的 .cursor/mcp.json 或用户级 ~/.cursor/mcp.json。"
+        case .codex:
+            return "粘贴到 ~/.codex/config.toml；令牌通过环境变量提供，不写进配置文件。"
+        case .claudeCode:
+            return "粘贴到项目的 .mcp.json，或复制下方可选的命令在终端注册。"
+        case .genericMCP:
+            return "适用于接受 Streamable HTTP MCP JSON 配置的客户端。"
+        }
+    }
+
+    var supplementaryTitle: String? {
+        switch self {
+        case .codex: return "环境变量（当前预览已脱敏）"
+        case .claudeCode: return "终端命令（可选，当前预览已脱敏）"
+        case .cursor, .genericMCP: return nil
+        }
+    }
+
+    var supplementaryCopyTitle: String? {
+        switch self {
+        case .codex: return "复制环境变量"
+        case .claudeCode: return "复制终端命令"
+        case .cursor, .genericMCP: return nil
+        }
+    }
+
+    var copyStatus: String {
+        "已复制 \(title) 配置"
+    }
+}
+
 /// Central settings surface for input schemas, candidate UI, buffer mode,
 /// AI/local connectors, and diagnostics.
 final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDelegate {
@@ -568,25 +621,31 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     )
     private let resetOnAppSwitchCheck = RimeFixedAccentSwitch(frame: .zero)
     private let gatewayEnableCheck = RimeFixedAccentSwitch(frame: .zero)
+    private let gatewayClientTabs = SettingsPointingSegmentedControl(
+        labels: GatewayClientConfiguration.allCases.map(\.title),
+        trackingMode: .selectOne,
+        target: nil,
+        action: nil
+    )
+    private var selectedGatewayClient = GatewayClientConfiguration.cursor
     private let gatewayConfigField = NSTextField(string: "")
     private let gatewayCopyConfigButton = SettingsPointingButton(
         title: "复制配置",
         target: nil,
         action: nil
     )
-    private let gatewayClaudeDisclosureButton = SettingsPointingButton(
-        title: "Claude Code 一键注册（可选）",
+    private let gatewaySupplementaryField = NSTextField(string: "")
+    private let gatewayCopySupplementaryButton = SettingsPointingButton(
+        title: "复制",
         target: nil,
         action: nil
     )
-    private let gatewayCommandField = NSTextField(string: "")
-    private let gatewayCopyButton = SettingsPointingButton(
-        title: "复制 Claude Code 命令",
-        target: nil,
-        action: nil
-    )
-    private var gatewayClaudeDisclosureOpen = false
+    private let aiProviderPicker = RimeFixedAccentPopUpButton()
+    private var selectedAIProviderID: UUID?
+    private var selectedAIProviderDocumentationURL: URL?
+    private let aiProviderNameField = NSTextField(string: "")
     private let aiBaseURLField = NSTextField(string: "")
+    private let aiDocumentationURLField = NSTextField(string: "")
     private let aiModelField = NSTextField(string: "")
     private let aiAPIKeyField = NSSecureTextField(string: "")
     private let aiConfigurationStatus = NSTextField(labelWithString: "")
@@ -1674,6 +1733,17 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         gatewayEnableCheck.target = self
         gatewayEnableCheck.action = #selector(gatewayToggled)
         gatewayEnableCheck.setAccessibilityLabel("启用本地网关")
+        gatewayClientTabs.target = self
+        gatewayClientTabs.action = #selector(gatewayClientChosen(_:))
+        gatewayClientTabs.segmentStyle = .rounded
+        gatewayClientTabs.segmentDistribution = .fillEqually
+        gatewayClientTabs.selectedSegmentBezelColor = RimeUI.accentGreen
+        gatewayClientTabs.controlSize = .small
+        gatewayClientTabs.translatesAutoresizingMaskIntoConstraints = false
+        gatewayClientTabs.widthAnchor.constraint(equalToConstant: 626).isActive = true
+        for client in GatewayClientConfiguration.allCases {
+            gatewayClientTabs.setToolTip(client.title, forSegment: client.rawValue)
+        }
         gatewayConfigField.isEditable = false
         gatewayConfigField.isSelectable = true
         gatewayConfigField.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
@@ -1683,37 +1753,37 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         gatewayConfigField.widthAnchor.constraint(equalToConstant: 626).isActive = true
         gatewayCopyConfigButton.target = self
         gatewayCopyConfigButton.action = #selector(copyGatewayConfig)
-        gatewayClaudeDisclosureButton.target = self
-        gatewayClaudeDisclosureButton.action = #selector(toggleGatewayClaudeDisclosure)
-        gatewayClaudeDisclosureButton.isBordered = false
-        gatewayClaudeDisclosureButton.alignment = .left
-        gatewayClaudeDisclosureButton.imagePosition = .imageTrailing
-        gatewayClaudeDisclosureButton.wantsLayer = true
-        gatewayClaudeDisclosureButton.layer?.cornerRadius = 6
-        gatewayClaudeDisclosureButton.layer?.borderColor = RimeUI.border.cgColor
-        gatewayClaudeDisclosureButton.layer?.borderWidth = SettingsVisualStyle.hairline(
-            backingScale: window?.backingScaleFactor
-        )
-        gatewayClaudeDisclosureButton.translatesAutoresizingMaskIntoConstraints = false
-        gatewayClaudeDisclosureButton.widthAnchor.constraint(equalToConstant: 626).isActive = true
-        gatewayClaudeDisclosureButton.heightAnchor.constraint(equalToConstant: 30).isActive = true
-        gatewayCommandField.isEditable = false
-        gatewayCommandField.isSelectable = true
-        gatewayCommandField.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
-        gatewayCommandField.lineBreakMode = .byCharWrapping
-        gatewayCommandField.maximumNumberOfLines = 4
-        gatewayCommandField.translatesAutoresizingMaskIntoConstraints = false
-        gatewayCommandField.widthAnchor.constraint(equalToConstant: 626).isActive = true
-        gatewayCopyButton.target = self
-        gatewayCopyButton.action = #selector(copyGatewayCommand)
+        gatewaySupplementaryField.isEditable = false
+        gatewaySupplementaryField.isSelectable = true
+        gatewaySupplementaryField.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        gatewaySupplementaryField.lineBreakMode = .byCharWrapping
+        gatewaySupplementaryField.maximumNumberOfLines = 4
+        gatewaySupplementaryField.translatesAutoresizingMaskIntoConstraints = false
+        gatewaySupplementaryField.widthAnchor.constraint(equalToConstant: 626).isActive = true
+        gatewayCopySupplementaryButton.target = self
+        gatewayCopySupplementaryButton.action = #selector(copyGatewaySupplementaryConfiguration)
 
-        aiBaseURLField.placeholderString = "https://api.openai.com/v1"
+        aiProviderPicker.target = self
+        aiProviderPicker.action = #selector(aiProviderSelected(_:))
+        aiProviderPicker.translatesAutoresizingMaskIntoConstraints = false
+        aiProviderPicker.widthAnchor.constraint(equalToConstant: 236).isActive = true
+        aiProviderNameField.placeholderString = "例如：CometAPI / OpenRouter"
+        aiProviderNameField.font = .systemFont(ofSize: 11)
         aiBaseURLField.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        aiModelField.placeholderString = "模型名称"
+        aiBaseURLField.placeholderString = "https://api.openai.com/v1"
+        aiDocumentationURLField.placeholderString = "https://provider.example/docs（可选）"
+        aiDocumentationURLField.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        aiModelField.placeholderString = "普通文本模型（留空即停用）"
         aiModelField.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        aiAPIKeyField.placeholderString = "API Key（可留空）"
+        aiAPIKeyField.placeholderString = "API Key（留空保持不变）"
         aiAPIKeyField.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        for field in [aiBaseURLField, aiModelField, aiAPIKeyField] {
+        for field in [
+            aiProviderNameField,
+            aiBaseURLField,
+            aiDocumentationURLField,
+            aiModelField,
+            aiAPIKeyField,
+        ] {
             field.translatesAutoresizingMaskIntoConstraints = false
             field.widthAnchor.constraint(equalToConstant: 420).isActive = true
         }
@@ -2879,26 +2949,26 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         }
 
         let gatewayEnabled = LocalGateway.shared.enabled
+        gatewayClientTabs.removeFromSuperview()
         gatewayCopyConfigButton.removeFromSuperview()
         gatewayConfigField.removeFromSuperview()
-        gatewayClaudeDisclosureButton.removeFromSuperview()
-        gatewayCommandField.removeFromSuperview()
-        gatewayCopyButton.removeFromSuperview()
+        gatewaySupplementaryField.removeFromSuperview()
+        gatewayCopySupplementaryButton.removeFromSuperview()
+        refreshGatewayClientConfigurationPreview()
+        gatewayClientTabs.isEnabled = gatewayEnabled
         gatewayCopyConfigButton.isEnabled = gatewayEnabled
-        gatewayClaudeDisclosureButton.isEnabled = gatewayEnabled
-        gatewayCopyButton.isEnabled = gatewayEnabled
-        gatewayClaudeDisclosureButton.image = NSImage(
-            systemSymbolName: gatewayClaudeDisclosureOpen ? "chevron.up" : "chevron.down",
-            accessibilityDescription: gatewayClaudeDisclosureOpen ? "收起" : "展开"
-        )?.withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
-        gatewayClaudeDisclosureButton.setAccessibilityExpanded(
-            gatewayClaudeDisclosureOpen
-        )
+        gatewayCopySupplementaryButton.isEnabled = gatewayEnabled
 
-        let configurationTitle = NSTextField(labelWithString: "接入配置")
+        let clientDetail = NSTextField(wrappingLabelWithString: selectedGatewayClient.detail)
+        clientDetail.font = .systemFont(ofSize: 11)
+        clientDetail.textColor = RimeUI.textMuted
+        clientDetail.translatesAutoresizingMaskIntoConstraints = false
+        clientDetail.widthAnchor.constraint(equalToConstant: 626).isActive = true
+
+        let configurationTitle = NSTextField(labelWithString: "配置预览（令牌已脱敏）")
         configurationTitle.font = .systemFont(ofSize: 11, weight: .semibold)
         configurationTitle.textColor = RimeUI.textPrimary
-        configurationTitle.toolTip = "标准 MCP（Streamable HTTP）。Cursor、Codex、Claude Code 等客户端通用。"
+        configurationTitle.toolTip = "预览永不读取或显示真实令牌；只有点按复制时才生成可直接使用的配置。"
         configurationTitle.setContentCompressionResistancePriority(
             .defaultLow,
             for: .horizontal
@@ -2915,26 +2985,41 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         configurationHeader.widthAnchor.constraint(equalToConstant: 626).isActive = true
 
         var configurationViews: [NSView] = [
+            gatewayClientTabs,
+            clientDetail,
             configurationHeader,
             gatewayConfigField,
-            gatewayClaudeDisclosureButton,
         ]
-        if gatewayClaudeDisclosureOpen {
-            let commandActions = NSStackView(views: [gatewayCopyButton, flexSpacer()])
-            commandActions.orientation = .horizontal
-            commandActions.alignment = .centerY
-            commandActions.translatesAutoresizingMaskIntoConstraints = false
-            commandActions.widthAnchor.constraint(equalToConstant: 626).isActive = true
+        if let supplementaryTitle = selectedGatewayClient.supplementaryTitle,
+           let supplementaryCopyTitle = selectedGatewayClient.supplementaryCopyTitle {
+            let supplementaryLabel = NSTextField(labelWithString: supplementaryTitle)
+            supplementaryLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+            supplementaryLabel.textColor = RimeUI.textPrimary
+            supplementaryLabel.setContentCompressionResistancePriority(
+                .defaultLow,
+                for: .horizontal
+            )
+            gatewayCopySupplementaryButton.title = supplementaryCopyTitle
+            let supplementaryHeader = NSStackView(views: [
+                supplementaryLabel,
+                flexSpacer(),
+                gatewayCopySupplementaryButton,
+            ])
+            supplementaryHeader.orientation = .horizontal
+            supplementaryHeader.alignment = .top
+            supplementaryHeader.spacing = 12
+            supplementaryHeader.translatesAutoresizingMaskIntoConstraints = false
+            supplementaryHeader.widthAnchor.constraint(equalToConstant: 626).isActive = true
             configurationViews.append(contentsOf: [
-                gatewayCommandField,
-                commandActions,
+                supplementaryHeader,
+                gatewaySupplementaryField,
             ])
         }
 
         return contentColumn([
             settingsRow(
                 title: "启用本地网关",
-                detail: "允许本机智能体通过标准 MCP / HTTP 推送待确认内容。",
+                detail: "允许本机智能体通过标准 MCP / HTTP 推送待确认内容；配置仅指向 127.0.0.1。",
                 symbolName: "network",
                 control: gatewayEnableCheck
             ),
@@ -3027,40 +3112,342 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             ])
 
         case .openAICompatible:
-            refreshAIModelConfiguration()
-            aiBaseURLField.removeFromSuperview()
-            aiModelField.removeFromSuperview()
-            aiAPIKeyField.removeFromSuperview()
-            aiConfigurationStatus.removeFromSuperview()
-            let save = SettingsPointingButton(
-                title: "保存配置",
-                target: self,
-                action: #selector(saveAIModelConfiguration)
-            )
-            let clearKey = SettingsPointingButton(
-                title: "清除密钥",
-                target: self,
-                action: #selector(clearAIModelAPIKey)
-            )
-            let actions = NSStackView(views: [save, clearKey, flexSpacer()])
-            actions.orientation = .horizontal
-            actions.alignment = .centerY
-            actions.spacing = 8
-            actions.translatesAutoresizingMaskIntoConstraints = false
-            actions.widthAnchor.constraint(equalToConstant: 626).isActive = true
-            detailPanel = connectorDetailPanel([
-                labeledSettingsRow("Base URL", control: aiBaseURLField),
-                labeledSettingsRow("模型", control: aiModelField),
-                labeledSettingsRow("API Key", control: aiAPIKeyField),
-                actions,
-                aiConfigurationStatus,
-            ])
+            detailPanel = aiProviderProfilesDetailPanel()
         }
 
         return contentColumn([
             aiConnectorSelectionView(),
             detailPanel,
         ])
+    }
+
+    private func aiProviderProfilesDetailPanel() -> NSView {
+        aiProviderPicker.removeFromSuperview()
+        aiProviderNameField.removeFromSuperview()
+        aiBaseURLField.removeFromSuperview()
+        aiDocumentationURLField.removeFromSuperview()
+        aiModelField.removeFromSuperview()
+        aiAPIKeyField.removeFromSuperview()
+        aiConfigurationStatus.removeFromSuperview()
+
+        let statuses = refreshAIProviderProfileConfiguration()
+        let selectedStatus = statuses.first(where: { $0.id == selectedAIProviderID })
+        let hasSelectedProfile = selectedStatus != nil
+
+        let newProvider = SettingsPointingButton(
+            title: "新建",
+            target: self,
+            action: #selector(createAIProviderProfile)
+        )
+        let addOpenRouter = SettingsPointingButton(
+            title: "添加 OpenRouter",
+            target: self,
+            action: #selector(createOpenRouterAIProvider)
+        )
+        let deleteProvider = SettingsPointingButton(
+            title: "删除",
+            target: self,
+            action: #selector(confirmDeleteAIProviderProfile)
+        )
+        let save = SettingsPointingButton(
+            title: "保存 Provider",
+            target: self,
+            action: #selector(saveAIProviderProfile)
+        )
+        let clearKey = SettingsPointingButton(
+            title: "清除密钥",
+            target: self,
+            action: #selector(clearAIProviderAPIKey)
+        )
+        let setCurrentTextModel = SettingsPointingButton(
+            title: "设为当前文本模型",
+            target: self,
+            action: #selector(selectCurrentAIProviderTextRoute)
+        )
+        let queryModels = SettingsPointingButton(
+            title: "查询模型 / 测试连接",
+            target: self,
+            action: #selector(querySelectedAIProviderModels)
+        )
+        let selectedTextRoute = selectedStatus?.routes.first(where: {
+            $0.adapter == .openAIChatCompletions
+                && $0.isEnabled
+                && $0.modelID != nil
+        })
+        let canSelectTextRoute = selectedStatus?.isEnabled == true
+            && selectedTextRoute != nil
+            && (selectedStatus?.requiresAPIKey != true
+                || selectedStatus?.hasStoredAPIKey == true)
+        for button in [
+            newProvider,
+            addOpenRouter,
+            deleteProvider,
+            save,
+            clearKey,
+            setCurrentTextModel,
+            queryModels,
+        ] {
+            button.controlSize = .small
+        }
+        deleteProvider.isEnabled = hasSelectedProfile
+        save.isEnabled = hasSelectedProfile
+        clearKey.isEnabled = hasSelectedProfile && selectedStatus?.hasStoredAPIKey == true
+        setCurrentTextModel.isEnabled = canSelectTextRoute
+        queryModels.isEnabled = hasSelectedProfile
+            && (selectedStatus?.requiresAPIKey != true
+                || selectedStatus?.hasStoredAPIKey == true)
+
+        let pickerControls = NSStackView(views: [
+            aiProviderPicker,
+            newProvider,
+            addOpenRouter,
+            deleteProvider,
+        ])
+        pickerControls.orientation = .horizontal
+        pickerControls.alignment = .centerY
+        pickerControls.spacing = 8
+
+        var actionViews: [NSView] = [
+            save,
+            clearKey,
+            queryModels,
+            setCurrentTextModel,
+        ]
+        if selectedAIProviderDocumentationURL != nil {
+            let openDocumentation = SettingsPointingButton(
+                title: "打开文档",
+                target: self,
+                action: #selector(openSelectedAIProviderDocumentation)
+            )
+            openDocumentation.controlSize = .small
+            actionViews.append(openDocumentation)
+        }
+        actionViews.append(flexSpacer())
+        let actions = NSStackView(views: actionViews)
+        actions.orientation = .horizontal
+        actions.alignment = .centerY
+        actions.spacing = 8
+        actions.translatesAutoresizingMaskIntoConstraints = false
+        actions.widthAnchor.constraint(equalToConstant: 626).isActive = true
+
+        var views: [NSView] = [
+            labeledSettingsRow("Provider", control: pickerControls),
+            labeledSettingsRow("名称", control: aiProviderNameField),
+            labeledSettingsRow("Base URL", control: aiBaseURLField),
+            labeledSettingsRow("文档", control: aiDocumentationURLField),
+            labeledSettingsRow("文本模型", control: aiModelField),
+            labeledSettingsRow("API Key", control: aiAPIKeyField),
+            actions,
+            aiConfigurationStatus,
+        ]
+        if let selectedStatus {
+            views.append(sectionLabel("模型路由"))
+            views.append(contentsOf: selectedStatus.routes.map {
+                aiProviderRouteStatusView($0)
+            })
+        } else {
+            views.append(secondaryLabel(
+                "新建通用 OpenAI Chat Provider，或添加含 Native Decisions/Jev 专用路线的 OpenRouter Provider。"
+            ))
+        }
+        return connectorDetailPanel(views)
+    }
+
+    private func aiProviderRouteStatusView(
+        _ route: AIProviderRouteRedactedStatus
+    ) -> NSView {
+        let state = aiProviderRouteState(route)
+        let title = NSTextField(labelWithString: route.displayName)
+        title.font = .systemFont(ofSize: 11, weight: .semibold)
+        title.textColor = RimeUI.textPrimary
+        let model = NSTextField(labelWithString: route.modelID ?? "未选择模型")
+        model.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        model.textColor = RimeUI.textSecondary
+        model.lineBreakMode = .byTruncatingMiddle
+        model.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let header = NSStackView(views: [
+            title,
+            model,
+            flexSpacer(),
+            connectorStatusBadge(state.label, active: state.active),
+        ])
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 8
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        let detail = NSTextField(wrappingLabelWithString:
+            "Adapter：\(route.adapter.displayName)\n"
+                + "能力：\(aiProviderCapabilitiesDescription(route.capabilities))\n"
+                + "状态：\(state.detail)"
+        )
+        detail.font = .systemFont(ofSize: 10)
+        detail.textColor = RimeUI.textMuted
+        detail.translatesAutoresizingMaskIntoConstraints = false
+
+        let card = NSStackView(views: [header, detail])
+        card.orientation = .vertical
+        card.alignment = .leading
+        card.spacing = 5
+        card.edgeInsets = NSEdgeInsets(top: 9, left: 10, bottom: 9, right: 10)
+        card.wantsLayer = true
+        card.layer?.backgroundColor = RimeUI.surface3.cgColor
+        card.layer?.borderColor = RimeUI.border.cgColor
+        card.layer?.borderWidth = SettingsVisualStyle.hairline(
+            backingScale: window?.backingScaleFactor
+        )
+        card.layer?.cornerRadius = 8
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.widthAnchor.constraint(equalToConstant: 626).isActive = true
+        header.widthAnchor.constraint(equalTo: card.widthAnchor, constant: -20).isActive = true
+        detail.widthAnchor.constraint(equalTo: card.widthAnchor, constant: -20).isActive = true
+        return card
+    }
+
+    private func aiProviderRouteState(
+        _ route: AIProviderRouteRedactedStatus
+    ) -> (label: String, detail: String, active: Bool) {
+        if route.adapter == .openRouterDecisions {
+            let configured = route.isEnabled && route.modelID != nil
+            return (
+                configured ? "专用结构化路线" : "专用路线未配置",
+                "仅展示给显式使用结构化结果的功能；不参与普通文本模型选择。",
+                false
+            )
+        }
+        guard route.isEnabled else {
+            return ("已停用", "此路线已停用。", false)
+        }
+        guard route.modelID != nil else {
+            return ("未选择模型", "填写文本模型后才会成为可用路线。", false)
+        }
+        if route.adapter.supportsAITextBlocks {
+            return ("文本路线候选", "可由支持该 Adapter 的文本功能显式选用。", true)
+        }
+        return ("已配置", "等待匹配的请求 Adapter 接入。", false)
+    }
+
+    private func aiProviderCapabilitiesDescription(
+        _ capabilities: Set<AIModelCapability>
+    ) -> String {
+        let labels = AIModelCapability.allCases.compactMap { capability -> String? in
+            guard capabilities.contains(capability) else { return nil }
+            switch capability {
+            case .textGeneration: return "文本生成"
+            case .streamingText: return "流式文本"
+            case .jsonSchema: return "JSON Schema"
+            case .toolCalling: return "工具调用"
+            case .modelDiscovery: return "模型发现"
+            case .nativeStructuredOutput: return "原生结构化输出"
+            case .decision: return "决策"
+            }
+        }
+        return labels.isEmpty ? "未声明" : labels.joined(separator: " · ")
+    }
+
+    private func refreshAIProviderProfileConfiguration() -> [AIProviderProfileRedactedStatus] {
+        do {
+            let store = AIProviderProfileCatalogStore.shared
+            let catalog = try store.loadMigratingLegacyOpenAICompatibleIfNeeded()
+            let statuses = try store.redactedStatuses(
+                migratingLegacyOpenAICompatible: false
+            )
+            if let selectedAIProviderID,
+               !statuses.contains(where: { $0.id == selectedAIProviderID }) {
+                self.selectedAIProviderID = nil
+            }
+            if selectedAIProviderID == nil {
+                selectedAIProviderID = statuses.first?.id
+            }
+
+            aiProviderPicker.removeAllItems()
+            for status in statuses {
+                aiProviderPicker.addItem(
+                    withTitle: "\(status.displayName) · \(status.routes.count) 条路线"
+                )
+                aiProviderPicker.lastItem?.representedObject = status.id.uuidString
+            }
+            if let selectedAIProviderID,
+               let index = statuses.firstIndex(where: { $0.id == selectedAIProviderID }) {
+                aiProviderPicker.selectItem(at: index)
+            }
+
+            let selectedProfile = selectedAIProviderID.flatMap {
+                catalog.profile(id: $0)
+            }
+            let selectedStatus = selectedAIProviderID.flatMap { id in
+                statuses.first(where: { $0.id == id })
+            }
+            let textRoute = selectedProfile?.routes.first(where: {
+                $0.adapter == .openAIChatCompletions
+            })
+            selectedAIProviderDocumentationURL = aiProviderDocumentationURL(
+                selectedProfile?.documentationURL
+            )
+            aiProviderNameField.stringValue = selectedProfile?.displayName ?? ""
+            aiBaseURLField.stringValue = selectedProfile?.baseURL ?? ""
+            aiDocumentationURLField.stringValue = selectedProfile?.documentationURL ?? ""
+            aiModelField.stringValue = textRoute?.modelID ?? ""
+            aiAPIKeyField.stringValue = ""
+            aiProviderPicker.isEnabled = selectedProfile != nil
+            for field in [
+                aiProviderNameField,
+                aiBaseURLField,
+                aiDocumentationURLField,
+                aiModelField,
+                aiAPIKeyField,
+            ] {
+                field.isEnabled = selectedProfile != nil
+            }
+            if let selectedStatus {
+                aiAPIKeyField.placeholderString = selectedStatus.hasStoredAPIKey
+                    ? "已保存（留空保持不变）"
+                    : (selectedStatus.requiresAPIKey
+                        ? "尚未保存（此 Provider 需要 API Key）"
+                        : "API Key（可选；留空保持不变）")
+                aiConfigurationStatus.stringValue =
+                    "版本 \(selectedStatus.revision) · \(selectedStatus.isEnabled ? "已启用" : "已停用")"
+                        + " · 密钥：\(selectedStatus.hasStoredAPIKey ? "已保存（脱敏）" : "未保存")"
+                aiConfigurationStatus.textColor = RimeUI.textMuted
+            } else {
+                aiAPIKeyField.placeholderString = "先新建 Provider"
+                aiConfigurationStatus.stringValue =
+                    "尚未保存 Provider；现有单一 OpenAI 配置会在首次打开时自动迁移。"
+                aiConfigurationStatus.textColor = RimeUI.textMuted
+            }
+            return statuses
+        } catch {
+            selectedAIProviderID = nil
+            selectedAIProviderDocumentationURL = nil
+            aiProviderPicker.removeAllItems()
+            aiProviderPicker.isEnabled = false
+            for field in [
+                aiProviderNameField,
+                aiBaseURLField,
+                aiDocumentationURLField,
+                aiModelField,
+                aiAPIKeyField,
+            ] {
+                field.stringValue = ""
+                field.isEnabled = false
+            }
+            aiAPIKeyField.placeholderString = "无法读取已保存密钥"
+            aiConfigurationStatus.stringValue = "读取 Provider 配置失败，请检查本地文件权限"
+            aiConfigurationStatus.textColor = .systemRed
+            return []
+        }
+    }
+
+    private func aiProviderDocumentationURL(_ rawURL: String?) -> URL? {
+        guard let rawURL,
+              let components = URLComponents(string: rawURL),
+              components.scheme?.lowercased() == "https",
+              components.host?.isEmpty == false,
+              components.user == nil,
+              components.password == nil else {
+            return nil
+        }
+        return components.url
     }
 
     private func aiConnectorSelectionView() -> NSView {
@@ -3080,8 +3467,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 detail = "官方 CLI 授权"
                 symbol = "sparkles"
             case .openAICompatible:
-                cardTitle = "OpenAI API"
-                detail = "自定义兼容端点"
+                cardTitle = "AI Provider"
+                detail = "多个 OpenAI 兼容 Provider"
                 symbol = "network"
             }
             return SettingsChoiceCardView(
@@ -3109,30 +3496,65 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         return row
     }
 
-    /// Client-agnostic MCP server config — the `mcpServers` shape Claude Desktop,
-    /// Cursor, Cline, VS Code and most agents read. Any client that speaks
-    /// Streamable HTTP can drop this in.
-    private func gatewayConfigJSON(redactingToken: Bool = false) -> String {
-        let token = redactingToken ? "••••••••" : GatewayToken.current()
-        return """
-        {
-          "mcpServers": {
-            "etinput": {
-              "type": "http",
-              "url": "http://127.0.0.1:\(LocalGateway.shared.port)/mcp",
-              "headers": {
-                "Authorization": "Bearer \(token)"
+    /// Renders a client-side config only. Callers deliberately pass the token:
+    /// previews use the redacted placeholder, while copy actions fetch it at
+    /// the last possible moment.
+    private func gatewayConfiguration(
+        for client: GatewayClientConfiguration,
+        token: String
+    ) -> String {
+        let url = "http://127.0.0.1:\(LocalGateway.shared.port)/mcp"
+        switch client {
+        case .codex:
+            return """
+            [mcp_servers.rimes]
+            url = "\(url)"
+            bearer_token_env_var = "RIMES_MCP_TOKEN"
+            default_tools_approval_mode = "prompt"
+            """
+        case .cursor, .claudeCode, .genericMCP:
+            return """
+            {
+              "mcpServers": {
+                "rimes": {
+                  "type": "http",
+                  "url": "\(url)",
+                  "headers": {
+                    "Authorization": "Bearer \(token)"
+                  }
+                }
               }
             }
-          }
+            """
         }
-        """
     }
 
-    private func gatewayCommand(redactingToken: Bool = false) -> String {
-        let token = redactingToken ? "••••••••" : GatewayToken.current()
-        return "claude mcp add --transport http etinput http://127.0.0.1:\(LocalGateway.shared.port)/mcp "
-            + "--header \"Authorization: Bearer \(token)\""
+    private func gatewaySupplementaryConfiguration(
+        for client: GatewayClientConfiguration,
+        token: String
+    ) -> String? {
+        let url = "http://127.0.0.1:\(LocalGateway.shared.port)/mcp"
+        switch client {
+        case .codex:
+            return "export RIMES_MCP_TOKEN='\(token)'"
+        case .claudeCode:
+            return "claude mcp add --transport http rimes \(url) "
+                + "--header \"Authorization: Bearer \(token)\""
+        case .cursor, .genericMCP:
+            return nil
+        }
+    }
+
+    private func refreshGatewayClientConfigurationPreview() {
+        gatewayClientTabs.selectedSegment = selectedGatewayClient.rawValue
+        gatewayConfigField.stringValue = gatewayConfiguration(
+            for: selectedGatewayClient,
+            token: GatewayClientConfiguration.redactedToken
+        )
+        gatewaySupplementaryField.stringValue = gatewaySupplementaryConfiguration(
+            for: selectedGatewayClient,
+            token: GatewayClientConfiguration.redactedToken
+        ) ?? ""
     }
 
     @objc private func gatewayToggled() {
@@ -3145,63 +3567,290 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         }
     }
 
-    @objc private func toggleGatewayClaudeDisclosure() {
-        guard LocalGateway.shared.enabled else { return }
-        gatewayClaudeDisclosureOpen.toggle()
+    @objc private func gatewayClientChosen(_ sender: NSSegmentedControl) {
+        guard let client = GatewayClientConfiguration(rawValue: sender.selectedSegment) else {
+            return
+        }
+        selectedGatewayClient = client
         DispatchQueue.main.async { [weak self] in
             self?.showCurrentRoute()
         }
     }
 
     @objc private func copyGatewayConfig() {
+        let token = selectedGatewayClient == .codex
+            ? GatewayClientConfiguration.redactedToken
+            : GatewayToken.current()
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(gatewayConfigJSON(), forType: .string)
-        settingsStatusLabel.stringValue = "已复制通用 MCP 配置"
+        NSPasteboard.general.setString(
+            gatewayConfiguration(for: selectedGatewayClient, token: token),
+            forType: .string
+        )
+        settingsStatusLabel.stringValue = selectedGatewayClient.copyStatus
         settingsStatusLabel.textColor = RimeUI.textMuted
     }
 
-    @objc private func copyGatewayCommand() {
+    @objc private func copyGatewaySupplementaryConfiguration() {
+        guard let configuration = gatewaySupplementaryConfiguration(
+            for: selectedGatewayClient,
+            token: GatewayToken.current()
+        ) else {
+            return
+        }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(gatewayCommand(), forType: .string)
-        settingsStatusLabel.stringValue = "已复制 Claude Code 注册命令"
+        NSPasteboard.general.setString(configuration, forType: .string)
+        settingsStatusLabel.stringValue = "已复制 \(selectedGatewayClient.title) 补充配置"
         settingsStatusLabel.textColor = RimeUI.textMuted
     }
 
-    @objc private func saveAIModelConfiguration() {
-        window?.makeFirstResponder(nil)
-        do {
-            let previous = try OpenAICompatibleConfigurationStore.shared.load()
-            let enteredKey = aiAPIKeyField.stringValue
-            let configuration = OpenAICompatibleConfiguration(
-                baseURL: aiBaseURLField.stringValue,
-                model: aiModelField.stringValue,
-                apiKey: enteredKey.isEmpty ? (previous?.apiKey ?? "") : enteredKey
-            )
-            try OpenAICompatibleConfigurationStore.shared.save(configuration)
-            refreshAIModelConfiguration(statusMessage: "通用 Open API 配置已保存")
-        } catch let error as AITextProviderError {
-            refreshAIModelConfiguration(statusMessage: error.userFacingMessage,
-                                        isError: true)
-        } catch {
-            refreshAIModelConfiguration(statusMessage: "保存失败，请检查本地目录权限",
-                                        isError: true)
+    @objc private func aiProviderSelected(_ sender: NSPopUpButton) {
+        guard let rawID = sender.selectedItem?.representedObject as? String,
+              let providerID = UUID(uuidString: rawID) else { return }
+        selectedAIProviderID = providerID
+        DispatchQueue.main.async { [weak self] in
+            self?.showCurrentRoute()
         }
     }
 
-    @objc private func clearAIModelAPIKey() {
+    @objc private func createAIProviderProfile() {
+        let profile = AIProviderProfile(
+            displayName: "新 OpenAI Provider",
+            baseURL: "https://api.openai.com/v1",
+            routes: [
+                AIModelRoute(
+                    displayName: "OpenAI Chat",
+                    adapter: .openAIChatCompletions,
+                    capabilities: [.textGeneration, .streamingText],
+                    isEnabled: false
+                ),
+            ],
+            requiresAPIKey: true
+        )
+        saveNewAIProviderProfile(profile, successMessage: "已新建通用 OpenAI Provider")
+    }
+
+    @objc private func createOpenRouterAIProvider() {
+        saveNewAIProviderProfile(
+            AIProviderProfile.openRouter(),
+            successMessage: "已添加 OpenRouter Provider；Native Decisions/Jev 保持为专用路线"
+        )
+    }
+
+    private func saveNewAIProviderProfile(
+        _ profile: AIProviderProfile,
+        successMessage: String
+    ) {
+        do {
+            let store = AIProviderProfileCatalogStore.shared
+            _ = try store.loadMigratingLegacyOpenAICompatibleIfNeeded()
+            let saved = try store.upsert(profile)
+            selectedAIProviderID = saved.id
+            refreshAIProviderPage(after: successMessage)
+        } catch {
+            presentAIProviderConfigurationError(error)
+        }
+    }
+
+    @objc private func saveAIProviderProfile() {
         window?.makeFirstResponder(nil)
         do {
-            guard var configuration = try OpenAICompatibleConfigurationStore.shared.load() else {
-                refreshAIModelConfiguration(statusMessage: "当前没有已保存的密钥")
-                return
+            let store = AIProviderProfileCatalogStore.shared
+            let catalog = try store.loadMigratingLegacyOpenAICompatibleIfNeeded()
+            guard let providerID = selectedAIProviderID,
+                  var profile = catalog.profile(id: providerID) else {
+                throw AIProviderProfileStoreError.missingProfile
             }
-            configuration.apiKey = ""
-            try OpenAICompatibleConfigurationStore.shared.save(configuration)
-            refreshAIModelConfiguration(statusMessage: "已清除本地 API Key")
+
+            let modelID = aiModelField.stringValue.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            let textRouteIndex = profile.routes.firstIndex(where: {
+                $0.adapter == .openAIChatCompletions
+            })
+            var textRoute = textRouteIndex.map { profile.routes[$0] }
+                ?? AIModelRoute(
+                    displayName: "OpenAI Chat",
+                    adapter: .openAIChatCompletions,
+                    capabilities: [.textGeneration, .streamingText],
+                    isEnabled: false
+                )
+            textRoute.modelID = modelID.isEmpty ? nil : modelID
+            textRoute.adapter = .openAIChatCompletions
+            textRoute.capabilities = [.textGeneration, .streamingText]
+            textRoute.isEnabled = !modelID.isEmpty
+            if let textRouteIndex {
+                profile.routes[textRouteIndex] = textRoute
+            } else {
+                profile.routes.append(textRoute)
+            }
+
+            profile.displayName = aiProviderNameField.stringValue
+            profile.baseURL = aiBaseURLField.stringValue
+            let documentationURL = aiDocumentationURLField.stringValue
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            profile.documentationURL = documentationURL.isEmpty ? nil : documentationURL
+            let enteredKey = aiAPIKeyField.stringValue
+            let secretUpdate: AIProviderSecretUpdate = enteredKey.isEmpty
+                ? .preserve
+                : .set(enteredKey)
+            let saved = try store.upsert(profile, secretUpdate: secretUpdate)
+            selectedAIProviderID = saved.id
+            refreshAIProviderPage(after: "已保存 Provider：\(saved.displayName)")
         } catch {
-            refreshAIModelConfiguration(statusMessage: "清除失败，请检查本地目录权限",
-                                        isError: true)
+            presentAIProviderConfigurationError(error)
         }
+    }
+
+    @objc private func clearAIProviderAPIKey() {
+        window?.makeFirstResponder(nil)
+        do {
+            let store = AIProviderProfileCatalogStore.shared
+            let catalog = try store.loadMigratingLegacyOpenAICompatibleIfNeeded()
+            guard let providerID = selectedAIProviderID,
+                  let profile = catalog.profile(id: providerID) else {
+                throw AIProviderProfileStoreError.missingProfile
+            }
+            let saved = try store.upsert(profile, secretUpdate: .clear)
+            selectedAIProviderID = saved.id
+            refreshAIProviderPage(after: "已清除 \(saved.displayName) 的本地 API Key")
+        } catch {
+            presentAIProviderConfigurationError(error)
+        }
+    }
+
+    @objc private func selectCurrentAIProviderTextRoute() {
+        do {
+            let store = AIProviderProfileCatalogStore.shared
+            let catalog = try store.loadMigratingLegacyOpenAICompatibleIfNeeded()
+            guard let providerID = selectedAIProviderID,
+                  let profile = catalog.profile(id: providerID),
+                  profile.isEnabled else {
+                throw AIProviderProfileStoreError.missingProfile
+            }
+            guard let route = profile.routes.first(where: {
+                $0.adapter == .openAIChatCompletions
+                    && $0.isEnabled
+                    && $0.hasSelectedModel
+            }) else {
+                throw AIProviderProfileStoreError.invalidConfiguration(
+                    "请先保存一个已启用的 OpenAI Chat 文本模型"
+                )
+            }
+            if profile.requiresAPIKey,
+               !(try store.secretStore.hasStoredAPIKey(for: profile.id)) {
+                throw AIProviderProfileStoreError.missingAPIKey
+            }
+
+            let changed = AITextConnectorSelectionStore.shared.selectProviderRoute(
+                profileID: profile.id,
+                routeID: route.id
+            )
+            settingsStatusLabel.stringValue = changed
+                ? "已将 \(route.modelID ?? route.displayName) 设为当前文本模型"
+                : "\(route.modelID ?? route.displayName) 已是当前文本模型"
+            settingsStatusLabel.textColor = RimeUI.textMuted
+            if changed {
+                BufferWindowController.shared.refresh()
+                RIMESController.refreshActiveUI()
+            }
+        } catch {
+            presentAIProviderConfigurationError(error)
+        }
+    }
+
+    /// A user-initiated, no-billing model-directory request. It deliberately
+    /// does not select a returned model or invoke a generation route; model
+    /// choice remains an explicit edit and Jev remains outside text routing.
+    @objc private func querySelectedAIProviderModels() {
+        guard let profileID = selectedAIProviderID else { return }
+        aiConfigurationStatus.stringValue = "正在查询 Provider 官方模型目录…"
+        aiConfigurationStatus.textColor = RimeUI.textMuted
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result: Result<[String], Error>
+            do {
+                result = .success(
+                    try AIProviderModelCatalogProbe.fetch(profileID: profileID)
+                )
+            } catch {
+                result = .failure(error)
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.selectedAIProviderID == profileID else { return }
+                switch result {
+                case let .success(modelIDs):
+                    let examples = modelIDs.prefix(3).joined(separator: "、")
+                    self.aiConfigurationStatus.stringValue =
+                        "已查询 \(modelIDs.count) 个模型；例如：\(examples)"
+                    self.aiConfigurationStatus.textColor = RimeUI.textMuted
+                case let .failure(error):
+                    self.aiConfigurationStatus.stringValue =
+                        "模型目录查询失败：\(error.localizedDescription)"
+                    self.aiConfigurationStatus.textColor = .systemRed
+                }
+            }
+        }
+    }
+
+    @objc private func openSelectedAIProviderDocumentation() {
+        guard let url = selectedAIProviderDocumentationURL else {
+            aiConfigurationStatus.stringValue = "当前 Provider 没有可打开的 HTTPS 文档地址"
+            aiConfigurationStatus.textColor = .systemRed
+            return
+        }
+        guard NSWorkspace.shared.open(url) else {
+            aiConfigurationStatus.stringValue = "无法打开 Provider 文档"
+            aiConfigurationStatus.textColor = .systemRed
+            return
+        }
+        settingsStatusLabel.stringValue = "已在浏览器打开 Provider 文档"
+        settingsStatusLabel.textColor = RimeUI.textMuted
+    }
+
+    @objc private func confirmDeleteAIProviderProfile() {
+        guard let providerID = selectedAIProviderID else { return }
+        let profileName = aiProviderNameField.stringValue
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "删除 Provider？"
+        alert.informativeText =
+            "将删除本机保存的 \(profileName.isEmpty ? "此 Provider" : profileName) 配置和 API Key。此操作无法撤销。"
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        let completion: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.deleteAIProviderProfile(id: providerID)
+        }
+        if let window {
+            alert.beginSheetModal(for: window, completionHandler: completion)
+        } else {
+            completion(alert.runModal())
+        }
+    }
+
+    private func deleteAIProviderProfile(id providerID: UUID) {
+        do {
+            try AIProviderProfileCatalogStore.shared.removeProfile(id: providerID)
+            selectedAIProviderID = nil
+            refreshAIProviderPage(after: "已删除 Provider")
+        } catch {
+            presentAIProviderConfigurationError(error)
+        }
+    }
+
+    private func refreshAIProviderPage(after statusMessage: String) {
+        settingsStatusLabel.stringValue = statusMessage
+        settingsStatusLabel.textColor = RimeUI.textMuted
+        DispatchQueue.main.async { [weak self] in
+            self?.showCurrentRoute()
+        }
+    }
+
+    private func presentAIProviderConfigurationError(_ error: Error) {
+        aiConfigurationStatus.stringValue =
+            "Provider 配置失败：\(error.localizedDescription)"
+        aiConfigurationStatus.textColor = .systemRed
+        settingsStatusLabel.stringValue = "Provider 配置失败"
+        settingsStatusLabel.textColor = .systemRed
     }
 
     private func pluginsPage(subpageID: String) -> NSView {
@@ -3836,10 +4485,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             .closeAfterLastDeliveryEnabled ? .on : .off
         resetOnAppSwitchCheck.state = BufferModel.shared.resetOnAppSwitch ? .on : .off
         gatewayEnableCheck.state = LocalGateway.shared.enabled ? .on : .off
-        gatewayConfigField.stringValue = gatewayConfigJSON(redactingToken: true)
-        gatewayCommandField.stringValue = gatewayCommand(redactingToken: true)
+        refreshGatewayClientConfigurationPreview()
         refreshAIConnectorSelection()
-        refreshAIModelConfiguration()
+        _ = refreshAIProviderProfileConfiguration()
         if let idx = (0..<appearancePopUp.numberOfItems).first(where: {
             appearancePopUp.item(at: $0)?.representedObject as? String == RimeUI.appearance.rawValue
         }) {
@@ -3869,33 +4517,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         let selected = AITextConnectorSelectionStore.shared.selectedKind
         for kind in AITextProviderKind.allCases {
             aiConnectorRadios[kind]?.state = kind == selected ? .on : .off
-        }
-    }
-
-    private func refreshAIModelConfiguration(statusMessage: String? = nil,
-                                             isError: Bool = false) {
-        do {
-            let configuration = try OpenAICompatibleConfigurationStore.shared.load()
-            aiBaseURLField.stringValue = configuration?.baseURL ?? ""
-            aiModelField.stringValue = configuration?.model ?? ""
-            aiAPIKeyField.stringValue = ""
-            aiAPIKeyField.placeholderString = configuration?.apiKey.isEmpty == false
-                ? "已保存（留空保持不变）"
-                : "API Key（可留空）"
-            if let statusMessage {
-                aiConfigurationStatus.stringValue = statusMessage
-                aiConfigurationStatus.textColor = isError ? .systemRed : RimeUI.textSecondary
-            } else {
-                aiConfigurationStatus.stringValue = configuration == nil
-                    ? "尚未保存通用 Open API 端点"
-                    : "配置已保存在本机"
-                aiConfigurationStatus.textColor = RimeUI.textMuted
-            }
-        } catch {
-            aiAPIKeyField.stringValue = ""
-            aiAPIKeyField.placeholderString = "无法读取已保存密钥"
-            aiConfigurationStatus.stringValue = statusMessage ?? "读取配置失败，请检查本地文件权限"
-            aiConfigurationStatus.textColor = .systemRed
         }
     }
 

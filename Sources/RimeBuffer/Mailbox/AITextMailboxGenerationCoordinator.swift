@@ -72,6 +72,16 @@ final class AITextMailboxGenerationCoordinator {
     struct Dependencies {
         let store: any AITextMailboxPersisting
         let providerResolver: (AITextProviderKind) -> (any AITextProvider)?
+        /// Resolves only a frozen, non-secret profile/model reference. Keeping
+        /// this injectable lets Mailbox verify its no-reroute invariant without
+        /// coupling tests to a user's private provider catalog.
+        let providerRouteResolver: (AIProviderRouteReference) throws
+            -> AIProviderResolvedRoute
+        /// Historical Mailbox rows predate `MailboxSource.providerRoute`.
+        /// Their only safe continuation target is the deterministically
+        /// migrated legacy OpenAI-compatible profile, never today's selection.
+        let legacyProviderRouteReferenceResolver: () throws
+            -> AIProviderRouteReference
         let notice: (AITextMailboxGenerationNotice) -> Void
 
         init(
@@ -79,10 +89,28 @@ final class AITextMailboxGenerationCoordinator {
             providerResolver: @escaping (AITextProviderKind) -> (any AITextProvider)? = {
                 AITextConnectorRegistry.shared.provider(for: $0)
             },
+            providerRouteResolver: @escaping (AIProviderRouteReference) throws
+                -> AIProviderResolvedRoute = {
+                    try AIProviderProfileCatalogStore.shared.resolve($0)
+                },
+            legacyProviderRouteReferenceResolver: @escaping () throws
+                -> AIProviderRouteReference = {
+                    let catalogStore = AIProviderProfileCatalogStore.shared
+                    _ = try catalogStore
+                        .loadMigratingLegacyOpenAICompatibleIfNeeded()
+                    return try catalogStore.routeReference(
+                        profileID: AIProviderProfile.legacyOpenAICompatibleID,
+                        routeID: AIProviderProfile
+                            .legacyOpenAICompatibleRouteID
+                    )
+                },
             notice: @escaping (AITextMailboxGenerationNotice) -> Void = { _ in }
         ) {
             self.store = store
             self.providerResolver = providerResolver
+            self.providerRouteResolver = providerRouteResolver
+            self.legacyProviderRouteReferenceResolver =
+                legacyProviderRouteReferenceResolver
             self.notice = notice
         }
     }
@@ -92,6 +120,9 @@ final class AITextMailboxGenerationCoordinator {
         let sourceText: String
         let connectorKind: AITextProviderKind
         let modelID: String?
+        /// When present, this is the exact profile/model revision that must
+        /// execute the request. It is also persisted into MailboxSource.
+        let providerRoute: AIProviderRouteReference?
         let format: AITextContentFormat
         let preparedPrompt: String
     }
@@ -139,6 +170,7 @@ final class AITextMailboxGenerationCoordinator {
     func startConversation(
         connectorKind: AITextProviderKind,
         modelID: String?,
+        providerRoute: AIProviderRouteReference? = nil,
         prompt: String
     ) throws -> MailboxGenerationHandle {
         dispatchPrecondition(condition: .onQueue(.main))
@@ -150,10 +182,14 @@ final class AITextMailboxGenerationCoordinator {
                 <= AITextRuntimeLimits.maximumSourceBytes else {
             throw AITextMailboxGenerationError.invalidMessage
         }
+        let resolvedRoute = try resolvedProviderRoute(
+            providerRoute,
+            connectorKind: connectorKind
+        )
         let selection = try AITextGenerationPreferenceStore.normalized(
             AITextGenerationSelection(
                 connectorKind: connectorKind,
-                modelID: modelID,
+                modelID: resolvedRoute?.route.modelID ?? modelID,
                 mode: .ask,
                 destination: .inline,
                 format: .plain
@@ -164,6 +200,7 @@ final class AITextMailboxGenerationCoordinator {
             sourceText: normalizedPrompt,
             connectorKind: selection.connectorKind,
             modelID: selection.modelID,
+            providerRoute: resolvedRoute?.reference,
             format: .plain,
             preparedPrompt: try AITextRequestPlanner.initialPrompt(
                 sourceText: normalizedPrompt,
@@ -178,13 +215,24 @@ final class AITextMailboxGenerationCoordinator {
         _ plan: RequestPlan
     ) throws -> MailboxGenerationHandle {
         dispatchPrecondition(condition: .onQueue(.main))
-        let provider = try resolvedProvider(for: plan.connectorKind)
+        // Re-resolve immediately before persisting/launching. A profile edit
+        // between UI selection and this boundary makes the old reference stale
+        // rather than creating a thread that will silently use new settings.
+        _ = try resolvedProviderRoute(
+            plan.providerRoute,
+            connectorKind: plan.connectorKind
+        )
+        let provider = try resolvedProvider(
+            for: plan.connectorKind,
+            providerRoute: plan.providerRoute
+        )
         let handle: MailboxGenerationHandle
         do {
             handle = try dependencies.store.beginAIConversation(
                 source: mailboxSource(
                     connectorKind: plan.connectorKind,
-                    modelID: plan.modelID
+                    modelID: plan.modelID,
+                    providerRoute: plan.providerRoute
                 ),
                 title: nil,
                 prompt: plan.sourceText,
@@ -235,7 +283,17 @@ final class AITextMailboxGenerationCoordinator {
             guard let connectorKind = providerKind(for: thread.source) else {
                 throw AITextMailboxGenerationError.unsupportedConversationSource
             }
-            let provider = try resolvedProvider(for: connectorKind)
+            let providerRoute = try providerRouteForContinuation(
+                source: thread.source
+            )
+            let resolvedRoute = try resolvedProviderRoute(
+                providerRoute,
+                connectorKind: connectorKind
+            )
+            let provider = try resolvedProvider(
+                for: connectorKind,
+                providerRoute: providerRoute
+            )
             let turns = try conversationTurns(thread: thread, appendingUser: normalized)
             let responseFormat = thread.messages.reversed().first(where: {
                 $0.role == .inbound && $0.kind == .content
@@ -246,7 +304,7 @@ final class AITextMailboxGenerationCoordinator {
             )
             let selection = AITextGenerationSelection(
                 connectorKind: connectorKind,
-                modelID: thread.source.model,
+                modelID: resolvedRoute?.route.modelID ?? thread.source.model,
                 mode: .ask,
                 destination: .inline,
                 format: responseFormat
@@ -257,6 +315,7 @@ final class AITextMailboxGenerationCoordinator {
                 connectorKind: selection.connectorKind,
                 modelID: try AITextGenerationPreferenceStore.normalized(selection)
                     .modelID,
+                providerRoute: resolvedRoute?.reference,
                 format: responseFormat,
                 preparedPrompt: preparedPrompt
             )
@@ -296,7 +355,8 @@ final class AITextMailboxGenerationCoordinator {
                 requestID: plan.requestID,
                 sourceText: plan.sourceText,
                 preparedPrompt: plan.preparedPrompt,
-                modelID: plan.modelID
+                modelID: plan.modelID,
+                providerRoute: plan.providerRoute
             ),
             onEvent: { [weak self] event in
                 self?.performOnMain { coordinator in
@@ -386,7 +446,8 @@ final class AITextMailboxGenerationCoordinator {
                 response: body,
                 author: mailboxSource(
                     connectorKind: job.plan.connectorKind,
-                    modelID: job.plan.modelID
+                    modelID: job.plan.modelID,
+                    providerRoute: job.plan.providerRoute
                 ).displayName,
                 format: .plain
             )
@@ -419,7 +480,8 @@ final class AITextMailboxGenerationCoordinator {
                     response: response,
                     author: mailboxSource(
                         connectorKind: job.plan.connectorKind,
-                        modelID: job.plan.modelID
+                        modelID: job.plan.modelID,
+                        providerRoute: job.plan.providerRoute
                     ).displayName,
                     format: job.plan.format
                 )
@@ -453,7 +515,8 @@ final class AITextMailboxGenerationCoordinator {
     }
 
     private func resolvedProvider(
-        for kind: AITextProviderKind
+        for kind: AITextProviderKind,
+        providerRoute: AIProviderRouteReference? = nil
     ) throws -> any AITextProvider {
         guard let provider = dependencies.providerResolver(kind) else {
             throw AITextMailboxGenerationError.connectorUnavailable(
@@ -464,7 +527,85 @@ final class AITextMailboxGenerationCoordinator {
         case .ready:
             return provider
         case let .unavailable(message):
+            // The profile text provider's ambient availability represents the
+            // current global selection. A Mailbox thread carrying an exact
+            // validated route must not be rejected (or rerouted) just because
+            // a different route is selected elsewhere; `generate` receives
+            // and resolves the frozen reference again.
+            if kind == .openAICompatible, providerRoute != nil {
+                return provider
+            }
             throw AITextMailboxGenerationError.connectorUnavailable(message)
+        }
+    }
+
+    /// Validates a profile/model route captured at the conversation boundary.
+    /// Mailbox currently sends ordinary streaming text only through the OpenAI
+    /// Chat adapter; native Decisions routes and future protocol adapters are
+    /// deliberately rejected instead of being coerced into chat completions.
+    private func resolvedProviderRoute(
+        _ reference: AIProviderRouteReference?,
+        connectorKind: AITextProviderKind
+    ) throws -> AIProviderResolvedRoute? {
+        guard let reference else { return nil }
+        guard connectorKind == .openAICompatible else {
+            throw AITextMailboxGenerationError.connectorUnavailable(
+                "该连接器不能使用保存的 Provider 模型路由"
+            )
+        }
+        let resolved: AIProviderResolvedRoute
+        do {
+            resolved = try dependencies.providerRouteResolver(reference)
+        } catch {
+            // Do not fall back to the currently selected provider/model when
+            // the historical route was removed, disabled, or revised.
+            throw AITextMailboxGenerationError.connectorUnavailable(
+                "已保存的 Provider 模型路由不可用，请新建会话后重新选择模型"
+            )
+        }
+        guard resolved.reference == reference,
+              resolved.profile.id == reference.profileID,
+              resolved.profile.revision == reference.profileRevision,
+              resolved.route.id == reference.routeID,
+              resolved.route.adapter == .openAIChatCompletions,
+              resolved.route.capabilities.contains(.textGeneration),
+              resolved.route.capabilities.contains(.streamingText),
+              resolved.route.modelID != nil else {
+            throw AITextMailboxGenerationError.connectorUnavailable(
+                "已保存的 Provider 模型路由不能用于 Mailbox 对话"
+            )
+        }
+        return resolved
+    }
+
+    /// Historical OpenAI-compatible sources were stored before the profile
+    /// catalog existed. They remain readable, but a continuation is mapped to
+    /// the deterministic migrated Comet/legacy route—not today's selected
+    /// generic Provider. New dynamic sources always store their profile UUID
+    /// plus a route reference; a missing reference for one of those sources
+    /// fails closed.
+    private func providerRouteForContinuation(
+        source: MailboxSource
+    ) throws -> AIProviderRouteReference? {
+        guard source.kind == .openAICompatible else {
+            return source.providerRoute
+        }
+        if let reference = source.providerRoute {
+            return reference
+        }
+        if let identifier = source.identifier,
+           let profileID = UUID(uuidString: identifier),
+           profileID != AIProviderProfile.legacyOpenAICompatibleID {
+            throw AITextMailboxGenerationError.connectorUnavailable(
+                "该会话缺少已冻结的 Provider 模型路由，无法安全继续"
+            )
+        }
+        do {
+            return try dependencies.legacyProviderRouteReferenceResolver()
+        } catch {
+            throw AITextMailboxGenerationError.connectorUnavailable(
+                "历史 OpenAI API 配置不可用，无法安全继续该会话"
+            )
         }
     }
 
@@ -499,7 +640,8 @@ final class AITextMailboxGenerationCoordinator {
 
     private func mailboxSource(
         connectorKind: AITextProviderKind,
-        modelID: String?
+        modelID: String?,
+        providerRoute: AIProviderRouteReference?
     ) -> MailboxSource {
         switch connectorKind {
         case .codexCLI:
@@ -507,7 +649,11 @@ final class AITextMailboxGenerationCoordinator {
         case .claudeCodeCLI:
             return .claudeCodeCLI(model: modelID)
         case .openAICompatible:
-            return .openAICompatible(model: modelID)
+            return .openAICompatible(
+                identifier: providerRoute?.profileID.uuidString,
+                model: modelID,
+                providerRoute: providerRoute
+            )
         }
     }
 
@@ -603,6 +749,7 @@ extension AITextMailboxGenerationCoordinator: MailboxAIReplyCoordinating {
                 let handle = try self.startConversation(
                     connectorKind: selection.connectorKind,
                     modelID: selection.modelID,
+                    providerRoute: selection.providerRoute,
                     prompt: body
                 )
                 completion(.success(handle))

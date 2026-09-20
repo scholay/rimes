@@ -130,6 +130,11 @@ struct AITextProviderRequest: Equatable {
     /// Frozen at the request boundary. Nil means the provider's verified
     /// default; a connector must never re-read the workbench selector later.
     let modelID: String?
+    /// A non-secret Provider/route snapshot captured together with the
+    /// generation plan. Generic API requests must not consult the current
+    /// settings selection after this point: an edited endpoint or credential
+    /// must either match this revision or fail closed.
+    let providerRoute: AIProviderRouteReference?
     let outputContract: AITextProviderOutputContract
     /// Frozen by the workspace at the request boundary. Ordinary semantic
     /// block requests ignore this value and retain their existing behavior.
@@ -139,12 +144,14 @@ struct AITextProviderRequest: Equatable {
          sourceText: String,
          preparedPrompt: String? = nil,
          modelID: String? = nil,
+         providerRoute: AIProviderRouteReference? = nil,
          outputContract: AITextProviderOutputContract = .semanticBlocks,
          maximumAlternativeGuessCount: Int = 3) {
         self.requestID = requestID
         self.sourceText = sourceText
         self.preparedPrompt = preparedPrompt
         self.modelID = modelID
+        self.providerRoute = providerRoute
         self.outputContract = outputContract
         self.maximumAlternativeGuessCount = min(
             max(maximumAlternativeGuessCount, 1),
@@ -210,6 +217,13 @@ final class AITextConnectorSelectionStore {
 
     private enum Key {
         static let selectedKind = "plugins.ai-text.connector.selected.v1"
+        /// A selected generic-provider route is stored as stable UUIDs, never
+        /// as an endpoint, model credential, or revision. The revision is
+        /// resolved afresh only when a request plan is captured.
+        static let selectedProviderProfileID =
+            "plugins.ai-text.connector.provider-profile.v1"
+        static let selectedProviderRouteID =
+            "plugins.ai-text.connector.provider-route.v1"
     }
 
     private let defaults: UserDefaults
@@ -238,6 +252,65 @@ final class AITextConnectorSelectionStore {
             name: .aiTextConnectorDidChange,
             object: self,
             userInfo: ["previous": previous.rawValue, "current": kind.rawValue]
+        )
+        return true
+    }
+
+    /// Returns the currently selected generic Provider route, resolving its
+    /// latest revision for a *new* request. Existing requests carry their own
+    /// immutable reference and never call this method again.
+    func selectedProviderRouteReference(
+        catalogStore: AIProviderProfileCatalogStore = .shared
+    ) throws -> AIProviderRouteReference? {
+        let catalog = try catalogStore.loadMigratingLegacyOpenAICompatibleIfNeeded()
+        let selectedIDs: (UUID, UUID)?
+        if let profileRaw = defaults.string(forKey: Key.selectedProviderProfileID),
+           let routeRaw = defaults.string(forKey: Key.selectedProviderRouteID),
+           let profileID = UUID(uuidString: profileRaw),
+           let routeID = UUID(uuidString: routeRaw) {
+            selectedIDs = (profileID, routeID)
+        } else if selectedKind == .openAICompatible,
+                  let legacy = catalog.profile(
+                    id: AIProviderProfile.legacyOpenAICompatibleID
+                  ) {
+            selectedIDs = (legacy.id, AIProviderProfile.legacyOpenAICompatibleRouteID)
+        } else if let binding = catalog.binding(for: .primaryText) {
+            selectedIDs = (binding.profileID, binding.routeID)
+        } else {
+            selectedIDs = nil
+        }
+        guard let selectedIDs else { return nil }
+        return try catalogStore.routeReference(
+            profileID: selectedIDs.0,
+            routeID: selectedIDs.1
+        )
+    }
+
+    /// Makes one generic Provider route active for ordinary text generation.
+    /// The selected route is a local preference, while its mutable endpoint
+    /// and credential remain exclusively in the private profile store.
+    @discardableResult
+    func selectProviderRoute(profileID: UUID, routeID: UUID) -> Bool {
+        let previousKind = selectedKind
+        let previousProfile = defaults.string(forKey: Key.selectedProviderProfileID)
+        let previousRoute = defaults.string(forKey: Key.selectedProviderRouteID)
+        let profileRaw = profileID.uuidString
+        let routeRaw = routeID.uuidString
+        guard previousKind != .openAICompatible
+                || previousProfile != profileRaw
+                || previousRoute != routeRaw else {
+            return false
+        }
+        defaults.set(AITextProviderKind.openAICompatible.rawValue, forKey: Key.selectedKind)
+        defaults.set(profileRaw, forKey: Key.selectedProviderProfileID)
+        defaults.set(routeRaw, forKey: Key.selectedProviderRouteID)
+        NotificationCenter.default.post(
+            name: .aiTextConnectorDidChange,
+            object: self,
+            userInfo: [
+                "previous": previousKind.rawValue,
+                "current": AITextProviderKind.openAICompatible.rawValue,
+            ]
         )
         return true
     }
@@ -3421,7 +3494,7 @@ enum AITextOpenAIResponseDecoder {
     }
 }
 
-private final class AITextOpenAIStreamOperation: NSObject,
+final class AITextOpenAIStreamOperation: NSObject,
                                                    AITextCancellable,
                                                    URLSessionDataDelegate,
                                                    URLSessionTaskDelegate {
@@ -3860,7 +3933,7 @@ final class AITextConnectorRegistry: AITextProvider {
         let resolvedProviders = providers ?? [
             CodexCLITextProvider(),
             ClaudeCodeCLITextProvider(),
-            OpenAICompatibleTextProvider(),
+            AIProviderProfileTextProvider(),
         ]
         var indexed: [AITextProviderKind: any AITextProvider] = [:]
         for provider in resolvedProviders {
@@ -4106,6 +4179,14 @@ final class AITextPluginWorkspace: BufferDeliveryContentSource {
                 guard self?.kind == .openAICompatible else { return }
                 self?.configurationDidChange()
             })
+            observers.append(NotificationCenter.default.addObserver(
+                forName: .aiProviderProfilesDidChange,
+                object: AIProviderProfileCatalogStore.shared,
+                queue: .main
+            ) { [weak self] _ in
+                guard self?.kind == .openAICompatible else { return }
+                self?.configurationDidChange()
+            })
         }
         selectionDidChange()
     }
@@ -4209,7 +4290,8 @@ final class AITextPluginWorkspace: BufferDeliveryContentSource {
                 requestID: plan.requestID,
                 sourceText: plan.sourceText,
                 preparedPrompt: plan.preparedPrompt,
-                modelID: plan.selection.modelID
+                modelID: plan.selection.modelID,
+                providerRoute: plan.selection.providerRoute
             ),
             onEvent: { [weak self] event in
                 self?.performOnMain { workspace in

@@ -46,6 +46,15 @@ if let status = PasteClipboardHistoryCLI.handleIfRequested(
     exit(status)
 }
 
+// Provider setup is deliberately a narrow standalone command: it accepts a
+// credential only from protected interactive stdin and exits before AppKit/IMK
+// startup. The normal UI uses the same private profile store.
+if let status = AIProviderProfileCLI.handleIfRequested(
+    arguments: CommandLine.arguments
+) {
+    exit(Int32(status))
+}
+
 // Installer reconciliation deliberately runs each TIS mutation/verification
 // in a fresh process. Handle those private phases before any smoke, AppKit,
 // IMK, or librime bootstrap.
@@ -666,6 +675,9 @@ if CommandLine.arguments.contains("translation-smoke") {
 }
 if CommandLine.arguments.contains("ai-text-smoke") {
     exit(runAITextPluginSmokeTest() ? 0 : 1)
+}
+if CommandLine.arguments.contains("provider-profiles-smoke") {
+    exit(runAIProviderProfilesSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("ai-text-terminal-receipt-smoke") {
     exit(runAITextTerminalDeliveryReceiptSmokeTest() ? 0 : 1)
