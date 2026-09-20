@@ -104,6 +104,9 @@ final class CaptureEditor {
     private var closed = false
     private var monitor: Any?
     private var preview = false
+    private var modeControl: NSSegmentedControl?
+    private var toolButtons: [CaptureToolButton] = []
+    private var controlActions: [CaptureControlAction] = []
 
     init(record: CaptureRecord, store: CaptureStore) throws {
         self.record = record; self.store = store
@@ -186,13 +189,36 @@ final class CaptureEditor {
         }
         renderQueue.addOperation(operation)
     }
+    @objc private func modeChanged(_ sender: NSSegmentedControl) {
+        preview = sender.selectedSegment == 1
+        render()
+    }
+
+    /// The rail shows which tool is active, so every change has to reach it.
+    private func syncToolSelection() {
+        for button in toolButtons {
+            button.isActiveTool = button.accessibilityLabel() == canvas.tool.title
+        }
+    }
+
     private func build() {
         let drag = CaptureCurrentDragView()
         drag.snapshot = { [weak self] in guard let self, let document = self.document else { return nil }; return (document, self.store.directory(self.record.id), self.store, self.record.id) }
+        // Annotate and preview are two states of one thing, so they are one
+        // control. As two identical buttons neither showed which was active.
+        let mode = NSSegmentedControl(
+            labels: ["标注", "效果预览"],
+            trackingMode: .selectOne,
+            target: self,
+            action: #selector(modeChanged(_:))
+        )
+        mode.segmentStyle = .rounded
+        mode.selectedSegment = preview ? 1 : 0
+        mode.font = .systemFont(ofSize: 12)
+        modeControl = mode
         let toolbar = CaptureUI.row([
             CaptureUI.label("Capsule", size: 16),
-            CaptureButton("标注") { self.preview = false; self.render() },
-            CaptureButton("效果预览") { self.preview = true; self.render() },
+            mode,
             CaptureButton("撤销") { self.undoEdit() }, CaptureButton("重做") { self.redoEdit() },
             CaptureButton("复制") { self.save { CaptureCoordinator.shared.copy($0) } },
             drag,
@@ -201,10 +227,31 @@ final class CaptureEditor {
             CaptureButton("保存") { self.save() },
             CaptureButton("关闭", symbol: "xmark") { self.requestClose() }
         ], spacing: 5)
-        let tools = CaptureUI.column(CaptureTool.allCases.map { tool in CaptureButton(tool.title) { self.canvas.tool = tool; self.preview = false; self.render() } }, spacing: 4)
-        tools.widthAnchor.constraint(equalToConstant: 85).isActive = true
+        // One 34pt square per tool, grouped, with the active one filled.
+        var railChildren: [NSView] = []
+        var lastGroup = CaptureTool.allCases.first?.group
+        for tool in CaptureTool.allCases {
+            if tool.group != lastGroup {
+                railChildren.append(CaptureUI.separator(width: 34))
+                lastGroup = tool.group
+            }
+            let button = CaptureToolButton(tool: tool) { [weak self] picked in
+                guard let self else { return }
+                self.canvas.tool = picked
+                self.preview = false
+                self.modeControl?.selectedSegment = 0
+                self.syncToolSelection()
+                self.render()
+            }
+            button.isActiveTool = tool == canvas.tool
+            toolButtons.append(button)
+            railChildren.append(button)
+        }
+        let tools = CaptureUI.column(railChildren, spacing: 4)
+        tools.alignment = .centerX
+        tools.widthAnchor.constraint(equalToConstant: 34).isActive = true
         let toolsScroll = CaptureInspectorScroll(tools)
-        toolsScroll.widthAnchor.constraint(equalToConstant: 105).isActive = true
+        toolsScroll.widthAnchor.constraint(equalToConstant: 52).isActive = true
         let inspector = CaptureInspectorScroll(makeInspector()); inspector.widthAnchor.constraint(equalToConstant: 210).isActive = true
         let middle = CaptureUI.row([toolsScroll, canvas, inspector], spacing: 14); middle.alignment = .top
         canvas.widthAnchor.constraint(greaterThanOrEqualToConstant: 540).isActive = true
@@ -262,42 +309,141 @@ final class CaptureEditor {
         }
     }
 
+    /// Binds a control to a closure so it applies as it changes.
+    private func bind(_ control: NSControl, _ perform: @escaping () -> Void) {
+        let action = CaptureControlAction(perform)
+        controlActions.append(action)
+        control.target = action
+        control.action = #selector(CaptureControlAction.fire)
+    }
+
     private func makeInspector() -> NSView {
-        let color = NSPopUpButton(); color.addItems(withTitles: ["绿色", "红色", "黄色", "蓝色", "白色", "黑色"])
-        let colors = ["22c55e","e34b3f","f2c94c","388bfd","ffffff","000000"]
+        let inspectorWidth: CGFloat = 182
+        let color = NSPopUpButton()
+        color.addItems(withTitles: ["绿色", "红色", "黄色", "蓝色", "白色", "黑色"])
+        let colors = ["22c55e", "e34b3f", "f2c94c", "388bfd", "ffffff", "000000"]
         let width = NSTextField(string: "5")
-        let textStyle = CaptureButton("应用样式") {
-            self.canvas.color = colors[color.indexOfSelectedItem]; self.canvas.stroke = min(64,max(1,width.doubleValue))
-            if let selected = self.selected { self.mutate { doc in if let i = doc.annotations.firstIndex(where: { $0.id == selected }) { doc.annotations[i].color = self.canvas.color; doc.annotations[i].width = self.canvas.stroke } } }
+        let applyStyle = { [weak self] in
+            guard let self else { return }
+            self.canvas.color = colors[color.indexOfSelectedItem]
+            self.canvas.stroke = min(64, max(1, width.doubleValue))
+            if let selected = self.selected {
+                self.mutate { doc in
+                    if let i = doc.annotations.firstIndex(where: { $0.id == selected }) {
+                        doc.annotations[i].color = self.canvas.color
+                        doc.annotations[i].width = self.canvas.stroke
+                    }
+                }
+            }
         }
-        let padding = NSTextField(string: "48"), corner = NSTextField(string: "16"), shadow = NSTextField(string: "24")
-        let bg = NSPopUpButton(); bg.addItems(withTitles: ["透明", "鼠尾草", "石墨", "米白", "海蓝渐变", "紫色渐变"])
-        let aspect = NSPopUpButton(); aspect.addItems(withTitles: ["自适应", "1:1", "16:9", "9:16", "4:3"])
-        let align = NSPopUpButton(); align.addItems(withTitles: ["居中", "靠上", "靠下"])
-        let apply = CaptureButton("应用背景") {
+        bind(color, applyStyle)
+        bind(width, applyStyle)
+
+        let padding = NSTextField(string: "48")
+        let corner = NSTextField(string: "16")
+        let shadow = NSTextField(string: "24")
+        let bg = NSPopUpButton()
+        bg.addItems(withTitles: ["透明", "鼠尾草", "石墨", "米白", "海蓝渐变", "紫色渐变"])
+        let aspect = NSPopUpButton()
+        aspect.addItems(withTitles: ["自适应", "1:1", "16:9", "9:16", "4:3"])
+        let align = NSPopUpButton()
+        align.addItems(withTitles: ["居中", "靠上", "靠下"])
+        // Background settings apply as they change. Two "apply" buttons meant
+        // every adjustment was a two-step edit with no feedback in between.
+        let applyBackground = { [weak self] in
+            guard let self else { return }
             self.mutate { doc in
                 doc.background.enabled = bg.indexOfSelectedItem != 0
-                doc.background.color = ["ffffff","dbe7df","242933","f6f1e8","d5ecff","e1d7ff"][bg.indexOfSelectedItem]
+                doc.background.color = ["ffffff", "dbe7df", "242933", "f6f1e8",
+                                        "d5ecff", "e1d7ff"][bg.indexOfSelectedItem]
                 doc.background.secondColor = bg.indexOfSelectedItem >= 4 ? "748ba8" : nil
-                doc.background.padding = min(2000,max(0,padding.doubleValue)); doc.background.corner = min(1000,max(0,corner.doubleValue)); doc.background.shadow = min(200,max(0,shadow.doubleValue))
-                let ratios: [CGFloat?] = [nil,1,16/9,9/16,4/3]; doc.background.aspect = ratios[aspect.indexOfSelectedItem]
+                doc.background.padding = min(2000, max(0, padding.doubleValue))
+                doc.background.corner = min(1000, max(0, corner.doubleValue))
+                doc.background.shadow = min(200, max(0, shadow.doubleValue))
+                let ratios: [CGFloat?] = [nil, 1, 16 / 9, 9 / 16, 4 / 3]
+                doc.background.aspect = ratios[aspect.indexOfSelectedItem]
                 doc.background.alignment = align.indexOfSelectedItem
-            }; self.preview = true; self.render()
+            }
+            self.preview = true
+            self.modeControl?.selectedSegment = 1
+            self.render()
         }
+        for control in [bg, aspect, align] { bind(control, applyBackground) }
+        for control in [padding, corner, shadow] { bind(control, applyBackground) }
+
         let size = NSTextField(string: "1440")
-        let presets = CaptureUI.row([CaptureButton("存预设") { if let background = self.document?.background, let data = try? JSONEncoder().encode(background) { UserDefaults.standard.set(data, forKey: "capture.background.preset") } }, CaptureButton("用预设") { if let data = UserDefaults.standard.data(forKey: "capture.background.preset"), let background = try? JSONDecoder().decode(CaptureBackground.self, from: data) { self.mutate { $0.background = background }; self.preview = true; self.render() } }])
-        return CaptureUI.column([
-            CaptureUI.label("工具样式", size: 14), color, CaptureUI.row([CaptureUI.label("线宽"),width]), textStyle,
-            CaptureUI.label("背景", size: 14), bg,
-            CaptureUI.row([CaptureUI.label("留白"),padding]), CaptureUI.row([CaptureUI.label("圆角"),corner]), CaptureUI.row([CaptureUI.label("阴影"),shadow]), aspect, align, apply, presets,
+        let sections: [NSView] = [
+            CaptureUI.sectionHeader("工具样式"),
+            CaptureUI.field("颜色", color),
+            CaptureUI.field("线宽", width),
+            CaptureUI.separator(width: inspectorWidth),
+
+            CaptureUI.sectionHeader("背景"),
+            CaptureUI.field("样式", bg),
+            CaptureUI.field("留白", padding),
+            CaptureUI.field("圆角", corner),
+            CaptureUI.field("阴影", shadow),
+            CaptureUI.field("比例", aspect),
+            CaptureUI.field("对齐", align),
+            CaptureUI.row([
+                CaptureButton("存预设") {
+                    if let background = self.document?.background,
+                       let data = try? JSONEncoder().encode(background) {
+                        UserDefaults.standard.set(data, forKey: "capture.background.preset")
+                    }
+                },
+                CaptureButton("用预设") {
+                    if let data = UserDefaults.standard.data(forKey: "capture.background.preset"),
+                       let background = try? JSONDecoder().decode(CaptureBackground.self, from: data) {
+                        self.mutate { $0.background = background }
+                        self.preview = true
+                        self.modeControl?.selectedSegment = 1
+                        self.render()
+                    }
+                },
+            ]),
             CaptureButton("自动平衡") { self.autoBalance() },
-            CaptureUI.row([CaptureButton("旋转") { self.mutate { $0.turns += 1 }; self.preview = true; self.render() }, CaptureButton("翻转") { self.mutate { $0.flip.toggle() }; self.preview = true; self.render() }]),
-            CaptureUI.row([size, CaptureButton("设宽度") { self.mutate { $0.outputWidth = min(16384,max(16,size.integerValue)) }; self.preview = true; self.render() }]),
+            CaptureUI.separator(width: inspectorWidth),
+
+            CaptureUI.sectionHeader("画布"),
+            CaptureUI.row([
+                CaptureButton("旋转") {
+                    self.mutate { $0.turns += 1 }; self.preview = true; self.render()
+                },
+                CaptureButton("翻转") {
+                    self.mutate { $0.flip.toggle() }; self.preview = true; self.render()
+                },
+            ]),
+            CaptureUI.field("宽度", size),
+            CaptureButton("设为输出宽度") {
+                self.mutate { $0.outputWidth = min(16384, max(16, size.integerValue)) }
+                self.preview = true
+                self.render()
+            },
+            CaptureUI.separator(width: inspectorWidth),
+
+            CaptureUI.sectionHeader("图层与导出"),
             CaptureButton("添加图片 / 背景") { self.chooseImages() },
-            CaptureUI.row([CaptureButton("缩小图层") { self.scaleLayer(0.9) }, CaptureButton("放大图层") { self.scaleLayer(1.1) }]),
-            CaptureButton("识别局部文字") { self.ocrSelection = true; self.canvas.tool = .crop; self.preview = false; self.render(); self.status.stringValue = "框选需要识别的区域" },
-            CaptureButton("导出可编辑工程") { self.exportProject() }
-        ], spacing: 7)
+            CaptureUI.row([
+                CaptureButton("缩小图层") { self.scaleLayer(0.9) },
+                CaptureButton("放大图层") { self.scaleLayer(1.1) },
+            ]),
+            CaptureButton("识别局部文字") {
+                self.ocrSelection = true
+                self.canvas.tool = .crop
+                self.syncToolSelection()
+                self.preview = false
+                self.modeControl?.selectedSegment = 0
+                self.render()
+                self.status.stringValue = "框选需要识别的区域"
+            },
+            CaptureButton("导出可编辑工程") { self.exportProject() },
+        ]
+        let column = CaptureUI.column(sections, spacing: 7)
+        for view in sections where !(view is NSTextField) {
+            view.widthAnchor.constraint(equalToConstant: inspectorWidth).isActive = true
+        }
+        return column
     }
     private func add(_ value: CaptureAnnotation) {
         var node = value

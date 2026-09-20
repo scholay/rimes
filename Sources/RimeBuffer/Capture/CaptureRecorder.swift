@@ -408,11 +408,19 @@ final class CaptureRecorderController {
     }
     private func authorize() {
         Task {
-            if options.camera, !(await AVCaptureDevice.requestAccess(for:.video)) { CaptureUI.error(CaptureError.message("摄像头权限未开启；关闭摄像头选项可继续录屏")); return }
-            if options.microphone, options.format != "GIF", !(await AVCaptureDevice.requestAccess(for:.audio)) { CaptureUI.error(CaptureError.message("麦克风权限未开启；关闭麦克风选项可继续录屏")); return }
-            if options.keys, !CGPreflightListenEventAccess(), !CGRequestListenEventAccess() { CaptureUI.error(CaptureError.message("显示全局按键需要输入监控授权；关闭按键选项可继续录屏")); return }
-            if options.keys, !AXIsProcessTrusted() {
-                _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+            // Each optional input asks through the shared audit, so a refusal
+            // is reported by the same page that lists the grant.
+            if options.camera, !SystemPermissionAudit.ensure(.camera) {
+                CaptureUI.error(CaptureError.message("摄像头权限未开启；关闭摄像头选项可继续录屏")); return
+            }
+            if options.microphone, options.format != "GIF",
+               !SystemPermissionAudit.ensure(.microphone) {
+                CaptureUI.error(CaptureError.message("麦克风权限未开启；关闭麦克风选项可继续录屏")); return
+            }
+            if options.keys, !SystemPermissionAudit.ensure(.inputMonitoring) {
+                CaptureUI.error(CaptureError.message("显示全局按键需要输入监控授权；关闭按键选项可继续录屏")); return
+            }
+            if options.keys, !SystemPermissionAudit.ensure(.accessibility) {
                 CaptureUI.error(CaptureError.message("按键显示还需要辅助功能授权；关闭按键选项可继续录屏")); return
             }
             settings?.close()

@@ -146,8 +146,10 @@ final class CaptureCoordinator {
 
     func begin(_ mode: String, delay: Int = 0, ratio: CGFloat? = nil, size: CGSize? = nil, freeze: Bool = true) {
         guard !sessionProtected, !IsSecureEventInputEnabled() else { return }
-        guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
-            CaptureUI.error(CaptureError.message("请在系统设置 → 隐私与安全性 → 屏幕与系统音频录制中允许 RIMES，然后重试。")); return
+        // Through the shared audit, so the permissions page and the feature
+        // agree on what was asked for and what the answer was.
+        guard SystemPermissionAudit.ensure(.screenRecording) else {
+            CaptureUI.error(CaptureError.message("请在系统设置 → 隐私与安全性 → 屏幕与系统音频录制中允许 RIMES，然后重试。可在 RIMES 设置 → 系统权限中逐项检查。")); return
         }
         generation = UUID(); let token = generation
         selectors.forEach { $0.close() }; selectors.removeAll()

@@ -12,6 +12,41 @@ enum CaptureTool: String, Codable, CaseIterable {
         case .spotlight: return "聚光灯"; case .blur: return "模糊"; case .pixelate: return "像素化"; case .redact: return "遮盖"
         }
     }
+
+    /// Icons, because sixteen Chinese labels of four different widths read as
+    /// a list of words rather than a tool rail. The name survives as the
+    /// tooltip and the accessibility label.
+    var symbolName: String {
+        switch self {
+        case .select: return "cursorarrow"
+        case .crop: return "crop"
+        case .arrow: return "arrow.up.right"
+        case .curve: return "arrow.turn.up.right"
+        case .line: return "line.diagonal"
+        case .rectangle: return "rectangle"
+        case .filledRectangle: return "rectangle.fill"
+        case .ellipse: return "circle"
+        case .text: return "textformat"
+        case .counter: return "1.circle"
+        case .pen: return "pencil.tip"
+        case .highlight: return "highlighter"
+        case .spotlight: return "flashlight.on.fill"
+        case .blur: return "drop.fill"
+        case .pixelate: return "square.grid.3x3.fill"
+        case .redact: return "rectangle.slash.fill"
+        }
+    }
+
+    /// Rail groups: pointer, shapes, marks, redaction. Separators between
+    /// them make sixteen icons scannable.
+    var group: Int {
+        switch self {
+        case .select, .crop: return 0
+        case .arrow, .curve, .line, .rectangle, .filledRectangle, .ellipse: return 1
+        case .text, .counter, .pen, .highlight, .spotlight: return 2
+        case .blur, .pixelate, .redact: return 3
+        }
+    }
 }
 
 struct CaptureAnnotation: Codable, Equatable, Identifiable {

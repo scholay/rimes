@@ -1948,23 +1948,62 @@ func runClipboardActivationPolicySmokeTest() -> Bool {
         }
     }
 
+    // Everything the capture module requests has to be listed here, or a
+    // refusal shows up as a broken feature with no row explaining it.
+    let captureGrants: [SystemPermission] = [
+        .screenRecording, .inputMonitoring, .camera, .microphone,
+    ]
+    guard captureGrants.allSatisfy(SystemPermission.allCases.contains) else {
+        return clipboardPermissionFail("capture permissions missing from the panel")
+    }
+
     // The permission inventory. Anything listed must name a real feature and
     // a real consequence, and must reach a settings pane — a row that cannot
     // be acted on is worse than no row.
-    guard SystemPermission.allCases.count == 2,
+    // Six: accessibility and local network, plus the four screen-capture
+    // grants. The count is pinned so adding a permission is a decision
+    // rather than a side effect — a new row has to earn its wording here.
+    guard SystemPermission.allCases.count == 6,
           SystemPermission.allCases.allSatisfy({
               !$0.title.isEmpty && !$0.enables.isEmpty
                   && !$0.whenMissing.isEmpty && $0.settingsURL != nil
           }) else {
         return clipboardPermissionFail("permission inventory completeness")
     }
-    // Input Monitoring is deliberately absent: the global monitors watch
-    // mouse buttons only and the hotkeys are Carbon registrations. Listing a
-    // permission that is never used teaches the user to grant things blindly.
-    guard !SystemPermission.allCases.contains(where: {
-        $0.rawValue.lowercased().contains("input")
-    }) else {
+    // Listing a permission nothing requests teaches the user to grant things
+    // blindly, so the inventory is pinned to an explicit set. Input
+    // Monitoring used to be banned outright here because the global monitors
+    // watched mouse buttons only; the capture recorder's keystroke overlay
+    // calls CGRequestListenEventAccess, so the rule moved from "never
+    // listed" to "listed only with a caller" — which is what the scan below
+    // checks.
+    let expectedInventory: Set<SystemPermission> = [
+        .accessibility, .screenRecording, .inputMonitoring,
+        .camera, .microphone, .localNetwork,
+    ]
+    guard Set(SystemPermission.allCases) == expectedInventory else {
         return clipboardPermissionFail("unused permissions must not be listed")
+    }
+    // Each capture grant must have a caller in the source. Skipped when the
+    // tree is absent, because an installed bundle carries no sources.
+    let sources = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+    if FileManager.default.fileExists(atPath: sources.path),
+       let walker = FileManager.default.enumerator(
+        at: sources,
+        includingPropertiesForKeys: nil
+       ) {
+        var corpus = ""
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            corpus += (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        }
+        for permission in captureGrants {
+            guard corpus.contains(".ensure(.\(permission.rawValue))") else {
+                return clipboardPermissionFail(
+                    "\(permission.rawValue) is listed but never requested"
+                )
+            }
+        }
     }
 
     let reports = SystemPermissionAudit.reportAll()

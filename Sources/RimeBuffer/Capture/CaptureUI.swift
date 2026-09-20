@@ -35,7 +35,105 @@ final class CaptureButton: NSButton {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+/// A square icon button that shows which tool is active. The previous rail
+/// was a column of text buttons whose widths tracked the length of each
+/// Chinese name, so nothing lined up and nothing showed the current tool.
+final class CaptureToolButton: NSButton {
+    private let tool: CaptureTool
+    private let perform: (CaptureTool) -> Void
+    var isActiveTool = false { didSet { needsDisplay = true } }
+
+    init(tool: CaptureTool, action: @escaping (CaptureTool) -> Void) {
+        self.tool = tool
+        perform = action
+        super.init(frame: .zero)
+        isBordered = false
+        title = ""
+        image = RimeUI.symbol(tool.symbolName, pointSize: 14, weight: .regular)
+        target = self
+        self.action = #selector(invoke)
+        toolTip = tool.title
+        setAccessibilityLabel(tool.title)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+    override var intrinsicContentSize: NSSize { NSSize(width: 34, height: 30) }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    @objc private func invoke() { perform(tool) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let body = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: body, xRadius: 7, yRadius: 7)
+        if isActiveTool {
+            RimeUI.accentGreen.setFill()
+        } else if isHighlighted {
+            RimeUI.surface2.setFill()
+        } else {
+            NSColor.clear.setFill()
+        }
+        path.fill()
+        if !isActiveTool {
+            RimeUI.border.setStroke()
+            path.stroke()
+        }
+        let tint = isActiveTool ? RimeUI.accentForegroundColor : RimeUI.textPrimary
+        guard let image else { return }
+        let art = image.withSymbolConfiguration(
+            NSImage.SymbolConfiguration(paletteColors: [tint])
+        ) ?? image
+        art.draw(in: CGRect(
+            x: (bounds.width - 16) / 2,
+            y: (bounds.height - 16) / 2,
+            width: 16,
+            height: 16
+        ))
+    }
+}
+
+/// Carries a closure to a target/action control, so popups and fields can
+/// apply as they change instead of waiting for an "apply" button.
+final class CaptureControlAction: NSObject {
+    private let perform: () -> Void
+    init(_ perform: @escaping () -> Void) { self.perform = perform }
+    @objc func fire() { perform() }
+}
+
 enum CaptureUI {
+    /// A label/control pair whose labels all line up, which a plain row of
+    /// mismatched intrinsic widths does not.
+    static func field(_ title: String, _ control: NSView,
+                      labelWidth: CGFloat = 40) -> NSStackView {
+        let caption = label(title)
+        caption.translatesAutoresizingMaskIntoConstraints = false
+        caption.widthAnchor.constraint(equalToConstant: labelWidth).isActive = true
+        let row = self.row([caption, control], spacing: 6)
+        row.distribution = .fill
+        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return row
+    }
+
+    /// A hairline between tool groups.
+    static func separator(width: CGFloat) -> NSView {
+        let line = NSView()
+        line.wantsLayer = true
+        line.layer?.backgroundColor = RimeUI.border.cgColor
+        line.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            line.heightAnchor.constraint(equalToConstant: 1),
+            line.widthAnchor.constraint(equalToConstant: width),
+        ])
+        return line
+    }
+
+    /// A section header for the inspector, so the controls below it read as
+    /// a group instead of a pile.
+    static func sectionHeader(_ value: String) -> NSTextField {
+        let label = NSTextField(labelWithString: value)
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = RimeUI.textMuted
+        return label
+    }
+
     static func label(_ value: String, size: CGFloat = 12) -> NSTextField {
         let label = NSTextField(labelWithString: value)
         label.font = .systemFont(ofSize: size)
