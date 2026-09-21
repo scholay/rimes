@@ -85,7 +85,19 @@ enum ClipboardHistorySmoke {
         guard pane.snapshotForSmoke().renderedThumbnailCount > 0 else {
             return false
         }
+        // Host the pane in a real (offscreen) window before capturing. The
+        // search caret and the focused search border exist only when the rail
+        // has a window, so a windowless preview silently dropped both and
+        // could not have shown that the search box looked dead.
+        let host = NSWindow(
+            contentRect: pane.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        host.contentView = pane
         pane.layoutSubtreeIfNeeded()
+        pane.showSearchCaretForCapture()
         pane.displayIfNeeded()
         guard let bitmap = pane.bitmapImageRepForCachingDisplay(in: pane.bounds) else {
             return false
@@ -100,6 +112,103 @@ enum ClipboardHistorySmoke {
         } catch {
             return false
         }
+    }
+
+    /// Under RIMES the search box is a label, so AppKit draws no insertion
+    /// point: the box accepted text while looking dead. Assert the caret
+    /// exists once the rail has a window, and that it advances as the query
+    /// grows — a caret pinned at the left edge would look equally broken.
+    @MainActor
+    static func searchCaretProbe() -> Bool {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "rimes-caret-probe-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        guard let store = try? ClipboardHistoryStore(rootDirectory: root) else {
+            return false
+        }
+        let model = ClipboardHistoryModel(
+            configuration: .init(),
+            pasteboard: ClipboardHistoryPasteboardDouble(),
+            clock: Date.init,
+            sourceApplicationName: { "Safari" },
+            sourceApplicationBundleIdentifier: { "com.apple.Safari" },
+            store: store,
+            schedulesAutomaticPolling: false
+        )
+        model.start()
+        let pane = ClipboardHistoryPaneView(model: model)
+        pane.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: ClipboardHistoryWindowMetrics.preferredWidth,
+            height: ClipboardHistoryWindowMetrics.preferredHeight
+        )
+        // No window: nothing is focused, so there must be no caret.
+        pane.layoutSubtreeIfNeeded()
+        guard !pane.snapshotForSmoke().searchCaretVisible else { return false }
+
+        let host = NSWindow(
+            contentRect: pane.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        host.contentView = pane
+        pane.layoutSubtreeIfNeeded()
+        // In a window but never clicked: an unfocused field shows no caret.
+        guard !pane.snapshotForSmoke().searchCaretVisible else { return false }
+
+        pane.setSearchFocused(true)
+        pane.layoutSubtreeIfNeeded()
+        let empty = pane.snapshotForSmoke()
+        guard empty.searchCaretVisible else { return false }
+
+        _ = pane.appendSearchText("clipboard")
+        pane.layoutSubtreeIfNeeded()
+        pane.showSearchCaretForCapture()
+        let typed = pane.snapshotForSmoke()
+        guard typed.searchCaretVisible,
+              typed.queryCharacterCount == 9,
+              typed.searchCaretX > empty.searchCaretX else { return false }
+
+        // Clicking a card or the background takes the focus away again.
+        pane.setSearchFocused(false)
+        pane.layoutSubtreeIfNeeded()
+        return !pane.snapshotForSmoke().searchCaretVisible
+    }
+
+    /// Both bands were positioned by hand and drifted apart.
+    @MainActor
+    static func capturesBandProbe() -> Bool {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "rimes-band-probe-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        guard let store = try? ClipboardHistoryStore(rootDirectory: root) else {
+            return false
+        }
+        let model = ClipboardHistoryModel(
+            configuration: .init(),
+            pasteboard: ClipboardHistoryPasteboardDouble(),
+            clock: Date.init,
+            sourceApplicationName: { "Safari" },
+            sourceApplicationBundleIdentifier: { "com.apple.Safari" },
+            store: store,
+            schedulesAutomaticPolling: false
+        )
+        model.start()
+        let pane = ClipboardHistoryPaneView(model: model)
+        pane.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: ClipboardHistoryWindowMetrics.preferredWidth,
+            height: ClipboardHistoryWindowMetrics.preferredHeight
+        )
+        pane.layoutSubtreeIfNeeded()
+        return pane.capturesBandMatchesRecentForSmoke
     }
 
     static func run() -> Bool {
@@ -127,6 +236,14 @@ enum ClipboardHistorySmoke {
         expect(
             clipboardHistoryStandalonePanelKeyboardProbe(),
             "standalone Clipboard panel cannot own native search input"
+        )
+        expect(
+            capturesBandProbe(),
+            "the captures tab must occupy the same band as Recent"
+        )
+        expect(
+            searchCaretProbe(),
+            "borrowed-Rime search box must show a caret that follows the query"
         )
         expect(
             ClipboardHistoryPresentationMode.resolve(
@@ -1876,24 +1993,45 @@ func runClipboardActivationPolicySmokeTest() -> Bool {
         }
     }
 
+    // Everything the capture module requests has to be listed here, or a
+    // refusal shows up as a broken feature with no row explaining it.
+    let captureGrants: [SystemPermission] = [
+        .screenRecording, .inputMonitoring, .camera, .microphone,
+    ]
+    guard captureGrants.allSatisfy(SystemPermission.allCases.contains) else {
+        return clipboardPermissionFail("capture permissions missing from the panel")
+    }
+
     // The permission inventory. Anything listed must name a real feature and
     // a real consequence, and must reach a settings pane — a row that cannot
     // be acted on is worse than no row.
-    guard SystemPermission.allCases.count == 2,
+    // Six: accessibility and local network, plus the four screen-capture
+    // grants. The count is pinned so adding a permission is a decision
+    // rather than a side effect — a new row has to earn its wording here.
+    guard SystemPermission.allCases.count == 6,
           SystemPermission.allCases.allSatisfy({
               !$0.title.isEmpty && !$0.enables.isEmpty
                   && !$0.whenMissing.isEmpty && $0.settingsURL != nil
           }) else {
         return clipboardPermissionFail("permission inventory completeness")
     }
-    // Input Monitoring is deliberately absent: the global monitors watch
-    // mouse buttons only and the hotkeys are Carbon registrations. Listing a
-    // permission that is never used teaches the user to grant things blindly.
-    guard !SystemPermission.allCases.contains(where: {
-        $0.rawValue.lowercased().contains("input")
-    }) else {
+    // Listing a permission nothing requests teaches the user to grant things
+    // blindly, so the inventory is pinned to an explicit set. Input
+    // Monitoring used to be banned outright here because the global monitors
+    // watched mouse buttons only; the capture recorder's keystroke overlay
+    // calls CGRequestListenEventAccess, so the rule moved from "never
+    // listed" to "listed only with a caller" — which is what the scan below
+    // checks.
+    let expectedInventory: Set<SystemPermission> = [
+        .accessibility, .screenRecording, .inputMonitoring,
+        .camera, .microphone, .localNetwork,
+    ]
+    guard Set(SystemPermission.allCases) == expectedInventory else {
         return clipboardPermissionFail("unused permissions must not be listed")
     }
+    // Actual optional-input routing and asynchronous permission lifetimes
+    // are exercised by capture-permission-smoke, not source-text matching of
+    // the old synchronous ensure() call (which raced system dialogs).
 
     let reports = SystemPermissionAudit.reportAll()
     guard reports.count == SystemPermission.allCases.count,

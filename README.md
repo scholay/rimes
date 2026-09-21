@@ -200,6 +200,7 @@ Pre-release，不进入自动更新。Windows/Linux `platform-preview-vX.Y.Z` �
 ## 友链
 
 - [本项目已在L站发布开源推广](https://linux.do/u/leowangling/preferences/account)
+- [iRime](https://github.com/jimmy54/iRime) — 感谢 iRime 项目及其作者对 RIMES 的指导与宣传支持。
 
 ## 贡献者
 
@@ -224,3 +225,5 @@ RIMES 自有代码采用 [MIT License](LICENSE)。随包 Rime 方案、词库和
 <p align="center">
   <img src="images/sponsor-wechat.png" alt="微信赞助二维码" width="280">
 </p>
+
+Capsule 捕获、图像编辑和录屏的使用说明、存储约定与验收状态见 [CAPTURE.md](CAPTURE.md)。

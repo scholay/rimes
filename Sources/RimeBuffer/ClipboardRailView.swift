@@ -98,6 +98,11 @@ struct ClipboardHistoryPaneSnapshot: Equatable {
     let renderedThumbnailCount: Int
     let selectedCardBorderWidth: CGFloat?
     let queryCharacterCount: Int
+    /// Whether the borrowed-Rime search box shows an insertion point, and
+    /// where it sits. Typing used to change the text with nothing to say the
+    /// box was live.
+    let searchCaretVisible: Bool
+    let searchCaretX: CGFloat
     let stateIsVisible: Bool
     let contentIsProtected: Bool
     let cardWidth: CGFloat
@@ -155,11 +160,26 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     private let library: CapsuleRailLibrary
     private let titleLabel = NSTextField(labelWithString: "Capsule")
     private let tabStrip = CapsuleRailTabStrip()
+    private let captureButton = ClipboardFirstMouseButton(title: "", target: nil, action: nil)
+    private static let headerGlyphPointSize: CGFloat = 12
+    private static let headerGlyphWeight: NSFont.Weight = .semibold
+    private static let headerGlyphBox: CGFloat = 22
+    private let capturesView = CaptureHistoryView()
     private let manageButton = ClipboardFirstMouseButton(title: "", target: nil, action: nil)
     private let countLabel = NSTextField(labelWithString: "")
     private let searchShell = NSView()
     private let searchIcon = NSImageView()
     private let searchLabel = NSTextField(labelWithString: "")
+    /// Under RIMES the search box is a label, not a field, so AppKit draws no
+    /// insertion point and no focus ring: typing changed the text with no sign
+    /// that the box was live. This is that missing caret.
+    private let searchCaret = NSView()
+    private var caretBlink: Timer?
+    /// A caret that is always on says the box is focused when it is not.
+    /// Clicking the box focuses it; clicking a card or the background takes
+    /// it away, the way a real search field behaves. Typing focuses it too,
+    /// because under RIMES every plain key is routed here.
+    private var searchFocused = false
     private let standaloneSearchField = NSTextField()
     private let clearButton = ClipboardFirstMouseButton(title: "清空", target: nil, action: nil)
     private let closeButton = ClipboardFirstMouseButton(title: "", target: nil, action: nil)
@@ -221,6 +241,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             width: ClipboardHistoryWindowMetrics.preferredWidth,
             height: ClipboardHistoryWindowMetrics.preferredHeight
         ))
+        capturesView.enabled = library.usesLiveCaptureHistory
         configureView()
         modelObserver = model.addObserver { [weak self] in self?.reloadFromModel() }
         library.onChange = { [weak self] in
@@ -314,6 +335,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
               }) else { return false }
         composingText = ""
         query.append(contentsOf: text)
+        setSearchFocused(true)
         reloadFromModel()
         return true
     }
@@ -413,19 +435,25 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     func searchCaretRectOnScreen() -> NSRect? {
         layoutSubtreeIfNeeded()
         guard let window else { return nil }
-        let rendered = query + composingText
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: searchLabel.font ?? NSFont.systemFont(ofSize: 12),
-        ]
-        let renderedWidth = ceil((rendered as NSString).size(withAttributes: attributes).width)
         let labelRect = searchLabel.convert(searchLabel.bounds, to: nil)
-        let x = min(labelRect.maxX, labelRect.minX + max(1, renderedWidth))
         return window.convertToScreen(NSRect(
-            x: x,
+            x: caretX(in: labelRect),
             y: labelRect.minY,
             width: 1,
             height: max(1, labelRect.height)
         ))
+    }
+
+    /// Where the insertion point sits, measured once and used by both the
+    /// drawn caret and the candidate-window anchor. Two measurements would
+    /// drift apart and put the candidate list beside the wrong character.
+    private func caretX(in labelRect: NSRect) -> CGFloat {
+        let rendered = query + composingText
+        guard !rendered.isEmpty else { return labelRect.minX }
+        let width = ceil((rendered as NSString).size(withAttributes: [
+            .font: searchLabel.font ?? NSFont.systemFont(ofSize: 12),
+        ]).width)
+        return min(labelRect.maxX, labelRect.minX + max(1, width))
     }
 
     /// Called before Rime or Buffer sees the event. Returns true only for a
@@ -466,12 +494,14 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             if query.isEmpty && composingText.isEmpty { onClose?() } else { resetSearch() }
             return true
         case UInt16(kVK_LeftArrow):
+            if selectedTab == .captures { capturesView.move(-1); return true }
             moveFilteredSelection(
                 delta: -1,
                 extending: intentModifiers == [.shift]
             )
             return true
         case UInt16(kVK_RightArrow):
+            if selectedTab == .captures { capturesView.move(1); return true }
             moveFilteredSelection(
                 delta: 1,
                 extending: intentModifiers == [.shift]
@@ -528,6 +558,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
 
     @discardableResult
     func activateSelectedItems() -> Bool {
+        if selectedTab == .captures { return capturesView.activate() }
         if selectedTab != .recent {
             guard let entry = selectedSavedEntry,
                   CapsuleRailActivationRules.action(for: entry.kind) != .refuse,
@@ -546,6 +577,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
 
     @discardableResult
     func copySelectedItems() -> Bool {
+        if selectedTab == .captures { return capturesView.copy() }
         if selectedTab != .recent {
             guard let entry = selectedSavedEntry,
                   CapsuleRailActivationRules.allowsCopy(entry.kind),
@@ -559,6 +591,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
 
     @discardableResult
     func saveSelectedItems() -> Bool {
+        if selectedTab == .captures { return capturesView.collect() }
         guard selectedTab == .recent, let onSaveHistory else { return false }
         let items = selectedFilteredItems
         guard !items.isEmpty else { return false }
@@ -567,6 +600,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
 
     @discardableResult
     func deleteSelectedItems() -> Bool {
+        if selectedTab == .captures { return capturesView.remove() }
         guard selectedTab == .recent else { return false }
         let items = selectedFilteredItems
         guard !items.isEmpty else { return false }
@@ -583,6 +617,16 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         applyAppearance()
         updateSearchPresentation()
         tabStrip.select(selectedTab)
+        clearButton.isHidden = selectedTab != .recent
+        capturesView.isHidden = selectedTab != .captures
+        if selectedTab == .captures {
+            removeAllCards(); removeAllSavedCards()
+            stateContainer.isHidden = true; scrollView.isHidden = true
+            capturesView.protected = protectedContent || !model.captureState.windowVisible
+            capturesView.query = query
+            countLabel.stringValue = "CAPTURES"
+            return
+        }
         clearButton.isHidden = selectedTab != .recent
         if let kind = selectedTab.savedKind {
             reloadSavedEntries(kind: kind, protectedContent: protectedContent)
@@ -644,6 +688,14 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         scrollView.contentView.bounds.origin.x
     }
 
+    /// The captures tab shares the Recent band. Hand-counted constants had
+    /// it starting 27pt lower and ending 21pt inside the hint row, which is
+    /// the blank line above every capture card.
+    var capturesBandMatchesRecentForSmoke: Bool {
+        layoutSubtreeIfNeeded()
+        return capturesView.frame.equalTo(scrollView.frame)
+    }
+
     func snapshotForSmoke() -> ClipboardHistoryPaneSnapshot {
         let buttons = cardDocumentView.cards
         let selectedBorder = buttons.first(where: { $0.itemID == model.selectedID })?
@@ -654,6 +706,8 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             renderedThumbnailCount: buttons.filter(\.isThumbnailRendered).count,
             selectedCardBorderWidth: selectedBorder,
             queryCharacterCount: query.count,
+            searchCaretVisible: !searchCaret.isHidden,
+            searchCaretX: searchCaret.frame.minX,
             stateIsVisible: !stateContainer.isHidden,
             contentIsProtected: model.isContentShielded,
             cardWidth: buttons.first?.frame.width ?? ClipboardHistoryWindowMetrics.cardWidth,
@@ -676,8 +730,10 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     }
 
     func selectTab(_ tab: CapsuleRailTab) {
+        setSearchFocused(false)
         guard tab != selectedTab else { return }
         selectedTab = tab
+        if tab == .captures { capturesView.reload() }
         if let kind = tab.savedKind, library.state(for: kind) == .idle {
             library.reload()
         }
@@ -714,6 +770,8 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     private func updateHint() {
         let activation = standaloneSearchEnabled ? "↩ PREPARE CLIPBOARD" : "↩ INSERT"
         switch selectedTab {
+        case .captures:
+            hintLabel.stringValue = "← → SELECT   ↩ EDIT   ⌘C COPY   ⌘S SAVE TO CAPSULE   DELETE REMOVE   ESC CLOSE"
         case .recent:
             hintLabel.stringValue = standaloneSearchEnabled
                 ? "TYPE TO SEARCH   ← → SELECT   ⇥ NEXT TAB   ↩ PREPARE CLIPBOARD   ⌘C COPY   ⌘S SAVE TO CAPSULE   DELETE REMOVE   ESC CLOSE"
@@ -824,7 +882,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         )
         for card in cardDocumentView.cards where card.frame.intersects(prefetch) {
             guard let entry = visibleSavedEntryByID[card.itemID],
-                  entry.kind == .image || entry.kind == .pdf,
+                  entry.kind == .image || entry.kind == .pdf || entry.kind == .video,
                   let path = entry.payload,
                   savedThumbnailCache.object(forKey: entry.id as NSUUID) == nil,
                   savedThumbnailOperations[entry.id] == nil else { continue }
@@ -877,11 +935,14 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     }
 
     @objc private func savedCardPressed(_ sender: ClipboardHistoryCardButton) {
+        setSearchFocused(false)
         _ = handleSavedCardInteraction(
             id: sender.itemID,
             clickCount: sender.actionContext.clickCount
         )
     }
+
+    @objc private func capturePressed() { CaptureCoordinator.shared.showLauncher() }
 
     @objc private func managePressed() { onManage?() }
 
@@ -937,8 +998,12 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         standaloneSearchField.delegate = self
         standaloneSearchField.isHidden = true
         standaloneSearchField.translatesAutoresizingMaskIntoConstraints = false
+        searchCaret.wantsLayer = true
+        searchCaret.layer?.cornerRadius = 1
+        searchCaret.isHidden = true
         searchShell.addSubview(searchIcon)
         searchShell.addSubview(searchLabel)
+        searchShell.addSubview(searchCaret)
         searchShell.addSubview(standaloneSearchField)
         NSLayoutConstraint.activate([
             searchShell.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
@@ -966,7 +1031,8 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         clearButton.bezelStyle = .rounded
         clearButton.controlSize = .small
         clearButton.setAccessibilityLabel("清空全部本地剪贴板历史")
-        closeButton.image = RimeUI.symbol("xmark", pointSize: 11, weight: .bold)
+        closeButton.image = RimeUI.symbol("xmark", pointSize: Self.headerGlyphPointSize,
+                                          weight: Self.headerGlyphWeight)
         closeButton.image?.isTemplate = true
         closeButton.imagePosition = .imageOnly
         closeButton.isBordered = false
@@ -976,7 +1042,8 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         tabStrip.onSelect = { [weak self] tab in
             MainActor.assumeIsolated { self?.selectTab(tab) }
         }
-        manageButton.image = RimeUI.symbol("gearshape", pointSize: 12, weight: .semibold)
+        manageButton.image = RimeUI.symbol("gearshape", pointSize: Self.headerGlyphPointSize,
+                                           weight: Self.headerGlyphWeight)
         manageButton.image?.isTemplate = true
         manageButton.imagePosition = .imageOnly
         manageButton.isBordered = false
@@ -985,10 +1052,30 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         manageButton.toolTip = "Capsule 管理"
         manageButton.setAccessibilityLabel("打开 Capsule 管理")
 
+        captureButton.image = RimeUI.symbol("camera", pointSize: Self.headerGlyphPointSize,
+                                            weight: Self.headerGlyphWeight)
+        captureButton.image?.isTemplate = true
+        captureButton.imagePosition = .imageOnly
+        captureButton.target = self; captureButton.action = #selector(capturePressed)
+        captureButton.isBordered = false
+        captureButton.toolTip = "捕获屏幕"
+        captureButton.setAccessibilityLabel("捕获屏幕")
+        // The three header glyphs were drawn at 11/12/14pt in three weights
+        // and had no frame of their own, so the camera sat larger than its
+        // neighbours and the glyph box changed shape between display scales.
+        // One size, one weight, one square each.
+        for button in [captureButton, manageButton, closeButton] {
+            button.imageScaling = .scaleProportionallyDown
+            button.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: Self.headerGlyphBox),
+                button.heightAnchor.constraint(equalToConstant: Self.headerGlyphBox),
+            ])
+        }
         let headerSpacer = NSView()
         let header = NSStackView(views: [
             titleLabel, countLabel, tabStrip, headerSpacer, searchShell,
-            clearButton, manageButton, closeButton,
+            clearButton, captureButton, manageButton, closeButton,
         ])
         header.orientation = .horizontal
         header.alignment = .centerY
@@ -1005,6 +1092,8 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         scrollView.verticalScrollElasticity = .none
         scrollView.documentView = cardDocumentView
         scrollView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(capturesView)
+        capturesView.isHidden = true; capturesView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.contentView.postsBoundsChangedNotifications = true
         viewportObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification,
@@ -1058,7 +1147,88 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             hintLabel.trailingAnchor.constraint(equalTo: header.trailingAnchor),
             hintLabel.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: 8),
             hintLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
+            // The captures tab occupies the same band as Recent, so it is
+            // pinned to that scroll view rather than to hand-counted numbers.
+            // Those constants said 78pt from the top and 128pt tall while the
+            // real band starts at 51 and is 126: an empty 27pt line above
+            // every card, and a bottom edge running 21pt into the hint row.
+            capturesView.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
+            capturesView.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
+            capturesView.topAnchor.constraint(equalTo: scrollView.topAnchor),
+            capturesView.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
         ])
+    }
+
+    /// The caret belongs to the borrowed-Rime surface only. In standalone
+    /// mode a real NSTextField is visible and AppKit draws its own.
+    private var searchIsLive: Bool {
+        !standaloneSearchEnabled && window != nil && searchFocused
+    }
+
+    func setSearchFocused(_ focused: Bool) {
+        guard focused != searchFocused else { return }
+        searchFocused = focused
+        refreshSearchCaret()
+        applyAppearance()
+    }
+
+    /// Places the caret and restarts its blink. Called on every keystroke so
+    /// the caret is solid while typing, the way a real field behaves.
+    private func refreshSearchCaret(resetBlink: Bool = true) {
+        guard searchIsLive else {
+            searchCaret.isHidden = true
+            caretBlink?.invalidate()
+            caretBlink = nil
+            return
+        }
+        let labelRect = searchLabel.frame
+        let height = ceil((searchLabel.font ?? NSFont.systemFont(ofSize: 12)).ascender
+            - (searchLabel.font ?? NSFont.systemFont(ofSize: 12)).descender) + 2
+        searchCaret.frame = NSRect(
+            x: caretX(in: labelRect),
+            y: labelRect.midY - height / 2,
+            width: 1.5,
+            height: height
+        )
+        guard resetBlink else { return }
+        searchCaret.isHidden = false
+        caretBlink?.invalidate()
+        // Match the system insertion point cadence.
+        let period = UserDefaults.standard.object(
+            forKey: "NSTextInsertionPointBlinkPeriodOn"
+        ) as? Double
+        let timer = Timer(
+            timeInterval: (period.map { $0 / 1000 } ?? 0.53),
+            repeats: true
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.searchIsLive else { return }
+                self.searchCaret.isHidden.toggle()
+            }
+        }
+        caretBlink = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// Ordering the panel out does not move the view between windows, so
+    /// `viewDidMoveToWindow` never fires and the blink would tick forever in
+    /// a resident input method. The controller parks it instead.
+    func setSearchCaretActive(_ active: Bool) {
+        if active {
+            refreshSearchCaret()
+        } else {
+            caretBlink?.invalidate()
+            caretBlink = nil
+            searchCaret.isHidden = true
+        }
+    }
+
+    /// Preview capture is a still frame, and the caret blinks. Force it on so
+    /// a rendered preview shows the same focused search box the user sees.
+    func showSearchCaretForCapture() {
+        setSearchFocused(true)
+        refreshSearchCaret()
+        searchCaret.isHidden = !searchIsLive
     }
 
     private func updateSearchPresentation() {
@@ -1092,6 +1262,8 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             searchLabel.attributedStringValue = rendered
             searchShell.setAccessibilityLabel("Capsule 搜索")
         }
+        searchLabel.layoutSubtreeIfNeeded()
+        refreshSearchCaret()
     }
 
     private func updateCount(visibleCount: Int) {
@@ -1256,12 +1428,42 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         }
     }
 
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        setSearchFocused(searchShell.frame.contains(point))
+        super.mouseDown(with: event)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // A repeating timer on a hidden rail keeps the process awake for
+        // nothing, so the blink lives exactly as long as the window does.
+        if window == nil {
+            caretBlink?.invalidate()
+            caretBlink = nil
+            searchCaret.isHidden = true
+        } else {
+            refreshSearchCaret()
+            applyAppearance()
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        refreshSearchCaret(resetBlink: false)
+    }
+
     private func applyAppearance() {
         appearance = RimeUI.appKitAppearance
         layer?.backgroundColor = RimeUI.workbenchChrome.cgColor
         searchShell.layer?.backgroundColor = RimeUI.surface2.cgColor
-        searchShell.layer?.borderColor = RimeUI.borderStrong.cgColor
         searchShell.layer?.borderWidth = 1
+        searchCaret.layer?.backgroundColor = RimeUI.accentTextColor.cgColor
+        // The rail routes every plain keystroke to the search box while it is
+        // open, so the box is always the focused surface. Say so.
+        searchShell.layer?.borderColor = searchIsLive
+            ? RimeUI.accentTextColor.withAlphaComponent(0.55).cgColor
+            : RimeUI.borderStrong.cgColor
         titleLabel.textColor = RimeUI.textPrimary
         countLabel.textColor = RimeUI.textMuted
         searchIcon.contentTintColor = RimeUI.textMuted
@@ -1408,6 +1610,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     }
 
     @objc private func cardPressed(_ sender: ClipboardHistoryCardButton) {
+        setSearchFocused(false)
         let actionContext = sender.actionContext
         _ = handleCardInteraction(
             itemID: sender.itemID,
@@ -1816,6 +2019,7 @@ private final class ClipboardHistoryCardButton: NSButton {
         switch kind {
         case .note: name = "note.text"
         case .image: name = "photo"
+        case .video: name = "video"
         case .pdf: name = "doc.richtext"
         case .skill: name = "wand.and.stars"
         case .password: name = "lock"
@@ -1932,6 +2136,7 @@ class ClipboardFirstMouseButton: NSButton {
 final class CapsuleRailTabStrip: NSView {
     var onSelect: ((CapsuleRailTab) -> Void)?
     private let stack = NSStackView()
+    private let tabScroll = NSScrollView()
     private var buttons: [CapsuleRailTabButton] = []
     private var selectedTab: CapsuleRailTab = .recent
 
@@ -1944,15 +2149,13 @@ final class CapsuleRailTabStrip: NSView {
         stack.alignment = .centerY
         stack.spacing = 2
         stack.edgeInsets = NSEdgeInsets(top: 3, left: 3, bottom: 3, right: 3)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            heightAnchor.constraint(equalToConstant: 28),
-        ])
+        tabScroll.drawsBackground = false
+        tabScroll.hasHorizontalScroller = false
+        tabScroll.horizontalScrollElasticity = .automatic
+        tabScroll.documentView = stack
+        addSubview(tabScroll)
+        heightAnchor.constraint(equalToConstant: 28).isActive = true
+        widthAnchor.constraint(greaterThanOrEqualToConstant: 170).isActive = true
         for tab in CapsuleRailTab.ordered {
             let button = CapsuleRailTabButton(tab: tab)
             button.target = self
@@ -1960,7 +2163,7 @@ final class CapsuleRailTabStrip: NSView {
             stack.addArrangedSubview(button)
             buttons.append(button)
         }
-        setContentCompressionResistancePriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         setAccessibilityElement(true)
         setAccessibilityRole(.tabGroup)
         setAccessibilityLabel("Capsule 类型")
@@ -1969,10 +2172,18 @@ final class CapsuleRailTabStrip: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    override var intrinsicContentSize: NSSize { NSSize(width: 350, height: 28) }
+    override func layout() {
+        super.layout()
+        tabScroll.frame = bounds
+        stack.frame = NSRect(x: 0, y: 0, width: max(bounds.width, stack.fittingSize.width), height: 28)
+    }
+
     func select(_ tab: CapsuleRailTab) {
         guard tab != selectedTab else { return }
         selectedTab = tab
         applyAppearance()
+        if let button = buttons.first(where: { $0.tab == tab }) { button.scrollToVisible(button.bounds) }
     }
 
     func applyAppearance() {

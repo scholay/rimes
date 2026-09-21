@@ -221,6 +221,7 @@ All release channels are published in `scholay/rimes`: macOS `vX.Y.Z` is formal;
 ## Community
 
 - [RIMES on Linux.do](https://linux.do/u/leowangling/preferences/account)
+- [iRime](https://github.com/jimmy54/iRime) — Thanks to the iRime project and its authors for their guidance and help promoting RIMES.
 
 ## Contributors
 

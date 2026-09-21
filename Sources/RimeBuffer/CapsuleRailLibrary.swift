@@ -4,14 +4,17 @@ import Foundation
 /// tab is one kind of saved Capsule entry, read-only in the rail.
 enum CapsuleRailTab: Hashable {
     case recent
+    case captures
     case saved(CapsuleEntryKind)
 
     /// Most-used first. Password is last because nothing leaves it from the
     /// rail: it can only be opened in the manager.
     static let ordered: [CapsuleRailTab] = [
         .recent,
+        .captures,
         .saved(.note),
         .saved(.image),
+        .saved(.video),
         .saved(.pdf),
         .saved(.skill),
         .saved(.password),
@@ -20,6 +23,7 @@ enum CapsuleRailTab: Hashable {
     var label: String {
         switch self {
         case .recent: return "最近"
+        case .captures: return "捕获"
         case let .saved(kind): return kind.tabLabel
         }
     }
@@ -65,7 +69,7 @@ enum CapsuleRailActivationRules {
     static func action(for kind: CapsuleEntryKind) -> Action {
         switch kind {
         case .note: return .insertText
-        case .image, .pdf, .skill: return .pasteFile
+        case .image, .pdf, .skill, .video: return .pasteFile
         case .password: return .refuse
         }
     }
@@ -111,6 +115,7 @@ final class CapsuleRailLibrary {
                                passwords: Result<[CapsuleRailEntry], Error>)
 
     var onChange: (() -> Void)?
+    var usesLiveCaptureHistory = false
     let savedIndex: CapsuleRailSavedIndex
 
     private let loader: Loader
@@ -137,10 +142,12 @@ final class CapsuleRailLibrary {
 
     /// Reads the real Capsule stores.
     static func live() -> CapsuleRailLibrary {
-        CapsuleRailLibrary(
+        let library = CapsuleRailLibrary(
             loader: { load(contentStore: .shared, passwordStore: .shared) },
             savedIndex: CapsuleRailSavedIndex(defaults: .standard)
         )
+        library.usesLiveCaptureHistory = true
+        return library
     }
 
     func entries(for kind: CapsuleEntryKind) -> [CapsuleRailEntry] {

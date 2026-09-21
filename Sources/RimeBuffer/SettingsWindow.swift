@@ -585,6 +585,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private var aiConnectorObserver: NSObjectProtocol?
     private var aiConnectorAvailabilityObserver: NSObjectProtocol?
     private var appearanceObserver: NSObjectProtocol?
+    private var permissionRefreshObserver: NSObjectProtocol?
     private var capsuleSyncSettingsObserver: NSObjectProtocol?
     private var mailboxSettingsObservation: MailboxStoreObservation?
     private weak var mailboxSettingsStatusBadge: NSTextField?
@@ -1465,6 +1466,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             contentHost.bottomAnchor.constraint(equalTo: background.bottomAnchor),
         ])
 
+        permissionRefreshObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.navigation.selectedSubpage()?.rawValue == "permissions" else { return }
+            self.reload()
+        }
         statsObserver = NotificationCenter.default.addObserver(
             forName: .keyFrequencyDidChange,
             object: nil,
@@ -4152,7 +4159,10 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     /// indistinguishable from a broken feature, which is the whole reason
     /// this page exists.
     private func permissionsPage() -> NSView {
-        var rows: [NSView] = []
+        var rows: [NSView] = [caption("只在使用对应功能时授权。这里显示当前进程的预检查结果；系统开关已打开但功能不可用时，请进入「授权与检测」。")]
+        rows.append(sectionLabel("找不到 RIMES？重新添加应用"))
+        rows.append(PermissionApplicationCard(width: 650))
+        rows.append(caption("上方拖动与「＋」适用于屏幕录制、辅助功能和输入监控。摄像头、麦克风需从「授权与检测」请求，不能手动添加。"))
         for report in SystemPermissionAudit.reportAll() {
             let status: String
             let symbol: String
@@ -4161,14 +4171,14 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 status = "已授权"
                 symbol = "checkmark.seal"
             case .denied:
-                status = "未授权"
+                status = report.permission == .screenRecording ? "当前进程待验证" : "当前进程未获授权"
                 symbol = "exclamationmark.triangle"
             case .undeterminable:
                 status = "系统未提供查询接口"
                 symbol = "questionmark.circle"
             }
             let button = SettingsPointingButton(
-                title: report.actionTitle,
+                title: report.permission == .localNetwork ? "打开设置" : "授权与检测",
                 target: self,
                 action: #selector(permissionActionTapped(_:))
             )
@@ -4182,12 +4192,11 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 control: button
             ))
         }
-        // The identity TCC records against, spelled out. Three different
-        // names appear on this bundle and only one of them is the one to look
-        // for in System Settings.
+        // Bundle-ID suffixes need not equal display names; do not mistake
+        // the intentional "isaac" identifier for a stale installation.
         let identity = SystemPermissionAudit.identity()
         let identityNote = NSTextField(wrappingLabelWithString:
-            "系统按「标识符」记录授权，而不是按显示名：\n"
+            "系统会结合应用身份与代码签名判断授权，请核对当前应用：\n"
             + "标识符：\(identity.bundleIdentifier)\n"
             + "显示名：\(identity.bundleName)　可执行文件：\(identity.executableName)\n"
             + "位置：\(identity.bundlePath)")
@@ -4196,19 +4205,10 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         rows.append(spacer(12))
         rows.append(sectionLabel("应用标识"))
         rows.append(identityNote)
-        if !identity.namesAgree {
-            let mismatch = NSTextField(wrappingLabelWithString:
-                "这三个名称目前并不一致，历史授权记录可能同时留有旧标识符的条目。"
-                + "在系统设置里请以上面的标识符为准，删除对不上的旧条目。")
-            mismatch.font = .systemFont(ofSize: 11)
-            mismatch.textColor = RimeUI.textMuted
-            rows.append(mismatch)
-        }
-
         if let authority = SystemPermissionAudit.signingAuthority() {
             let signed = NSTextField(wrappingLabelWithString:
-                "签名证书：\(authority)。授权记录绑定在证书上而不是二进制哈希上，"
-                + "因此重新构建之后无需重新授权。")
+                "签名证书：\(authority)。保持稳定的签名身份有助于在更新后保留授权；"
+                + "最终以系统和当前进程的实际检测结果为准。")
             signed.font = .systemFont(ofSize: 11)
             signed.textColor = RimeUI.textMuted
             rows.append(spacer(8))
@@ -4217,10 +4217,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         if SystemPermissionAudit.isAdHocSigned() {
             // The single most useful sentence on this page for this build.
             let note = NSTextField(wrappingLabelWithString:
-                "当前为临时签名（ad-hoc）构建：每次重新构建都会更换代码签名，"
-                + "系统会因此作废已授予的权限，而「系统设置」里的勾选仍然显示为开启，"
-                + "并且不会再次弹出授权对话框。恢复方法是在对应面板中移除 RIMES 后重新添加。"
-                + "改用固定的签名证书可以一劳永逸。")
+                "当前为临时签名（ad-hoc）开发版：重新构建后，旧授权可能不再匹配，"
+                + "即使系统开关仍显示开启。请先检测、重启；仍失败时再在对应系统面板"
+                + "移除旧 RIMES 并添加当前应用。稳定的开发签名可减少反复授权。")
             note.font = .systemFont(ofSize: 11)
             note.textColor = RimeUI.textMuted
             rows.append(spacer(12))
@@ -4233,38 +4232,40 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             action: #selector(refreshPermissionsPage)
         )
         let reset = SettingsPointingButton(
-            title: "清除授权记录并重新申请",
+            title: "重置辅助功能授权…",
             target: self,
             action: #selector(resetAccessibilityRecordTapped)
         )
         let actions = NSStackView(views: [refresh, reset])
         actions.orientation = .horizontal
         actions.spacing = 8
-        actions.toolTip = "系统只对「从未记录过」的应用弹出授权对话框。一旦记录存在（临时签名每次"
-            + "重新构建都会让记录与新二进制对不上），再申请也不会有任何反应。"
-            + "清除记录后系统才会重新询问。"
+        reset.toolTip = "仅重置 RIMES 的辅助功能授权，不处理屏幕录制或其他权限；执行前会确认。"
         rows.append(actions)
         return contentColumn(rows)
     }
 
-    @objc private func permissionActionTapped(_ sender: NSButton) {
+    @MainActor @objc private func permissionActionTapped(_ sender: NSButton) {
         let permissions = SystemPermission.allCases
         guard sender.tag >= 0, sender.tag < permissions.count else { return }
         let permission = permissions[sender.tag]
-        let prompted = SystemPermissionAudit.requestOrReveal(permission)
-        IMELog.write("permissions: \(permission.rawValue) action prompted=\(prompted)")
-        refreshPermissionsPage()
+        if permission == .localNetwork, let url = permission.settingsURL {
+            NSWorkspace.shared.open(url)
+        } else {
+            CapturePermissionGuide.shared.show(permission)
+        }
     }
 
-    @objc private func resetAccessibilityRecordTapped() {
+    @MainActor @objc private func resetAccessibilityRecordTapped() {
+        let alert = NSAlert()
+        alert.messageText = "仅重置 RIMES 的辅助功能授权？"
+        alert.informativeText = "这不会修复屏幕录制权限，也不会清除其他权限。重置后需要重新允许 RIMES 使用辅助功能。"
+        alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "重置辅助功能")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
         let cleared = SystemPermissionAudit.resetAccessibilityRecord()
         // Only ask after the record is gone; asking first is what produced
         // nothing at all.
-        if cleared {
-            ClipboardAutoPaste.requestPermission()
-        } else {
-            SystemPermissionAudit.requestOrReveal(.accessibility)
-        }
+        if cleared { CapturePermissionGuide.shared.show(.accessibility) }
+        else { info("未能重置辅助功能授权。请到系统设置手动检查 RIMES 条目。") }
         reload()
     }
 

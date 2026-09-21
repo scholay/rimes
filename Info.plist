@@ -74,6 +74,12 @@
 	<false/>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
+	<key>NSCameraUsageDescription</key>
+	<string>在你开启录屏摄像头时添加讲解画面。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>在你开启录屏麦克风时录制讲解声音。</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>在你主动截图、取字或录屏时捕获所选屏幕内容。</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSBonjourServices</key>

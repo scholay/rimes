@@ -86,6 +86,24 @@ private final class ClipboardHistoryPanel: NSPanel {
         }
         return super.performKeyEquivalent(with: event)
     }
+
+    // DIAGNOSTIC: does anything at all reach this window? A rail that ignores
+    // both mouse and keyboard is either not being sent events or discarding
+    // them, and only arrival can tell those apart.
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel:
+            IMELog.write(
+                "clipboard panel received \(event.type.rawValue) "
+                    + "ordered=\(isVisible) activeSpace=\(isOnActiveSpace) "
+                    + "key=\(isKeyWindow) acceptsKey=\(acceptsKeyInput) "
+                    + "appActive=\(NSApp.isActive) alpha=\(alphaValue)"
+            )
+        default:
+            break
+        }
+        super.sendEvent(event)
+    }
 }
 
 func clipboardHistoryStandalonePanelKeyboardProbe() -> Bool {
@@ -378,8 +396,13 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
         scheduleExplicitCapture()
         RIMESController.refreshActiveUI()
         let targetDescription = presentationTargetToken?.description ?? "none"
+        MainActor.assumeIsolated { pane.setSearchCaretActive(true) }
         IMELog.write(
-            "clipboard window shown mode=\(mode) target=\(targetDescription)"
+            "clipboard window shown mode=\(mode) target=\(targetDescription) "
+                + "frame=\(NSStringFromRect(panel.frame)) level=\(panel.level.rawValue) "
+                + "ordered=\(panel.isVisible) activeSpace=\(panel.isOnActiveSpace) "
+                + "alpha=\(panel.alphaValue) screen=\(panel.screen != nil) "
+                + "appActive=\(NSApp.isActive)"
         )
     }
 
@@ -418,6 +441,7 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
         }
         presentationMode = .borrowedRime
         syncCaptureState()
+        MainActor.assumeIsolated { pane.setSearchCaretActive(false) }
         IMELog.write("clipboard window hidden")
     }
 
@@ -583,9 +607,13 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
               targetIsExternal,
               clientMatches,
               !secureInput else {
-            if isReturnKey {
+            // DIAGNOSTIC: log every rejected key while the rail is on screen,
+            // not just Return. Typing into the search box produced no log at
+            // all, so which of these six conditions fails is unknown.
+            if isReturnKey || visible {
                 IMELog.write(
-                    "clipboard return route=pass modifiers=\(intentModifiers.rawValue) "
+                    "clipboard route=pass key=\(event.keyCode) "
+                        + "modifiers=\(intentModifiers.rawValue) "
                         + "visible=\(visible) token=\(token != nil) "
                         + "target=\(target != nil) external=\(targetIsExternal) "
                         + "client=\(clientMatches) secure=\(secureInput)"
@@ -644,8 +672,15 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
         }
         if Self.isPlainSearchInputEvent(event) {
             consumedKeyCodes.insert(event.keyCode)
+            IMELog.write("clipboard route=rime key=\(event.keyCode) (plain search text)")
             return .routeToRime
         }
+        // DIAGNOSTIC: the gate opened, the surface declined the key, and it is
+        // not plain text either — so it reaches the host instead of the search.
+        IMELog.write(
+            "clipboard route=pass-after-surface key=\(event.keyCode) "
+                + "chars=\(event.characters?.count ?? -1)"
+        )
         lastHandledKeyCode = nil
         lastHandledClientIdentity = nil
         return .passThrough
@@ -771,7 +806,10 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
                 self?.activateSaved(entry, closesAfterWrite: false) ?? false
             }
             pane.onEditSaved = { [weak self] entry in
-                self?.openCapsuleManager(revealing: entry)
+                if entry.kind == .image || entry.kind == .video {
+                    self?.hide()
+                    CaptureCoordinator.shared.editSaved(entry)
+                } else { self?.openCapsuleManager(revealing: entry) }
             }
             pane.onManage = { [weak self] in
                 self?.openCapsuleManager(revealing: nil)

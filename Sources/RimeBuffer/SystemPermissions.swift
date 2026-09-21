@@ -1,5 +1,7 @@
+import AVFoundation
 import ApplicationServices
 import Cocoa
+import CoreGraphics
 
 /// Every macOS permission RIMES actually uses, what stops working without it,
 /// and how to reach the pane that grants it.
@@ -7,16 +9,29 @@ import Cocoa
 /// Written as one list because the alternative is what happened before: a
 /// feature declines, logs a line nobody reads, and silently falls back — so a
 /// missing grant looks like a broken feature. Anything not listed here is not
-/// requested. Input Monitoring in particular is deliberately absent: the
-/// global monitors watch mouse buttons only, and the hotkeys are Carbon
-/// registrations, neither of which needs it.
+/// requested.
+///
+/// Input Monitoring was deliberately absent while the global monitors watched
+/// mouse buttons only. Screen capture's keystroke overlay reads keys, so it is
+/// listed now — the comment claiming otherwise outlived the feature that
+/// justified it.
 enum SystemPermission: String, CaseIterable {
     case accessibility
+    case screenRecording
+    case inputMonitoring
+    case camera
+    case microphone
     case localNetwork
 
     var title: String {
         switch self {
         case .accessibility: return "辅助功能"
+        case .screenRecording:
+            if #available(macOS 15.0, *) { return "屏幕与系统音频录制" }
+            return "屏幕录制"
+        case .inputMonitoring: return "输入监控"
+        case .camera: return "摄像头"
+        case .microphone: return "麦克风"
         case .localNetwork: return "本地网络"
         }
     }
@@ -26,7 +41,16 @@ enum SystemPermission: String, CaseIterable {
     var enables: String {
         switch self {
         case .accessibility:
-            return "剪贴板自动粘贴、工作台对齐目标输入框、输入框高亮提示"
+            return "剪贴板自动粘贴、工作台对齐目标输入框、输入框高亮提示、"
+                + "滚动截图的自动滚动"
+        case .screenRecording:
+            return "截图、滚动截图与录屏（查看已有图片和贴图无需此权限）"
+        case .inputMonitoring:
+            return "录屏时显示全局按键"
+        case .camera:
+            return "录屏时的摄像头画面"
+        case .microphone:
+            return "录屏时录制麦克风"
         case .localNetwork:
             return "Marine 局域网配对与跨设备直连"
         }
@@ -35,7 +59,16 @@ enum SystemPermission: String, CaseIterable {
     var whenMissing: String {
         switch self {
         case .accessibility:
-            return "内容仍会写入剪贴板，但需要自己按 ⌘V；工作台改用光标位置定位。"
+            return "内容仍会写入剪贴板，但需要自己按 ⌘V；工作台改用光标位置定位；"
+                + "滚动截图只能手动滚动。"
+        case .screenRecording:
+            return "无法取得新的屏幕画面；已有截图、编辑和历史仍可使用。"
+        case .inputMonitoring:
+            return "录屏可继续，但需关闭「显示按键」选项。"
+        case .camera:
+            return "录屏可继续，画面中不含摄像头。"
+        case .microphone:
+            return "录屏可继续，只录系统声或无声。"
         case .localNetwork:
             return "本机回环网关不受影响，仅跨设备配对不可用。"
         }
@@ -46,9 +79,30 @@ enum SystemPermission: String, CaseIterable {
         case .accessibility:
             return URL(string: "x-apple.systempreferences:com.apple.preference"
                 + ".security?Privacy_Accessibility")
+        case .screenRecording:
+            return URL(string: "x-apple.systempreferences:com.apple.preference"
+                + ".security?Privacy_ScreenCapture")
+        case .inputMonitoring:
+            return URL(string: "x-apple.systempreferences:com.apple.preference"
+                + ".security?Privacy_ListenEvent")
+        case .camera:
+            return URL(string: "x-apple.systempreferences:com.apple.preference"
+                + ".security?Privacy_Camera")
+        case .microphone:
+            return URL(string: "x-apple.systempreferences:com.apple.preference"
+                + ".security?Privacy_Microphone")
         case .localNetwork:
             return URL(string: "x-apple.systempreferences:com.apple.preference"
                 + ".security?Privacy_LocalNetwork")
+        }
+    }
+
+    /// These panes accept an application via their Add button or file drag.
+    /// Camera/microphone are request-driven lists, not manual app pickers.
+    var supportsManualApplicationAddition: Bool {
+        switch self {
+        case .accessibility, .screenRecording, .inputMonitoring: return true
+        case .camera, .microphone, .localNetwork: return false
         }
     }
 }
@@ -84,9 +138,26 @@ enum SystemPermissionAudit {
         switch permission {
         case .accessibility:
             return AXIsProcessTrusted() ? .granted : .denied
+        case .screenRecording:
+            return CGPreflightScreenCaptureAccess() ? .granted : .denied
+        case .inputMonitoring:
+            return CGPreflightListenEventAccess() ? .granted : .denied
+        case .camera:
+            return mediaStatus(for: .video)
+        case .microphone:
+            return mediaStatus(for: .audio)
         case .localNetwork:
             // There is no API that reports local-network authorization.
             return .undeterminable
+        }
+    }
+
+    private static func mediaStatus(
+        for type: AVMediaType
+    ) -> SystemPermissionStatus {
+        switch AVCaptureDevice.authorizationStatus(for: type) {
+        case .authorized: return .granted
+        default: return .denied
         }
     }
 
@@ -127,7 +198,7 @@ enum SystemPermissionAudit {
               let staticCode else { return false }
         var information: CFDictionary?
         guard SecCodeCopySigningInformation(staticCode,
-                                            SecCSFlags(rawValue: 0),
+                                            SecCSFlags(rawValue: kSecCSSigningInformation),
                                             &information) == errSecSuccess,
               let details = information as? [String: Any] else { return false }
         // An ad-hoc signature carries no certificate chain.
@@ -143,6 +214,18 @@ enum SystemPermissionAudit {
             // Already listed — which an ad-hoc rebuild guarantees once the
             // user has granted it even once — means no prompt will appear.
             silent = status == .denied && isAdHocSigned()
+        case .camera, .microphone:
+            // These prompt exactly once. After any answer the system returns
+            // the recorded one without showing anything.
+            let type: AVMediaType = permission == .camera ? .video : .audio
+            silent = AVCaptureDevice.authorizationStatus(for: type)
+                != .notDetermined
+        case .screenRecording, .inputMonitoring:
+            // CoreGraphics exposes no "not determined" state for these, so a
+            // request may or may not raise a prompt. Attempting it and
+            // falling back to System Settings is the honest behaviour;
+            // claiming to know in advance is not.
+            silent = false
         case .localNetwork:
             silent = true
         }
@@ -230,15 +313,61 @@ enum SystemPermissionAudit {
     @discardableResult
     static func requestOrReveal(_ permission: SystemPermission) -> Bool {
         let report = report(for: permission)
-        if permission == .accessibility,
-           report.status == .denied,
-           !report.promptWouldBeSilent {
-            ClipboardAutoPaste.requestPermission()
-            return true
+        guard report.status != .granted else {
+            if let url = permission.settingsURL { NSWorkspace.shared.open(url) }
+            return false
+        }
+        switch permission {
+        case .accessibility:
+            if !report.promptWouldBeSilent {
+                ClipboardAutoPaste.requestPermission()
+                return true
+            }
+        case .screenRecording:
+            // Returns false when macOS has a recorded denial and shows
+            // nothing; fall through to Settings in that case.
+            if CGRequestScreenCaptureAccess() { return true }
+        case .inputMonitoring:
+            if CGRequestListenEventAccess() { return true }
+        case .camera, .microphone:
+            let type: AVMediaType = permission == .camera ? .video : .audio
+            if AVCaptureDevice.authorizationStatus(for: type) == .notDetermined {
+                AVCaptureDevice.requestAccess(for: type) { _ in }
+                return true
+            }
+        case .localNetwork:
+            break
         }
         if let url = permission.settingsURL {
             NSWorkspace.shared.open(url)
         }
         return false
+    }
+
+    /// User-initiated request only: never opens Settings as a second side
+    /// effect, and waits for camera/microphone's asynchronous system answer.
+    @MainActor
+    static func requestOnly(_ permission: SystemPermission) async {
+        switch permission {
+        case .screenRecording: _ = CGRequestScreenCaptureAccess()
+        case .inputMonitoring: _ = CGRequestListenEventAccess()
+        case .accessibility: ClipboardAutoPaste.requestPermission()
+        case .camera, .microphone:
+            let type: AVMediaType = permission == .camera ? .video : .audio
+            if AVCaptureDevice.authorizationStatus(for: type) == .notDetermined {
+                _ = await AVCaptureDevice.requestAccess(for: type)
+            }
+        case .localNetwork: break
+        }
+    }
+
+    /// One call for a feature about to need a permission: true when it can
+    /// proceed now. Everything that needs a grant goes through here so the
+    /// panel and the feature can never disagree about what was asked for.
+    @discardableResult
+    static func ensure(_ permission: SystemPermission) -> Bool {
+        if status(for: permission) == .granted { return true }
+        requestOrReveal(permission)
+        return status(for: permission) == .granted
     }
 }

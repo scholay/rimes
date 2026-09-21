@@ -171,14 +171,14 @@ enum CapsuleRailSmoke {
         expect: (_ condition: @autoclosure () -> Bool, _ message: String) -> Void
     ) {
         expect(
-            CapsuleRailTab.ordered.map(\.label) == ["最近", "笔记", "图片", "PDF", "技能", "密码"],
+            CapsuleRailTab.ordered.map(\.label) == ["最近", "捕获", "笔记", "图片", "视频", "PDF", "技能", "密码"],
             "tab order"
         )
         expect(CapsuleRailTab.recent.cycled(by: -1) == .saved(.password), "tabs wrap backward")
         expect(CapsuleRailTab.saved(.password).cycled(by: 1) == .recent, "tabs wrap forward")
-        expect(CapsuleRailTab.saved(.note).cycled(by: 2) == .saved(.pdf), "tabs step")
+        expect(CapsuleRailTab.saved(.note).cycled(by: 3) == .saved(.pdf), "tabs step")
         expect(CapsuleRailActivationRules.action(for: .note) == .insertText, "note inserts text")
-        for kind in [CapsuleEntryKind.image, .pdf, .skill] {
+        for kind in [CapsuleEntryKind.image, .video, .pdf, .skill] {
             expect(
                 CapsuleRailActivationRules.action(for: kind) == .pasteFile,
                 "\(kind.rawValue) pastes a file"
@@ -308,6 +308,8 @@ enum CapsuleRailSmoke {
         expect(savedFromHistory.count == 1, "Command-S saves the selected history card")
 
         expect(pane.handleKeyDown(key(kVK_Tab)), "Tab is owned by the rail")
+        expect(pane.selectedTab == .captures, "Tab moves to captures")
+        expect(pane.handleKeyDown(key(kVK_Tab)), "next Tab moves onward")
         expect(pane.selectedTab == .saved(.note), "Tab moves to Notes")
         waitUntil { library.state(for: .note) == .loaded }
         pane.layoutSubtreeIfNeeded()
