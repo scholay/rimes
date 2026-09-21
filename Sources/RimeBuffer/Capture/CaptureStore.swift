@@ -37,6 +37,19 @@ struct CaptureRecord: Codable, Equatable, Identifiable {
     var thumbnail: String? = nil
 }
 
+enum CaptureDuration {
+    static func normalized(_ seconds: Double) -> Double {
+        seconds.isFinite && seconds >= 0 ? seconds : 0
+    }
+    static func label(_ seconds: Double) -> String {
+        // Imported metadata is not trusted to fit in an integer. Unknown or
+        // implausibly large values must never crash the history rail.
+        guard seconds.isFinite, seconds >= 0, seconds < Double(Int32.max) else { return "--:--" }
+        let whole = Int(seconds)
+        return String(format: "%02d:%02d", whole / 60, whole % 60)
+    }
+}
+
 enum CaptureError: LocalizedError {
     case message(String)
     var errorDescription: String? { if case let .message(s) = self { return s }; return nil }
@@ -150,7 +163,7 @@ final class CaptureStore: @unchecked Sendable {
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
             var record = CaptureRecord(id: id, title: title ?? "\(kind.label) \(Date().formatted(date: .numeric, time: .shortened))",
                 kind: kind, createdAt: Date(), source: source, original: name, output: name, project: nil, text: "",
-                width: width, height: height, duration: duration, collectionID: nil, incomplete: incomplete)
+                width: width, height: height, duration: CaptureDuration.normalized(duration), collectionID: nil, incomplete: incomplete)
             record.thumbnail = try? Self.makeThumbnail(source: destination, kind: kind, directory: folder)
             try queue.sync { try write(record) }
             changed()
@@ -283,7 +296,7 @@ final class CaptureStore: @unchecked Sendable {
             guard (try file.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true else { continue }
             let asset = AVURLAsset(url: file)
             guard !asset.tracks(withMediaType: .video).isEmpty else { continue }
-            _ = try importFile(file, kind: .video, title: "恢复的录屏", duration: max(0, CMTimeGetSeconds(asset.duration)), incomplete: true)
+            _ = try importFile(file, kind: .video, title: "恢复的录屏", duration: CMTimeGetSeconds(asset.duration), incomplete: true)
             try FileManager.default.removeItem(at: file)
             recovered += 1
         }

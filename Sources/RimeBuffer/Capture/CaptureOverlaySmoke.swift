@@ -53,6 +53,47 @@ enum CaptureOverlaySmoke {
         try require(panels[0].record.title == revised.title && panels[0].preview.image != nil, "metadata updates without blanking image")
         coordinator.setResultOverlaysSuspended(false)
         try require(panels.map(\.frame) == frames && panels.allSatisfy(\.isVisible), "restore uses the same stack")
+        // Lock/wake, secure input and capture suspension must not strand cards
+        // or allow one unprotect signal to bypass another active protection.
+        coordinator.setResultOverlaysSuspended(true)
+        coordinator.setProtection(.locked, active: true)
+        coordinator.setProtection(.sleeping, active: true)
+        coordinator.setProtection(.sleeping, active: false)
+        try require(panels.allSatisfy { !$0.isVisible }, "wake while locked stays hidden")
+        coordinator.setProtection(.secureInput, active: true)
+        coordinator.setProtection(.locked, active: false)
+        try require(panels.allSatisfy { !$0.isVisible }, "unlock while secure stays hidden")
+        coordinator.setProtection(.secureInput, active: false)
+        try require(panels.allSatisfy(\.isVisible), "final unprotect restores cards and clears abandoned capture suspension")
+
+        coordinator.showText("disposable recovery fixture")
+        guard let textPanel = NSApp.windows.compactMap({ $0 as? CapturePanel }).first(where: {
+            $0.isVisible && $0.contentView?.subviews.contains(where: { $0 is NSStackView }) == true
+        }) else { throw CaptureError.message("overlay: recovery fixture panel missing") }
+        coordinator.setProtection(.inactive, active: true)
+        try require(!textPanel.isVisible, "managed panels hide during session transition")
+        coordinator.setProtection(.inactive, active: false)
+        try require(textPanel.isVisible, "previously visible managed panel restores")
+        coordinator.setProtection(.locked, active: true)
+        textPanel.close()
+        coordinator.setProtection(.locked, active: false)
+        try require(!textPanel.isVisible, "closed panel is not resurrected on unlock")
+
+        // No ScreenCaptureKit call is reached: cancel the waiting task before
+        // its first suspension ends, then let late task cleanup run.
+        coordinator.begin("area", delay: 30)
+        try require(coordinator.preparingCapture && coordinator.countdown?.isVisible == true, "delay has visible cancellation UI")
+        coordinator.countdown?.cancelOperation(nil)
+        try require(!coordinator.preparingCapture && coordinator.countdown == nil && panels.allSatisfy(\.isVisible), "Escape cancels countdown and restores cards")
+        coordinator.begin("area", delay: 30)
+        coordinator.begin("area")
+        try require(!coordinator.preparingCapture && coordinator.countdown == nil, "repeated shortcut cancels countdown")
+        coordinator.begin("area", delay: 30)
+        coordinator.setProtection(.locked, active: true)
+        try require(!coordinator.preparingCapture && coordinator.countdown == nil && panels.allSatisfy { !$0.isVisible }, "lock cancels pending delay")
+        coordinator.setProtection(.locked, active: false)
+        _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.03))
+        try require(!coordinator.preparingCapture && panels.allSatisfy(\.isVisible), "cancelled tasks cannot strand or restart capture")
         let bottom = panels[2].frame.minY
         panels[2].close()
         try require(coordinator.overlays.count == 2 && panels[1].frame.minY == bottom, "closing bottom immediately fills the gap")

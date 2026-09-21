@@ -40,7 +40,17 @@ enum CaptureSmoke {
             let store = try CaptureStore(root:root.appendingPathComponent("captures"))
             let image = try fixture()
             let record = try store.importImage(image)
+            try MainActor.assumeIsolated { try CaptureEditorSmoke.run(record: record, store: store) }
+            for seconds in [Double.nan, .infinity, -.infinity, -1] {
+                try require(CaptureDuration.normalized(seconds) == 0, "invalid duration is normalized before persistence")
+                try require(CaptureDuration.label(seconds) == "--:--", "invalid legacy duration cannot trap history")
+            }
+            try require(CaptureDuration.label(Double.greatestFiniteMagnitude) == "--:--", "out-of-range duration cannot overflow")
+            try require(CaptureDuration.label(125.9) == "02:05", "duration keeps minute/second formatting")
             try require(try store.records().count == 1,"metadata publication")
+            let invalidDuration = try store.importFile(store.url(record), kind: .image, duration: .nan)
+            try require(try store.record(invalidDuration.id).duration == 0, "import persists normalized duration")
+            try store.remove(invalidDuration.id)
             let original = try Data(contentsOf:store.url(record))
             store.acquire(record.id)
             try require(try store.prune(capacity:0) == 0,"active lease must survive capacity cleanup")
@@ -108,6 +118,10 @@ enum CaptureSmoke {
             // the matching rows off in System Settings, so registration can
             // fail — CaptureHotKey records that rather than going quiet.
             let fresh = UserDefaults(suiteName: UUID().uuidString)!
+            try require(CapturePreferences.overlaysOnLeft(fresh), "fresh overlay layout and checkbox both default left")
+            fresh.set(false, forKey: "capture.overlay.left")
+            try require(!CapturePreferences.overlaysOnLeft(fresh), "explicit right-edge preference preserved")
+            fresh.removeObject(forKey: "capture.overlay.left")
             let panelShortcut = RimeShortcutPreferences.shortcut(for: .captureScreen, defaults: fresh)
             let areaShortcut = RimeShortcutPreferences.shortcut(for: .captureArea, defaults: fresh)
             try require(panelShortcut.keyCode == UInt16(kVK_ANSI_5)

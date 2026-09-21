@@ -3184,7 +3184,7 @@ final class CapsulePaneViewController: NSViewController,
         captureDraftFromFields()
         let kind = draft.kind
         let panel = NSOpenPanel()
-        panel.title = kind == .image ? "选择 Capsule 图片" : "选择 Capsule PDF"
+        panel.title = kind == .image ? "选择 Capsule 图片" : kind == .video ? "选择 Capsule 视频" : "选择 Capsule PDF"
         panel.message = "Capsule 只保存该文件在当前电脑中的绝对路径。"
         panel.prompt = "选择"
         panel.canChooseDirectories = false

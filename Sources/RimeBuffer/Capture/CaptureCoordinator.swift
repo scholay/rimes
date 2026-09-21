@@ -4,6 +4,14 @@ import Carbon.HIToolbox
 import ScreenCaptureKit
 import UniformTypeIdentifiers
 
+enum CaptureProtectionReason: Hashable { case locked, sleeping, inactive, secureInput, shuttingDown }
+
+enum CapturePreferences {
+    static func overlaysOnLeft(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: "capture.overlay.left") as? Bool ?? true
+    }
+}
+
 @MainActor
 final class CaptureCoordinator {
     static let shared = CaptureCoordinator()
@@ -19,7 +27,8 @@ final class CaptureCoordinator {
     private var otherPanels: [CapturePanel] = []
     private var lastClosed: UUID?
     private var generation = UUID()
-    private var preparingCapture = false
+    private(set) var preparingCapture = false
+    private(set) var countdown: CapturePanel?
     private var preparationTask: Task<Void, Never>?
     private var previousTarget: CaptureTarget?
     private var sourceName = ""
@@ -28,7 +37,8 @@ final class CaptureCoordinator {
     private var observers: [NSObjectProtocol] = []
     private var protectionTimer: Timer?
     private var cleanupTimer: Timer?
-    private var sessionProtected = false
+    private var protectionReasons: Set<CaptureProtectionReason> = []
+    private var sessionProtected: Bool { !protectionReasons.isEmpty }
     private var scrollSession: CaptureScrollSession?
     private var recorder: CaptureRecorderController?
     private let queue = DispatchQueue(label: "RIMES.Capture.work", qos: .userInitiated)
@@ -56,23 +66,23 @@ final class CaptureCoordinator {
                 self?.layoutOverlays()
             }
         })
-        for name in [NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.willSleepNotification, NSWorkspace.willPowerOffNotification] {
+        let transitions: [(Notification.Name, CaptureProtectionReason, Bool)] = [
+            (NSWorkspace.sessionDidResignActiveNotification, .inactive, true),
+            (NSWorkspace.sessionDidBecomeActiveNotification, .inactive, false),
+            (NSWorkspace.willSleepNotification, .sleeping, true),
+            (NSWorkspace.didWakeNotification, .sleeping, false),
+            (NSWorkspace.willPowerOffNotification, .shuttingDown, true)
+        ]
+        for (name, reason, active) in transitions {
             observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.protect() }
+                MainActor.assumeIsolated { self?.setProtection(reason, active: active) }
             })
         }
-        for name in [NSWorkspace.sessionDidBecomeActiveNotification, NSWorkspace.didWakeNotification] {
-            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.sessionProtected = false }
-            })
-        }
-        observers.append(DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.protect() } })
-        observers.append(DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.sessionProtected = false } })
+        observers.append(DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.setProtection(.locked, active: true) } })
+        observers.append(DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.setProtection(.locked, active: false) } })
         protectionTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard IsSecureEventInputEnabled() else { return }
-                self?.recorder?.pauseForProtection()
-                self?.invalidateSelection()
+                self?.setProtection(.secureInput, active: IsSecureEventInputEnabled())
             }
         }
         cleanupTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
@@ -95,7 +105,7 @@ final class CaptureCoordinator {
                     if let overlay = self.overlays[record.id], overlay.record == snapshot[record.id] {
                         self.updateOverlay(overlay, record: record)
                     }
-                    if let pin = self.pins[record.id] {
+                    if let pin = self.pins[record.id], pin.isVisible {
                         let frame = pin.frame, alpha = pin.alphaValue, locked = pin.ignoresMouseEvents
                         pin.close(); self.pin(record)
                         self.pins[record.id]?.setFrame(frame, display: true); self.pins[record.id]?.alphaValue = alpha; self.pins[record.id]?.ignoresMouseEvents = locked
@@ -105,21 +115,47 @@ final class CaptureCoordinator {
         }
     }
 
-    private func protect() {
-        sessionProtected = true
+    /// Protection sources are independent: wake must not expose windows while
+    /// the screen is still locked, nor unlock while secure input remains active.
+    func setProtection(_ reason: CaptureProtectionReason, active: Bool) {
+        if !active {
+            guard protectionReasons.remove(reason) != nil else { return }
+            if !sessionProtected { restoreHiddenPanels() }
+            return
+        }
+        guard protectionReasons.insert(reason).inserted else { return }
+        rememberVisiblePanels()
         invalidateSelection()
+        // The capture was cancelled, not paused. Remove its suspension even
+        // though protection still prevents layout from showing anything.
+        setResultOverlaysSuspended(false)
         CapturePermissionGuide.shared.dismiss()
         launcher?.close()
         overlays.values.forEach { $0.orderOut(nil) }; pins.values.forEach { $0.orderOut(nil) }
         editors.values.forEach { $0.panel.orderOut(nil) }
         otherPanels.forEach { $0.orderOut(nil) }
-        scrollSession?.cancel(); recorder?.stop()
+        scrollSession?.cancel()
+        if reason == .secureInput { recorder?.pauseForProtection() } else { recorder?.stop() }
+        IMELog.write("capture protection entered")
+    }
+
+    private var managedPanels: [NSWindow] {
+        Array(pins.values) + editors.values.map(\.panel) + otherPanels
+    }
+    private func rememberVisiblePanels() {
+        for panel in managedPanels where panel.isVisible && !temporarilyHidden.contains(where: { $0 === panel }) {
+            temporarilyHidden.append(panel)
+        }
     }
 
     private func restoreHiddenPanels() {
+        if IsSecureEventInputEnabled() { setProtection(.secureInput, active: true); return }
         guard !sessionProtected else { return }
-        pins.values.forEach { $0.orderFrontRegardless() }
-        temporarilyHidden.forEach { $0.orderFrontRegardless() }; temporarilyHidden.removeAll()
+        let managed = managedPanels
+        for panel in temporarilyHidden where managed.contains(where: { $0 === panel }) {
+            panel.orderFrontRegardless()
+        }
+        temporarilyHidden.removeAll()
         setResultOverlaysSuspended(false)
     }
 
@@ -142,6 +178,7 @@ final class CaptureCoordinator {
 
     func showLauncher() {
         guard !sessionProtected, !IsSecureEventInputEnabled() else { NSSound.beep(); return }
+        if countdown != nil { cancelSelection(generation); return }
         if NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier { sourceApplication = NSWorkspace.shared.frontmostApplication }
         sourceName = sourceApplication?.localizedName ?? ""
         ClipboardHistoryWindowController.shared.hide()
@@ -170,6 +207,7 @@ final class CaptureCoordinator {
     func begin(_ mode: String, delay: Int = 0, ratio: CGFloat? = nil, size: CGSize? = nil, freeze: Bool = true,
                requestedAt: TimeInterval? = nil) {
         guard !sessionProtected, !IsSecureEventInputEnabled() else { return }
+        if countdown != nil { cancelSelection(generation); return }
         guard !CapturePermissionGuide.shared.presentExisting(), !preparingCapture else { return }
         // The explicit capture uses ScreenCaptureKit's real permission gate.
         // Do not reject it solely on CoreGraphics preflight, or stack a system
@@ -181,22 +219,26 @@ final class CaptureCoordinator {
         let started = requestedAt ?? ProcessInfo.processInfo.systemUptime
         IMELog.write("capture prepare start mode=\(mode)")
         launcher?.close()
-        ClipboardHistoryWindowController.shared.hide()
+        if isolatedStore == nil { ClipboardHistoryWindowController.shared.hide() }
         // Result overlays used to be closed here, which is why only ever one
         // was on screen: each capture destroyed the stack it was about to
         // add to. They are hidden for the duration like every other panel
         // and restored with them, so the results accumulate.
-        pins.values.forEach { $0.orderOut(nil) }
-        if !overlaysSuspended {
-            temporarilyHidden = editors.values.map(\.panel).filter(\.isVisible)
-                + otherPanels.filter(\.isVisible)
-        }
+        rememberVisiblePanels()
         setResultOverlaysSuspended(true)
         temporarilyHidden.forEach { $0.orderOut(nil) }
+        let countdownLabel = delay > 0 ? presentCountdown(seconds: delay, request: token) : nil
         preparationTask = Task {
             defer { if generation == token { preparingCapture = false; preparationTask = nil } }
             do {
-                if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000) }
+                if delay > 0 {
+                    for remaining in stride(from: delay, through: 1, by: -1) {
+                        guard selectionIsCurrent(token) else { return }
+                        countdownLabel?.stringValue = "\(remaining) 秒后截图 · Esc 取消"
+                        try await Task.sleep(nanoseconds: 1_000_000_000)
+                    }
+                    closeCountdown()
+                }
                 guard selectionIsCurrent(token) else { return }
                 // Preflight only decides whether to cover the desktop before
                 // the real gate. Never obscure a first-use system prompt, and
@@ -211,6 +253,9 @@ final class CaptureCoordinator {
                 if usesSelection && surfaces.isEmpty {
                     surfaces = try presentSelectors(mode: mode, ratio: ratio, size: size, request: token)
                     logPreparation("mask-visible", started: started)
+                }
+                if usesSelection {
+                    surfaces = try supportedSurfaces(surfaces, displayIDs: Set(content.displays.map(\.displayID)))
                 }
                 if mode == "previous", let previousTarget {
                     guard content.displays.contains(where: { $0.displayID == previousTarget.display.displayID }) else { throw CaptureError.message("上次使用的显示器已断开") }
@@ -233,6 +278,7 @@ final class CaptureCoordinator {
                 try await select(content, surfaces: selectionSurfaces, mode: mode, freeze: freeze, request: token, started: started)
             } catch {
                 guard generation == token, !sessionProtected else { return }
+                if IsSecureEventInputEnabled() { setProtection(.secureInput, active: true); return }
                 invalidateSelection()
                 self.restoreHiddenPanels()
                 if CapturePermissionCheck.isPermissionFailure(error) {
@@ -245,17 +291,52 @@ final class CaptureCoordinator {
         }
     }
 
-    private struct SelectionSurface {
+    struct SelectionSurface {
         let screen: NSScreen
         let displayID: CGDirectDisplayID
         let view: CaptureSelectionView
+    }
+    private func presentCountdown(seconds: Int, request: UUID) -> NSTextField {
+        let panel = CapturePanel(size: NSSize(width: 280, height: 100))
+        panel.captureChrome = true
+        let label = CaptureUI.label("\(seconds) 秒后截图 · Esc 取消", size: 16)
+        CaptureUI.fill(CaptureUI.column([label, CaptureButton("取消") { [weak self] in self?.cancelSelection(request) }]), in: panel.contentView!)
+        panel.closed = { [weak self, weak panel] in
+            guard let self, self.countdown === panel else { return }
+            self.countdown = nil; self.cancelSelection(request)
+        }
+        countdown = panel; panel.present()
+        return label
+    }
+    private func closeCountdown() {
+        let panel = countdown; countdown = nil
+        panel?.closed = nil; panel?.close()
+    }
+    func supportedSurfaces(_ surfaces: [SelectionSurface], displayIDs: Set<CGDirectDisplayID>) throws -> [SelectionSurface] {
+        let supported = surfaces.filter { surface in
+            guard displayIDs.contains(surface.displayID) else {
+                surface.view.invalidate()
+                if let panel = surface.view.window as? CapturePanel {
+                    selectors.removeAll { $0 === panel }; panel.close()
+                }
+                return false
+            }
+            return true
+        }
+        guard !supported.isEmpty else { throw CaptureError.message("没有可捕获的显示器") }
+        if !selectors.contains(where: \.isKeyWindow), let panel = selectors.first {
+            panel.makeKeyAndOrderFront(nil); panel.makeFirstResponder(panel.contentView)
+        }
+        return supported
     }
     private func logPreparation(_ phase: String, started: TimeInterval) {
         let milliseconds = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
         IMELog.write("capture prepare \(phase) elapsed_ms=\(milliseconds)")
     }
     private func selectionIsCurrent(_ request: UUID) -> Bool {
-        generation == request && !Task.isCancelled && !sessionProtected && !IsSecureEventInputEnabled()
+        guard generation == request, !Task.isCancelled else { return false }
+        if IsSecureEventInputEnabled() { setProtection(.secureInput, active: true); return false }
+        return !sessionProtected
     }
     private func closeSelectors() {
         selectors.forEach {
@@ -268,12 +349,13 @@ final class CaptureCoordinator {
         generation = UUID(); preparingCapture = false
         preparationTask?.cancel(); preparationTask = nil
         closeSelectors()
+        closeCountdown()
     }
     private func cancelSelection(_ request: UUID) {
         guard generation == request else { return }
         invalidateSelection()
+        restoreHiddenPanels()
         if !sessionProtected, !IsSecureEventInputEnabled() {
-            restoreHiddenPanels()
             sourceApplication?.activate(options: [.activateIgnoringOtherApps])
         }
     }
@@ -310,12 +392,15 @@ final class CaptureCoordinator {
         // Fetch z-order once, not on every mouse move. Only windows admitted
         // by ScreenCaptureKit may become actual capture targets.
         let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        let windows = infos.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value }.compactMap { byID[$0] }
+        let windows = infos.compactMap { info -> (window: SCWindow, frame: CGRect)? in
+            guard let id = (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+                  let window = byID[id], let bounds = info[kCGWindowBounds as String] as? [String: Any],
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return nil }
+            return (window, frame)
+        }
         guard !windows.isEmpty else { throw CaptureError.message("当前没有可截取的窗口，请使用区域截图") }
         for surface in surfaces {
-            guard let display = content.displays.first(where: { $0.displayID == surface.displayID }) else {
-                throw CaptureError.message("显示器已变化，请重新截图")
-            }
+            guard let display = content.displays.first(where: { $0.displayID == surface.displayID }) else { continue }
             surface.view.windowSelected = { [weak self] id in
                 guard let self, self.selectionIsCurrent(request), let window = byID[id] else { return }
                 self.invalidateSelection()
@@ -323,9 +408,9 @@ final class CaptureCoordinator {
                 Task { do { try await self.finish(target: target, content: content, mode: mode, snapshot: nil) } catch { CaptureUI.error(error) } }
             }
             surface.view.acceptWindows(windows.map {
-                CaptureWindowChoice(id: $0.windowID,
-                    frame: $0.frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY),
-                    title: [$0.owningApplication?.applicationName, $0.title].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                CaptureWindowChoice(id: $0.window.windowID,
+                    frame: CaptureWindowChoice.localFrame(window: $0.frame, display: CGDisplayBounds(display.displayID)),
+                    title: [$0.window.owningApplication?.applicationName, $0.window.title].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
             })
         }
     }
@@ -334,9 +419,7 @@ final class CaptureCoordinator {
                         request: UUID, started: TimeInterval) async throws {
         try await withThrowingTaskGroup(of: (Int, CGImage).self) { group in
             for (index, surface) in surfaces.enumerated() {
-                guard let display = content.displays.first(where: { $0.displayID == surface.displayID }) else {
-                    throw CaptureError.message("显示器已变化，请重新截图")
-                }
+                guard let display = content.displays.first(where: { $0.displayID == surface.displayID }) else { continue }
                 let scale = surface.screen.backingScaleFactor
                 let screenWidth = surface.screen.frame.width
                 let target = CaptureTarget(display: display, window: nil, rect: nil)
@@ -360,7 +443,8 @@ final class CaptureCoordinator {
     }
 
     private func finish(target: CaptureTarget, content: SCShareableContent, mode: String, snapshot: CGImage?) async throws {
-        guard !sessionProtected, !IsSecureEventInputEnabled() else { return }
+        if IsSecureEventInputEnabled() { setProtection(.secureInput, active: true); return }
+        guard !sessionProtected else { return }
         restoreHiddenPanels()
         previousTarget = target
         if mode == "scroll" {
@@ -534,13 +618,13 @@ final class CaptureCoordinator {
     /// one is dismissed. A fixed three-step cascade overlapped them and lost
     /// everything past the third.
     private func layoutOverlays() {
-        guard !sessionProtected, !overlaysSuspended else { return }
+        guard !sessionProtected, !overlaysSuspended, !IsSecureEventInputEnabled() else { return }
         if overlays.isEmpty { overlayScreen = nil; return }
         if overlayScreen == nil || !NSScreen.screens.contains(where: { $0 == overlayScreen }) {
             overlayScreen = NSScreen.main
         }
         guard let visible = overlayScreen?.visibleFrame else { return }
-        let onLeft = UserDefaults.standard.object(forKey: "capture.overlay.left") as? Bool ?? true
+        let onLeft = CapturePreferences.overlaysOnLeft()
         let panels = overlayOrder.reversed().compactMap { overlays[$0] }
         let frames = CaptureOverlayLayout.frames(sizes: panels.map { $0.frame.size }, visible: visible, onLeft: onLeft)
         for (index, panel) in panels.enumerated() {
@@ -552,6 +636,7 @@ final class CaptureCoordinator {
     }
 
     func showActions(_ record: CaptureRecord) {
+        guard !sessionProtected, !IsSecureEventInputEnabled() else { return }
         let panel = CapturePanel(size: NSSize(width: 310, height: 170))
         var actions: [NSView] = [CaptureUI.label(record.title), CaptureUI.row([CaptureButton("保存文件") { self.export(record) }, CaptureButton("收入 Capsule") { self.collect(record) }])]
         if record.kind.capsuleKind == .image {
@@ -631,6 +716,7 @@ final class CaptureCoordinator {
         }
     }
     func edit(_ record: CaptureRecord) {
+        guard !sessionProtected, !IsSecureEventInputEnabled() else { return }
         if record.kind == .gif {
             guard let store = try? store, store.acquire(record.id) else { return }
             let url = store.url(record)
@@ -708,6 +794,7 @@ final class CaptureCoordinator {
         keepPanel(panel); panel.present()
     }
     func pin(_ record: CaptureRecord) {
+        guard !sessionProtected, !IsSecureEventInputEnabled() else { return }
         guard record.kind != .video, let store = try? store else { return }
         if let pin = pins[record.id] { pin.orderFrontRegardless(); return }
         let panel = CapturePinPanel(size: NSSize(width: 430, height: 310), key: false)
@@ -727,13 +814,14 @@ final class CaptureCoordinator {
         pins[record.id] = panel; panel.present()
     }
     func showRecorder() {
+        guard !sessionProtected, !IsSecureEventInputEnabled() else { return }
         if recorder?.isRecording == true { recorder?.showControls(); return }
         recorder = CaptureRecorderController { [weak self] in self?.begin("record", freeze: false) } completed: { [weak self] record in self?.showOverlay(record) }
         recorder?.showSettings()
     }
     func showOptions() {
         let panel = CapturePanel(size: NSSize(width: 480, height: 270))
-        let left = NSButton(checkboxWithTitle: "浮层放在屏幕左下角", target: nil, action: nil); left.state = UserDefaults.standard.bool(forKey: "capture.overlay.left") ? .on : .off
+        let left = NSButton(checkboxWithTitle: "浮层放在屏幕左下角", target: nil, action: nil); left.state = CapturePreferences.overlaysOnLeft() ? .on : .off
         let seconds = NSTextField(string: String(Int(UserDefaults.standard.double(forKey: "capture.overlay.seconds"))))
         let scale = NSSlider(value: UserDefaults.standard.object(forKey: "capture.overlay.scale") as? Double ?? 1, minValue: 0.8, maxValue: 1.5, target: nil, action: nil)
         let restore = CaptureButton("应用") { [weak panel] in

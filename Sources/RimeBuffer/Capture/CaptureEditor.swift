@@ -114,9 +114,10 @@ final class CaptureEditor {
     var onClose: (() -> Void)?
     nonisolated private let store: CaptureStore
     private var record: CaptureRecord
-    private var document: CaptureDocument?
+    private(set) var document: CaptureDocument?
     private var undo: [CaptureDocument] = []
     private var redo: [CaptureDocument] = []
+    private var selectionDragRecorded = false
     private var saved: CaptureDocument?
     private let canvas = CaptureCanvas()
     private let status = CaptureUI.label("正在读取图片…")
@@ -193,8 +194,13 @@ final class CaptureEditor {
     private func mutate(_ body: (inout CaptureDocument) -> Void) {
         guard !closed else { return }
         guard var document else { return }
+        let previous = document
+        body(&document)
+        guard document != previous else { return }
+        recordUndo(previous); self.document = document; render()
+    }
+    private func recordUndo(_ document: CaptureDocument) {
         undo.append(document); if undo.count > 60 { undo.removeFirst() }; redo.removeAll()
-        body(&document); self.document = document; render()
     }
     private func render() {
         guard var snapshot = document else { return }
@@ -215,8 +221,9 @@ final class CaptureEditor {
                 guard token == self.renderGeneration else { return }
                 switch result {
                 case .success(let image):
+                    let annotationCount = value.annotations.count
                     IMELog.write("capture render ok \(image.width)x\(image.height) "
-                        + "annotations=\(value.annotations.count)")
+                        + "annotations=\(annotationCount)")
                     self.canvas.image = image
                     self.canvas.displayPixelSize = CaptureRenderer.outputPixelSize(value)
                     self.status.isHidden = true
@@ -266,7 +273,8 @@ final class CaptureEditor {
                 guard let self else { return }
                 self.canvas.color = value; color?.swatch = CaptureColorValue.parse(value)
                 if let selected = self.selected, let index = self.document?.annotations.firstIndex(where: { $0.id == selected }) {
-                    if !registeredUndo, let document = self.document { self.undo.append(document); self.redo.removeAll(); registeredUndo = true }
+                    guard self.document?.annotations[index].color != value else { return }
+                    if !registeredUndo, let document = self.document { self.recordUndo(document); registeredUndo = true }
                     self.document?.annotations[index].color = value; self.render()
                 }
             }
@@ -326,7 +334,7 @@ final class CaptureEditor {
         canvas.complete = { [weak self] in self?.add($0) }
         canvas.pick = { [weak self] point in
             guard let self else { return }
-            if let document = self.document { self.undo.append(document); self.redo.removeAll() }
+            self.selectionDragRecorded = false
             let node = self.document?.annotations.reversed().first { $0.rect.insetBy(dx: -15, dy: -15).contains(point) }
             self.selected = node?.id
             if let node { self.canvas.color = node.color; self.canvas.stroke = node.width; self.colorButton?.swatch = CaptureColorValue.parse(node.color) }
@@ -334,15 +342,19 @@ final class CaptureEditor {
             self.canvas.selectedRect = node?.rect ?? self.selectedLayer.flatMap { self.document?.layers[$0].frame }; self.canvas.needsDisplay = true
         }
         canvas.moveSelection = { [weak self] delta in
-            guard let self else { return }
-            if let selected = self.selected, let index = self.document?.annotations.firstIndex(where: { $0.id == selected }) {
-                let moved = self.document!.annotations[index].points.map { CGPoint(x: $0.x+delta.x, y: $0.y+delta.y) }
-                self.document?.annotations[index].points = moved
-                self.canvas.selectedRect = self.document?.annotations[index].rect
-            } else if let index = self.selectedLayer, let frame = self.document?.layers[index].frame {
-                self.document?.layers[index].frame = frame.offsetBy(dx: delta.x, dy: delta.y)
-                self.canvas.selectedRect = self.document?.layers[index].frame
+            guard let self, !self.closed, delta != .zero, delta.x.isFinite, delta.y.isFinite,
+                  var document = self.document else { return }
+            let previous = document
+            if let selected = self.selected, let index = document.annotations.firstIndex(where: { $0.id == selected }) {
+                document.annotations[index].points = document.annotations[index].points.map { CGPoint(x: $0.x+delta.x, y: $0.y+delta.y) }
+                self.canvas.selectedRect = document.annotations[index].rect
+            } else if let index = self.selectedLayer, document.layers.indices.contains(index) {
+                document.layers[index].frame = document.layers[index].frame.offsetBy(dx: delta.x, dy: delta.y)
+                self.canvas.selectedRect = document.layers[index].frame
             }
+            guard document != previous else { return }
+            if !self.selectionDragRecorded { self.recordUndo(previous); self.selectionDragRecorded = true }
+            self.document = document
             self.render()
         }
         canvas.editSelection = { [weak self] in self?.editSelectedText() }

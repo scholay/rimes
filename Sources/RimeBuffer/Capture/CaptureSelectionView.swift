@@ -6,6 +6,13 @@ struct CaptureWindowChoice: Equatable {
     let frame: CGRect
     let title: String
 
+    /// Both kCGWindowBounds and CGDisplayBounds use global top-left points.
+    /// Our selection view is flipped, so only the display origin is removed;
+    /// applying an AppKit-style Y flip here would mirror the hit targets.
+    static func localFrame(window: CGRect, display: CGRect) -> CGRect {
+        window.offsetBy(dx: -display.minX, dy: -display.minY)
+    }
+
     static func hitTest(_ point: CGPoint, in choices: [Self]) -> Self? {
         choices.first { $0.frame.contains(point) }
     }

@@ -3,6 +3,7 @@ import AppKit
 @MainActor
 enum CaptureSelectionSmoke {
     static func run(previewDirectory: URL? = nil) throws {
+        NSApp.setActivationPolicy(.accessory); NSApp.finishLaunching()
         func require(_ condition: Bool, _ message: String) throws {
             if !condition { throw CaptureError.message("selection: " + message) }
         }
@@ -11,7 +12,59 @@ enum CaptureSelectionSmoke {
         panel.isReleasedWhenClosed = false
         defer { panel.close() }
         let image = try CaptureSmoke.fixture(width: 800, height: 600)
+        for display in [CGRect(x: 0, y: 0, width: 1440, height: 900),
+                        CGRect(x: -1920, y: -300, width: 1920, height: 1080),
+                        CGRect(x: 100, y: -1200, width: 1600, height: 1200)] {
+            let window = CGRect(x: display.minX + 80, y: display.minY + 120, width: 300, height: 180)
+            try require(CaptureWindowChoice.localFrame(window: window, display: display) == CGRect(x: 80, y: 120, width: 300, height: 180),
+                        "global top-left window bounds stay top-left on offset/negative displays")
+        }
         func install(_ view: CaptureSelectionView) { panel.contentView = view; view.frame = CGRect(origin: .zero, size: size) }
+        if let screen = NSScreen.main,
+           let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value {
+            // Read only our fixture window's WindowServer metadata, never
+            // screen pixels. Verify the actual CG -> flipped-view boundary.
+            panel.setFrame(CGRect(x: screen.frame.minX + 80, y: screen.frame.maxY - 120 - size.height,
+                                  width: size.width, height: size.height), display: false)
+            panel.orderFrontRegardless()
+            panel.displayIfNeeded()
+            _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
+            let infos = CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(panel.windowNumber)) as? [[String: Any]]
+            if let bounds = infos?.first?[kCGWindowBounds as String] as? [String: Any],
+               let actual = CGRect(dictionaryRepresentation: bounds as CFDictionary) {
+                try require(CaptureWindowChoice.localFrame(window: actual, display: CGDisplayBounds(displayID)) == CGRect(x: 80, y: 120, width: 400, height: 300),
+                            "real WindowServer bounds need no second Y flip")
+            } else {
+                print("capture-selection-smoke: own WindowServer metadata unavailable; native view and synthetic geometry checks still run")
+            }
+            let flipped = CaptureSelectionView(); install(flipped)
+            let screenPoint = CGPoint(x: panel.frame.minX + 20, y: panel.frame.maxY - 30)
+            try require(flipped.convert(panel.convertPoint(fromScreen: screenPoint), from: nil) == CGPoint(x: 20, y: 30),
+                        "native AppKit screen conversion ends in top-left view points")
+            panel.orderOut(nil)
+
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("capture-surfaces-" + UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let coordinator = CaptureCoordinator(isolatedStore: try CaptureStore(root: root))
+            let supportedPanel = CapturePanel(size: size), unavailablePanel = CapturePanel(size: size)
+            defer { supportedPanel.close(); unavailablePanel.close() }
+            let supportedView = CaptureSelectionView(), unavailableView = CaptureSelectionView()
+            supportedPanel.contentView = supportedView; unavailablePanel.contentView = unavailableView
+            supportedPanel.orderFrontRegardless(); unavailablePanel.orderFrontRegardless()
+            let surfaces = [CaptureCoordinator.SelectionSurface(screen: screen, displayID: 10, view: supportedView),
+                            CaptureCoordinator.SelectionSurface(screen: screen, displayID: 20, view: unavailableView)]
+            let retained = try coordinator.supportedSurfaces(surfaces, displayIDs: [10])
+            unavailableView.acceptSnapshot(image)
+            try require(retained.count == 1 && retained.first?.view === supportedView && supportedPanel.isVisible
+                        && !unavailablePanel.isVisible && unavailableView.snapshot == nil,
+                        "missing one SC display closes only its mask and rejects late frames")
+            do {
+                _ = try coordinator.supportedSurfaces(retained, displayIDs: [])
+                throw CaptureError.message("all-unavailable display set accepted")
+            } catch CaptureError.message(let message) {
+                try require(message == "没有可捕获的显示器" && !supportedPanel.isVisible, "fail only when no supported display remains")
+            }
+        }
         func mouse(_ view: CaptureSelectionView, _ type: NSEvent.EventType, _ point: CGPoint) throws {
             guard let event = NSEvent.mouseEvent(with: type, location: view.convert(point, to: nil), modifierFlags: [],
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber, context: nil,

@@ -142,7 +142,7 @@ private final class CaptureHistoryCard: NSView {
         image.layer?.masksToBounds = true
         image.widthAnchor.constraint(equalToConstant:186).isActive = true; image.heightAnchor.constraint(equalToConstant:72).isActive = true
         let title = CaptureUI.label(String(record.title.prefix(25)),size:11)
-        let duration = record.kind == .video ? String(format: " · %02d:%02d", Int(record.duration)/60, Int(record.duration)%60) : ""
+        let duration = record.kind == .video ? " · " + CaptureDuration.label(record.duration) : ""
         let detail = CaptureUI.label(record.kind.label + duration + (record.collectionID == nil ? "" : " · 已收藏") + (record.incomplete ? " · 未完成" : ""),size:10)
         CaptureUI.fill(CaptureUI.column([image,title,detail],spacing:3),in:self,inset:8)
         setAccessibilityElement(true); setAccessibilityLabel(record.title)
