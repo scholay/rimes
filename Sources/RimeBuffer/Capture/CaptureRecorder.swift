@@ -270,7 +270,11 @@ final class CaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
         guard let ctx = CGContext(data:CVPixelBufferGetBaseAddress(buffer),width:Int(size.width),height:Int(size.height),bitsPerComponent:8,bytesPerRow:CVPixelBufferGetBytesPerRow(buffer),space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return }
         ctx.translateBy(x:0,y:size.height); ctx.scaleBy(x:1,y:-1)
         if options.camera, let cameraFrame, let image = ci.createCGImage(CIImage(cvPixelBuffer:cameraFrame),from:CIImage(cvPixelBuffer:cameraFrame).extent) {
-            var rect = CGRect(x:size.width*(1-options.cameraSize)-20,y:size.height*(1-options.cameraSize)-20,width:size.width*options.cameraSize,height:size.height*options.cameraSize)
+            // Keep geometry in CGFloat: mixed Double/CGFloat arithmetic is
+            // ambiguous with the release runner's Swift overload resolution.
+            let fraction = CGFloat(options.cameraSize)
+            var rect = CGRect(x: size.width * (1 - fraction) - 20, y: size.height * (1 - fraction) - 20,
+                              width: size.width * fraction, height: size.height * fraction)
             if options.cameraPosition.contains("左") { rect.origin.x = 20 }
             if options.cameraPosition.contains("上") { rect.origin.y = 20 }
             if options.cameraFullscreen { rect = CGRect(origin:.zero,size:size) }
@@ -286,13 +290,13 @@ final class CaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
         if options.clicks, let (point,time) = latestClick, now-time < 0.6, let target {
                     let source = target.window?.frame ?? CGRect(x:target.display.frame.minX+(target.rect?.minX ?? 0),y:target.display.frame.minY+(target.rect?.minY ?? 0),width:target.rect?.width ?? target.display.frame.width,height:target.rect?.height ?? target.display.frame.height)
             let p = CGPoint(x:(point.x-source.minX)/source.width*size.width,y:(point.y-source.minY)/source.height*size.height)
-            let radius = options.clickSize*(1+(now-time)*0.7)
+            let radius = CGFloat(options.clickSize*(1+(now-time)*0.7))
             ctx.setStrokeColor(CaptureRenderer.color(options.clickColor,alpha:1-(now-time)/0.6)); ctx.setFillColor(CaptureRenderer.color(options.clickColor,alpha:0.4)); ctx.setLineWidth(3)
             let rect = CGRect(x:p.x-radius,y:p.y-radius,width:radius*2,height:radius*2)
             if options.clickFilled { ctx.fillEllipse(in:rect) } else { ctx.strokeEllipse(in:rect) }
         }
         if options.keys, let (text,time) = latestKey, now-time < 1.4, !IsSecureEventInputEnabled() {
-            let width = min(size.width-40,CGFloat(text.count)*options.keySize*0.7+32)
+            let width = min(size.width-40,CGFloat(text.count)*CGFloat(options.keySize)*0.7+32)
             let rect = CGRect(x:(size.width-width)/2,y:options.keyTop ? 20 : size.height-70,width:width,height:50)
             ctx.setFillColor(CGColor(gray:options.keyLight ? 1 : 0,alpha:0.82)); ctx.addPath(CGPath(roundedRect:rect,cornerWidth:10,cornerHeight:10,transform:nil)); ctx.fillPath()
             let text = NSAttributedString(string:text,attributes:[.font:NSFont.systemFont(ofSize:options.keySize,weight:.medium),.foregroundColor:options.keyLight ? NSColor.black : NSColor.white])
