@@ -117,6 +117,8 @@ enum CaptureSmoke {
                 && areaShortcut.modifiers == [.command, .shift],
                 "capture area shortcut defaults to ⌘⇧4")
             try cloudProjectRoundTrip(root: root.appendingPathComponent("project-sync"))
+            try MainActor.assumeIsolated { try CaptureSelectionSmoke.run() }
+            try MainActor.assumeIsolated { try CaptureOverlaySmoke.run(root: root.appendingPathComponent("overlays")) }
             print("capture-smoke: OK (lifecycle, redaction, immutable source, projects, scroll, layout, local video)")
             return true
         } catch { print("capture-smoke: FAILED \(error.localizedDescription)"); return false }

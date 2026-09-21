@@ -21,9 +21,10 @@ final class CaptureHotKey {
             guard GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &id) == noErr,
                   id.signature == 0x43415054 else { return OSStatus(eventNotHandledErr) }
             let action = id.id
+            let pressedAt = ProcessInfo.processInfo.systemUptime
             DispatchQueue.main.async {
                 if action == 2 {
-                    CaptureCoordinator.shared.begin("area")
+                    CaptureCoordinator.shared.begin("area", requestedAt: pressedAt)
                 } else {
                     CaptureCoordinator.shared.showLauncher()
                 }

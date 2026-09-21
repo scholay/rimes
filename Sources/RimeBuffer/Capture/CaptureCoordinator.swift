@@ -9,14 +9,18 @@ final class CaptureCoordinator {
     static let shared = CaptureCoordinator()
     private var launcher: CapturePanel?
     private var selectors: [CapturePanel] = []
-    private var overlays: [UUID: CapturePanel] = [:]
+    private(set) var overlays: [UUID: CaptureResultPanel] = [:]
     /// Stacking order; the dictionary alone cannot say which card is newest.
-    private var overlayOrder: [UUID] = []
+    private(set) var overlayOrder: [UUID] = []
+    private var overlaysSuspended = false
+    private var overlayScreen: NSScreen?
     private var pins: [UUID: CapturePanel] = [:]
     private var editors: [UUID: CaptureEditor] = [:]
     private var otherPanels: [CapturePanel] = []
     private var lastClosed: UUID?
     private var generation = UUID()
+    private var preparingCapture = false
+    private var preparationTask: Task<Void, Never>?
     private var previousTarget: CaptureTarget?
     private var sourceName = ""
     private var sourceApplication: NSRunningApplication?
@@ -28,9 +32,14 @@ final class CaptureCoordinator {
     private var scrollSession: CaptureScrollSession?
     private var recorder: CaptureRecorderController?
     private let queue = DispatchQueue(label: "RIMES.Capture.work", qos: .userInitiated)
-    private var store: CaptureStore { get throws { try CaptureStore.shared.get() } }
+    private let isolatedStore: CaptureStore?
+    private var store: CaptureStore { get throws { try isolatedStore ?? CaptureStore.shared.get() } }
 
-    private init() {
+    init(isolatedStore: CaptureStore? = nil) {
+        self.isolatedStore = isolatedStore
+        // Smoke coordinators use disposable assets, no live capture observers,
+        // global shortcut registration, cleanup timers or user storage.
+        if isolatedStore != nil { return }
         let front = NSWorkspace.shared.frontmostApplication
         if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { sourceApplication = front }
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
@@ -40,6 +49,12 @@ final class CaptureCoordinator {
         })
         observers.append(NotificationCenter.default.addObserver(forName: .capsuleCapturesDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshVisibleAssets() }
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                if let self, self.preparingCapture || !self.selectors.isEmpty { self.cancelSelection(self.generation) }
+                self?.layoutOverlays()
+            }
         })
         for name in [NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.willSleepNotification, NSWorkspace.willPowerOffNotification] {
             observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -57,8 +72,7 @@ final class CaptureCoordinator {
             MainActor.assumeIsolated {
                 guard IsSecureEventInputEnabled() else { return }
                 self?.recorder?.pauseForProtection()
-                self?.selectors.forEach { $0.close() }
-                self?.selectors.removeAll()
+                self?.invalidateSelection()
             }
         }
         cleanupTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
@@ -67,18 +81,19 @@ final class CaptureCoordinator {
         queue.async { _ = try? CaptureStore.shared.get().recoverInterruptedRecordings(); _ = try? CaptureStore.shared.get().prune() }
     }
 
-    private func refreshVisibleAssets() {
-        guard !sessionProtected else { return }
+    func refreshVisibleAssets(completion: (() -> Void)? = nil) {
+        guard !sessionProtected else { completion?(); return }
+        let snapshot = overlays.mapValues { $0.record }
         let ids = Set(overlays.keys).union(pins.keys)
-        guard !ids.isEmpty else { return }
+        guard !ids.isEmpty, let store = try? store else { completion?(); return }
         queue.async {
-            guard let records = try? CaptureStore.shared.get().records() else { return }
+            let records = (try? store.records()) ?? []
             DispatchQueue.main.async {
+                defer { completion?() }
                 guard !self.sessionProtected else { return }
                 for record in records where ids.contains(record.id) {
-                    if let overlay = self.overlays[record.id] {
-                        let origin = overlay.frame.origin
-                        overlay.close(); self.showOverlay(record); self.overlays[record.id]?.setFrameOrigin(origin)
+                    if let overlay = self.overlays[record.id], overlay.record == snapshot[record.id] {
+                        self.updateOverlay(overlay, record: record)
                     }
                     if let pin = self.pins[record.id] {
                         let frame = pin.frame, alpha = pin.alphaValue, locked = pin.ignoresMouseEvents
@@ -91,8 +106,9 @@ final class CaptureCoordinator {
     }
 
     private func protect() {
-        sessionProtected = true; generation = UUID()
-        selectors.forEach { $0.close() }; selectors.removeAll()
+        sessionProtected = true
+        invalidateSelection()
+        CapturePermissionGuide.shared.dismiss()
         launcher?.close()
         overlays.values.forEach { $0.orderOut(nil) }; pins.values.forEach { $0.orderOut(nil) }
         editors.values.forEach { $0.panel.orderOut(nil) }
@@ -104,7 +120,13 @@ final class CaptureCoordinator {
         guard !sessionProtected else { return }
         pins.values.forEach { $0.orderFrontRegardless() }
         temporarilyHidden.forEach { $0.orderFrontRegardless() }; temporarilyHidden.removeAll()
-        layoutOverlays()
+        setResultOverlaysSuspended(false)
+    }
+
+    func setResultOverlaysSuspended(_ suspended: Bool) {
+        overlaysSuspended = suspended
+        if suspended { overlays.values.forEach { $0.orderOut(nil) } }
+        else { layoutOverlays() }
     }
 
     private func keepPanel(_ panel: CapturePanel) {
@@ -124,95 +146,82 @@ final class CaptureCoordinator {
         sourceName = sourceApplication?.localizedName ?? ""
         ClipboardHistoryWindowController.shared.hide()
         if let launcher, launcher.isVisible { launcher.makeKeyAndOrderFront(nil); return }
-        let panel = CapturePanel(size: NSSize(width: 812, height: 62))
-        let delay = NSPopUpButton(); delay.addItems(withTitles: ["立即", "3 秒", "5 秒", "10 秒"])
-        let ratio = NSPopUpButton(); ratio.addItems(withTitles: ["自由比例", "1:1", "4:3", "16:9", "9:16"])
-        let width = NSTextField(string: ""); width.placeholderString = "宽 pt"; width.widthAnchor.constraint(equalToConstant: 65).isActive = true
-        let height = NSTextField(string: ""); height.placeholderString = "高 pt"; height.widthAnchor.constraint(equalToConstant: 65).isActive = true
-        // The glyph is the control: clicking it flips the state it draws.
-        let freezeToggle = CaptureGlyphButton(symbol: "snowflake",
-                                              tooltip: "冻结选区画面")
-        freezeToggle.isOn = true
-        freezeToggle.onClick = { [weak freezeToggle] in freezeToggle?.isOn.toggle() }
-        let run: (String) -> Void = { [weak self, weak panel] mode in
-            let seconds = [0, 3, 5, 10][delay.indexOfSelectedItem]
-            let ratios: [CGFloat?] = [nil, 1, 4 / 3, 16 / 9, 9 / 16]
-            let size = width.doubleValue > 0 && height.doubleValue > 0 ? CGSize(width: min(16384, width.doubleValue), height: min(16384, height.doubleValue)) : nil
-            panel?.close()
-            self?.begin(mode, delay: seconds, ratio: ratios[ratio.indexOfSelectedItem], size: size, freeze: freezeToggle.isOn)
+        let panel = CapturePanel(size: NSSize(width: 766, height: 68))
+        panel.captureChrome = true
+        panel.styleMask = [.borderless]
+        panel.isOpaque = false; panel.backgroundColor = .clear
+        let strip = CaptureLauncherView(frame: .zero)
+        strip.capture = { [weak self, weak panel] mode, delay, ratio, size in
+            panel?.close(); self?.begin(mode, delay: delay, ratio: ratio, size: size)
         }
-        // One horizontal strip: capture modes, then capture options, then the
-        // things you reach for afterwards. Icons carry the meaning and the
-        // names survive as tooltips, so the panel stops being a wall of
-        // Chinese labels at four different widths.
-        delay.toolTip = "延时"
-        ratio.toolTip = "选区比例"
-        width.toolTip = "固定宽度 (pt)"
-        height.toolTip = "固定高度 (pt)"
-        let strip = CaptureUI.row([
-            CaptureGlyphButton(symbol: "viewfinder", tooltip: "区域 ⌘⇧4",
-                               prominent: true) { run("area") },
-            CaptureGlyphButton(symbol: "macwindow", tooltip: "窗口") { run("window") },
-            CaptureGlyphButton(symbol: "display", tooltip: "全屏") { run("screen") },
-            CaptureUI.verticalSeparator(),
-            CaptureGlyphButton(symbol: "arrow.up.arrow.down", tooltip: "滚动截图") { run("scroll") },
-            CaptureGlyphButton(symbol: "text.viewfinder", tooltip: "取字 OCR") { run("ocr") },
-            CaptureGlyphButton(symbol: "record.circle", tooltip: "录屏") { [weak self, weak panel] in
-                panel?.close(); self?.showRecorder()
-            },
-            CaptureUI.verticalSeparator(),
-            delay, ratio, width, height, freezeToggle,
-            CaptureUI.verticalSeparator(),
-            CaptureGlyphButton(symbol: "arrow.counterclockwise", tooltip: "重截上次区域") { run("previous") },
-            CaptureGlyphButton(symbol: "rectangle.on.rectangle", tooltip: "恢复浮层") { [weak self] in
-                self?.restoreOverlay()
-            },
-            CaptureGlyphButton(symbol: "folder", tooltip: "打开工程") { self.openProject() },
-            CaptureGlyphButton(symbol: "gearshape", tooltip: "捕获设置") { [weak self] in
-                self?.showOptions()
-            },
-            CaptureUI.verticalSeparator(),
-            CaptureGlyphButton(symbol: "xmark", tooltip: "关闭") { [weak panel] in panel?.close() },
-        ], spacing: 6)
-        strip.alignment = .centerY
-        CaptureUI.fill(strip, in: panel.contentView!, inset: 12)
+        strip.recording = { [weak self, weak panel] in panel?.close(); self?.showRecorder() }
+        strip.utilities = [
+            ("恢复最近关闭的卡片", { [weak self] in self?.restoreOverlay() }),
+            ("打开已有工程…", { [weak self] in self?.openProject() }),
+            ("捕获与贴图设置…", { [weak self] in self?.showOptions() })
+        ]
+        CaptureUI.fill(strip, in: panel.contentView!, inset: 0)
+        panel.setContentSize(strip.fittingSize)
         launcher = panel
         panel.closed = { [weak self, weak panel] in self?.launcher = nil; panel?.contentView = nil }
         panel.present()
     }
 
-    func begin(_ mode: String, delay: Int = 0, ratio: CGFloat? = nil, size: CGSize? = nil, freeze: Bool = true) {
+    func begin(_ mode: String, delay: Int = 0, ratio: CGFloat? = nil, size: CGSize? = nil, freeze: Bool = true,
+               requestedAt: TimeInterval? = nil) {
         guard !sessionProtected, !IsSecureEventInputEnabled() else { return }
-        // Through the shared audit, so the permissions page and the feature
-        // agree on what was asked for and what the answer was.
-        guard SystemPermissionAudit.ensure(.screenRecording) else {
-            CaptureUI.error(CaptureError.message("请在系统设置 → 隐私与安全性 → 屏幕与系统音频录制中允许 RIMES，然后重试。可在 RIMES 设置 → 系统权限中逐项检查。")); return
-        }
+        guard !CapturePermissionGuide.shared.presentExisting(), !preparingCapture else { return }
+        // The explicit capture uses ScreenCaptureKit's real permission gate.
+        // Do not reject it solely on CoreGraphics preflight, or stack a system
+        // prompt, Settings launch and generic error in the same gesture.
+        preparingCapture = true
         generation = UUID(); let token = generation
-        selectors.forEach { $0.close() }; selectors.removeAll()
+        preparationTask?.cancel()
+        closeSelectors()
+        let started = requestedAt ?? ProcessInfo.processInfo.systemUptime
+        IMELog.write("capture prepare start mode=\(mode)")
+        launcher?.close()
         ClipboardHistoryWindowController.shared.hide()
         // Result overlays used to be closed here, which is why only ever one
         // was on screen: each capture destroyed the stack it was about to
         // add to. They are hidden for the duration like every other panel
         // and restored with them, so the results accumulate.
         pins.values.forEach { $0.orderOut(nil) }
-        temporarilyHidden = overlays.values.filter(\.isVisible)
-            + editors.values.map(\.panel).filter(\.isVisible)
-            + otherPanels.filter(\.isVisible)
+        if !overlaysSuspended {
+            temporarilyHidden = editors.values.map(\.panel).filter(\.isVisible)
+                + otherPanels.filter(\.isVisible)
+        }
+        setResultOverlaysSuspended(true)
         temporarilyHidden.forEach { $0.orderOut(nil) }
-        Task {
+        preparationTask = Task {
+            defer { if generation == token { preparingCapture = false; preparationTask = nil } }
             do {
                 if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000) }
-                // Let AppKit remove the launcher before collecting shareable windows.
-                try await Task.sleep(nanoseconds: 180_000_000)
-                guard generation == token, !sessionProtected, !IsSecureEventInputEnabled() else { return }
+                guard selectionIsCurrent(token) else { return }
+                // Preflight only decides whether to cover the desktop before
+                // the real gate. Never obscure a first-use system prompt, and
+                // never reject capture just because preflight reports false.
+                let usesSelection = !["previous", "screen", "recordScreen"].contains(mode)
+                var surfaces = usesSelection && CGPreflightScreenCaptureAccess()
+                    ? try presentSelectors(mode: mode, ratio: ratio, size: size, request: token) : []
+                if !surfaces.isEmpty { logPreparation("mask-visible", started: started) }
                 let content = try await CaptureEngine.content()
+                guard selectionIsCurrent(token) else { return }
+                logPreparation("content-ready", started: started)
+                if usesSelection && surfaces.isEmpty {
+                    surfaces = try presentSelectors(mode: mode, ratio: ratio, size: size, request: token)
+                    logPreparation("mask-visible", started: started)
+                }
                 if mode == "previous", let previousTarget {
                     guard content.displays.contains(where: { $0.displayID == previousTarget.display.displayID }) else { throw CaptureError.message("上次使用的显示器已断开") }
                     try await finish(target: previousTarget, content: content, mode: "area", snapshot: nil)
                     return
                 }
-                if mode == "window" || mode == "recordWindow" { chooseWindow(content, mode: mode == "recordWindow" ? "record" : "window"); return }
+                if mode == "window" || mode == "recordWindow" {
+                    try chooseWindow(content, surfaces: surfaces, mode: mode == "recordWindow" ? "record" : "window", request: token)
+                    logPreparation("windows-ready", started: started)
+                    return
+                }
                 if mode == "screen" || mode == "recordScreen" {
                     let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
                     let id = (screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
@@ -220,56 +229,133 @@ final class CaptureCoordinator {
                     try await finish(target: CaptureTarget(display: display, window: nil, rect: nil), content: content, mode: mode == "recordScreen" ? "record" : mode, snapshot: nil)
                     return
                 }
-                try await select(content, mode: mode, ratio: ratio, size: size, freeze: freeze)
-            } catch { self.restoreHiddenPanels(); CaptureUI.error(error) }
+                let selectionSurfaces = usesSelection ? surfaces : try presentSelectors(mode: mode, ratio: ratio, size: size, request: token)
+                try await select(content, surfaces: selectionSurfaces, mode: mode, freeze: freeze, request: token, started: started)
+            } catch {
+                guard generation == token, !sessionProtected else { return }
+                invalidateSelection()
+                self.restoreHiddenPanels()
+                if CapturePermissionCheck.isPermissionFailure(error) {
+                    IMELog.write("capture authorization: ScreenCaptureKit declined current process")
+                    CapturePermissionGuide.shared.show(.screenRecording) { [weak self] in
+                        self?.begin(mode, delay: delay, ratio: ratio, size: size, freeze: freeze)
+                    }
+                } else { CaptureUI.error(error) }
+            }
         }
     }
 
-    private func chooseWindow(_ content: SCShareableContent, mode: String) {
-        let windows = content.windows.filter { $0.owningApplication?.processID != ProcessInfo.processInfo.processIdentifier && $0.frame.width > 50 && $0.frame.height > 40 && $0.windowLayer == 0 }
-        let chooser = NSPopUpButton()
-        chooser.addItems(withTitles: windows.map { "\($0.owningApplication?.applicationName ?? "窗口") · \($0.title ?? "")" })
-        let panel = CapturePanel(size: NSSize(width: 480, height: 130))
-        let confirm = CaptureButton("捕获窗口") { [weak self, weak panel] in
-            guard let self, windows.indices.contains(chooser.indexOfSelectedItem), let display = content.displays.first else { return }
-            let window = windows[chooser.indexOfSelectedItem]
-            let matchingDisplay = content.displays.max { a, b in
-                let ar = a.frame.intersection(window.frame), br = b.frame.intersection(window.frame)
-                return ar.width*ar.height < br.width*br.height
-            } ?? display
-            let target = CaptureTarget(display: matchingDisplay, window: window, rect: nil)
-            panel?.close()
-            Task { do { try await self.finish(target: target, content: content, mode: mode, snapshot: nil) } catch { CaptureUI.error(error) } }
-        }
-        CaptureUI.fill(CaptureUI.column([CaptureUI.label("选择窗口"), chooser, CaptureUI.row([confirm, CaptureButton("取消") { [weak panel] in panel?.close() }])]), in: panel.contentView!)
-        keepPanel(panel); panel.present()
+    private struct SelectionSurface {
+        let screen: NSScreen
+        let displayID: CGDirectDisplayID
+        let view: CaptureSelectionView
     }
-
-    private func select(_ content: SCShareableContent, mode: String, ratio: CGFloat?, size: CGSize?, freeze: Bool) async throws {
-        let request = generation
-        var frames: [(NSScreen, SCDisplay, CGImage)] = []
+    private func logPreparation(_ phase: String, started: TimeInterval) {
+        let milliseconds = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+        IMELog.write("capture prepare \(phase) elapsed_ms=\(milliseconds)")
+    }
+    private func selectionIsCurrent(_ request: UUID) -> Bool {
+        generation == request && !Task.isCancelled && !sessionProtected && !IsSecureEventInputEnabled()
+    }
+    private func closeSelectors() {
+        selectors.forEach {
+            ($0.contentView as? CaptureSelectionView)?.invalidate()
+            $0.close()
+        }
+        selectors.removeAll()
+    }
+    private func invalidateSelection() {
+        generation = UUID(); preparingCapture = false
+        preparationTask?.cancel(); preparationTask = nil
+        closeSelectors()
+    }
+    private func cancelSelection(_ request: UUID) {
+        guard generation == request else { return }
+        invalidateSelection()
+        if !sessionProtected, !IsSecureEventInputEnabled() {
+            restoreHiddenPanels()
+            sourceApplication?.activate(options: [.activateIgnoringOtherApps])
+        }
+    }
+    private func presentSelectors(mode: String, ratio: CGFloat?, size: CGSize?, request: UUID) throws -> [SelectionSurface] {
+        var surfaces: [SelectionSurface] = []
         for screen in NSScreen.screens {
-            guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value,
-                  let display = content.displays.first(where: { $0.displayID == id }) else { continue }
-            let image = try await CaptureEngine.image(CaptureTarget(display: display, window: nil, rect: nil), content: content, scale: screen.backingScaleFactor)
-            frames.append((screen, display, image))
-        }
-        guard request == generation, !sessionProtected, !IsSecureEventInputEnabled() else { return }
-        for (screen, display, image) in frames {
+            guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else { continue }
             let panel = CapturePanel(size: screen.frame.size)
             panel.styleMask = [.borderless]; panel.level = .screenSaver; panel.isMovableByWindowBackground = false
+            panel.backgroundColor = .clear; panel.isOpaque = false; panel.hasShadow = false
+            panel.acceptsMouseMovedEvents = true; panel.escapeCloses = false
             panel.setFrame(screen.frame, display: false)
-            let view = CaptureSelectionView(image: image); view.fixedSize = size; view.ratio = ratio
-            view.cancelled = { [weak self] in self?.selectors.forEach { $0.close() }; self?.selectors.removeAll(); self?.restoreHiddenPanels(); self?.sourceApplication?.activate(options: [.activateIgnoringOtherApps]) }
-            view.selected = { [weak self] rect in
-                guard let self, self.generation == request else { return }
-                self.selectors.forEach { $0.close() }; self.selectors.removeAll()
-                let target = CaptureTarget(display: display, window: nil, rect: rect)
-                let factor = CGFloat(image.width) / screen.frame.width
-                let crop = freeze ? image.cropping(to: CGRect(x: rect.minX * factor, y: rect.minY * factor, width: rect.width * factor, height: rect.height * factor)) : nil
-                Task { do { try await self.finish(target: target, content: content, mode: mode, snapshot: mode == "scroll" || mode == "record" ? nil : crop) } catch { CaptureUI.error(error) } }
+            let view = CaptureSelectionView(mode: mode == "window" || mode == "recordWindow" ? .window : .area)
+            view.fixedSize = size; view.ratio = ratio
+            view.cancelled = { [weak self] in self?.cancelSelection(request) }
+            panel.contentView = view; selectors.append(panel)
+            panel.present(center: false); panel.makeFirstResponder(view); panel.displayIfNeeded()
+            surfaces.append(SelectionSurface(screen: screen, displayID: id, view: view))
+        }
+        guard !surfaces.isEmpty else { throw CaptureError.message("没有可捕获的显示器") }
+        // Leave keyboard cancellation on the display under the pointer.
+        if let panel = selectors.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) {
+            panel.makeKeyAndOrderFront(nil); panel.makeFirstResponder(panel.contentView)
+        }
+        return surfaces
+    }
+
+    private func chooseWindow(_ content: SCShareableContent, surfaces: [SelectionSurface], mode: String, request: UUID) throws {
+        let eligible = content.windows.filter {
+            $0.isOnScreen && $0.owningApplication?.processID != ProcessInfo.processInfo.processIdentifier
+                && $0.frame.width > 50 && $0.frame.height > 40 && $0.windowLayer == 0
+        }
+        let byID = Dictionary(uniqueKeysWithValues: eligible.map { ($0.windowID, $0) })
+        // Fetch z-order once, not on every mouse move. Only windows admitted
+        // by ScreenCaptureKit may become actual capture targets.
+        let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        let windows = infos.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value }.compactMap { byID[$0] }
+        guard !windows.isEmpty else { throw CaptureError.message("当前没有可截取的窗口，请使用区域截图") }
+        for surface in surfaces {
+            guard let display = content.displays.first(where: { $0.displayID == surface.displayID }) else {
+                throw CaptureError.message("显示器已变化，请重新截图")
             }
-            panel.contentView = view; selectors.append(panel); panel.present(center: false); panel.makeFirstResponder(view)
+            surface.view.windowSelected = { [weak self] id in
+                guard let self, self.selectionIsCurrent(request), let window = byID[id] else { return }
+                self.invalidateSelection()
+                let target = CaptureTarget(display: display, window: window, rect: nil)
+                Task { do { try await self.finish(target: target, content: content, mode: mode, snapshot: nil) } catch { CaptureUI.error(error) } }
+            }
+            surface.view.acceptWindows(windows.map {
+                CaptureWindowChoice(id: $0.windowID,
+                    frame: $0.frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY),
+                    title: [$0.owningApplication?.applicationName, $0.title].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+            })
+        }
+    }
+
+    private func select(_ content: SCShareableContent, surfaces: [SelectionSurface], mode: String, freeze: Bool,
+                        request: UUID, started: TimeInterval) async throws {
+        try await withThrowingTaskGroup(of: (Int, CGImage).self) { group in
+            for (index, surface) in surfaces.enumerated() {
+                guard let display = content.displays.first(where: { $0.displayID == surface.displayID }) else {
+                    throw CaptureError.message("显示器已变化，请重新截图")
+                }
+                let scale = surface.screen.backingScaleFactor
+                let screenWidth = surface.screen.frame.width
+                let target = CaptureTarget(display: display, window: nil, rect: nil)
+                group.addTask { (index, try await CaptureEngine.image(target, content: content, scale: scale)) }
+                surface.view.selected = { [weak self] rect, image in
+                    guard let self, self.selectionIsCurrent(request) else { return }
+                    self.invalidateSelection()
+                    let target = CaptureTarget(display: display, window: nil, rect: rect)
+                    let factor = CGFloat(image.width) / screenWidth
+                    let crop = freeze ? image.cropping(to: CGRect(x: rect.minX * factor, y: rect.minY * factor, width: rect.width * factor, height: rect.height * factor)) : nil
+                    Task { do { try await self.finish(target: target, content: content, mode: mode, snapshot: mode == "scroll" || mode == "record" ? nil : crop) } catch { CaptureUI.error(error) } }
+                }
+            }
+            for try await (index, image) in group {
+                guard selectionIsCurrent(request) else { group.cancelAll(); return }
+                logPreparation("display-ready", started: started)
+                surfaces[index].view.acceptSnapshot(image)
+                if !selectionIsCurrent(request) { group.cancelAll(); return }
+            }
         }
     }
 
@@ -306,17 +392,25 @@ final class CaptureCoordinator {
             + "thumbnail=\(record.thumbnail != nil) stack=\(overlays.count)")
         do {
             let store = try store
-            if let old = overlays[record.id] { old.orderFrontRegardless(); return }
+            if let old = overlays[record.id] {
+                updateOverlay(old, record: record)
+                layoutOverlays()
+                return
+            }
             let scale = max(0.8, min(1.5, UserDefaults.standard.object(forKey: "capture.overlay.scale") as? Double ?? 1))
             // Smaller than before so a stack of them fits down one edge:
             // the thumbnail is the whole card, and the controls arrive on
             // hover instead of taking a permanent row each.
-            let width = 224 * scale
-            let height = 128 * scale
-            let panel = CapturePanel(size: NSSize(width: width, height: height), key: false)
+            let width = 208 * scale
+            let height = 148 * scale
+            let panel = CaptureResultPanel(record: record, size: NSSize(width: width, height: height))
+            panel.captureChrome = true
             let body = CaptureHoverView()
-            let preview = CaptureDragImageView()
-            preview.fillsFrame = true
+            let preview = panel.preview
+            // Keep the whole capture visible. Top-left aspect-fill could turn
+            // a mostly white screenshot into an apparently blank card.
+            preview.imageScaling = .scaleProportionallyUpOrDown
+            preview.imageAlignment = .alignCenter
             preview.file = store.url(record)
             CaptureUI.fill(preview, in: body, inset: 0)
             // Every card is the same rectangle. An NSImageView reports its
@@ -333,43 +427,39 @@ final class CaptureCoordinator {
                 preview.setContentHuggingPriority(.defaultLow, for: axis)
                 preview.setContentCompressionResistancePriority(.defaultLow, for: axis)
             }
-            let previewLoad = loadOverlayPreview(record, store: store, into: preview)
-
-            let close = CaptureGlyphButton(symbol: "xmark", tooltip: "关闭") { [weak panel] in
-                panel?.close()
-            }
-            let actions = CaptureUI.row([
-                CaptureGlyphButton(symbol: "doc.on.doc", tooltip: "复制") { self.copy(record) },
-                CaptureGlyphButton(
-                    symbol: record.kind.capsuleKind == .video ? "play.fill" : "pencil.tip.crop.circle",
-                    tooltip: record.kind.capsuleKind == .video ? "播放" : "标注"
-                ) { self.edit(record) },
-                CaptureGlyphButton(symbol: "tray.and.arrow.down", tooltip: "收入 Capsule") { self.collect(record) },
-                CaptureGlyphButton(symbol: "ellipsis", tooltip: "更多") { self.showActions(record) },
-            ], spacing: 4)
-            for control in [close, actions] {
-                control.translatesAutoresizingMaskIntoConstraints = false
-                control.alphaValue = 0
-                body.addSubview(control)
-            }
+            let status = panel.previewStatus
+            status.translatesAutoresizingMaskIntoConstraints = false
+            body.addSubview(status)
             NSLayoutConstraint.activate([
-                close.topAnchor.constraint(equalTo: body.topAnchor, constant: 6),
-                close.trailingAnchor.constraint(equalTo: body.trailingAnchor, constant: -6),
-                actions.centerXAnchor.constraint(equalTo: body.centerXAnchor),
-                actions.bottomAnchor.constraint(equalTo: body.bottomAnchor, constant: -6),
+                status.centerXAnchor.constraint(equalTo: body.centerXAnchor),
+                status.centerYAnchor.constraint(equalTo: body.centerYAnchor),
             ])
-            body.onHover = { [weak close, weak actions] inside in
+
+            let controls = CaptureCardControls(frame: .zero)
+            controls.copyButton.onClick = { [weak self, weak panel] in
+                if let panel { self?.copy(panel.record, dismissing: panel) }
+            }
+            controls.saveButton.onClick = { [weak self, weak panel] in if let panel { self?.export(panel.record) } }
+            controls.closeButton.onClick = { [weak panel] in panel?.close() }
+            controls.pinButton.isHidden = record.kind.capsuleKind == .video
+            controls.pinButton.onClick = { [weak self, weak panel] in if let panel { self?.pin(panel.record) } }
+            controls.editButton.onClick = { [weak self, weak panel] in if let panel { self?.edit(panel.record) } }
+            if record.kind.capsuleKind == .video {
+                controls.editButton.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "播放")
+                controls.editButton.toolTip = "播放"; controls.editButton.setAccessibilityLabel("播放")
+            }
+            controls.alphaValue = 0
+            CaptureUI.fill(controls, in: body, inset: 0)
+            body.onHover = { [weak controls] inside in
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0.12
-                    close?.animator().alphaValue = inside ? 1 : 0
-                    actions?.animator().alphaValue = inside ? 1 : 0
+                    controls?.animator().alphaValue = inside ? 1 : 0
                 }
             }
             CaptureUI.fill(body, in: panel.contentView!, inset: 0)
 
             guard store.acquire(record.id) else { throw CaptureError.message("资产正在清理，请刷新捕获历史") }
             panel.closed = { [weak self] in
-                previewLoad.cancel()
                 store.release(record.id)
                 self?.lastClosed = record.id
                 self?.overlays.removeValue(forKey: record.id)
@@ -378,7 +468,10 @@ final class CaptureCoordinator {
             }
             overlays[record.id] = panel
             overlayOrder.append(record.id)
-            panel.present(center: false)
+            if overlayScreen == nil {
+                overlayScreen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+            }
+            loadOverlayPreview(panel, store: store)
             layoutOverlays()
             // If a card is still blank a moment later, say what state it is
             // in rather than leaving it to guesswork.
@@ -396,44 +489,43 @@ final class CaptureCoordinator {
         } catch { CaptureUI.error(error) }
     }
 
-    /// The overlay used to show the rendered preview only. When that file is
-    /// not written yet — or the loader declines the type — nothing was set
-    /// and the card came up black. Fall back to the captured file itself and
-    /// say so in the log rather than presenting an empty rectangle.
-    @discardableResult
-    private func loadOverlayPreview(_ record: CaptureRecord,
-                                    store: CaptureStore,
-                                    into view: NSImageView) -> Operation {
-        let original = store.url(record)
-        return CapsuleMediaPreviewLoader.shared.load(
+    private func updateOverlay(_ panel: CaptureResultPanel, record: CaptureRecord) {
+        let old = panel.record
+        guard old != record else { return }
+        panel.record = record
+        guard let store = try? store else { return }
+        panel.preview.file = store.url(record)
+        // Metadata-only changes (collection, OCR, title) do not blank a ready
+        // preview or cancel its pending decode.
+        if old.output != record.output || old.thumbnail != record.thumbnail || old.kind != record.kind {
+            loadOverlayPreview(panel, store: store)
+        }
+    }
+
+    private func loadOverlayPreview(_ panel: CaptureResultPanel, store: CaptureStore) {
+        let record = panel.record
+        let generation = panel.beginPreview()
+        panel.previewLoad = CapsuleMediaPreviewLoader.shared.load(
             kind: record.thumbnail == nil ? record.kind.capsuleKind : .image,
             path: store.previewURL(record).path,
             maximumPixelSize: 512
-        ) { result in
+        ) { [weak panel] result in
+            guard let panel, !panel.dismissed, panel.previewGeneration == generation else { return }
             if case let .image(image) = result {
                 IMELog.write("capture overlay preview loaded "
                     + "\(image.width)x\(image.height)")
-                view.image = NSImage(cgImage: image, size: .zero)
-                // The image lands about 30ms after the panel is presented.
-                // CaptureDragImageView draws it itself when fillsFrame is
-                // set, bypassing the cell that would normally invalidate, so
-                // the newest card stayed blank until something else forced a
-                // redraw — which is exactly why entering capture mode and
-                // pressing Esc "fixed" it: that re-orders every card.
-                view.needsDisplay = true
-                view.window?.viewsNeedDisplay = true
-                view.window?.displayIfNeeded()
+                panel.acceptPreview(NSImage(cgImage: image, size: .zero), generation: generation)
                 return
             }
-            if let fallback = NSImage(contentsOf: original) {
-                IMELog.write("capture overlay preview unavailable; using the original")
-                view.image = fallback
-                view.needsDisplay = true
-                view.window?.viewsNeedDisplay = true
-                view.window?.displayIfNeeded()
-            } else {
-                IMELog.write("capture overlay has no displayable preview for "
-                    + "\(record.kind.label)")
+            // Retry the current rendered output with the same bounded decoder,
+            // not an unbounded main-thread NSImage load or the original asset.
+            panel.previewLoad = CapsuleMediaPreviewLoader.shared.load(
+                kind: record.kind.capsuleKind, path: store.url(record).path, maximumPixelSize: 512
+            ) { [weak panel] fallback in
+                let image: NSImage?
+                if case let .image(value) = fallback { image = NSImage(cgImage: value, size: .zero) }
+                else { image = nil }
+                panel?.acceptPreview(image, generation: generation)
             }
         }
     }
@@ -442,30 +534,21 @@ final class CaptureCoordinator {
     /// one is dismissed. A fixed three-step cascade overlapped them and lost
     /// everything past the third.
     private func layoutOverlays() {
-        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
-            ?? NSScreen.main
-        guard let visible = screen?.visibleFrame else { return }
-        let onLeft = UserDefaults.standard.object(forKey: "capture.overlay.left") as? Bool ?? true
-        var y = visible.minY + 18
-        for id in overlayOrder.reversed() {
-            // Only cards that are actually on screen take a slot. A panel
-            // that is hidden — during a capture, or before it is presented —
-            // used to reserve the bottom position and show nothing there,
-            // which read as a missing card with an empty space under the
-            // column.
-            guard let panel = overlays[id], panel.isVisible else { continue }
-            let x = onLeft
-                ? visible.minX + 18
-                : visible.maxX - panel.frame.width - 18
-            panel.setFrameOrigin(CGPoint(x: x, y: y))
-            // What the Esc path does, and what made a blank card appear.
-            panel.orderFrontRegardless()
-            IMELog.write("capture overlay slot y=\(Int(y)) "
-                + "size=\(Int(panel.frame.width))x\(Int(panel.frame.height)) "
-                + "visible=\(panel.isVisible)")
-            y += panel.frame.height + 8
-            if y > visible.maxY - panel.frame.height { break }
+        guard !sessionProtected, !overlaysSuspended else { return }
+        if overlays.isEmpty { overlayScreen = nil; return }
+        if overlayScreen == nil || !NSScreen.screens.contains(where: { $0 == overlayScreen }) {
+            overlayScreen = NSScreen.main
         }
+        guard let visible = overlayScreen?.visibleFrame else { return }
+        let onLeft = UserDefaults.standard.object(forKey: "capture.overlay.left") as? Bool ?? true
+        let panels = overlayOrder.reversed().compactMap { overlays[$0] }
+        let frames = CaptureOverlayLayout.frames(sizes: panels.map { $0.frame.size }, visible: visible, onLeft: onLeft)
+        for (index, panel) in panels.enumerated() {
+            guard index < frames.count else { panel.orderOut(nil); continue }
+            panel.setFrameOrigin(frames[index].origin)
+            panel.present(center: false)
+        }
+        IMELog.write("capture overlay layout total=\(panels.count) visible=\(frames.count)")
     }
 
     func showActions(_ record: CaptureRecord) {
@@ -491,19 +574,37 @@ final class CaptureCoordinator {
             }
         }
     }
-    func copy(_ record: CaptureRecord) {
-        guard !sessionProtected, !IsSecureEventInputEnabled() else { return }
-        let expectedChangeCount = NSPasteboard.general.changeCount
-        queue.async {
+    /// Only a stack-card copy supplies its panel. Other copy entry points keep
+    /// their existing UI. A supplied completion owns error presentation.
+    func copy(_ record: CaptureRecord, dismissing overlay: CaptureResultPanel? = nil,
+              to pasteboard: NSPasteboard = .general,
+              completion: ((Result<Void, Error>) -> Void)? = nil) {
+        guard !sessionProtected, !IsSecureEventInputEnabled() else {
+            completion?(.failure(CaptureError.message("当前处于保护状态，未复制")))
+            return
+        }
+        let expectedChangeCount = pasteboard.changeCount
+        let pasteboardName = pasteboard.name
+        let storeResult = Result { try store }
+        queue.async { [weak overlay] in
             let result = Result {
-                let store = try CaptureStore.shared.get(); guard store.acquire(record.id) else { throw CaptureError.message("资产正在清理") }; defer { store.release(record.id) }
+                let store = try storeResult.get(); guard store.acquire(record.id) else { throw CaptureError.message("资产正在清理") }; defer { store.release(record.id) }
                 let current = try store.record(record.id)
                 return try CapsuleFilePasteboardWriter.prepare(kind: current.kind.capsuleKind, path: store.url(current).path)
             }
-            DispatchQueue.main.async {
-                guard !self.sessionProtected, !IsSecureEventInputEnabled() else { return }
-                do { try CapsuleFilePasteboardWriter.write(result.get(), expectedChangeCount: expectedChangeCount) }
-                catch { CaptureUI.error(error) }
+            DispatchQueue.main.async { [weak overlay] in
+                guard !self.sessionProtected, !IsSecureEventInputEnabled() else {
+                    completion?(.failure(CaptureError.message("当前处于保护状态，未复制")))
+                    return
+                }
+                let outcome = Result<Void, Error> {
+                    try CapsuleFilePasteboardWriter.write(result.get(), to: NSPasteboard(name: pasteboardName), expectedChangeCount: expectedChangeCount)
+                    // Close this exact card only after the write succeeds;
+                    // never dismiss a replacement restored during the copy.
+                    if overlay?.record.id == record.id { overlay?.close() }
+                }
+                if let completion { completion(outcome) }
+                else if case .failure(let error) = outcome { CaptureUI.error(error) }
             }
         }
     }

@@ -2029,27 +2029,9 @@ func runClipboardActivationPolicySmokeTest() -> Bool {
     guard Set(SystemPermission.allCases) == expectedInventory else {
         return clipboardPermissionFail("unused permissions must not be listed")
     }
-    // Each capture grant must have a caller in the source. Skipped when the
-    // tree is absent, because an installed bundle carries no sources.
-    let sources = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-    if FileManager.default.fileExists(atPath: sources.path),
-       let walker = FileManager.default.enumerator(
-        at: sources,
-        includingPropertiesForKeys: nil
-       ) {
-        var corpus = ""
-        for case let url as URL in walker where url.pathExtension == "swift" {
-            corpus += (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        }
-        for permission in captureGrants {
-            guard corpus.contains(".ensure(.\(permission.rawValue))") else {
-                return clipboardPermissionFail(
-                    "\(permission.rawValue) is listed but never requested"
-                )
-            }
-        }
-    }
+    // Actual optional-input routing and asynchronous permission lifetimes
+    // are exercised by capture-permission-smoke, not source-text matching of
+    // the old synchronous ensure() call (which raced system dialogs).
 
     let reports = SystemPermissionAudit.reportAll()
     guard reports.count == SystemPermission.allCases.count,

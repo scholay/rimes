@@ -39,6 +39,7 @@ final class CaptureButton: NSButton {
 /// was a column of text buttons whose widths tracked the length of each
 /// Chinese name, so nothing lined up and nothing showed the current tool.
 final class CaptureToolButton: NSButton {
+    override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
     private let tool: CaptureTool
     private let perform: (CaptureTool) -> Void
     var isActiveTool = false { didSet { needsDisplay = true } }
@@ -63,20 +64,16 @@ final class CaptureToolButton: NSButton {
 
     override func draw(_ dirtyRect: NSRect) {
         let body = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let path = NSBezierPath(roundedRect: body, xRadius: 7, yRadius: 7)
+        let path = NSBezierPath(roundedRect: body, xRadius: 15, yRadius: 15)
         if isActiveTool {
-            RimeUI.accentGreen.setFill()
+            CaptureChrome.blue.setFill()
         } else if isHighlighted {
-            RimeUI.surface2.setFill()
+            CaptureChrome.control.setFill()
         } else {
             NSColor.clear.setFill()
         }
         path.fill()
-        if !isActiveTool {
-            RimeUI.border.setStroke()
-            path.stroke()
-        }
-        let tint = isActiveTool ? RimeUI.accentForegroundColor : RimeUI.textPrimary
+        let tint = CaptureChrome.text
         guard let image else { return }
         let art = image.withSymbolConfiguration(
             NSImage.SymbolConfiguration(paletteColors: [tint])
@@ -264,6 +261,7 @@ enum CaptureUI {
 /// Shared chrome for new Capsule windows. Only key-capable surfaces acquire
 /// standalone focus; passive overlays never claim an input-method target.
 class CapturePanel: NSPanel, NSWindowDelegate {
+    var captureChrome = false { didSet { updateTheme() } }
     var closed: (() -> Void)?
     var escapeCloses = true
     var shouldClose: (() -> Bool)?
@@ -287,6 +285,11 @@ class CapturePanel: NSPanel, NSWindowDelegate {
     }
     deinit { if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) } }
     private func updateTheme() {
+        if captureChrome {
+            appearance = NSAppearance(named: .darkAqua); backgroundColor = isOpaque ? CaptureChrome.bar : .clear
+            contentView?.needsDisplay = true
+            return
+        }
         appearance = RimeUI.appKitAppearance; backgroundColor = RimeUI.surface
         func visit(_ view: NSView) {
             if let label = view as? NSTextField { label.textColor = RimeUI.textPrimary }
@@ -299,7 +302,7 @@ class CapturePanel: NSPanel, NSWindowDelegate {
     override var canBecomeMain: Bool { acceptsKeyboard }
     func present(center: Bool = true) {
         if center { self.center() }
-        appearance = RimeUI.appKitAppearance
+        appearance = captureChrome ? NSAppearance(named: .darkAqua) : RimeUI.appKitAppearance
         if acceptsKeyboard {
             StandaloneWindowFocusCoordinator.shared.windowWillPresent(self)
             registered = true
@@ -388,12 +391,12 @@ final class CaptureDragImageView: NSImageView, NSDraggingSource {
 /// document at drag start, including every redaction and unsaved edit.
 final class CaptureCurrentDragView: NSView, NSDraggingSource {
     var snapshot: (() -> (CaptureDocument, URL, CaptureStore, UUID)?)?
-    override var intrinsicContentSize: NSSize { NSSize(width: 72, height: 28) }
+    override var intrinsicContentSize: NSSize { NSSize(width: 132, height: 32) }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {}
     override func draw(_ dirtyRect: NSRect) {
-        RimeUI.surface3.setFill(); NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
-        ("拖出图片" as NSString).draw(at: CGPoint(x: 11, y: 7), withAttributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: RimeUI.textPrimary])
+        CaptureChrome.control.setFill(); NSBezierPath(roundedRect: bounds, xRadius: 16, yRadius: 16).fill()
+        ("≡   拖出图片   ≡" as NSString).draw(at: CGPoint(x: 18, y: 8), withAttributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: CaptureChrome.muted])
     }
     override func mouseDragged(with event: NSEvent) {
         guard let (document, directory, store, id) = snapshot?() else { return }

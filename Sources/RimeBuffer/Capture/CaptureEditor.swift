@@ -13,8 +13,11 @@ final class CaptureCanvas: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
     var image: CGImage? { didSet { needsDisplay = true } }
     var documentSize = CGSize(width: 1, height: 1)
+    var displayPixelSize: CGSize?
     var tool: CaptureTool = .select
-    var color = "22c55e"
+    var color = "FFE338"
+    var zoom: CGFloat? { didSet { pan = .zero; needsDisplay = true } }
+    private var pan = CGPoint.zero
     var stroke: CGFloat = 5
     var previewOnly = false
     var draft: CaptureAnnotation?
@@ -32,9 +35,16 @@ final class CaptureCanvas: NSView {
     required init?(coder: NSCoder) { fatalError() }
     var imageRect: CGRect {
         guard let image else { return .zero }
-        let scale = min((bounds.width-24)/CGFloat(image.width), (bounds.height-24)/CGFloat(image.height))
+        let scale = zoom.map { $0 * (displayPixelSize ?? documentSize).width / CGFloat(image.width) } ?? min((bounds.width-72)/CGFloat(image.width), (bounds.height-72)/CGFloat(image.height))
         let size = CGSize(width: CGFloat(image.width)*scale, height: CGFloat(image.height)*scale)
-        return CGRect(x: (bounds.width-size.width)/2, y: (bounds.height-size.height)/2, width: size.width, height: size.height)
+        return CGRect(x: (bounds.width-size.width)/2 + pan.x, y: (bounds.height-size.height)/2 + pan.y, width: size.width, height: size.height)
+    }
+    override func scrollWheel(with event: NSEvent) {
+        guard zoom != nil else { return }
+        let rect = imageRect
+        pan.x = min(max(0, (rect.width - bounds.width) / 2 + 24), max(-max(0, (rect.width - bounds.width) / 2 + 24), pan.x + event.scrollingDeltaX))
+        pan.y = min(max(0, (rect.height - bounds.height) / 2 + 24), max(-max(0, (rect.height - bounds.height) / 2 + 24), pan.y + event.scrollingDeltaY))
+        needsDisplay = true
     }
     private func point(_ event: NSEvent) -> CGPoint {
         let point = convert(event.locationInWindow, from: nil), rect = imageRect
@@ -47,7 +57,7 @@ final class CaptureCanvas: NSView {
         // mode is swallowing the press.
         IMELog.write("capture canvas mouseDown tool=\(tool.rawValue) "
             + "previewOnly=\(previewOnly) size=\(documentSize)")
-        guard !previewOnly else { return }
+        guard !previewOnly, imageRect.contains(convert(event.locationInWindow, from: nil)) else { return }
         let p = point(event)
         if tool == .select { previousPoint = p; pick?(p); if event.clickCount == 2 { editSelection?() }; return }
         draft = CaptureAnnotation(tool: tool, points: [p,p], color: color, width: stroke)
@@ -76,19 +86,19 @@ final class CaptureCanvas: NSView {
         complete?(node); needsDisplay = true
     }
     override func draw(_ dirtyRect: NSRect) {
-        RimeUI.surface2.setFill(); bounds.fill()
+        CaptureChrome.canvas.setFill(); bounds.fill()
         guard let image, let cg = NSGraphicsContext.current?.cgContext else { return }
         NSImage(cgImage: image, size: .zero).draw(in: imageRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         if let draft {
             cg.saveGState(); cg.translateBy(x: imageRect.minX, y: imageRect.minY)
             cg.scaleBy(x: imageRect.width/documentSize.width, y: imageRect.height/documentSize.height)
-            if draft.tool == .crop { cg.setStrokeColor(RimeUI.accentGreen.cgColor); cg.setLineWidth(3); cg.stroke(draft.rect) }
+            if draft.tool == .crop { cg.setStrokeColor(CaptureChrome.blue.cgColor); cg.setLineWidth(3); cg.stroke(draft.rect) }
             else { CaptureRenderer.draw(draft, context: cg, canvas: documentSize) }
             cg.restoreGState()
         }
         if let rect = selectedRect, !previewOnly {
             let r = CGRect(x: imageRect.minX + rect.minX/documentSize.width*imageRect.width, y: imageRect.minY + rect.minY/documentSize.height*imageRect.height, width: rect.width/documentSize.width*imageRect.width, height: rect.height/documentSize.height*imageRect.height)
-            RimeUI.accentGreen.setStroke(); NSBezierPath(rect: r.insetBy(dx: -3, dy: -3)).stroke()
+            CaptureChrome.blue.setStroke(); NSBezierPath(rect: r.insetBy(dx: -3, dy: -3)).stroke()
         }
     }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
@@ -120,19 +130,24 @@ final class CaptureEditor {
     private var closed = false
     private var monitor: Any?
     private var preview = false
-    private var modeControl: NSSegmentedControl?
     private var toolButtons: [CaptureToolButton] = []
     private var controlActions: [CaptureControlAction] = []
+    private var menuActions: [CaptureControlAction] = []
+    private var popover: NSPopover?
+    private weak var colorButton: CaptureChromeButton?
+    private weak var previewButton: CaptureChromeButton?
 
     init(record: CaptureRecord, store: CaptureStore) throws {
         self.record = record; self.store = store
-        panel = CapturePanel(size: NSSize(width: 1120, height: 780))
+        panel = CapturePanel(size: NSSize(width: 1200, height: 780))
+        panel.captureChrome = true
         panel.minSize = NSSize(width: 1040, height: 700); panel.escapeCloses = false
         panel.shouldClose = { [weak self] in self?.requestClose(); return false }
         guard store.acquire(record.id) else { throw CaptureError.message("资产正在清理，请刷新捕获历史") }
         build()
         panel.closed = { [weak self] in
             guard let self else { return }; self.closed = true; self.store.release(self.record.id)
+            self.popover?.close(); self.popover = nil
             self.renderGeneration = UUID()
             self.renderQueue.cancelAllOperations()
             if let monitor = self.monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
@@ -157,7 +172,7 @@ final class CaptureEditor {
                 }
                 let loaded = value
                 DispatchQueue.main.async { guard !self.closed else { return }; self.document = loaded; self.saved = loaded; self.canvas.textBoxes = boxes; self.render() }
-            } catch { DispatchQueue.main.async { self.status.stringValue = error.localizedDescription } }
+            } catch { DispatchQueue.main.async { self.status.stringValue = error.localizedDescription; self.status.isHidden = false } }
         }
     }
     func show() {
@@ -184,6 +199,7 @@ final class CaptureEditor {
     private func render() {
         guard var snapshot = document else { return }
         canvas.documentSize = snapshot.size; canvas.previewOnly = preview
+        previewButton?.active = preview
         if !preview { snapshot.background.enabled = false; snapshot.crop = nil; snapshot.turns = 0; snapshot.flip = false; snapshot.outputWidth = nil }
         let token = UUID(); renderGeneration = token
         status.stringValue = preview ? "效果预览 · 切回标注后编辑" : "标注原始画布 · 拖入图片可组合"
@@ -202,19 +218,17 @@ final class CaptureEditor {
                     IMELog.write("capture render ok \(image.width)x\(image.height) "
                         + "annotations=\(value.annotations.count)")
                     self.canvas.image = image
+                    self.canvas.displayPixelSize = CaptureRenderer.outputPixelSize(value)
+                    self.status.isHidden = true
                 case .failure(let error):
                     IMELog.write("capture render FAILED \(error.localizedDescription)")
                     self.status.stringValue = error.localizedDescription
+                    self.status.isHidden = false
                 }
             }
         }
         renderQueue.addOperation(operation)
     }
-    @objc private func modeChanged(_ sender: NSSegmentedControl) {
-        preview = sender.selectedSegment == 1
-        render()
-    }
-
     /// The rail shows which tool is active, so every change has to reach it.
     private func syncToolSelection() {
         for button in toolButtons {
@@ -225,73 +239,97 @@ final class CaptureEditor {
     private func build() {
         let drag = CaptureCurrentDragView()
         drag.snapshot = { [weak self] in guard let self, let document = self.document else { return nil }; return (document, self.store.directory(self.record.id), self.store, self.record.id) }
-        // Annotate and preview are two states of one thing, so they are one
-        // control. As two identical buttons neither showed which was active.
-        let mode = NSSegmentedControl(
-            labels: ["标注", "效果预览"],
-            trackingMode: .selectOne,
-            target: self,
-            action: #selector(modeChanged(_:))
-        )
-        mode.segmentStyle = .rounded
-        mode.selectedSegment = preview ? 1 : 0
-        mode.font = .systemFont(ofSize: 12)
-        modeControl = mode
-        let toolbar = CaptureUI.row([
-            CaptureUI.label("Capsule", size: 16),
-            mode,
-            CaptureButton("撤销") { self.undoEdit() }, CaptureButton("重做") { self.redoEdit() },
-            CaptureButton("复制") { self.save { CaptureCoordinator.shared.copy($0) } },
-            drag,
-            CaptureButton("导出") { self.exportImage() },
-            CaptureButton("收入 Capsule") { self.save { CaptureCoordinator.shared.collect($0) } },
-            CaptureButton("保存") { self.save() },
-            CaptureButton("关闭", symbol: "xmark") { self.requestClose() }
-        ], spacing: 5)
-        // One 34pt square per tool, grouped, with the active one filled.
-        var railChildren: [NSView] = []
-        var lastGroup = CaptureTool.allCases.first?.group
-        for tool in CaptureTool.allCases {
-            if tool.group != lastGroup {
-                railChildren.append(CaptureUI.separator(width: 34))
-                lastGroup = tool.group
-            }
-            let button = CaptureToolButton(tool: tool) { [weak self] picked in
-                guard let self else { return }
-                IMELog.write("capture tool picked \(picked.rawValue)")
-                self.canvas.tool = picked
-                self.preview = false
-                self.modeControl?.selectedSegment = 0
-                self.syncToolSelection()
-                self.render()
-            }
-            button.isActiveTool = tool == canvas.tool
-            toolButtons.append(button)
-            railChildren.append(button)
+        let root = panel.contentView!
+        let top = CaptureChromeSurface()
+        let footer = CaptureChromeSurface()
+        let traffic = NSView(); traffic.widthAnchor.constraint(equalToConstant: 68).isActive = true
+        let crop = CaptureChromeButton(symbol: "crop", help: "裁剪") { [weak self] in self?.selectTool(.crop) }
+        let add = CaptureChromeButton(symbol: "photo.badge.plus", help: "添加图片") { [weak self] in self?.chooseImages() }
+        let background = CaptureChromeButton(symbol: "photo.on.rectangle", help: "背景与画布")
+        background.onClick = { [weak self, weak background] in
+            guard let self, let background else { return }; self.showPopover(self.makeBackgroundControls(), from: background)
         }
-        let tools = CaptureUI.column(railChildren, spacing: 4)
-        tools.alignment = .centerX
-        tools.widthAnchor.constraint(equalToConstant: 34).isActive = true
-        let toolsScroll = CaptureInspectorScroll(tools)
-        toolsScroll.widthAnchor.constraint(equalToConstant: 52).isActive = true
-        let inspector = CaptureInspectorScroll(makeInspector()); inspector.widthAnchor.constraint(equalToConstant: 210).isActive = true
-        let middle = CaptureUI.row([toolsScroll, canvas, inspector], spacing: 14); middle.alignment = .top
-        canvas.widthAnchor.constraint(greaterThanOrEqualToConstant: 540).isActive = true
-        canvas.heightAnchor.constraint(equalTo: middle.heightAnchor).isActive = true
-        inspector.heightAnchor.constraint(equalTo: middle.heightAnchor).isActive = true
-        toolsScroll.heightAnchor.constraint(equalTo: middle.heightAnchor).isActive = true
-        middle.heightAnchor.constraint(greaterThanOrEqualToConstant: 410).isActive = true
-        let strip = CaptureLibraryStrip(store: store)
-        strip.heightAnchor.constraint(equalToConstant: 126).isActive = true
-        let stack = CaptureUI.column([toolbar, middle, status, strip], spacing: 10)
-        CaptureUI.fill(stack, in: panel.contentView!)
-        for child in [toolbar, middle, strip] { child.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
+        let visibleTools: [CaptureTool] = [.select, .rectangle, .filledRectangle, .ellipse, .line, .arrow, .text, .pixelate, .spotlight, .counter, .pen, .highlight]
+        let tools = visibleTools.map { tool in
+            let button = CaptureToolButton(tool: tool) { [weak self] in self?.selectTool($0) }
+            toolButtons.append(button); return button
+        }
+        let group = CaptureChrome.group(tools, spacing: 0, inset: 0)
+        let color = CaptureChromeButton(help: "标注颜色", size: NSSize(width: 48, height: 32)); color.dropdown = true
+        color.swatch = CaptureColorValue.parse(canvas.color); colorButton = color
+        color.onClick = { [weak self, weak color] in
+            guard let self, let color else { return }
+            let picker = CaptureColorPicker(hex: self.canvas.color)
+            // One color-popover session is one undo step, even while dragging.
+            var registeredUndo = false
+            picker.onChange = { [weak self, weak color] value in
+                guard let self else { return }
+                self.canvas.color = value; color?.swatch = CaptureColorValue.parse(value)
+                if let selected = self.selected, let index = self.document?.annotations.firstIndex(where: { $0.id == selected }) {
+                    if !registeredUndo, let document = self.document { self.undo.append(document); self.redo.removeAll(); registeredUndo = true }
+                    self.document?.annotations[index].color = value; self.render()
+                }
+            }
+            self.showPopover(picker, from: color)
+        }
+        let stroke = CaptureChromeButton(symbol: "line.diagonal", help: "线条粗细", size: NSSize(width: 48, height: 32)); stroke.dropdown = true
+        stroke.onClick = { [weak self, weak stroke] in
+            guard let self, let stroke else { return }
+            self.showMenu([1, 3, 5, 8, 12, 20].map { "\($0) px" }, from: stroke) { index in
+                self.canvas.stroke = CGFloat([1, 3, 5, 8, 12, 20][index])
+                if let selected = self.selected { self.mutate { doc in if let i = doc.annotations.firstIndex(where: { $0.id == selected }) { doc.annotations[i].width = self.canvas.stroke } } }
+            }
+        }
+        let saveAs = CaptureChromeButton("另存为…", size: NSSize(width: 76, height: 32)) { [weak self] in self?.exportImage() }
+        let done = CaptureChromeButton("完成", size: NSSize(width: 58, height: 32)) { [weak self] in self?.save { [weak self] _ in self?.panel.close() } }; done.active = true
+        let topRow = CaptureUI.row([traffic, crop, add, background, group, color, stroke, CaptureChrome.spacer(), saveAs, done], spacing: 6)
+        CaptureUI.fill(topRow, in: top, inset: 12)
+        let zoom = CaptureChromeButton("适合", help: "画布缩放", size: NSSize(width: 82, height: 32)); zoom.dropdown = true
+        zoom.onClick = { [weak self, weak zoom] in
+            guard let self, let zoom else { return }
+            self.showMenu(["适合", "50%", "100%", "200%"], from: zoom) { index in
+                self.canvas.zoom = [nil, 0.5, 1, 2][index]; zoom.title = ["适合", "50%", "100%", "200%"][index]
+            }
+        }
+        let undo = CaptureChromeButton(symbol: "arrow.uturn.backward", help: "撤销 ⌘Z", size: NSSize(width: 32, height: 32)) { [weak self] in self?.undoEdit() }; undo.bare = true
+        let redo = CaptureChromeButton(symbol: "arrow.uturn.forward", help: "重做 ⇧⌘Z", size: NSSize(width: 32, height: 32)) { [weak self] in self?.redoEdit() }; redo.bare = true
+        let preview = CaptureChromeButton(symbol: "eye", help: "切换效果预览")
+        preview.onClick = { [weak self, weak preview] in guard let self else { return }; self.preview.toggle(); preview?.active = self.preview; self.render() }
+        previewButton = preview
+        let pin = CaptureChromeButton(symbol: "pin.fill", help: "贴图") { [weak self] in self?.save { CaptureCoordinator.shared.pin($0) } }
+        let copy = CaptureChromeButton(symbol: "doc.on.doc", help: "复制图片") { [weak self] in self?.save { CaptureCoordinator.shared.copy($0) } }
+        let left = CaptureUI.row([zoom, undo, redo], spacing: 4)
+        let right = CaptureUI.row([preview, pin, copy], spacing: 6)
+        for view in [left, drag, right] { view.translatesAutoresizingMaskIntoConstraints = false; footer.addSubview(view) }
+        for view in [top, canvas, footer] { view.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(view) }
+        NSLayoutConstraint.activate([
+            top.leadingAnchor.constraint(equalTo: root.leadingAnchor), top.trailingAnchor.constraint(equalTo: root.trailingAnchor), top.topAnchor.constraint(equalTo: root.topAnchor), top.heightAnchor.constraint(equalToConstant: 56),
+            canvas.leadingAnchor.constraint(equalTo: root.leadingAnchor), canvas.trailingAnchor.constraint(equalTo: root.trailingAnchor), canvas.topAnchor.constraint(equalTo: top.bottomAnchor), canvas.bottomAnchor.constraint(equalTo: footer.topAnchor),
+            footer.leadingAnchor.constraint(equalTo: root.leadingAnchor), footer.trailingAnchor.constraint(equalTo: root.trailingAnchor), footer.bottomAnchor.constraint(equalTo: root.bottomAnchor), footer.heightAnchor.constraint(equalToConstant: 54),
+            left.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 14), left.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            drag.centerXAnchor.constraint(equalTo: footer.centerXAnchor), drag.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            right.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -14), right.centerYAnchor.constraint(equalTo: footer.centerYAnchor)
+        ])
+        status.textColor = CaptureChrome.muted; status.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(status)
+        NSLayoutConstraint.activate([status.centerXAnchor.constraint(equalTo: canvas.centerXAnchor), status.centerYAnchor.constraint(equalTo: canvas.centerYAnchor)])
+        // Real traffic lights retain standard close/minimize/zoom semantics.
+        panel.styleMask.insert([.closable, .miniaturizable])
+        for (index, type) in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].enumerated() {
+            if let button = panel.standardWindowButton(type) {
+                button.isHidden = false; button.removeFromSuperview(); traffic.addSubview(button)
+                button.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([button.leadingAnchor.constraint(equalTo: traffic.leadingAnchor, constant: CGFloat(index * 22)), button.centerYAnchor.constraint(equalTo: traffic.centerYAnchor), button.widthAnchor.constraint(equalToConstant: 14), button.heightAnchor.constraint(equalToConstant: 14)])
+            }
+        }
+        traffic.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        syncToolSelection()
         canvas.complete = { [weak self] in self?.add($0) }
         canvas.pick = { [weak self] point in
             guard let self else { return }
             if let document = self.document { self.undo.append(document); self.redo.removeAll() }
             let node = self.document?.annotations.reversed().first { $0.rect.insetBy(dx: -15, dy: -15).contains(point) }
             self.selected = node?.id
+            if let node { self.canvas.color = node.color; self.canvas.stroke = node.width; self.colorButton?.swatch = CaptureColorValue.parse(node.color) }
             self.selectedLayer = node == nil ? self.document?.layers.indices.reversed().first { self.document!.layers[$0].frame.contains(point) } : nil
             self.canvas.selectedRect = node?.rect ?? self.selectedLayer.flatMap { self.document?.layers[$0].frame }; self.canvas.needsDisplay = true
         }
@@ -339,133 +377,57 @@ final class CaptureEditor {
         control.action = #selector(CaptureControlAction.fire)
     }
 
-    private func makeInspector() -> NSView {
-        let inspectorWidth: CGFloat = 182
-        let color = NSPopUpButton()
-        color.addItems(withTitles: ["绿色", "红色", "黄色", "蓝色", "白色", "黑色"])
-        let colors = ["22c55e", "e34b3f", "f2c94c", "388bfd", "ffffff", "000000"]
-        let width = NSTextField(string: "5")
-        let applyStyle = { [weak self] in
-            guard let self else { return }
-            self.canvas.color = colors[color.indexOfSelectedItem]
-            self.canvas.stroke = min(64, max(1, width.doubleValue))
-            if let selected = self.selected {
-                self.mutate { doc in
-                    if let i = doc.annotations.firstIndex(where: { $0.id == selected }) {
-                        doc.annotations[i].color = self.canvas.color
-                        doc.annotations[i].width = self.canvas.stroke
-                    }
-                }
-            }
+    private func selectTool(_ tool: CaptureTool) {
+        canvas.tool = tool; canvas.selectedRect = nil; selected = nil; selectedLayer = nil
+        preview = false; syncToolSelection(); render()
+    }
+    private func showPopover(_ view: NSView, from button: NSView) {
+        popover?.close()
+        let controller = NSViewController(); controller.view = view
+        let popover = NSPopover(); popover.behavior = .transient; popover.appearance = NSAppearance(named: .darkAqua)
+        popover.contentViewController = controller
+        popover.contentSize = view.frame.size == .zero ? view.fittingSize : view.frame.size
+        self.popover = popover; popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
+    }
+    private func showMenu(_ titles: [String], from view: NSView, picked: @escaping (Int) -> Void) {
+        menuActions.removeAll(); let menu = NSMenu()
+        defer { menuActions.removeAll() }
+        for (index, title) in titles.enumerated() {
+            let target = CaptureControlAction { picked(index) }; menuActions.append(target)
+            let item = NSMenuItem(title: title, action: #selector(CaptureControlAction.fire), keyEquivalent: ""); item.target = target; menu.addItem(item)
         }
-        bind(color, applyStyle)
-        bind(width, applyStyle)
-
-        let padding = NSTextField(string: "48")
-        let corner = NSTextField(string: "16")
-        let shadow = NSTextField(string: "24")
-        let bg = NSPopUpButton()
-        bg.addItems(withTitles: ["透明", "鼠尾草", "石墨", "米白", "海蓝渐变", "紫色渐变"])
-        let aspect = NSPopUpButton()
-        aspect.addItems(withTitles: ["自适应", "1:1", "16:9", "9:16", "4:3"])
-        let align = NSPopUpButton()
-        align.addItems(withTitles: ["居中", "靠上", "靠下"])
-        // Background settings apply as they change. Two "apply" buttons meant
-        // every adjustment was a two-step edit with no feedback in between.
-        let applyBackground = { [weak self] in
+        menu.popUp(positioning: nil, at: .zero, in: view)
+    }
+    private func makeBackgroundControls() -> NSView {
+        controlActions.removeAll()
+        let current = document?.background ?? CaptureBackground()
+        let enabled = NSButton(checkboxWithTitle: "启用背景", target: nil, action: nil); enabled.state = current.enabled ? .on : .off
+        let padding = NSTextField(string: String(Int(current.padding)))
+        let corner = NSTextField(string: String(Int(current.corner)))
+        let shadow = NSTextField(string: String(Int(current.shadow)))
+        let color = NSColorWell(); color.color = CaptureColorValue.parse(current.color) ?? .white
+        let change = { [weak self] in
             guard let self else { return }
             self.mutate { doc in
-                doc.background.enabled = bg.indexOfSelectedItem != 0
-                doc.background.color = ["ffffff", "dbe7df", "242933", "f6f1e8",
-                                        "d5ecff", "e1d7ff"][bg.indexOfSelectedItem]
-                doc.background.secondColor = bg.indexOfSelectedItem >= 4 ? "748ba8" : nil
+                doc.background.enabled = enabled.state == .on
                 doc.background.padding = min(2000, max(0, padding.doubleValue))
                 doc.background.corner = min(1000, max(0, corner.doubleValue))
                 doc.background.shadow = min(200, max(0, shadow.doubleValue))
-                let ratios: [CGFloat?] = [nil, 1, 16 / 9, 9 / 16, 4 / 3]
-                doc.background.aspect = ratios[aspect.indexOfSelectedItem]
-                doc.background.alignment = align.indexOfSelectedItem
+                doc.background.color = CaptureColorValue.hex(color.color); doc.background.secondColor = nil
             }
-            self.preview = true
-            self.modeControl?.selectedSegment = 1
-            self.render()
+            self.preview = true; self.render()
         }
-        for control in [bg, aspect, align] { bind(control, applyBackground) }
-        for control in [padding, corner, shadow] { bind(control, applyBackground) }
-
-        let size = NSTextField(string: "1440")
-        let sections: [NSView] = [
-            CaptureUI.sectionHeader("工具样式"),
-            CaptureUI.field("颜色", color),
-            CaptureUI.field("线宽", width),
-            CaptureUI.separator(width: inspectorWidth),
-
-            CaptureUI.sectionHeader("背景"),
-            CaptureUI.field("样式", bg),
-            CaptureUI.field("留白", padding),
-            CaptureUI.field("圆角", corner),
-            CaptureUI.field("阴影", shadow),
-            CaptureUI.field("比例", aspect),
-            CaptureUI.field("对齐", align),
+        for control in [enabled, padding, corner, shadow, color] { bind(control, change) }
+        let stack = CaptureUI.column([
+            enabled, CaptureUI.field("颜色", color), CaptureUI.field("留白", padding),
+            CaptureUI.field("圆角", corner), CaptureUI.field("阴影", shadow),
             CaptureUI.row([
-                CaptureButton("存预设") {
-                    if let background = self.document?.background,
-                       let data = try? JSONEncoder().encode(background) {
-                        UserDefaults.standard.set(data, forKey: "capture.background.preset")
-                    }
-                },
-                CaptureButton("用预设") {
-                    if let data = UserDefaults.standard.data(forKey: "capture.background.preset"),
-                       let background = try? JSONDecoder().decode(CaptureBackground.self, from: data) {
-                        self.mutate { $0.background = background }
-                        self.preview = true
-                        self.modeControl?.selectedSegment = 1
-                        self.render()
-                    }
-                },
-            ]),
-            CaptureButton("自动平衡") { self.autoBalance() },
-            CaptureUI.separator(width: inspectorWidth),
-
-            CaptureUI.sectionHeader("画布"),
-            CaptureUI.row([
-                CaptureButton("旋转") {
-                    self.mutate { $0.turns += 1 }; self.preview = true; self.render()
-                },
-                CaptureButton("翻转") {
-                    self.mutate { $0.flip.toggle() }; self.preview = true; self.render()
-                },
-            ]),
-            CaptureUI.field("宽度", size),
-            CaptureButton("设为输出宽度") {
-                self.mutate { $0.outputWidth = min(16384, max(16, size.integerValue)) }
-                self.preview = true
-                self.render()
-            },
-            CaptureUI.separator(width: inspectorWidth),
-
-            CaptureUI.sectionHeader("图层与导出"),
-            CaptureButton("添加图片 / 背景") { self.chooseImages() },
-            CaptureUI.row([
-                CaptureButton("缩小图层") { self.scaleLayer(0.9) },
-                CaptureButton("放大图层") { self.scaleLayer(1.1) },
-            ]),
-            CaptureButton("识别局部文字") {
-                self.ocrSelection = true
-                self.canvas.tool = .crop
-                self.syncToolSelection()
-                self.preview = false
-                self.modeControl?.selectedSegment = 0
-                self.render()
-                self.status.stringValue = "框选需要识别的区域"
-            },
-            CaptureButton("导出可编辑工程") { self.exportProject() },
-        ]
-        let column = CaptureUI.column(sections, spacing: 7)
-        for view in sections where !(view is NSTextField) {
-            view.widthAnchor.constraint(equalToConstant: inspectorWidth).isActive = true
-        }
-        return column
+                CaptureChromeButton("旋转", size: NSSize(width: 80, height: 30)) { [weak self] in self?.mutate { $0.turns += 1 }; self?.preview = true; self?.render() },
+                CaptureChromeButton("翻转", size: NSSize(width: 80, height: 30)) { [weak self] in self?.mutate { $0.flip.toggle() }; self?.preview = true; self?.render() }
+            ])
+        ], spacing: 10)
+        let body = CaptureChromeSurface(); body.frame = CGRect(x: 0, y: 0, width: 228, height: 248)
+        CaptureUI.fill(stack, in: body, inset: 16); return body
     }
     private func add(_ value: CaptureAnnotation) {
         var node = value
@@ -489,7 +451,7 @@ final class CaptureEditor {
     private func undoEdit() { guard let previous = undo.popLast(), let document else { return }; redo.append(document); self.document = previous; selected = nil; selectedLayer = nil; canvas.selectedRect = nil; render() }
     private func redoEdit() { guard let next = redo.popLast(), let document else { return }; undo.append(document); self.document = next; selected = nil; selectedLayer = nil; canvas.selectedRect = nil; render() }
     private func requestClose() {
-        guard !saving else { status.stringValue = "正在保存，请稍候"; return }
+        guard !saving else { status.stringValue = "正在保存，请稍候"; status.isHidden = false; return }
         guard document != saved else { panel.close(); return }
         let alert = NSAlert(); alert.messageText = "保存本次编辑？"; alert.addButton(withTitle: "保存"); alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "放弃修改")
         alert.beginSheetModal(for: panel) { response in
@@ -499,7 +461,7 @@ final class CaptureEditor {
     }
     private func save(completion: ((CaptureRecord) -> Void)? = nil) {
         guard let snapshot = document, !saving else { return }
-        saving = true; status.stringValue = "正在保存工程…"
+        saving = true; status.stringValue = "正在保存工程…"; status.isHidden = false
         let record = self.record, directory = store.directory(record.id)
         performAssetWork {
             do {
@@ -516,7 +478,7 @@ final class CaptureEditor {
                 try self.store.update(updated)
                 if updated.collectionID != nil { updated = try self.store.collect(record.id) }
                 let result = updated
-                DispatchQueue.main.async { self.record = result; self.saved = snapshot; self.saving = false; self.status.stringValue = "工程已保存"; completion?(result) }
+                DispatchQueue.main.async { self.record = result; self.saved = snapshot; self.saving = false; self.status.stringValue = "工程已保存"; self.status.isHidden = true; completion?(result) }
             } catch { DispatchQueue.main.async { self.saving = false; self.status.stringValue = error.localizedDescription; CaptureUI.error(error, window: self.panel) } }
         }
     }

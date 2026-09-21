@@ -114,9 +114,27 @@ struct CaptureDocument: Codable, Equatable {
 
 enum CaptureRenderer {
     private static let ci = CIContext(options: [.cacheIntermediates: false])
+    /// Export geometry without allocating a full-resolution bitmap. Editor
+    /// zoom must not mistake the bounded preview raster for the output size.
+    static func outputPixelSize(_ document: CaptureDocument) -> CGSize {
+        var size = CGSize(width: ceil(document.size.width), height: ceil(document.size.height))
+        if let crop = document.crop { size = crop.intersection(CGRect(origin: .zero, size: document.size)).integral.size }
+        if abs(document.turns % 2) == 1 { size = CGSize(width: size.height, height: size.width) }
+        if document.background.enabled {
+            size.width += document.background.padding * 2; size.height += document.background.padding * 2
+            if let ratio = document.background.aspect, ratio.isFinite, ratio > 0.1, ratio < 10 {
+                if size.width / size.height > ratio { size.height = size.width / ratio } else { size.width = size.height * ratio }
+            }
+            size = CGSize(width: ceil(size.width), height: ceil(size.height))
+        }
+        if let width = document.outputWidth, size.width > 0 {
+            size = CGSize(width: width, height: max(1, Int(size.height * CGFloat(width) / size.width)))
+        }
+        return size
+    }
     static func color(_ hex: String, alpha: CGFloat = 1) -> CGColor {
-        let value = UInt32(hex.replacingOccurrences(of: "#", with: ""), radix: 16) ?? 0x22c55e
-        return CGColor(red: CGFloat((value >> 16) & 255)/255, green: CGFloat((value >> 8) & 255)/255, blue: CGFloat(value & 255)/255, alpha: alpha)
+        let color = CaptureColorValue.parse(hex) ?? NSColor(srgbRed: 0.13, green: 0.77, blue: 0.37, alpha: 1)
+        return color.withAlphaComponent(color.alphaComponent * min(1, max(0, alpha))).cgColor
     }
     static func context(_ size: CGSize) throws -> CGContext {
         guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,

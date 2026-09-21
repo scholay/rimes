@@ -407,26 +407,22 @@ final class CaptureRecorderController {
         panel.present()
     }
     private func authorize() {
-        Task {
-            // Each optional input asks through the shared audit, so a refusal
-            // is reported by the same page that lists the grant.
-            if options.camera, !SystemPermissionAudit.ensure(.camera) {
-                CaptureUI.error(CaptureError.message("摄像头权限未开启；关闭摄像头选项可继续录屏")); return
-            }
-            if options.microphone, options.format != "GIF",
-               !SystemPermissionAudit.ensure(.microphone) {
-                CaptureUI.error(CaptureError.message("麦克风权限未开启；关闭麦克风选项可继续录屏")); return
-            }
-            if options.keys, !SystemPermissionAudit.ensure(.inputMonitoring) {
-                CaptureUI.error(CaptureError.message("显示全局按键需要输入监控授权；关闭按键选项可继续录屏")); return
-            }
-            if options.keys, !SystemPermissionAudit.ensure(.accessibility) {
-                CaptureUI.error(CaptureError.message("按键显示还需要辅助功能授权；关闭按键选项可继续录屏")); return
-            }
-            settings?.close()
-            if options.mode == "区域" { requestTarget() }
-            else { CaptureCoordinator.shared.begin(options.mode == "窗口" ? "recordWindow" : "recordScreen",freeze:false) }
+        guard settings != nil, !IsSecureEventInputEnabled(),
+              !CapturePermissionGuide.shared.presentExisting() else { return }
+        for permission in Self.optionalPermissions(options) where SystemPermissionAudit.status(for: permission) != .granted {
+            CapturePermissionGuide.shared.show(permission) { [weak self] in self?.authorize() }
+            return
         }
+        settings?.close()
+        if options.mode == "区域" { requestTarget() }
+        else { CaptureCoordinator.shared.begin(options.mode == "窗口" ? "recordWindow" : "recordScreen",freeze:false) }
+    }
+    static func optionalPermissions(_ options: CaptureRecordingOptions) -> [SystemPermission] {
+        var permissions: [SystemPermission] = []
+        if options.camera { permissions.append(.camera) }
+        if options.microphone && options.format != "GIF" { permissions.append(.microphone) }
+        if options.keys { permissions += [.inputMonitoring, .accessibility] }
+        return permissions
     }
     func start(target:CaptureTarget,content:SCShareableContent) {
         token = UUID(); let current = token

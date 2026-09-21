@@ -26,7 +26,9 @@ enum SystemPermission: String, CaseIterable {
     var title: String {
         switch self {
         case .accessibility: return "辅助功能"
-        case .screenRecording: return "屏幕录制"
+        case .screenRecording:
+            if #available(macOS 15.0, *) { return "屏幕与系统音频录制" }
+            return "屏幕录制"
         case .inputMonitoring: return "输入监控"
         case .camera: return "摄像头"
         case .microphone: return "麦克风"
@@ -42,7 +44,7 @@ enum SystemPermission: String, CaseIterable {
             return "剪贴板自动粘贴、工作台对齐目标输入框、输入框高亮提示、"
                 + "滚动截图的自动滚动"
         case .screenRecording:
-            return "截图、滚动截图、贴图与录屏"
+            return "截图、滚动截图与录屏（查看已有图片和贴图无需此权限）"
         case .inputMonitoring:
             return "录屏时显示全局按键"
         case .camera:
@@ -60,7 +62,7 @@ enum SystemPermission: String, CaseIterable {
             return "内容仍会写入剪贴板，但需要自己按 ⌘V；工作台改用光标位置定位；"
                 + "滚动截图只能手动滚动。"
         case .screenRecording:
-            return "截图与录屏无法取得画面，捕获面板不可用。"
+            return "无法取得新的屏幕画面；已有截图、编辑和历史仍可使用。"
         case .inputMonitoring:
             return "录屏可继续，但需关闭「显示按键」选项。"
         case .camera:
@@ -92,6 +94,15 @@ enum SystemPermission: String, CaseIterable {
         case .localNetwork:
             return URL(string: "x-apple.systempreferences:com.apple.preference"
                 + ".security?Privacy_LocalNetwork")
+        }
+    }
+
+    /// These panes accept an application via their Add button or file drag.
+    /// Camera/microphone are request-driven lists, not manual app pickers.
+    var supportsManualApplicationAddition: Bool {
+        switch self {
+        case .accessibility, .screenRecording, .inputMonitoring: return true
+        case .camera, .microphone, .localNetwork: return false
         }
     }
 }
@@ -187,7 +198,7 @@ enum SystemPermissionAudit {
               let staticCode else { return false }
         var information: CFDictionary?
         guard SecCodeCopySigningInformation(staticCode,
-                                            SecCSFlags(rawValue: 0),
+                                            SecCSFlags(rawValue: kSecCSSigningInformation),
                                             &information) == errSecSuccess,
               let details = information as? [String: Any] else { return false }
         // An ad-hoc signature carries no certificate chain.
@@ -331,6 +342,23 @@ enum SystemPermissionAudit {
             NSWorkspace.shared.open(url)
         }
         return false
+    }
+
+    /// User-initiated request only: never opens Settings as a second side
+    /// effect, and waits for camera/microphone's asynchronous system answer.
+    @MainActor
+    static func requestOnly(_ permission: SystemPermission) async {
+        switch permission {
+        case .screenRecording: _ = CGRequestScreenCaptureAccess()
+        case .inputMonitoring: _ = CGRequestListenEventAccess()
+        case .accessibility: ClipboardAutoPaste.requestPermission()
+        case .camera, .microphone:
+            let type: AVMediaType = permission == .camera ? .video : .audio
+            if AVCaptureDevice.authorizationStatus(for: type) == .notDetermined {
+                _ = await AVCaptureDevice.requestAccess(for: type)
+            }
+        case .localNetwork: break
+        }
     }
 
     /// One call for a feature about to need a permission: true when it can

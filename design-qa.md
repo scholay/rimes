@@ -1,3 +1,61 @@
+# Screenshot UI visual QA — 2026-09-21
+
+## Result
+
+Passed for the four requested native surfaces, as a reference-aligned AppKit adaptation. No known P0/P1/P2 visual defects remain in the inspected states. This is not a claim of pixel-identical reproduction or complete hardware/workflow acceptance.
+
+The user explicitly allowed removing extra controls. Chinese labels, SF Symbols, local-only actions and existing asset storage are retained. The reference cat/photo is screenshot content, not a product asset. No reference bitmap is embedded into the application UI.
+
+## Reference and capture provenance
+
+All references are the four user-provided local images. Their desktop scaling is unspecified, so comparison uses each component's bounds/proportions, not the surrounding desktop or raw screenshot width.
+
+| Surface | Reference source | Implementation capture / state |
+| --- | --- | --- |
+| Card | `/Users/isaachigher/Library/RIMES/capsule/captures/12DB1E02-FA5E-47FD-9AFB-DC30C788AD28/original.png` (282×214) | `.build/capture-validation/chrome/card-hover-native.png` (416×296 px, 208×148 pt, 2×): hover, native window capture; `card-rest.png`: no hover |
+| Editor | `/Users/isaachigher/Library/RIMES/capsule/captures/AB2EF26E-9CEC-418F-AC4B-CFE30231AAFB/original.png` (3197×1944) | `.build/capture-validation/chrome/editor.png` (2400×1560 px, 1200×780 pt, 2×); `editor-compact.png` (2080×1400 px, 1040×700 pt, 2×) |
+| Color | `/Users/isaachigher/Library/RIMES/capsule/captures/6F713FE8-4D4D-4EB0-84DC-7E18E18D9F30/original.png` (890×565) | `.build/capture-validation/chrome/color-picker.png` (680×848 px, 340×424 pt, 2×), #2C7FFB; actual editor popover opening and dimensions also exercised |
+| Capture bar | `/Users/isaachigher/Library/RIMES/capsule/captures/55B6FB92-C55A-434F-941F-BD35806CF58C/original.png` (967×121) | `.build/capture-validation/chrome/launcher.png` (1506×136 px, 753×68 pt, 2×), idle, automatic dimensions |
+
+Implementation capture root: `/Users/isaachigher/Documents/DEV/rime-buffer-1/`. The captures are generated from real AppKit views, not HTML or drawn mockups. Most use view caching; `card-hover-native.png` uses the actual own-window image because cached views omit the live vibrancy/blur compositor. Test images and preferences are isolated; user captures and general pasteboard are untouched.
+
+## Five-surface check
+
+| Check | Finding |
+| --- | --- |
+| Fonts | Native system fonts, 12–13 pt controls, consistent label weight; compact toolbar labels fit without wrapping. Native inactive traffic lights are gray in test-window captures. |
+| Spacing | Card center actions / corner glyphs, single-row editor tools, expansive canvas, bottom zoom / centered drag / right actions, two-group capture bar and two-column color swatches follow references. Compact editor controls checked against content bounds. |
+| Colors | Independent dark neutral chrome, blue active / completion state, light card pills, dimmed and blurred hover preview, neutral canvas. Does not change IME-wide theme. |
+| Images and icons | Uses actual bounded current-render previews (not unredacted fallback), SF Symbols and synthetic QA content. Entire thumbnail fits, retaining previous cropping-loss fix. Reference cloud icons intentionally removed. |
+| Copy and information hierarchy | Chinese local equivalents; copy/save dominate card. Editor has Save As / Done; no persistent inspector/history rail. Capture bar has seven icon-above-label modes. Color controls include working Hex/RGBA/alpha and custom swatches. |
+
+## Iterations
+
+1. Initial implementation: native editor top/bottom layout and minimum window-size screenshots inspected alongside editor reference. Removed persistent sidebars and history rail, retained all stored documents.
+2. Cross-surface comparison found mode icons below text (P2) due to AppKit button coordinates; fixed custom mode orientation. Native button alignment insets made small circular controls oval (P2); overridden for custom-painted controls. Empty custom-color slots changed from tiny glyphs to full dashed swatch circles.
+3. Native card capture confirmed actual blurred hover backdrop; cached-only screenshot had not represented compositor blur. Retested all four surfaces and actual editor popover. No overlap or clipping found at tested sizes.
+
+## Behavioral regression evidence
+
+- Debug build passed with only existing AVFoundation deprecation warnings.
+- `capture-chrome-smoke`: compact layout, actual popover, pixel zoom including crop/rotation/background/output dimensions, RGBA opacity composition, invalid Hex rollback, custom color persistence/deduplication, six executable capture/recording modes and visual captures.
+- `capture-smoke`: asset lifecycles, original preservation, rendering/projects, scroll matcher; selection and overlay suites included.
+- Overlay tests: success-only copy dismissal, failed/conflicting clipboard preserves card, history/file retention, late callback cannot close a replacement card, overflow and refresh stability.
+- Selection tests: early drag before frame readiness, cancellation, fixed geometry, front-to-back window hit testing and cross-display coordinates.
+- Permission, clipboard-policy, clipboard-history, capsule-rail and capsule-window smoke passed.
+
+## Scope boundaries
+
+No claim that all mixed-DPI monitors, Spaces, third-party paste targets, device recording paths or IME composition behavior were end-to-end validated. Real shortcut latency must be measured from installed-process logs. Cloud upload/share, persistent library strip and extra inspector actions were deliberately omitted; restore/project/settings utilities remain in the capture bar's contextual menu so legacy pinned windows can still be managed.
+
+Release installation and installed-process checks are recorded in `CAPTURE.md`: matching UUID, strict deep signature verification, new single process and enabled/selected input source. Release `capture-smoke` and `capture-chrome-smoke` also passed; Release visual captures are under `.build/capture-validation/chrome-release/`.
+
+Installed real-keyboard verification remains unconfirmed: native automation could not attach the background input method by path or bundle ID (timeouts). Sending the launcher shortcut through Finder did not yield an observable RIMES accessibility tree; no real shortcut latency or external-window capture success is claimed.
+
+---
+
+The pre-existing Buffer / Clipboard report below is retained unchanged as historical evidence. Its blockers and acceptance status are independent of the screenshot UI work above.
+
 # Design QA — Clipboard image previews, toggleable Buffer toolbar, and theme families
 
 ## Current Acceptance Contract

@@ -691,6 +691,42 @@ if CommandLine.arguments.contains("mailbox-store-smoke") {
 if CommandLine.arguments.contains("mailbox-window-smoke") {
     exit(runMailboxWindowSmokeTest() ? 0 : 1)
 }
+if let index = CommandLine.arguments.firstIndex(of: "capture-permission-preview-smoke"), CommandLine.arguments.indices.contains(index + 1) {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory); app.finishLaunching()
+    do {
+        try MainActor.assumeIsolated {
+            let guide = CapturePermissionGuide(allowsSystemActions: false)
+            try guide.renderForSmoke(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+            withExtendedLifetime(guide) {}
+        }
+        exit(0)
+    } catch { print("capture-permission-preview-smoke: FAILED \(error.localizedDescription)"); exit(1) }
+}
+if CommandLine.arguments.contains("capture-permission-smoke") {
+    _ = NSApplication.shared
+    Task { @MainActor in
+        do { try await CapturePermissionSmoke.run(); exit(0) }
+        catch { print("capture-permission-smoke: FAILED \(error.localizedDescription)"); exit(1) }
+    }
+    NSApplication.shared.run()
+    exit(1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "capture-selection-smoke") {
+    _ = NSApplication.shared
+    do {
+        let preview = CommandLine.arguments.indices.contains(index + 1) ? URL(fileURLWithPath: CommandLine.arguments[index + 1]) : nil
+        try MainActor.assumeIsolated { try CaptureSelectionSmoke.run(previewDirectory: preview) }
+        exit(0)
+    } catch { print("capture-selection-smoke: FAILED \(error.localizedDescription)"); exit(1) }
+}
+if let index = CommandLine.arguments.firstIndex(of: "capture-chrome-smoke"), CommandLine.arguments.indices.contains(index + 1) {
+    _ = NSApplication.shared
+    do {
+        try MainActor.assumeIsolated { try CaptureChromeSmoke.run(output: URL(fileURLWithPath: CommandLine.arguments[index + 1])) }
+        exit(0)
+    } catch { print("capture-chrome-smoke: FAILED \(error.localizedDescription)"); exit(1) }
+}
 if CommandLine.arguments.contains("capture-smoke") {
     _ = NSApplication.shared
     exit(CaptureSmoke.run() ? 0 : 1)
