@@ -286,10 +286,11 @@ final class KeyboardExperienceTests: XCTestCase {
 
 @MainActor private final class SlowPlugin: BufferPlugin {
     let descriptor = BufferPluginDescriptor(id: "test", title: "test", realtime: true)
+    var onStarted: ((String) -> Void)?
     var requests = [String](), concurrent = 0, peak = 0, cancellations = 0
     func availability(for request: BufferPluginRequest) async -> BufferPluginAvailability { .ready }
     func execute(_ request: BufferPluginRequest, preview: @escaping @MainActor (String) -> Void) async throws -> BufferPluginResult {
-        requests.append(request.source); concurrent += 1; peak = max(peak, concurrent)
+        requests.append(request.source); concurrent += 1; peak = max(peak, concurrent); onStarted?(request.source)
         // Deliberately ignores cancellation to prove the runner still serializes it.
         await withCheckedContinuation { continuation in
             Task { try? await Task.sleep(nanoseconds: 60_000_000); continuation.resume() }
@@ -304,20 +305,24 @@ final class BufferPluginRunnerTests: XCTestCase {
     @MainActor func testDebounceOnlyExecutesLatestText() async throws {
         let runner = BufferPluginRunner(), plugin = SlowPlugin()
         var completed = [String]()
+        let finished = expectation(description: "Latest request completes")
         for text in ["a", "ab", "abc"] {
-            runner.submit(plugin: plugin, request: .init(source: text, revision: UUID()), delayNanoseconds: 20_000_000, preview: { _ in }, completion: { if case .success(let result) = $0 { completed.append(result.text) } })
+            runner.submit(plugin: plugin, request: .init(source: text, revision: UUID()), delayNanoseconds: 20_000_000, preview: { _ in }, completion: { if case .success(let result) = $0 { completed.append(result.text); finished.fulfill() } })
         }
-        try await Task.sleep(nanoseconds: 180_000_000)
+        await fulfillment(of: [finished], timeout: 5)
         XCTAssertEqual(plugin.requests, ["abc"]); XCTAssertEqual(completed, ["abc"])
     }
     @MainActor func testUncooperativeOldTaskCannotOverlapOrPublish() async throws {
         let runner = BufferPluginRunner(), plugin = SlowPlugin()
         var completed = [String](), previews = [String]()
+        let started = expectation(description: "Old request is running")
+        let finished = expectation(description: "Replacement completes")
+        plugin.onStarted = { if $0 == "old" { started.fulfill() } }
         func submit(_ text: String) {
-            runner.submit(plugin: plugin, request: .init(source: text, revision: UUID()), delayNanoseconds: 0, preview: { previews.append($0) }, completion: { if case .success(let result) = $0 { completed.append(result.text) } })
+            runner.submit(plugin: plugin, request: .init(source: text, revision: UUID()), delayNanoseconds: 0, preview: { previews.append($0) }, completion: { if case .success(let result) = $0 { completed.append(result.text); finished.fulfill() } })
         }
-        submit("old"); try await Task.sleep(nanoseconds: 20_000_000)
-        submit("new"); try await Task.sleep(nanoseconds: 200_000_000)
+        submit("old"); await fulfillment(of: [started], timeout: 5)
+        submit("new"); await fulfillment(of: [finished], timeout: 5)
         XCTAssertEqual(plugin.requests, ["old", "new"]); XCTAssertEqual(plugin.peak, 1)
         XCTAssertEqual(completed, ["new"]); XCTAssertEqual(previews, ["new"])
         submit("hidden"); runner.cancel(); try await Task.sleep(nanoseconds: 30_000_000)
