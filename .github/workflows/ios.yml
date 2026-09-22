@@ -8,7 +8,30 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ios-checks-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
+  release-config:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@e8944e80fb94b20106697132f8c20c665fab29e9
+        with:
+          ruby-version: '3.3'
+          working-directory: platforms/ios
+          bundler-cache: true
+      - name: Validate Fastlane without signing credentials
+        working-directory: platforms/ios
+        env:
+          FASTLANE_SKIP_UPDATE_CHECK: '1'
+          FASTLANE_OPT_OUT_USAGE: '1'
+        run: |
+          ruby scripts/tests/release-config-test.rb
+          bundle exec fastlane lanes
   build:
     runs-on: macos-26
     env:
