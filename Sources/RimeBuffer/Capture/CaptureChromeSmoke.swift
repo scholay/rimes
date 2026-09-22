@@ -82,7 +82,7 @@ enum CaptureChromeSmoke {
         try snapshot(picker, "color-picker")
 
         let launcher = CaptureLauncherView(frame: .zero)
-        let launchPanel = CapturePanel(size: NSSize(width: 780, height: 68)); launchPanel.captureChrome = true
+        let launchPanel = CapturePanel(size: NSSize(width: 780, height: 68), surface: .transparent); launchPanel.captureChrome = true
         launchPanel.styleMask = [.borderless]; launchPanel.backgroundColor = .clear; launchPanel.isOpaque = false
         CaptureUI.fill(launcher, in: launchPanel.contentView!, inset: 0)
         launchPanel.setContentSize(launcher.fittingSize); launchPanel.orderFrontRegardless()

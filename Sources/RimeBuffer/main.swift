@@ -731,6 +731,15 @@ if CommandLine.arguments.contains("capture-smoke") {
     _ = NSApplication.shared
     exit(CaptureSmoke.run() ? 0 : 1)
 }
+if let index = CommandLine.arguments.firstIndex(of: "window-chrome-smoke") {
+    _ = NSApplication.shared
+    do {
+        let output = CommandLine.arguments.indices.contains(index + 1)
+            ? URL(fileURLWithPath: CommandLine.arguments[index + 1]) : nil
+        try MainActor.assumeIsolated { try WindowChromeSmoke.run(output: output) }
+        exit(0)
+    } catch { print("window-chrome-smoke: FAILED \(error.localizedDescription)"); exit(1) }
+}
 if let index = CommandLine.arguments.firstIndex(of: "capture-media-smoke"), CommandLine.arguments.count > index + 1 {
     Task { exit(await CaptureSmoke.media(CommandLine.arguments[index + 1]) ? 0 : 1) }
     NSApplication.shared.run()
@@ -770,6 +779,12 @@ if let previewIndex = CommandLine.arguments.firstIndex(of: "capsule-rail-preview
 if CommandLine.arguments.contains("capsule-rail-smoke") {
     _ = NSApplication.shared
     exit(MainActor.assumeIsolated { CapsuleRailSmoke.run() } ? 0 : 1)
+}
+if let index = CommandLine.arguments.firstIndex(of: "capsule-interaction-smoke") {
+    _ = NSApplication.shared
+    let output = CommandLine.arguments.indices.contains(index + 1)
+        ? URL(fileURLWithPath: CommandLine.arguments[index + 1]) : nil
+    exit(MainActor.assumeIsolated { CapsuleInteractionSmoke.run(output: output) } ? 0 : 1)
 }
 if CommandLine.arguments.contains("capsule-sync-smoke") {
     exit(runCapsuleCloudSyncSmokeTest() ? 0 : 1)

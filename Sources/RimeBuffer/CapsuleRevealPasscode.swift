@@ -19,8 +19,6 @@ struct CapsuleRevealChord: Codable, Equatable, Hashable, Sendable {
         keys = String(Self.keyboardOrder.filter(characters.contains))
     }
 
-    var displayValue: String { keys.uppercased() }
-
     /// Match the physical ANSI letter key carried by the native event. This
     /// deliberately does not consult `charactersIgnoringModifiers`: the
     /// passcode remains the same while another input source or keyboard layout
@@ -193,10 +191,12 @@ struct CapsuleRevealPasscodeAttempt {
     }
 }
 
-private final class CapsuleRevealChordCaptureView: NSView {
+final class CapsuleRevealChordCaptureView: NSView {
     var onChord: ((CapsuleRevealChord) -> Void)?
-    var onProgress: ((CapsuleRevealChord?) -> Void)?
+    /// Presentation receives progress only, never the actual key combination.
+    var onProgress: ((Bool) -> Void)?
     var onCancel: (() -> Void)?
+    var onFocusLost: (() -> Void)?
 
     private var keysDown: [UInt16: Character] = [:]
     private var allKeysDown = Set<UInt16>()
@@ -207,11 +207,11 @@ private final class CapsuleRevealChordCaptureView: NSView {
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
+    init(compact: Bool = false) {
+        super.init(frame: .zero)
         wantsLayer = true
         translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(equalToConstant: 54).isActive = true
+        heightAnchor.constraint(equalToConstant: compact ? 30 : 54).isActive = true
         setAccessibilityLabel("并击口令输入区")
         setAccessibilityHelp("同时按下每组字母并全部松开，完成一个槽位")
     }
@@ -244,11 +244,7 @@ private final class CapsuleRevealChordCaptureView: NSView {
         }
         keysDown[event.keyCode] = character
         chordKeys.insert(character)
-        onProgress?(
-            rejectedCurrentChord
-                ? nil
-                : CapsuleRevealChord(String(chordKeys))
-        )
+        onProgress?(!rejectedCurrentChord)
         needsDisplay = true
     }
 
@@ -281,6 +277,7 @@ private final class CapsuleRevealChordCaptureView: NSView {
 
     override func resignFirstResponder() -> Bool {
         reset()
+        onFocusLost?()
         return super.resignFirstResponder()
     }
 
@@ -290,7 +287,7 @@ private final class CapsuleRevealChordCaptureView: NSView {
         chordKeys.removeAll(keepingCapacity: true)
         rejectedCurrentChord = false
         blockedByModifier = false
-        onProgress?(nil)
+        onProgress?(false)
         needsDisplay = true
     }
 
@@ -298,7 +295,7 @@ private final class CapsuleRevealChordCaptureView: NSView {
         if !rejectedCurrentChord { NSSound.beep() }
         rejectedCurrentChord = true
         chordKeys.removeAll(keepingCapacity: true)
-        onProgress?(nil)
+        onProgress?(false)
         needsDisplay = true
     }
 
@@ -317,9 +314,8 @@ private final class CapsuleRevealChordCaptureView: NSView {
         path.lineWidth = window?.firstResponder === self ? 1.5 : 1
         path.stroke()
         let label = chordKeys.isEmpty
-            ? "点击此处，然后逐组并击"
-            : String(CapsuleRevealChord.keyboardOrder.filter(chordKeys.contains))
-                .uppercased()
+            ? "逐组输入口令"
+            : "●"
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(
                 ofSize: chordKeys.isEmpty ? 12 : 20,
@@ -343,7 +339,7 @@ private final class CapsuleRevealChordCaptureView: NSView {
 private final class CapsuleRevealPasscodeSlotsView: NSStackView {
     private let labels: [NSTextField]
 
-    override init(frame frameRect: NSRect) {
+    init(compact: Bool = false) {
         labels = (0..<CapsuleRevealPasscode.slotCount).map { index in
             let label = NSTextField(labelWithString: "\(index + 1)")
             label.alignment = .center
@@ -352,18 +348,18 @@ private final class CapsuleRevealPasscodeSlotsView: NSStackView {
             label.layer?.cornerRadius = 7
             label.layer?.borderWidth = 1
             label.translatesAutoresizingMaskIntoConstraints = false
-            label.widthAnchor.constraint(greaterThanOrEqualToConstant: 62).isActive = true
-            label.heightAnchor.constraint(equalToConstant: 42).isActive = true
+            label.widthAnchor.constraint(greaterThanOrEqualToConstant: compact ? 24 : 62).isActive = true
+            label.heightAnchor.constraint(equalToConstant: compact ? 23 : 42).isActive = true
             return label
         }
-        super.init(frame: frameRect)
+        super.init(frame: .zero)
         orientation = .horizontal
         alignment = .centerY
         distribution = .fillEqually
         spacing = 8
         translatesAutoresizingMaskIntoConstraints = false
         labels.forEach(addArrangedSubview)
-        update(completed: 0, active: nil, revealCompletedValues: false)
+        update(completed: 0, active: false)
     }
 
     @available(*, unavailable)
@@ -373,9 +369,7 @@ private final class CapsuleRevealPasscodeSlotsView: NSStackView {
 
     func update(
         completed: Int,
-        active: CapsuleRevealChord?,
-        revealCompletedValues: Bool,
-        values: [CapsuleRevealChord] = []
+        active: Bool
     ) {
         for (index, label) in labels.enumerated() {
             label.layer?.borderColor = (index == min(completed, labels.count - 1)
@@ -384,18 +378,84 @@ private final class CapsuleRevealPasscodeSlotsView: NSStackView {
             label.backgroundColor = RimeUI.surface3
             label.textColor = RimeUI.textPrimary
             if index < completed {
-                label.stringValue = revealCompletedValues && values.indices.contains(index)
-                    ? values[index].displayValue
-                    : "●"
+                label.stringValue = "●"
                 label.setAccessibilityLabel("口令槽位 \(index + 1)，已输入")
-            } else if index == completed, let active {
-                label.stringValue = active.displayValue
+            } else if index == completed, active {
+                label.stringValue = "●"
                 label.setAccessibilityLabel("口令槽位 \(index + 1)，输入中")
             } else {
                 label.stringValue = "\(index + 1)"
                 label.setAccessibilityLabel("口令槽位 \(index + 1)，未输入")
             }
         }
+    }
+}
+
+/// The same physical-key verifier embedded in a card or detail form. No sheet,
+/// text input context, clipboard, or raw chord value enters the presentation.
+final class CapsuleInlinePasscodeView: NSStackView {
+    var onVerified: (() -> Void)?
+    var onCancel: (() -> Void)?
+    private let store: CapsuleRevealPasscodeStore
+    private let slots = CapsuleRevealPasscodeSlotsView(compact: true)
+    let capture = CapsuleRevealChordCaptureView(compact: true)
+    private let status = NSTextField(labelWithString: "输入口令查看 · Esc 取消")
+    private var attempt = CapsuleRevealPasscodeAttempt()
+    private var completed = false
+
+    init(store: CapsuleRevealPasscodeStore) {
+        self.store = store
+        super.init(frame: .zero)
+        orientation = .vertical
+        alignment = .leading
+        spacing = 5
+        edgeInsets = NSEdgeInsets(top: 2, left: 4, bottom: 2, right: 4)
+        status.font = .systemFont(ofSize: 10)
+        status.textColor = RimeUI.textSecondary
+        status.lineBreakMode = .byTruncatingTail
+        for view in [status, slots, capture] {
+            addArrangedSubview(view)
+            view.widthAnchor.constraint(equalTo: widthAnchor, constant: -8).isActive = true
+        }
+        capture.onProgress = { [weak self] active in
+            guard let self, !self.completed else { return }
+            self.slots.update(completed: self.attempt.chords.count, active: active)
+        }
+        capture.onChord = { [weak self] chord in self?.accept(chord) }
+        capture.onCancel = { [weak self] in self?.reset(); self?.onCancel?() }
+        capture.onFocusLost = { [weak self] in
+            guard let self, !self.completed else { return }
+            self.reset()
+        }
+    }
+
+    @available(*, unavailable)
+    required init(coder: NSCoder) { fatalError() }
+
+    func focus() { window?.makeFirstResponder(capture) }
+
+    func reset() {
+        completed = false
+        attempt.reset()
+        capture.reset()
+        slots.update(completed: 0, active: false)
+    }
+
+    private func accept(_ chord: CapsuleRevealChord) {
+        guard !completed else { return }
+        let count = attempt.chords.count + 1
+        let passcode = attempt.append(chord)
+        slots.update(completed: count, active: false)
+        guard let passcode else { return }
+        attempt.reset()
+        guard store.matches(passcode) else {
+            status.stringValue = "口令不匹配，请重试"
+            status.textColor = .systemRed
+            slots.update(completed: 0, active: false)
+            return
+        }
+        completed = true
+        onVerified?()
     }
 }
 
@@ -439,7 +499,7 @@ final class CapsuleRevealPasscodeChallengeController: NSObject, NSWindowDelegate
         status.stringValue = purpose == .verify
             ? "输入四组并击后验证"
             : "输入新的四组并击口令"
-        slots.update(completed: 0, active: nil, revealCompletedValues: false)
+        slots.update(completed: 0, active: false)
         parent.beginSheet(panel)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -522,8 +582,7 @@ final class CapsuleRevealPasscodeChallengeController: NSObject, NSWindowDelegate
             guard let self else { return }
             self.slots.update(
                 completed: self.attempt.chords.count,
-                active: active,
-                revealCompletedValues: false
+                active: active
             )
         }
         capture.onChord = { [weak self] chord in
@@ -538,9 +597,7 @@ final class CapsuleRevealPasscodeChallengeController: NSObject, NSWindowDelegate
         let passcode = attempt.append(chord)
         slots.update(
             completed: completed,
-            active: nil,
-            revealCompletedValues: purpose == .configure,
-            values: attempt.chords
+            active: false
         )
         guard let passcode else { return }
 
@@ -554,8 +611,7 @@ final class CapsuleRevealPasscodeChallengeController: NSObject, NSWindowDelegate
                 attempt.reset()
                 slots.update(
                     completed: 0,
-                    active: nil,
-                    revealCompletedValues: false
+                    active: false
                 )
             }
         case .configure:
@@ -567,8 +623,7 @@ final class CapsuleRevealPasscodeChallengeController: NSObject, NSWindowDelegate
                     attempt.reset()
                     slots.update(
                         completed: 0,
-                        active: nil,
-                        revealCompletedValues: true
+                        active: false
                     )
                     return
                 }
@@ -581,8 +636,7 @@ final class CapsuleRevealPasscodeChallengeController: NSObject, NSWindowDelegate
                 status.textColor = RimeUI.textSecondary
                 slots.update(
                     completed: 0,
-                    active: nil,
-                    revealCompletedValues: true
+                    active: false
                 )
             }
         }
@@ -687,7 +741,7 @@ final class CapsuleRevealPasscodeSettingsView: NSView {
     private func renderStatus() {
         statusLabel.stringValue = store.isCustomized
             ? "已启用 · 4 槽 · 自定义并击口令"
-            : "已启用 · 4 槽 · 默认 RH / WO / CVN / QU"
+            : "已启用 · 4 槽 · 使用默认口令"
     }
 
     @objc private func setPasscode() {

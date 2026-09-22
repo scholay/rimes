@@ -1,14 +1,14 @@
 import Foundation
 
 /// The Capsule rail's tabs. Recent is the local clipboard history; every other
-/// tab is one kind of saved Capsule entry, read-only in the rail.
+/// tab is one kind of saved Capsule entry with explicit card actions.
 enum CapsuleRailTab: Hashable {
     case recent
     case captures
     case saved(CapsuleEntryKind)
 
     /// Most-used first. Password is last because nothing leaves it from the
-    /// rail: it can only be opened in the manager.
+    /// rail: it is authenticated and viewed in place, never copied/delivered.
     static let ordered: [CapsuleRailTab] = [
         .recent,
         .captures,
@@ -62,20 +62,20 @@ enum CapsuleRailActivationRules {
         case insertText
         /// A file: onto the pasteboard, then pasted into the target app.
         case pasteFile
-        /// Nothing leaves the rail.
-        case refuse
+        /// Authenticate and reveal in the card; never delivery or pasteboard.
+        case revealInPlace
     }
 
     static func action(for kind: CapsuleEntryKind) -> Action {
         switch kind {
         case .note: return .insertText
         case .image, .pdf, .skill, .video: return .pasteFile
-        case .password: return .refuse
+        case .password: return .revealInPlace
         }
     }
 
     static func allowsCopy(_ kind: CapsuleEntryKind) -> Bool {
-        action(for: kind) != .refuse
+        action(for: kind) != .revealInPlace
     }
 }
 
@@ -119,6 +119,7 @@ final class CapsuleRailLibrary {
     let savedIndex: CapsuleRailSavedIndex
 
     private let loader: Loader
+    private let passwordReader: ((CapsuleRailEntry) throws -> String)?
     private let queue = DispatchQueue(
         label: "RIMES.CapsuleRail.library",
         qos: .userInitiated
@@ -130,9 +131,11 @@ final class CapsuleRailLibrary {
     private var contentEntryIDs: Set<UUID> = []
 
     init(loader: @escaping Loader,
-         savedIndex: CapsuleRailSavedIndex = CapsuleRailSavedIndex(defaults: nil)) {
+         savedIndex: CapsuleRailSavedIndex = CapsuleRailSavedIndex(defaults: nil),
+         passwordReader: ((CapsuleRailEntry) throws -> String)? = nil) {
         self.loader = loader
         self.savedIndex = savedIndex
+        self.passwordReader = passwordReader
     }
 
     /// A library that never reads anything, for panes built without stores.
@@ -144,10 +147,26 @@ final class CapsuleRailLibrary {
     static func live() -> CapsuleRailLibrary {
         let library = CapsuleRailLibrary(
             loader: { load(contentStore: .shared, passwordStore: .shared) },
-            savedIndex: CapsuleRailSavedIndex(defaults: .standard)
+            savedIndex: CapsuleRailSavedIndex(defaults: .standard),
+            passwordReader: { entry in
+                let repository = CapsuleWindowRepository()
+                guard let row = try repository.list(kind: .password).first(where: {
+                    $0.id == entry.id && $0.updatedAt == entry.updatedAt && $0.title == entry.title
+                }) else { throw CapsuleWindowRepositoryError.staleRecord }
+                return try repository.draft(for: row).content
+            }
         )
         library.usesLiveCaptureHistory = true
         return library
+    }
+
+    /// Only called after a successful current-credential challenge. This is
+    /// deliberately separate from the metadata loader and search projection.
+    func readPassword(_ entry: CapsuleRailEntry) throws -> String {
+        guard entry.kind == .password, let passwordReader else {
+            throw CapsuleWindowRepositoryError.staleRecord
+        }
+        return try passwordReader(entry)
     }
 
     func entries(for kind: CapsuleEntryKind) -> [CapsuleRailEntry] {

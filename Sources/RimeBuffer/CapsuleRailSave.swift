@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 /// What saving one Recent card into Capsule would create.
 enum CapsuleRailSavePlan: Equatable {
     case note(title: String, text: String)
-    /// A file the user already keeps on disk: an Image or PDF entry that
+    /// A file the user already keeps on disk: an Image, PDF or Video entry that
     /// points at it.
     case file(kind: CapsuleEntryKind, title: String, path: String)
     /// Image data with no file behind it. It is written into Capsule's
@@ -17,7 +17,7 @@ enum CapsuleRailSavePlan: Equatable {
     enum UnsupportedReason: Equatable {
         /// Colors and unrecognised pasteboard types have no Capsule kind.
         case kind
-        /// A file that is neither an image nor a PDF.
+        /// A file without a supported Capsule media kind.
         case fileType
         case tooLarge
         case noContent
@@ -34,6 +34,16 @@ enum CapsuleRailSaveOutcome: Equatable {
 }
 
 enum CapsuleRailSaveRules {
+    /// A mixed file card must stay intact if even one representation cannot
+    /// be migrated. Partial success is never permission to delete the source.
+    static func mayRemoveSource(after outcomes: [CapsuleRailSaveOutcome]) -> Bool {
+        !outcomes.isEmpty && outcomes.allSatisfy {
+            switch $0 {
+            case .saved, .alreadySaved: return true
+            case .unsupported, .failed: return false
+            }
+        }
+    }
     static let maximumTitleCharacters = 60
     static let imageExtensions: Set<String> = [
         "png", "jpg", "jpeg", "heic", "webp", "tif", "tiff", "gif", "bmp",
@@ -97,7 +107,7 @@ enum CapsuleRailSaveRules {
         case .files:
             let urls = fileURLs(in: archive)
             guard !urls.isEmpty else { return [.unsupported(.noContent)] }
-            return urls.map { url in
+            let plans: [CapsuleRailSavePlan] = urls.map { url in
                 let ext = url.pathExtension.lowercased()
                 if ext == "pdf" {
                     return .file(kind: .pdf, title: url.lastPathComponent, path: url.path)
@@ -105,8 +115,14 @@ enum CapsuleRailSaveRules {
                 if imageExtensions.contains(ext) {
                     return .file(kind: .image, title: url.lastPathComponent, path: url.path)
                 }
+                if ["mp4", "mov", "m4v"].contains(ext) {
+                    return .file(kind: .video, title: url.lastPathComponent, path: url.path)
+                }
                 return .unsupported(.fileType)
             }
+            // Do not silently drop a malformed/non-file pasteboard item and
+            // then declare a mixed card completely migrated.
+            return plans + Array(repeating: .unsupported(.fileType), count: archive.items.count - urls.count)
         case .color, .unknown:
             return [.unsupported(.kind)]
         }

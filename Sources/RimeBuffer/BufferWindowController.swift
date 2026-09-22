@@ -1849,6 +1849,7 @@ private final class BufferChromeView: NSVisualEffectView {
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = true
         fillLayer.backgroundColor = fillColor.cgColor
+        RoundedWindowChrome.maskMaterial(self, radius: 9)
         layer?.addSublayer(fillLayer)
         rastaAccentLayer.zPosition = 90
         rastaAccentLayer.masksToBounds = true

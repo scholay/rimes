@@ -261,36 +261,46 @@ enum CaptureUI {
 /// Shared chrome for new Capsule windows. Only key-capable surfaces acquire
 /// standalone focus; passive overlays never claim an input-method target.
 class CapturePanel: NSPanel, NSWindowDelegate {
+    enum Surface { case rounded, transparent }
     var captureChrome = false { didSet { updateTheme() } }
     var closed: (() -> Void)?
     var escapeCloses = true
     var shouldClose: (() -> Bool)?
     private let acceptsKeyboard: Bool
+    private let surface: Surface
     private var registered = false
     private var themeObserver: NSObjectProtocol?
-    init(size: NSSize, key: Bool = true) {
+    init(size: NSSize, key: Bool = true, surface: Surface = .rounded) {
         acceptsKeyboard = key
+        self.surface = surface
         super.init(contentRect: NSRect(origin: .zero, size: size),
                    styleMask: key ? [.titled, .fullSizeContentView, .resizable] : [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         titleVisibility = .hidden; titlebarAppearsTransparent = true
         for type: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] { standardWindowButton(type)?.isHidden = true }
         isReleasedWhenClosed = false; isMovableByWindowBackground = true; hasShadow = true; hidesOnDeactivate = false
-        backgroundColor = RimeUI.surface; appearance = RimeUI.appKitAppearance
-        contentView?.wantsLayer = true; contentView?.layer?.cornerRadius = 14
-        contentView?.layer?.masksToBounds = true
+        updateTheme()
         level = .floating; collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
         delegate = self
         themeObserver = NotificationCenter.default.addObserver(forName: .rimeAppearanceDidChange, object: nil, queue: .main) { [weak self] _ in self?.updateTheme() }
     }
     deinit { if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) } }
+    override var contentView: NSView? {
+        didSet { updateSurface() }
+    }
+    private func updateSurface() {
+        RoundedWindowChrome.apply(to: self, radius: surface == .rounded ? RoundedWindowChrome.radius : 0)
+        contentView?.layer?.backgroundColor = (surface == .transparent ? NSColor.clear
+            : captureChrome ? CaptureChrome.bar : RimeUI.surface).cgColor
+    }
     private func updateTheme() {
+        updateSurface()
         if captureChrome {
-            appearance = NSAppearance(named: .darkAqua); backgroundColor = isOpaque ? CaptureChrome.bar : .clear
+            appearance = NSAppearance(named: .darkAqua)
             contentView?.needsDisplay = true
             return
         }
-        appearance = RimeUI.appKitAppearance; backgroundColor = RimeUI.surface
+        appearance = RimeUI.appKitAppearance
         func visit(_ view: NSView) {
             if let label = view as? NSTextField { label.textColor = RimeUI.textPrimary }
             if let text = view as? NSTextView { text.textColor = RimeUI.textPrimary; text.backgroundColor = RimeUI.surface2 }

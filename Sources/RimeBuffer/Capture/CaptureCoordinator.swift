@@ -183,7 +183,7 @@ final class CaptureCoordinator {
         sourceName = sourceApplication?.localizedName ?? ""
         ClipboardHistoryWindowController.shared.hide()
         if let launcher, launcher.isVisible { launcher.makeKeyAndOrderFront(nil); return }
-        let panel = CapturePanel(size: NSSize(width: 766, height: 68))
+        let panel = CapturePanel(size: NSSize(width: 766, height: 68), surface: .transparent)
         panel.captureChrome = true
         panel.styleMask = [.borderless]
         panel.isOpaque = false; panel.backgroundColor = .clear
@@ -363,7 +363,7 @@ final class CaptureCoordinator {
         var surfaces: [SelectionSurface] = []
         for screen in NSScreen.screens {
             guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else { continue }
-            let panel = CapturePanel(size: screen.frame.size)
+            let panel = CapturePanel(size: screen.frame.size, surface: .transparent)
             panel.styleMask = [.borderless]; panel.level = .screenSaver; panel.isMovableByWindowBackground = false
             panel.backgroundColor = .clear; panel.isOpaque = false; panel.hasShadow = false
             panel.acceptsMouseMovedEvents = true; panel.escapeCloses = false

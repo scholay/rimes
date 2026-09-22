@@ -15,6 +15,12 @@
 - 贴图可调整窗口大小、透明度，点击后用方向键移动，Shift 加速；锁定穿透后从捕获设置解锁或关闭所有贴图。锁屏隐藏内容。
 - OCR 结果可复制、存笔记或显式送入 Buffer；不会直接向宿主输入框发送。导入的 Buffer 块要求显式投递，即使已有自动上屏偏好也不会由 OCR 导入启动投递。
 
+### 自定义窗口圆角
+
+截图结果卡片、编辑器、贴图及捕获辅助窗口与 Capsule 管理窗口使用透明窗口底板，背景和完整内容树在同一圆角内裁剪，避免浅色系统外观下露出矩形底色。替换内容、调整窗口尺寸或切换主题后仍保留裁剪。Capsule 列表与编辑区域同时裁剪滚动内容；Capsule 底栏、Buffer 和卡片悬停毛玻璃另设可伸缩材质遮罩，避免系统背景材质越过圆角。
+
+捕获横条保留两组之间的透明间隙；全屏选区蒙层覆盖到屏幕四角，不做圆角裁剪。设置、Mailbox 等使用系统标准标题栏的窗口继续由 AppKit 管理外形，不改变焦点、拖动与缩放行为。
+
 ### 授权与检测
 
 显式截图通过 ScreenCaptureKit 取得可捕获内容，不再仅因 CoreGraphics 预检查失败就阻断。系统实际拒绝当前进程时，截图入口与「设置 → 系统权限」共用一个授权引导：请求授权、打开对应系统面板、检测并继续；三项为独立用户操作，不自动连弹错误或跳转。返回应用只更新预检查提示，不自动截图。只将 ScreenCaptureKit 的 `userDeclined` 归为权限问题，服务失败、超时等保留实际错误。
@@ -65,6 +71,7 @@ GIF 明确不含音轨，转码限制为 2 分钟、15 FPS 和 1280 像素，超
 swift build -c debug
 .build/debug/RimeBuffer capture-smoke
 .build/debug/RimeBuffer capture-chrome-smoke .build/capture-validation/chrome
+.build/debug/RimeBuffer window-chrome-smoke .build/capture-validation/corners
 .build/debug/RimeBuffer capture-selection-smoke
 .build/debug/RimeBuffer capture-permission-smoke
 .build/debug/RimeBuffer capsule-rail-smoke
@@ -82,6 +89,8 @@ swift build -c debug
 `capture-smoke` 验证清理租约、收藏身份、原图不可变、遮盖像素、工程导入/恢复、跨设备依赖完整性、横纵拼接、尺寸变换及视频本机策略。`capture-media-smoke <双音轨测试 MP4>` 验证混音、H.264 与动态 GIF。`capture-live-smoke 1800` 只录制自身测试窗口并订阅系统音频，包含暂停/继续；它记录主循环定时器偏差，不能替代真实中文输入延迟测量。
 
 `capture-chrome-smoke` 使用隔离素材验证紧凑编辑器布局、色板真实弹出、像素缩放、RGBA 渲染、非法 Hex 回退、自存色去重、捕获模式路由，并生成原生卡片／编辑器／色板／横条截图。视觉对照与已知范围记在 `design-qa.md`。
+
+`window-chrome-smoke` 已纳入 CI：用临时 Capsule 库和 AppKit 测试窗口检查浅色／深色、1×／2× 四角像素透明度、满幅子视图与悬停层裁剪、管理窗口缩放、内容视图替换、材质遮罩及全屏蒙层例外；可选输出目录用于图像检查。不修改用户主题偏好、真实内容库、剪贴板或系统权限。
 
 `capture-smoke` 还用临时素材和隔离存储验证三张真实结果窗口：重复刷新不重建、不重叠，隐藏期间刷新不显示，恢复及关闭后补位，元数据刷新不取消缩略图，缺失缩略图回退当前渲染版本，过期回调不覆盖或复活窗口；纯布局测试覆盖左右侧、负坐标及屏幕容量溢出。不读取或修改用户截图。
 

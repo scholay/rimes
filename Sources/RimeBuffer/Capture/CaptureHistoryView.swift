@@ -70,6 +70,27 @@ final class CaptureHistoryView: NSView {
             card.selected = record.id == selected
             card.choose = { [weak self] in self?.selected = record.id; self?.updateSelection() }
             card.open = { CaptureCoordinator.shared.edit(record) }
+            card.makeActions = { [weak self] in
+                guard let self, !self.protected else { return nil }
+                return CapsuleCardMenu.make([
+                    ("编辑", true, { [weak self] in
+                        guard self?.protected == false else { return }
+                        CaptureCoordinator.shared.edit(record)
+                    }),
+                    (record.collectionID == nil ? "迁移到\(record.kind.capsuleKind.tabLabel)" : "迁移（已在对应分类）",
+                     record.collectionID == nil, { [weak self] in
+                        guard self?.protected == false else { return }
+                        CaptureCoordinator.shared.collect(record)
+                    }),
+                    ("删除", record.collectionID == nil, { [weak self] in
+                        guard let self, !self.protected else { return }
+                        self.queue.async {
+                            do { try store.remove(record.id) }
+                            catch { DispatchQueue.main.async { CaptureUI.error(error) } }
+                        }
+                    }),
+                ])
+            }
             card.widthAnchor.constraint(equalToConstant:206).isActive = true
             card.heightAnchor.constraint(equalToConstant:126).isActive = true
             stack.addArrangedSubview(card)
@@ -123,6 +144,8 @@ private final class CaptureHistoryCard: NSView {
     let record: CaptureRecord
     var choose:(()->Void)?
     var open:(()->Void)?
+    var makeActions: (() -> NSMenu?)?
+    private let more = CaptureChromeButton(symbol: "ellipsis", help: "更多操作：编辑、迁移、删除", size: NSSize(width: 24, height: 24))
     var selected = false { didSet { layer?.borderColor = selected ? RimeUI.accentGreen.cgColor : RimeUI.border.cgColor } }
     private let image = CaptureDragImageView()
     private var operation: Operation?
@@ -145,6 +168,14 @@ private final class CaptureHistoryCard: NSView {
         let duration = record.kind == .video ? " · " + CaptureDuration.label(record.duration) : ""
         let detail = CaptureUI.label(record.kind.label + duration + (record.collectionID == nil ? "" : " · 已收藏") + (record.incomplete ? " · 未完成" : ""),size:10)
         CaptureUI.fill(CaptureUI.column([image,title,detail],spacing:3),in:self,inset:8)
+        layer?.masksToBounds = true
+        more.onClick = { [weak self] in self?.showActions() }
+        more.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(more)
+        NSLayoutConstraint.activate([
+            more.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            more.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+        ])
         setAccessibilityElement(true); setAccessibilityLabel(record.title)
     }
     func showPreview(_ visible: Bool) {
@@ -159,21 +190,10 @@ private final class CaptureHistoryCard: NSView {
     override func acceptsFirstMouse(for event:NSEvent?)->Bool { true }
     override func mouseDown(with event:NSEvent) { if event.clickCount >= 2 { open?() } else { choose?() } }
     override func menu(for event:NSEvent)->NSMenu? {
-        let menu = NSMenu()
-        for (title,tag) in [("打开",0),("复制",1),("收入 Capsule",2),("贴图",3),("识别文字",4),("保存文件",5)] {
-            let item = NSMenuItem(title:title,action:#selector(action(_:)),keyEquivalent:""); item.target = self; item.tag = tag; menu.addItem(item)
-        }
-        return menu
+        makeActions?()
     }
-    @objc private func action(_ sender:NSMenuItem) {
-        switch sender.tag {
-        case 0: CaptureCoordinator.shared.edit(record)
-        case 1: CaptureCoordinator.shared.copy(record)
-        case 2: CaptureCoordinator.shared.collect(record)
-        case 3: CaptureCoordinator.shared.pin(record)
-        case 4: CaptureCoordinator.shared.ocr(record)
-        case 5: CaptureCoordinator.shared.export(record)
-        default: break
-        }
+    private func showActions() {
+        guard let menu = makeActions?() else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: more.frame.maxX, y: more.frame.minY), in: self)
     }
 }
