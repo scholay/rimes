@@ -165,6 +165,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
     private let model: ClipboardHistoryModel
     private let library: CapsuleRailLibrary
     private let passcodeStore: CapsuleRevealPasscodeStore
+    var copyPassword: (String) -> Bool = { CapsulePasswordClipboard.write($0) }
     private var passwordCardID: UUID?
     private var passwordCard: CapsuleCardPasswordView?
     var hasPasswordInteraction: Bool { passwordCard != nil }
@@ -810,7 +811,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
                 ? "TYPE TO SEARCH   ← → SELECT   ⇥ NEXT TAB   ↩ PREPARE CLIPBOARD   ⌘C COPY   ⌘S SAVE TO CAPSULE   DELETE REMOVE   ESC CLOSE"
                 : "TYPE TO SEARCH   ← → SELECT   ⇧←→ / ⌘CLICK MULTI   ⇥ NEXT TAB   ↩ INSERT   ⌘C COPY   ⌘S SAVE TO CAPSULE   DELETE REMOVE   ESC CLOSE"
         case .saved(.password):
-            hintLabel.stringValue = "↩ VERIFY PASSWORD IN CARD   ·   15 秒自动隐藏   ·   ⋯ EDIT / MOVE / DELETE"
+            hintLabel.stringValue = ""
         case .saved:
             hintLabel.stringValue = "TYPE TO SEARCH   ← → SELECT   ⇥ NEXT TAB   \(activation)   ⌘C COPY   ESC CLOSE"
         }
@@ -888,6 +889,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             button.makeActionsMenu = { [weak self] in
                 self?.savedActionsMenu(id: id)
             }
+            button.onCopy = { [weak self] in self?.copySavedCard(id: id) ?? false }
             savedCardButtons[entry.id] = button
             button.update(
                 entry: entry,
@@ -991,7 +993,7 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             return !self.model.isContentShielded && self.model.captureState.windowVisible
                 && self.selectedSavedEntry == entry && self.passwordCardID == entry.id
                 && self.window?.isVisible == true
-        })
+        }, copySecret: copyPassword)
         card.onConceal = { [weak self] in self?.concealCardPassword() }
         passwordCardID = entry.id
         passwordCard = card
@@ -1005,10 +1007,10 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
               let entry = visibleSavedEntryByID[id] else { return nil }
         concealCardPassword()
         return CapsuleCardMenu.make([
-            ("编辑", true, { [weak self] in self?.editSavedEntry(id: id) }),
-            (entry.kind == .note ? "迁移为密码…" : "迁移（已在对应分类）", entry.kind == .note,
+            ("编辑", "pencil", true, { [weak self] in self?.editSavedEntry(id: id) }),
+            (entry.kind == .note ? "迁移为密码…" : "迁移（已在对应分类）", "arrow.right.square", entry.kind == .note,
              { [weak self] in self?.onMigrateSaved?(entry) }),
-            ("删除…", true, { [weak self] in self?.onDeleteSaved?(entry) }),
+            ("删除…", "trash", true, { [weak self] in self?.onDeleteSaved?(entry) }),
         ])
     }
 
@@ -1016,16 +1018,23 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
         guard !model.isContentShielded, model.captureState.windowVisible,
               let item = visibleItemByID[id] else { return nil }
         let saveable = CapsuleRailSaveRules.isSaveable(item.kind)
-        let destination = item.kind == .image ? "图片" : (item.kind == .files ? "对应文件分类" : "笔记")
+        let destination = item.kind == .image ? "图库" : (item.kind == .files ? "对应文件分类" : "笔记")
         return CapsuleCardMenu.make([
-            ("编辑", saveable, { [weak self] in self?.editHistoryItem(id: id) }),
-            ("迁移到\(destination)", saveable, { [weak self] in self?.onMigrateHistory?(item) }),
-            ("删除", true, { [weak self] in
+            ("编辑", "pencil", saveable, { [weak self] in self?.editHistoryItem(id: id) }),
+            ("迁移到\(destination)", "arrow.right.square", saveable, { [weak self] in self?.onMigrateHistory?(item) }),
+            ("删除", "trash", true, { [weak self] in
                 guard let self, !self.model.isContentShielded,
                       self.model.captureState.windowVisible else { return }
                 _ = self.model.delete(ids: [id])
             }),
         ])
+    }
+
+    private func copySavedCard(id: UUID) -> Bool {
+        guard !model.isContentShielded, model.captureState.windowVisible,
+              let entry = visibleSavedEntryByID[id],
+              entry.kind != .password else { return false }
+        return onCopySaved?(entry) ?? false
     }
 
     @objc private func savedCardPressed(_ sender: ClipboardHistoryCardButton) {
@@ -1414,6 +1423,12 @@ final class ClipboardHistoryPaneView: NSView, NSTextFieldDelegate {
             let id = item.id
             button.makeActionsMenu = { [weak self] in
                 self?.historyActionsMenu(id: id)
+            }
+            button.onCopy = { [weak self] in
+                guard let self, !self.model.isContentShielded,
+                      self.model.captureState.windowVisible,
+                      let item = self.visibleItemByID[id] else { return false }
+                return self.onCopy?([item]) ?? false
             }
             return button
         }
@@ -1845,21 +1860,25 @@ private final class ClipboardHistoryCardButton: NSButton {
     private let previewImageView = NSImageView()
     private var trackingArea: NSTrackingArea?
     private var hovered = false
+    private var allowsHoverCopy = true
     private var selectedItem = false
     private var focusedItem = false
     private var itemKind: ClipboardItemKind = .unknown
     private(set) var actionContext = ClipboardHistoryCardActionContext.keyboard
     private(set) var renderedBorderWidth: CGFloat = 1
-    /// Persistent upper-right menu shared by recent and saved cards.
+    /// Selection-only upper-right menu shared by temporary and saved cards.
     var makeActionsMenu: (() -> NSMenu?)?
+    var onCopy: (() -> Bool)?
     var passwordContent: NSView? {
         didSet {
             oldValue?.removeFromSuperview()
             if let passwordContent { addSubview(passwordContent) }
+            refreshAppearance()
             needsLayout = true
         }
     }
     private let editButton = ClipboardFirstMouseButton(title: "", target: nil, action: nil)
+    private let copyButton = ClipboardFirstMouseButton(title: "", target: nil, action: nil)
     private let savedMarker = NSImageView()
     private var editable = false
     private var inCapsule = false
@@ -1916,7 +1935,20 @@ private final class ClipboardHistoryCardButton: NSButton {
         editButton.toolTip = "更多操作"
         editButton.setAccessibilityLabel("更多操作：编辑、迁移、删除")
         editButton.isHidden = true
+        editButton.identifier = NSUserInterfaceItemIdentifier("capsule-card-menu")
         addSubview(editButton)
+        copyButton.image = RimeUI.symbol("doc.on.doc", pointSize: 12, weight: .semibold)
+        copyButton.imagePosition = .imageOnly
+        copyButton.isBordered = false
+        copyButton.wantsLayer = true
+        copyButton.layer?.cornerRadius = 6
+        copyButton.target = self
+        copyButton.action = #selector(copyPressed)
+        copyButton.toolTip = "复制"
+        copyButton.setAccessibilityLabel("复制")
+        copyButton.identifier = NSUserInterfaceItemIdentifier("capsule-card-copy")
+        copyButton.isHidden = true
+        addSubview(copyButton)
         savedMarker.image = RimeUI.symbol("capsule.fill", pointSize: 8, weight: .semibold)
         savedMarker.image?.isTemplate = true
         savedMarker.imageScaling = .scaleNone
@@ -1941,6 +1973,9 @@ private final class ClipboardHistoryCardButton: NSButton {
         let local = superview.map { convert(point, from: $0) } ?? point
         if !editButton.isHidden, editButton.frame.contains(local) {
             return editButton
+        }
+        if !copyButton.isHidden, copyButton.frame.contains(local) {
+            return copyButton
         }
         if let passwordContent, passwordContent.frame.contains(local) {
             return passwordContent.hitTest(local)
@@ -1971,6 +2006,7 @@ private final class ClipboardHistoryCardButton: NSButton {
             height: bounds.height - 43
         )
         editButton.frame = NSRect(x: bounds.width - 32, y: isFlipped ? 5 : bounds.height - 29, width: 22, height: 22)
+        copyButton.frame = NSRect(x: bounds.width - 32, y: isFlipped ? bounds.height - 29 : 7, width: 22, height: 22)
         passwordContent?.frame = NSRect(x: 10, y: isFlipped ? 34 : 8, width: bounds.width - 20, height: bounds.height - 42)
         // The collection marker stays beside the menu, never underneath it.
         savedMarker.frame = NSRect(
@@ -2052,7 +2088,10 @@ private final class ClipboardHistoryCardButton: NSButton {
         allowsThumbnail = item.kind.allowsImageThumbnail
         self.editable = editable
         self.inCapsule = inCapsule
+        allowsHoverCopy = true
         editButton.toolTip = "更多操作"
+        copyButton.toolTip = "复制"
+        copyButton.setAccessibilityLabel("复制")
         needsLayout = true
         savedTitle = nil
         savedPreview = nil
@@ -2107,7 +2146,12 @@ private final class ClipboardHistoryCardButton: NSButton {
         )
         editable = true
         inCapsule = false
+        // Passwords use only the verified, time-limited copy action inside
+        // CapsuleCardPasswordView, never the generic hover button.
+        allowsHoverCopy = entry.kind != .password
         editButton.toolTip = "更多操作"
+        copyButton.toolTip = "复制"
+        copyButton.setAccessibilityLabel(copyButton.toolTip)
         needsLayout = true
         allowsThumbnail = showsMedia
         toolTip = entry.title
@@ -2115,7 +2159,7 @@ private final class ClipboardHistoryCardButton: NSButton {
         let masked = entry.kind == .password ? " · 已脱敏" : ""
         setAccessibilityLabel("\(entry.kind.displayName)：\(entry.title)\(masked)")
         let help = CapsuleRailActivationRules.action(for: entry.kind) == .revealInPlace
-            ? "双击或回车在卡片内验证口令查看；不会复制或发送密码"
+            ? "双击或回车在卡片内验证口令；查看后可显式复制，不自动发送"
             : "双击或回车放入目标输入框"
         setAccessibilityHelp(selected ? "已选择；\(help)" : "单击选择；\(help)")
         setAccessibilitySelected(selected)
@@ -2161,6 +2205,10 @@ private final class ClipboardHistoryCardButton: NSButton {
         menu.popUp(positioning: nil, at: NSPoint(x: editButton.frame.maxX, y: editButton.frame.minY), in: self)
     }
 
+    @objc private func copyPressed() {
+        guard onCopy?() == true else { NSSound.beep(); return }
+    }
+
     func setHoveredForPreview(_ value: Bool) {
         hovered = value
         refreshAppearance()
@@ -2193,7 +2241,8 @@ private final class ClipboardHistoryCardButton: NSButton {
         } else {
             previewLabel.textColor = RimeUI.textPrimary
         }
-        editButton.isHidden = false
+        editButton.isHidden = !selectedItem
+        copyButton.isHidden = !allowsHoverCopy || !hovered || passwordContent != nil
         timeLabel.isHidden = true
         savedMarker.isHidden = !inCapsule
         savedMarker.contentTintColor = selectedItem ? RimeUI.accentBlue : RimeUI.textMuted
@@ -2201,6 +2250,10 @@ private final class ClipboardHistoryCardButton: NSButton {
         editButton.layer?.backgroundColor = RimeUI.surface2.cgColor
         editButton.layer?.borderColor = RimeUI.borderStrong.cgColor
         editButton.layer?.borderWidth = 1
+        copyButton.contentTintColor = RimeUI.textPrimary
+        copyButton.layer?.backgroundColor = RimeUI.surface2.cgColor
+        copyButton.layer?.borderColor = RimeUI.borderStrong.cgColor
+        copyButton.layer?.borderWidth = 1
         previewImageView.layer?.backgroundColor = RimeUI.surface3.cgColor
         layer?.backgroundColor = background.cgColor
         layer?.borderColor = border.cgColor

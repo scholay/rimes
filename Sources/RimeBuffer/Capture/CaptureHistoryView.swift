@@ -70,19 +70,23 @@ final class CaptureHistoryView: NSView {
             card.selected = record.id == selected
             card.choose = { [weak self] in self?.selected = record.id; self?.updateSelection() }
             card.open = { CaptureCoordinator.shared.edit(record) }
+            card.copyAction = { [weak self] in
+                guard let self, self.enabled, !self.protected else { return }
+                CaptureCoordinator.shared.copy(record)
+            }
             card.makeActions = { [weak self] in
                 guard let self, !self.protected else { return nil }
                 return CapsuleCardMenu.make([
-                    ("编辑", true, { [weak self] in
+                    ("编辑", "pencil", true, { [weak self] in
                         guard self?.protected == false else { return }
                         CaptureCoordinator.shared.edit(record)
                     }),
                     (record.collectionID == nil ? "迁移到\(record.kind.capsuleKind.tabLabel)" : "迁移（已在对应分类）",
-                     record.collectionID == nil, { [weak self] in
+                     "arrow.right.square", record.collectionID == nil, { [weak self] in
                         guard self?.protected == false else { return }
                         CaptureCoordinator.shared.collect(record)
                     }),
-                    ("删除", record.collectionID == nil, { [weak self] in
+                    ("删除", "trash", record.collectionID == nil, { [weak self] in
                         guard let self, !self.protected else { return }
                         self.queue.async {
                             do { try store.remove(record.id) }
@@ -126,7 +130,7 @@ final class CaptureLibraryStrip: NSView, NSSearchFieldDelegate {
     init(store: CaptureStore) {
         super.init(frame: .zero)
         history.storeProvider = { store }; history.enabled = true
-        filter.addItems(withTitles: ["捕获", "图片", "视频"]); filter.target = self; filter.action = #selector(changeFilter)
+        filter.addItems(withTitles: ["捕获", "图库", "影集"]); filter.target = self; filter.action = #selector(changeFilter)
         search.placeholderString = "搜索捕获内容…"; search.delegate = self
         let controls = CaptureUI.column([filter, search], spacing: 10); controls.widthAnchor.constraint(equalToConstant: 180).isActive = true
         let row = CaptureUI.row([controls, history], spacing: 14)
@@ -140,13 +144,21 @@ final class CaptureLibraryStrip: NSView, NSSearchFieldDelegate {
     @objc private func changeFilter() { history.mediaFilter = filter.indexOfSelectedItem }
 }
 
-private final class CaptureHistoryCard: NSView {
+final class CaptureHistoryCard: NSView {
     let record: CaptureRecord
     var choose:(()->Void)?
     var open:(()->Void)?
     var makeActions: (() -> NSMenu?)?
+    var copyAction: (() -> Void)?
     private let more = CaptureChromeButton(symbol: "ellipsis", help: "更多操作：编辑、迁移、删除", size: NSSize(width: 24, height: 24))
-    var selected = false { didSet { layer?.borderColor = selected ? RimeUI.accentGreen.cgColor : RimeUI.border.cgColor } }
+    private let copyButton = CaptureChromeButton(symbol: "doc.on.doc", help: "复制", size: NSSize(width: 24, height: 24))
+    private var trackingArea: NSTrackingArea?
+    var selected = false {
+        didSet {
+            layer?.borderColor = selected ? RimeUI.accentGreen.cgColor : RimeUI.border.cgColor
+            more.isHidden = !selected
+        }
+    }
     private let image = CaptureDragImageView()
     private var operation: Operation?
     private let file: URL
@@ -170,11 +182,24 @@ private final class CaptureHistoryCard: NSView {
         CaptureUI.fill(CaptureUI.column([image,title,detail],spacing:3),in:self,inset:8)
         layer?.masksToBounds = true
         more.onClick = { [weak self] in self?.showActions() }
+        more.light = !RimeUI.isDark
+        more.identifier = NSUserInterfaceItemIdentifier("capsule-card-menu")
+        more.isHidden = true
         more.translatesAutoresizingMaskIntoConstraints = false
         addSubview(more)
         NSLayoutConstraint.activate([
             more.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             more.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+        ])
+        copyButton.onClick = { [weak self] in self?.copyAction?() }
+        copyButton.light = !RimeUI.isDark
+        copyButton.identifier = NSUserInterfaceItemIdentifier("capsule-card-copy")
+        copyButton.translatesAutoresizingMaskIntoConstraints = false
+        copyButton.isHidden = true
+        addSubview(copyButton)
+        NSLayoutConstraint.activate([
+            copyButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+            copyButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
         ])
         setAccessibilityElement(true); setAccessibilityLabel(record.title)
     }
@@ -188,6 +213,15 @@ private final class CaptureHistoryCard: NSView {
     required init?(coder:NSCoder) { fatalError() }
     deinit { operation?.cancel() }
     override func acceptsFirstMouse(for event:NSEvent?)->Bool { true }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+    override func mouseEntered(with event: NSEvent) { copyButton.isHidden = false }
+    override func mouseExited(with event: NSEvent) { copyButton.isHidden = true }
     override func mouseDown(with event:NSEvent) { if event.clickCount >= 2 { open?() } else { choose?() } }
     override func menu(for event:NSEvent)->NSMenu? {
         makeActions?()

@@ -7,8 +7,8 @@ enum CapsuleRailTab: Hashable {
     case captures
     case saved(CapsuleEntryKind)
 
-    /// Most-used first. Password is last because nothing leaves it from the
-    /// rail: it is authenticated and viewed in place, never copied/delivered.
+    /// Most-used first. Password requires in-place authentication; copying
+    /// is a separate explicit action available only during its reveal lease.
     static let ordered: [CapsuleRailTab] = [
         .recent,
         .captures,
@@ -22,7 +22,7 @@ enum CapsuleRailTab: Hashable {
 
     var label: String {
         switch self {
-        case .recent: return "最近"
+        case .recent: return "临时"
         case .captures: return "捕获"
         case let .saved(kind): return kind.tabLabel
         }
@@ -62,7 +62,7 @@ enum CapsuleRailActivationRules {
         case insertText
         /// A file: onto the pasteboard, then pasted into the target app.
         case pasteFile
-        /// Authenticate and reveal in the card; never delivery or pasteboard.
+        /// Authenticate and reveal in the card; activation never copies/delivers.
         case revealInPlace
     }
 

@@ -119,7 +119,7 @@ enum CandidateWindowMetric: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .baseWidth: return "基础宽度"
+        case .baseWidth: return "最大宽度"
         case .compactStripHeight: return "候选条高度"
         case .compactCandidateHeight: return "候选按钮高度"
         case .preeditHeight: return "预编辑高度"
@@ -313,6 +313,15 @@ enum CandidateLayout {
     static let annotationFontSize: CGFloat = 9
     static let rootSpacing: CGFloat = 5
 
+    /// Content-sized chrome, bounded by the configured ceiling and display.
+    /// Paging uses that ceiling, never this fitted width, so shrinking a short
+    /// last page cannot change its own page boundaries.
+    static func fittedPanelWidth(rowWidths: [CGFloat], preeditWidth: CGFloat,
+                                 maximumWidth: CGFloat) -> CGFloat {
+        min(max(1, maximumWidth), max(preeditWidth,
+            (rowWidths.max() ?? 0) + barHorizontalPadding * 2))
+    }
+
     /// Vertical inset between the strip edge and its tallest child.
     static func barVerticalPadding(_ m: CandidateWindowMetrics) -> CGFloat {
         let tallestChild = max(actionButtonSize, min(m.compactCandidateHeight, m.compactStripHeight - 2))
@@ -499,7 +508,6 @@ final class CandidateWindow {
     private static let candidateSeparatorWidth = CandidateLayout.candidateSeparatorWidth
     private static let barSpacing = CandidateLayout.barSpacing
     private static let barHorizontalPadding = CandidateLayout.barHorizontalPadding
-    private static let actionButtonSize = CandidateLayout.actionButtonSize
     private static let compactCandidateHorizontalPadding = CandidateLayout.compactCandidateHorizontalPadding
     private static let expandedRowSpacing: CGFloat = 3
     /// Vertical limit of the matrix. Three rows is the visual cap, NOT the
@@ -516,13 +524,10 @@ final class CandidateWindow {
     private let strip = NSView()
     private let candidateScroll = NSScrollView()
     private let candidateStack = NSStackView()
-    private let divider = NSView()
-    private let settingsButton = CandidateActionButton(symbolName: "gearshape", title: "")
     private var stripHeightConstraint: NSLayoutConstraint!
     private var candidateHeightConstraint: NSLayoutConstraint!
     private var preeditHeightConstraint: NSLayoutConstraint!
     private var preeditWidthConstraint: NSLayoutConstraint!
-    private var dividerHeightConstraint: NSLayoutConstraint!
     private var barTopConstraint: NSLayoutConstraint!
     private var barBottomConstraint: NSLayoutConstraint!
     private var lastGoodCaretRect: NSRect?
@@ -558,7 +563,6 @@ final class CandidateWindow {
     private var scrubRenderedViewsWhenHidden = false
 
     var onSelect: ((FocusToken, CandidateSelection) -> Void)?
-    var onSettings: (() -> Void)?
 
     var hasCandidates: Bool {
         guard let ownerToken,
@@ -719,23 +723,7 @@ final class CandidateWindow {
         candidateHeightConstraint = candidateScroll.heightAnchor.constraint(equalToConstant: metrics.compactCandidateHeight)
         candidateHeightConstraint.isActive = true
 
-        divider.wantsLayer = true
-        divider.layer?.backgroundColor = RimeUI.borderStrong.cgColor
-        divider.translatesAutoresizingMaskIntoConstraints = false
-        divider.widthAnchor.constraint(equalToConstant: 1).isActive = true
-        dividerHeightConstraint = divider.heightAnchor.constraint(equalToConstant: dividerHeight(for: metrics))
-        dividerHeightConstraint.isActive = true
-
-        settingsButton.target = self
-        settingsButton.action = #selector(settingsTapped)
-        settingsButton.toolTip = "打开设置"
-        settingsButton.setAccessibilityElement(true)
-        settingsButton.setAccessibilityRole(.button)
-        settingsButton.setAccessibilityLabel("打开设置")
-        settingsButton.widthAnchor.constraint(equalToConstant: Self.actionButtonSize).isActive = true
-        settingsButton.heightAnchor.constraint(equalToConstant: Self.actionButtonSize).isActive = true
-
-        let barRow = NSStackView(views: [candidateScroll, divider, settingsButton])
+        let barRow = NSStackView(views: [candidateScroll])
         barRow.orientation = .horizontal
         barRow.alignment = .centerY
         barRow.spacing = Self.barSpacing
@@ -1225,7 +1213,7 @@ final class CandidateWindow {
             ? 0
             : root.spacing
         let height = stripHeight + preeditHeight + interItemSpacing
-        return NSSize(width: activePanelWidth(), height: height)
+        return NSSize(width: fittedPanelWidth(), height: height)
     }
 
     /// Resolve the final panel, scroll viewport, and document frame before rows
@@ -1282,7 +1270,7 @@ final class CandidateWindow {
     private func panelWidth(caretRect: NSRect) -> CGFloat {
         let metrics = CandidateWindowMetrics.current
         let visibleWidth = (screen(containing: caretRect)?.visibleFrame.width ?? metrics.baseWidth) - 12
-        return min(max(metrics.baseWidth, 360), max(360, visibleWidth))
+        return min(metrics.baseWidth, max(1, visibleWidth))
     }
 
     private func layoutAndShowAccordingToPresentation() {
@@ -1672,7 +1660,7 @@ final class CandidateWindow {
                     candidate: candidate,
                     highlighted: isActiveRow && index == selectedIndex,
                     compact: true,
-                    width: naturalWidths[index],
+                    width: min(naturalWidths[index], available),
                     showsLabel: isActiveRow
                 ))
             }
@@ -1685,12 +1673,7 @@ final class CandidateWindow {
     /// the active-row highlight does not reflow that row. No width is shared
     /// across rows.
     private func expandedRowNaturalWidths(page: RimeContextModel) -> [CGFloat] {
-        page.candidates.map { candidate in
-            ceil(measuredCandidateWidth(candidate,
-                                        highlighted: true,
-                                        compact: true,
-                                        showsLabel: true))
-        }
+        page.candidates.map(stableCandidateWidth)
     }
 
     /// How many whole columns fit starting at `base`. Pure for `matrix-smoke`.
@@ -1857,7 +1840,8 @@ final class CandidateWindow {
             ? candidate.text
             : "\(candidate.text)  \(candidate.comment)"
 
-        let naturalWidth = ceil(measuredCandidateWidth(candidate,
+        let naturalWidth = compact && showsLabel ? stableCandidateWidth(candidate)
+            : ceil(measuredCandidateWidth(candidate,
                                                        highlighted: highlighted,
                                                        compact: compact,
                                                        showsLabel: showsLabel))
@@ -1946,12 +1930,47 @@ final class CandidateWindow {
     }
 
     private func activePanelWidth() -> CGFloat {
+        // This is the stable layout budget, not the displayed content width.
         panelWidth(caretRect: lastCaretRect)
     }
 
+    private func fittedPanelWidth() -> CGFloat {
+        let budget = activePanelWidth()
+        let available = candidateAvailableWidth(panelWidth: budget)
+        func rowWidth(_ widths: [CGFloat]) -> CGFloat {
+            widths.reduce(0, +) + CGFloat(max(0, widths.count - 1)) * separatorRunWidth()
+        }
+        let rows: [CGFloat]
+        if isSingleCharacterSelectionActive {
+            rows = [rowWidth(characterSelectionText.map {
+                stableCandidateWidth(RimeCandidateModel(text: String($0), comment: "", label: ""))
+            })]
+        } else if isExpanded {
+            let offsets = expandedPages.isEmpty ? [0] : Array(expandedWindowRange())
+            rows = offsets.map { offset in
+                let widths = expandedRowNaturalWidths(page: expandedPages.isEmpty ? currentContext : expandedPages[offset])
+                let range = Self.fittedColumnRange(widths: widths, separator: separatorRunWidth(),
+                    available: available, base: expandedColumnBases[offset] ?? 0)
+                return rowWidth(Array(widths[range]))
+            }
+        } else {
+            rows = [rowWidth(currentVisualCandidateIndices(panelWidth: budget).map {
+                min(available, stableCandidateWidth(currentContext.candidates[$0]))
+            })]
+        }
+        let preeditWidth = preeditPill.isHidden ? 0
+            : ceil(preeditLabel.intrinsicContentSize.width) + CandidateLayout.preeditHorizontalPadding * 2
+        return CandidateLayout.fittedPanelWidth(rowWidths: rows, preeditWidth: preeditWidth,
+                                               maximumWidth: budget)
+    }
+
+    private func stableCandidateWidth(_ candidate: RimeCandidateModel) -> CGFloat {
+        ceil(max(measuredCandidateWidth(candidate, highlighted: true, compact: true),
+                 measuredCandidateWidth(candidate, highlighted: false, compact: true)))
+    }
+
     private func candidateAvailableWidth(panelWidth: CGFloat) -> CGFloat {
-        let sideControlsWidth: CGFloat = 1 + Self.actionButtonSize + Self.barSpacing * 2
-        return max(80, panelWidth - Self.barHorizontalPadding * 2 - sideControlsWidth)
+        max(1, panelWidth - Self.barHorizontalPadding * 2)
     }
 
     private func candidateMaxWidth(panelWidth: CGFloat) -> CGFloat {
@@ -1970,9 +1989,7 @@ final class CandidateWindow {
         var usedWidth: CGFloat = 0
 
         for i in currentContext.candidates.indices {
-            let natural = ceil(measuredCandidateWidth(currentContext.candidates[i],
-                                                      highlighted: false,
-                                                      compact: true))
+            let natural = stableCandidateWidth(currentContext.candidates[i])
             let width = min(natural, maxItemWidth)
             let nextWidth = page.isEmpty ? width : usedWidth + separatorRunWidth() + width
             if !page.isEmpty, nextWidth > pageWidth {
@@ -2047,8 +2064,6 @@ final class CandidateWindow {
             .withAlphaComponent(0.72).cgColor
         strip.layer?.backgroundColor = RimeUI.candidateBackgroundColor.cgColor
         strip.layer?.borderColor = RimeUI.borderStrong.cgColor
-        divider.layer?.backgroundColor = RimeUI.borderStrong.cgColor
-        settingsButton.applyAppearance()
     }
 
     private func applyMetrics() {
@@ -2058,26 +2073,19 @@ final class CandidateWindow {
         updatePreeditWidth()
         stripHeightConstraint.constant = effectiveStripHeight(for: metrics)
         candidateHeightConstraint.constant = candidateAreaHeight(for: metrics)
-        dividerHeightConstraint.constant = dividerHeight(for: metrics)
         let padding = barVerticalPadding(for: metrics)
         barTopConstraint.constant = padding
         barBottomConstraint.constant = -padding
     }
 
     private func updatePreeditWidth() {
-        let panelWidth = max(1, activePanelWidth())
+        let panelWidth = max(1, fittedPanelWidth())
         let naturalWidth = ceil(preeditLabel.intrinsicContentSize.width)
             + CandidateLayout.preeditHorizontalPadding * 2
         preeditWidthConstraint.constant = min(
             panelWidth,
             max(CandidateLayout.preeditHorizontalPadding * 2, naturalWidth)
         )
-    }
-
-    private func dividerHeight(for metrics: CandidateWindowMetrics) -> CGFloat {
-        // Expanded matrices grow the strip beyond the compact height; keep the
-        // divider bounded to whichever is taller.
-        min(effectiveStripHeight(for: metrics) - 8, max(20, metrics.compactStripHeight - 10))
     }
 
     private func barVerticalPadding(for metrics: CandidateWindowMetrics) -> CGFloat {
@@ -2227,10 +2235,8 @@ final class CandidateWindow {
         )
     }
 
-    /// Pins the candidate strip's action boundary: only numbered candidates
-    /// live in the scrolling area, while the gear remains the sole trailing
-    /// control. The retired `0 + tray` Buffer shortcut must not reappear as a
-    /// hidden button or accessibility element.
+    /// Only candidates remain: neither the retired Buffer shortcut nor a
+    /// settings button may reappear in the view/accessibility hierarchy.
     static func actionSurfaceSnapshotForSmoke() -> CandidateActionSurfaceSnapshot {
         let candidateWindow = CandidateWindow()
         candidateWindow.presentationMode = .caret
@@ -2248,13 +2254,65 @@ final class CandidateWindow {
 
         let buttons = candidateWindow.candidateStack.arrangedSubviews
             .compactMap { $0 as? NSButton }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let settings = descendants(candidateWindow.content).compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == "打开设置" }
         return CandidateActionSurfaceSnapshot(
             renderedCandidateButtons: buttons.count,
             renderedLegacyActionButtons: buttons.filter { $0.tag < 0 }.count,
-            settingsButtonVisible: !candidateWindow.settingsButton.isHidden,
-            settingsAccessibilityLabel:
-                candidateWindow.settingsButton.accessibilityLabel()
+            settingsButtonVisible: settings.map { !$0.isHidden } ?? false,
+            settingsAccessibilityLabel: settings?.accessibilityLabel()
         )
+    }
+
+    static func adaptiveWidthChecksForSmoke() -> [(String, Bool)] {
+        let window = CandidateWindow()
+        let budget = window.activePanelWidth()
+        var checks: [(String, Bool)] = []
+        func render(_ texts: [String]) -> CGFloat {
+            window.currentContext.candidates = texts.enumerated().map {
+                RimeCandidateModel(text: $0.element, comment: "", label: String($0.offset + 1))
+            }
+            window.visualPageIndex = 0
+            window.renderCandidates()
+            window.panel.layoutIfNeeded()
+            return window.panel.frame.width
+        }
+        let short = render(["中"])
+        let expected = window.stableCandidateWidth(window.currentContext.candidates[0])
+            + CandidateLayout.barHorizontalPadding * 2
+        checks.append(("one candidate fits its text without a fixed-width or gear gap", abs(short - expected) < 1))
+        let longer = render(["中文输入", "自动调整", "候选"])
+        checks.append(("more content grows the panel", longer > short && longer <= budget))
+        let long = render([String(repeating: "长", count: 200)])
+        checks.append(("oversized content respects the configured and screen ceiling", long <= budget))
+        checks.append(("returning to short content shrinks the panel", abs(render(["中"]) - short) < 1))
+        _ = render((0..<18).map { "候选\($0)" })
+        let pages = window.candidatePages(panelWidth: budget)
+        var fits = pages.count > 1
+        for page in pages.indices {
+            window.visualPageIndex = page
+            window.renderCandidates()
+            window.panel.layoutIfNeeded()
+            window.candidateStack.layoutSubtreeIfNeeded()
+            fits = fits && window.candidatePages(panelWidth: window.activePanelWidth()) == pages
+                && window.candidateStack.arrangedSubviews.compactMap { $0 as? NSButton }.count == pages[page].count
+                && window.candidateStack.fittingSize.width <= window.candidateScroll.contentSize.width + 1
+        }
+        checks.append(("adaptive pages keep all candidates reachable without clipping", fits))
+        var row = RimeContextModel()
+        row.candidates = [RimeCandidateModel(text: "短行", comment: "", label: "1")]
+        var wideRow = row
+        wideRow.candidates[0] = RimeCandidateModel(text: "较长的矩阵行", comment: "", label: "1")
+        window.expandedPages = [row, wideRow]
+        window.expandedSelectionPageOffset = 0
+        window.renderCandidates()
+        let matrixWidth = window.panel.frame.width
+        window.expandedSelectionPageOffset = 1
+        window.renderCandidates()
+        checks.append(("matrix width follows its widest visible row without selection jitter",
+            abs(matrixWidth - window.panel.frame.width) < 1 && matrixWidth < budget))
+        return checks
     }
 
     /// AppKit-backed typography seam for `candidate-metrics-smoke`. It renders
@@ -2454,14 +2512,6 @@ final class CandidateWindow {
                   CandidateSelection(pageOffset: selection.pageOffset, index: selectedIndex))
     }
 
-    @objc private func settingsTapped() {
-        guard CandidatePanelAnimationRules.allowsInteraction(
-                phase: visibilityPhase
-              ),
-              presentationIsVisible,
-              presentationIsOnActiveSpace else { return }
-        onSettings?()
-    }
 }
 
 /// The button remains the click and accessibility target, while a dedicated
@@ -2640,63 +2690,6 @@ private final class CandidateTitleLabel: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-private final class CandidateActionButton: NSButton {
-    private var trackingArea: NSTrackingArea?
-    private var isHovered = false
-
-    init(symbolName: String, title: String) {
-        super.init(frame: .zero)
-        self.title = title
-        image = RimeUI.symbol(symbolName, pointSize: title.isEmpty ? 15 : 14, weight: .semibold)
-        image?.isTemplate = true
-        imagePosition = title.isEmpty ? .imageOnly : .imageLeading
-        imageScaling = .scaleProportionallyDown
-        isBordered = false
-        setButtonType(.momentaryChange)
-        focusRingType = .none
-        font = .systemFont(ofSize: 14, weight: .semibold)
-        contentTintColor = RimeUI.textSecondary
-        wantsLayer = true
-        layer?.cornerRadius = CandidateLayout.selectedCandidateCornerRadius
-        layer?.backgroundColor = NSColor.clear.cgColor
-        translatesAutoresizingMaskIntoConstraints = false
-        setContentHuggingPriority(.required, for: .horizontal)
-        setContentCompressionResistancePriority(.required, for: .horizontal)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    func applyAppearance() {
-        contentTintColor = isHovered ? RimeUI.textPrimary : RimeUI.textSecondary
-        layer?.backgroundColor = (isHovered ? RimeUI.surface3 : NSColor.clear).cgColor
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea { removeTrackingArea(trackingArea) }
-        let replacement = NSTrackingArea(
-            rect: .zero,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(replacement)
-        trackingArea = replacement
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        isHovered = true
-        applyAppearance()
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        isHovered = false
-        applyAppearance()
-    }
-
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-}
-
 // MARK: - Settings live preview
 
 /// A non-interactive mock of the candidate window for the settings page. It
@@ -2723,8 +2716,6 @@ final class CandidatePreviewView: NSView {
     private let preeditLabel = NSTextField(labelWithString: "")
     private let strip = NSView()
     private let candidateRow = NSStackView()
-    private let divider = NSView()
-    private let gear = NSButton()
     private var heightConstraint: NSLayoutConstraint!
 
     private var preeditHeightConstraint: NSLayoutConstraint!
@@ -2732,7 +2723,6 @@ final class CandidatePreviewView: NSView {
     private var stripHeightConstraint: NSLayoutConstraint!
     private var windowWidthConstraint: NSLayoutConstraint!
     private var candidateRowHeightConstraint: NSLayoutConstraint!
-    private var dividerHeightConstraint: NSLayoutConstraint!
 
     private let sampleCandidates: [(label: String, text: String)] = [
         ("1", "你好"), ("2", "拟好"), ("3", "你"), ("4", "尼"),
@@ -2793,19 +2783,7 @@ final class CandidatePreviewView: NSView {
         candidateRow.translatesAutoresizingMaskIntoConstraints = false
         candidateRow.setContentHuggingPriority(.required, for: .horizontal)
 
-        divider.wantsLayer = true
-        divider.translatesAutoresizingMaskIntoConstraints = false
-
-        gear.isBordered = false
-        gear.image = RimeUI.symbol("gearshape", pointSize: 15, weight: .semibold)
-        gear.image?.isTemplate = true
-        gear.imagePosition = .imageOnly
-        gear.isEnabled = false
-        gear.wantsLayer = true
-        gear.layer?.cornerRadius = CandidateLayout.selectedCandidateCornerRadius
-        gear.translatesAutoresizingMaskIntoConstraints = false
-
-        let bar = NSStackView(views: [candidateRow, divider, gear])
+        let bar = NSStackView(views: [candidateRow])
         bar.orientation = .horizontal
         bar.alignment = .centerY
         bar.spacing = CandidateLayout.barSpacing
@@ -2826,7 +2804,6 @@ final class CandidatePreviewView: NSView {
                 CandidateLayout.actionButtonSize
             )
         )
-        dividerHeightConstraint = divider.heightAnchor.constraint(equalToConstant: CandidateLayout.dividerHeight(metrics))
 
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: maxWidth),
@@ -2875,12 +2852,8 @@ final class CandidatePreviewView: NSView {
             bar.trailingAnchor.constraint(equalTo: strip.trailingAnchor, constant: -CandidateLayout.barHorizontalPadding),
             bar.centerYAnchor.constraint(equalTo: strip.centerYAnchor),
 
-            divider.widthAnchor.constraint(equalToConstant: 1),
-            gear.widthAnchor.constraint(equalToConstant: CandidateLayout.actionButtonSize),
-            gear.heightAnchor.constraint(equalToConstant: CandidateLayout.actionButtonSize),
-
             preeditHeightConstraint, stripTopConstraint, stripHeightConstraint,
-            windowWidthConstraint, candidateRowHeightConstraint, dividerHeightConstraint,
+            windowWidthConstraint, candidateRowHeightConstraint,
         ])
 
         rebuild()
@@ -2904,8 +2877,6 @@ final class CandidatePreviewView: NSView {
             .withAlphaComponent(0.72).cgColor
         strip.layer?.backgroundColor = RimeUI.candidateBackgroundColor.cgColor
         strip.layer?.borderColor = RimeUI.borderStrong.cgColor
-        divider.layer?.backgroundColor = RimeUI.borderStrong.cgColor
-        gear.contentTintColor = RimeUI.textSecondary
 
         // Preedit.
         preeditLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
@@ -2915,7 +2886,19 @@ final class CandidatePreviewView: NSView {
         // Geometry (identical to the live window).
         let stripHeight = CandidateLayout.compactStripHeight(m)
         let buttonHeight = CandidateLayout.candidateButtonHeight(m)
-        let windowWidth = m.baseWidth
+        let widths = sampleCandidates.map { item in
+            ceil(max(candidateAttr(label: item.label, text: item.text, highlighted: true, m: m).size().width,
+                     candidateAttr(label: item.label, text: item.text, highlighted: false, m: m).size().width))
+                + CandidateLayout.compactCandidateHorizontalPadding
+        }
+        let count = CandidateWindow.fittedColumnCount(widths: widths,
+            separator: CandidateLayout.candidateSeparatorRunWidth,
+            available: m.baseWidth - CandidateLayout.barHorizontalPadding * 2, base: 0)
+        let rowWidth = widths.prefix(count).reduce(0, +)
+            + CGFloat(max(0, count - 1)) * CandidateLayout.candidateSeparatorRunWidth
+        let windowWidth = CandidateLayout.fittedPanelWidth(rowWidths: [rowWidth],
+            preeditWidth: ceil(preeditLabel.intrinsicContentSize.width) + CandidateLayout.preeditHorizontalPadding * 2,
+            maximumWidth: m.baseWidth)
         let previewWindowHeight = m.preeditHeight + CandidateLayout.rootSpacing + stripHeight
         let scrollHeight = canvasPadding * 2 + previewWindowHeight
         let documentWidth = max(maxWidth, windowWidth + 2 * canvasPadding)
@@ -2925,7 +2908,6 @@ final class CandidatePreviewView: NSView {
         preeditHeightConstraint.constant = m.preeditHeight
         stripHeightConstraint.constant = stripHeight
         candidateRowHeightConstraint.constant = max(buttonHeight, CandidateLayout.actionButtonSize)
-        dividerHeightConstraint.constant = CandidateLayout.dividerHeight(m)
         windowWidthConstraint.constant = windowWidth
         previewDocument.frame = NSRect(x: 0, y: 0, width: documentWidth, height: scrollHeight)
         previewScroll.hasHorizontalScroller = overflows
@@ -2938,13 +2920,12 @@ final class CandidatePreviewView: NSView {
             candidateRow.removeArrangedSubview($0)
             $0.removeFromSuperview()
         }
-        let gearArea = CandidateLayout.actionButtonSize + CandidateLayout.barSpacing * 2 + 1
-        let available = windowWidth - 2 * CandidateLayout.barHorizontalPadding - gearArea
+        let available = windowWidth - 2 * CandidateLayout.barHorizontalPadding
         let candidateAvailable = max(64, available)
         var used: CGFloat = 0
         for (i, item) in sampleCandidates.enumerated() {
             let attr = candidateAttr(label: item.label, text: item.text, highlighted: i == 0, m: m)
-            let w = ceil(attr.size().width) + CandidateLayout.compactCandidateHorizontalPadding
+            let w = min(candidateAvailable, widths[i])
             let hasCandidate = used > 0
             let separatorRun = CandidateLayout.candidateSeparatorRunWidth
             let next = hasCandidate ? used + separatorRun + w : w

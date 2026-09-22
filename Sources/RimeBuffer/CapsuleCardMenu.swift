@@ -2,15 +2,17 @@ import AppKit
 
 /// Retain each callback with its menu item (NSMenuItem.target is weak).
 enum CapsuleCardMenu {
-    static func make(_ actions: [(String, Bool, () -> Void)]) -> NSMenu {
+    static func make(_ actions: [(String, String, Bool, () -> Void)]) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        for (title, enabled, action) in actions {
+        for (title, symbol, enabled, action) in actions {
             let handler = Handler(action)
             let item = NSMenuItem(title: title, action: #selector(Handler.invoke), keyEquivalent: "")
             item.target = handler
             item.representedObject = handler
             item.isEnabled = enabled
+            item.image = RimeUI.symbol(symbol, pointSize: 13, weight: .regular)
+            item.image?.isTemplate = true
             menu.addItem(item)
         }
         return menu

@@ -864,7 +864,7 @@ func runCapsuleWindowSmokeTest() -> Bool {
             return capsuleWindowSmokeFail("password list/search disclosure boundary")
         }
 
-        // Verify the manager's real button and fail-closed inactive window.
+        // Verify the manager's single input and fail-closed inactive window.
         // Successful native authentication is covered in interaction-smoke,
         // whose single key-window fixture avoids this suite's sheet lifecycle.
         let passwordWindow = NSWindow(
@@ -882,15 +882,17 @@ func runCapsuleWindowSmokeTest() -> Bool {
             return capsuleWindowSmokeFail("manager must load the requested password entry")
         }
         pane.view.layoutSubtreeIfNeeded()
-        guard let revealButton = capsuleDescendants(in: pane.view).compactMap({ $0 as? NSButton })
-            .first(where: { $0.title == "查看明文" }) else {
-            return capsuleWindowSmokeFail("password entry must offer a reveal button")
+        guard let verifier = capsuleDescendants(in: pane.view).compactMap({ $0 as? CapsuleInlinePasscodeView }).first,
+              capsuleDescendants(in: verifier).filter({
+                  $0.identifier?.rawValue.hasPrefix("capsule-passcode-slot-") == true
+              }).count == 4 else {
+            return capsuleWindowSmokeFail("password entry must offer four slots and native input without a reveal-button step")
         }
-        let buttonCenter = pane.view.convert(NSPoint(x: revealButton.bounds.midX, y: revealButton.bounds.midY), from: revealButton)
-        guard pane.view.hitTest(buttonCenter) === revealButton else {
-            return capsuleWindowSmokeFail("password reveal button must be hit-testable")
+        let inputCenter = pane.view.convert(NSPoint(x: verifier.capture.bounds.midX, y: verifier.capture.bounds.midY), from: verifier.capture)
+        guard pane.view.hitTest(pane.view.convert(inputCenter, to: pane.view.superview)) === verifier.capture else {
+            return capsuleWindowSmokeFail("single password input must be hit-testable")
         }
-        revealButton.performClick(nil)
+        verifier.focus()
         guard passwordWindow.firstResponder is CapsuleRevealChordCaptureView else { return capsuleWindowSmokeFail("manager verifier first responder") }
         guard passwordWindow.attachedSheet == nil,
               capsuleSendPasscode(customChordKeyCodes, to: passwordWindow),

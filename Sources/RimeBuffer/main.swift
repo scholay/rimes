@@ -1403,9 +1403,6 @@ candidateWindow.onSelect = { owner, selection in
     InputFocusCoordinator.shared.controller(for: owner)?
         .selectCandidate(selection, owner: owner)
 }
-candidateWindow.onSettings = {
-    SettingsWindowController.shared.show()
-}
 // Buffer presentation is independent from the caret-owned candidate panel.
 var lastBufferControlsActive = BufferModel.shared.active
 BufferModel.shared.onChange = {
@@ -10611,8 +10608,8 @@ func runBufferWindowSmokeTest() -> Bool {
           bufferCandidateSnapshot.scrubbedPreedit,
           candidateActionSurface.renderedCandidateButtons == 2,
           candidateActionSurface.renderedLegacyActionButtons == 0,
-          candidateActionSurface.settingsButtonVisible,
-          candidateActionSurface.settingsAccessibilityLabel == "打开设置",
+          !candidateActionSurface.settingsButtonVisible,
+          candidateActionSurface.settingsAccessibilityLabel == nil,
           !CandidateKeyboardRoutingRules.ownsLocally(
             keycode: 0x30,
             isExpanded: false
@@ -11341,6 +11338,13 @@ func runCandidateMetricsSmokeTest() -> Bool {
     func check(_ cond: Bool, _ msg: String) {
         if !cond { print("FAILED: \(msg)"); ok = false }
     }
+    for (message, result) in CandidateWindow.adaptiveWidthChecksForSmoke() {
+        check(result, message)
+    }
+    check(CandidateLayout.fittedPanelWidth(rowWidths: [100, 200], preeditWidth: 300, maximumWidth: 460) == 300,
+          "preedit can widen the panel within its ceiling")
+    check(CandidateLayout.fittedPanelWidth(rowWidths: [200], preeditWidth: 0, maximumWidth: 180) == 180,
+          "narrow displays bound candidate width")
 
     // The dependency chain must stay strip -> button -> candidate glyph -> label.
     check(CandidateWindowMetric.compactCandidateHeight.containerMetric?.metric == .compactStripHeight,

@@ -171,7 +171,7 @@ enum CapsuleRailSmoke {
         expect: (_ condition: @autoclosure () -> Bool, _ message: String) -> Void
     ) {
         expect(
-            CapsuleRailTab.ordered.map(\.label) == ["最近", "捕获", "笔记", "图片", "视频", "PDF", "技能", "密码"],
+            CapsuleRailTab.ordered.map(\.label) == ["临时", "捕获", "笔记", "图库", "影集", "PDF", "技能", "密码"],
             "tab order"
         )
         expect(CapsuleRailTab.recent.cycled(by: -1) == .saved(.password), "tabs wrap backward")
@@ -357,7 +357,7 @@ enum CapsuleRailSmoke {
         pane.layoutSubtreeIfNeeded()
         let passwords = pane.capsuleRailSnapshotForSmoke()
         expect(passwords.cardCount == 1, "Password shows its entry")
-        expect(passwords.hint.contains("IN CARD"), "Password hint offers in-place authentication")
+        expect(passwords.hint.isEmpty, "Password verification has no instruction text")
         let activationsBefore = activated.count
         let copiesBefore = copied.count
         _ = pane.handleKeyDown(key(kVK_Return))

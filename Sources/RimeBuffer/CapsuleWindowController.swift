@@ -1334,6 +1334,7 @@ final class CapsulePaneViewController: NSViewController,
     private var previousPasswordFields: [NSTextField] = []
     private var passwordRevealButton: NSButton?
     private var passwordRevealState = CapsulePasswordRevealState()
+    var passwordClipboardWriter: (String) -> Bool = { CapsulePasswordClipboard.write($0) }
     private var passwordRevealTimer: Timer?
     private var passwordChallengeGeneration: UInt64 = 0
     private var passwordChallengeController:
@@ -2513,7 +2514,16 @@ final class CapsulePaneViewController: NSViewController,
             headingRow.orientation = .horizontal
             headingRow.alignment = .centerY
             headingRow.spacing = 8
-            if !isCompactDetail || passwordRevealState.isPlaintextVisible { addFormRow(headingRow) }
+            if passwordRevealState.isPlaintextVisible {
+                let copy = RimePointingHandButton(title: "复制", target: self, action: #selector(copyPasswordPlaintext))
+                copy.image = RimeUI.symbol("doc.on.doc", pointSize: 12, weight: .regular)
+                copy.imagePosition = .imageLeading
+                copy.bezelStyle = .inline
+                copy.identifier = NSUserInterfaceItemIdentifier("capsule-password-detail-copy")
+                copy.setAccessibilityLabel("复制密码内容")
+                headingRow.addArrangedSubview(copy)
+                addFormRow(headingRow)
+            }
         } else {
             if !isCompactDetail { addFormRow(heading) }
         }
@@ -2624,7 +2634,8 @@ final class CapsulePaneViewController: NSViewController,
                 self.schedulePasswordAutoConceal()
                 self.renderEditor(scrollToTop: false)
             }
-            firstDetailFormRow = addField(label: "已加密 · 原地验证后查看与编辑", field: challenge)
+            firstDetailFormRow = challenge
+            addFormRow(challenge)
             if isCompactDetail {
                 DispatchQueue.main.async { [weak self, weak challenge] in
                     guard let self, self.inlinePasswordChallenge === challenge,
@@ -3388,6 +3399,15 @@ final class CapsulePaneViewController: NSViewController,
             return
         }
         inlinePasswordChallenge?.focus()
+    }
+
+    @objc private func copyPasswordPlaintext() {
+        guard draft.kind == .password, passwordRevealState.isPlaintextVisible,
+              (passwordRevealState.remainingDuration(now: Date()) ?? 0) > 0,
+              view.window?.isKeyWindow == true, !IsSecureEventInputEnabled(),
+              let text = passwordSecretTextView?.string else { return }
+        if passwordClipboardWriter(text) { setStatus("已复制") }
+        else { NSSound.beep() }
     }
 
     private func installPrivacyObservers() {

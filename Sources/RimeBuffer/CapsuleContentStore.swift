@@ -32,9 +32,9 @@ enum CapsuleEntryKind: String, Codable, CaseIterable, Hashable {
         case .password: return "密码"
         case .skill: return "技能"
         case .note: return "笔记"
-        case .image: return "图片"
+        case .image: return "图库"
         case .pdf: return "PDF"
-        case .video: return "视频"
+        case .video: return "影集"
         }
     }
 
