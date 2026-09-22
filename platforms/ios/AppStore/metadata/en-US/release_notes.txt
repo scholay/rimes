@@ -1,0 +1,1 @@
+First iPhone release with offline Chinese input, slide chords, a local writing Buffer and optional translation.

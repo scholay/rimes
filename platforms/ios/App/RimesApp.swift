@@ -7,7 +7,7 @@ struct RimesApp: App {
     @StateObject private var model = SettingsModel()
     var body: some Scene { WindowGroup { HomeView().environmentObject(model).tint(.teal).task {
         #if DEBUG
-        DevelopmentSmoke.runIfRequested()
+        await DevelopmentSmoke.runIfRequested()
         #endif
     } } }
 }
@@ -33,13 +33,14 @@ struct HomeView: View {
                     NavigationLink { PlaygroundView() } label: { Label(L("输入体验", "Try typing"), systemImage: "square.and.pencil") }
                 }
                 Section(L("你的输入方式", "Your typing")) {
-                    Picker(L("默认方案", "Default scheme"), selection: $model.value.scheme) { ForEach(InputScheme.allCases) { Text($0.title).tag($0) } }.onChange(of: model.value.scheme) { _,_ in model.save() }
+                    Picker(L("默认方案", "Default scheme"), selection: $model.value.scheme) { ForEach(InputScheme.allCases) { Text($0.title).tag($0) } }.onChange(of: model.value.scheme) { _,_ in model.value.schemeSelectionRevision = UUID(); model.save() }
                     NavigationLink { ChordProfilesView() } label: { Label(L("滑动并击与键位", "Slide chords & mappings"), systemImage: "hand.draw") }
+                    NavigationLink { TranslationSetupView() } label: { Label(L("苹果翻译语言包", "Apple translation languages"), systemImage: "translate") }
                     NavigationLink { ProvidersView() } label: { Label(L("AI 服务", "AI services"), systemImage: "sparkles") }
                 }
                 Section {
                     NavigationLink(L("隐私与第三方许可", "Privacy & licenses")) { PrivacyView() }
-                    Text("RIMES iOS 0.1 · Development preview").font(.caption).foregroundStyle(.secondary)
+                    Text("RIMES " + (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0")).font(.caption).foregroundStyle(.secondary)
                 }
             }.navigationTitle(L("欢迎", "Welcome"))
             .alert(L("无法保存", "Could not save"), isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) { Button("OK") { model.error = nil } } message: { Text(model.error ?? "") }
@@ -67,7 +68,9 @@ struct PlaygroundView: View {
         Form {
             Section(L("使用系统地球键切换至 RIMES", "Switch to RIMES using the globe key")) { TextEditor(text: $text).frame(minHeight: 170).accessibilityIdentifier("playground.primary") }
             Section(L("另一个输入框", "Another field")) { TextField(L("测试切换输入目标", "Test switching fields"), text: $second).accessibilityIdentifier("playground.secondary") }
+            #if DEBUG
             NavigationLink(L("本地引擎检查", "Local engine check")) { EngineCheckView() }
+            #endif
         }.navigationTitle(L("输入体验", "Try typing"))
     }
 }
@@ -162,11 +165,11 @@ struct ChordProfilesView: View {
             Section { Text(L("每手：起点＋终点。途中经过的键不计入；双手全部松开时提交。划回起点恢复单键。", "Each hand selects start + end. Passed keys do not count. Release both hands to submit; return to the start for a single key.")) }
             Section(L("当前方案", "Active profile")) {
                 ForEach([ChordProfile.builtIn] + model.value.profiles) { p in
-                    HStack { Button(p.name) { model.value.chord = p; model.save() }; Spacer(); if model.value.chord.id == p.id { Image(systemName:"checkmark").foregroundStyle(.teal) }; Button { editing = p.id == "builtin.flyyao" ? p.copy() : p } label: { Image(systemName:"pencil") } }
+                    HStack { Button(p.id == ChordProfile.builtIn.id ? L("默认并击", "Default chord") : p.name) { model.value.chord = p; model.save() }; Spacer(); if model.value.chord.id == p.id { Image(systemName:"checkmark").foregroundStyle(.teal) }; Button { editing = p.id == "builtin.flyyao" ? p.copy() : p } label: { Image(systemName:"pencil") } }
                     .contextMenu { Button(L("复制方案", "Duplicate profile")) { editing = p.copy() } }
                 }
             }
-            Button(L("复制飞耀", "Copy FlyYao")) { editing = ChordProfile.builtIn.copy() }
+            Button(L("复制默认并击", "Copy default chord")) { editing = ChordProfile.builtIn.copy() }
             Button(L("导入 JSON", "Import JSON")) { importing = true }
         }.navigationTitle(L("滑动并击", "Slide chords"))
         .fileImporter(isPresented:$importing,allowedContentTypes:[.json]) { result in
@@ -222,7 +225,11 @@ struct PrivacyView: View {
         List {
             Section(L("本机输入", "On-device typing")) { Text(L("词频只保存在设备。无账户、遥测或输入正文日志。Buffer 草稿不会落盘；键盘会话结束时清除。", "Learning stays on your device. No account, telemetry or text logs. Buffer drafts are not saved to disk and are cleared when the keyboard session ends.")) }
             Section("AI") { Text(L("只发送你主动提交的 Buffer 文本到你配置并同意的服务；API Key 保存在仅限本设备的 Keychain 中。请求不会跟随重定向。", "Only explicitly submitted Buffer text goes to your configured, consented service. API keys stay in this device's Keychain. Requests never follow redirects.")) }
-            Section(L("测试版分发状态", "Distribution status")) { Text(L("开发预览版。五笔及飞耀资源的发行授权核实未完成时，不得分发 TestFlight 包。", "Development preview. TestFlight distribution is gated until Wubi and FlyYao distribution rights are resolved.")) }
+            Section(L("苹果翻译", "Apple translation")) { Text(L("翻译在设备上使用已下载的苹果语言模型。下载语言包可能需要联网；翻译不可用时不会自动改用 AI 服务。", "Translation uses downloaded Apple language models on your device. Preparing languages may need a network connection. Unavailable translations never fall back to an AI service automatically.")) }
+            Section {
+                Link(L("隐私政策", "Privacy policy"), destination: URL(string: "https://scholay.github.io/rimes/ios/privacy/")!)
+                Link(L("使用帮助与联系", "Help & contact"), destination: URL(string: "https://scholay.github.io/rimes/ios/support/")!)
+            }
             Section(L("第三方声明", "Third-party notices")) { Text(Bundle.main.url(forResource:"THIRD_PARTY",withExtension:"txt").flatMap { try? String(contentsOf:$0,encoding:.utf8) } ?? L("许可文件缺失", "License file missing")).font(.caption).textSelection(.enabled) }
         }.navigationTitle(L("隐私与许可", "Privacy & licenses"))
     }

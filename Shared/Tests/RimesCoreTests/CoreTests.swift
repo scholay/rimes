@@ -51,12 +51,28 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(p.resolve(Set("sd"))?.input,"u")
         XCTAssertEqual(p.resolve(Set("j"))?.input,"j")
     }
-    func testCrossingCanRecoverButInvalidReleaseCancelsWholeGroup() {
-        let p = ChordProfile.builtIn; var g = ChordGesture()
-        g.begin(id:1,key:"a",profile:p); g.begin(id:2,key:"j",profile:p)
-        g.move(id:1,key:"k",profile:p); XCTAssertNil(g.keys)
-        g.move(id:1,key:"s",profile:p); XCTAssertEqual(g.keys,Set("asj"))
-        XCTAssertNil(g.end(id:1,key:nil,profile:p)); XCTAssertNil(g.end(id:2,key:"j",profile:p))
+    func testEmptySpaceKeepsEndpointAndEitherReleaseOrderCommitsOnce() {
+        let p = ChordProfile.builtIn
+        for reverse in [false, true] {
+            var g = ChordGesture()
+            g.begin(id: 1, key: "d", profile: p); g.move(id: 1, key: "v", profile: p)
+            g.begin(id: 2, key: "k", profile: p); g.move(id: 2, key: "m", profile: p)
+            let expected = p.resolve(Set("dvkm")); XCTAssertNotNil(expected)
+            g.move(id: 1, key: nil, profile: p); g.move(id: 2, key: nil, profile: p)
+            XCTAssertEqual(g.keys, Set("dvkm"))
+            g.move(id: 1, key: "k", profile: p) // Crossing into the other hand is not an endpoint.
+            XCTAssertEqual(g.keys, Set("dvkm"))
+            g.move(id: 1, key: "d", profile: p); XCTAssertEqual(g.keys, Set("dkm"))
+            g.move(id: 1, key: "v", profile: p)
+            XCTAssertNil(g.end(id: reverse ? 2 : 1, key: nil, profile: p))
+            XCTAssertEqual(g.end(id: reverse ? 1 : 2, key: nil, profile: p), expected)
+            XCTAssertNil(g.end(id: 1, key: nil, profile: p))
+        }
+        var g = ChordGesture()
+        g.begin(id: 1, key: "a", profile: p); g.move(id: 1, key: nil, profile: p)
+        g.cancel(); XCTAssertNil(g.end(id: 1, key: nil, profile: p))
+        g.begin(id: 2, key: "a", profile: p); g.reset()
+        XCTAssertNil(g.end(id: 2, key: nil, profile: p))
     }
     func testExtraFingerQuarantinesUntilAllLift() {
         let p = ChordProfile.builtIn; var g = ChordGesture()
@@ -92,8 +108,10 @@ final class CoreTests: XCTestCase {
     func testOrderedDeliveryPreservesAllCharactersAndPartialRemainder() {
         let text = "你好。 下一句！\nThird 👩🏽‍💻"
         XCTAssertEqual(TextBlocks.split(text).joined(),text)
-        var b = BufferSession(); b.edit(text); b.consumed(all:false)
-        XCTAssertEqual(b.source," 下一句！\nThird 👩🏽‍💻")
+        var b = BufferSession(); b.edit(text)
+        XCTAssertEqual(b.pending.first, "你好。 ") // Desktop keeps trailing whitespace with its clause.
+        b.consumed(all:false)
+        XCTAssertEqual(b.source,"下一句！\nThird 👩🏽‍💻")
         let id = b.begin(); b.finish("One! Two?",id:id); b.consumed(all:false)
         XCTAssertEqual(b.pending,[" Two?"])
         b.cancel() // A same-session target change cancels requests, not pending text.

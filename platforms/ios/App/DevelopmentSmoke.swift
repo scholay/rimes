@@ -5,7 +5,8 @@ import RimesCore
 
 /// Explicit development diagnostic using the shipped engine and data. No customer content.
 @MainActor enum DevelopmentSmoke {
-    static func runIfRequested() {
+    static func runIfRequested() async {
+        if ProcessInfo.processInfo.arguments.contains("--translation-smoke") { await translationSmoke() }
         guard ProcessInfo.processInfo.arguments.contains("--engine-smoke") else { return }
         var checks: [[String:Any]] = []
         let start = ProcessInfo.processInfo.systemUptime
@@ -36,5 +37,25 @@ import RimesCore
             try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic)
         } catch { assertionFailure("Could not write smoke report") }
     }
+    private static func translationSmoke() async {
+        let plugin = AppleTranslationPlugin()
+        let revision = UUID()
+        let request = BufferPluginRequest(source: "你好，世界！", revision: revision, options: ["source": "zh-Hans", "target": "en"])
+        let start = ProcessInfo.processInfo.systemUptime
+        var report: [String: Any] = ["environment": "main-app Apple Translation smoke; not keyboard extension acceptance", "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") ?? "", "osVersion": UIDevice.current.systemVersion]
+        switch await plugin.availability(for: request) {
+        case .ready:
+            do {
+                let result = try await plugin.execute(request) { _ in }
+                report["passed"] = !result.text.isEmpty && result.revision == revision
+                report["syntheticTranslation"] = result.text
+            } catch { report["passed"] = false; report["error"] = error.localizedDescription }
+        case .unavailable(let reason): report["passed"] = false; report["unavailable"] = reason
+        }
+        report["elapsedMilliseconds"] = (ProcessInfo.processInfo.systemUptime - start) * 1000
+        let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("translation-smoke.json")
+        try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: url, options: .atomic)
+    }
+
 }
 #endif

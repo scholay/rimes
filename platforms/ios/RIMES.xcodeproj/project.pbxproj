@@ -8,30 +8,54 @@
 
 /* Begin PBXBuildFile section */
 		061AF7384B28E8EF7F2FFC29 /* RIMESKeyboard.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B5C6E4AD5FD1AD736D377EAB /* RIMESKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		07278CA48F1961A0966D176D /* KeyboardFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5069B7A0CE0CA7FA60C8A05B /* KeyboardFeedback.swift */; };
+		081C517706973AD4C1512CFA /* BufferBlockStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5267BE2DE80307CA7424D16 /* BufferBlockStrip.swift */; };
+		0E3F096AF85A9F91E7741EBA /* BufferComposition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E1C9123D22B409520688270 /* BufferComposition.swift */; };
+		0FC1EF3D45A3AE16603B9FF1 /* KeySurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = B579639B42DCF0E4CECDE063 /* KeySurface.swift */; };
 		12ED10B7FAED3657E4132730 /* RimesCore in Frameworks */ = {isa = PBXBuildFile; productRef = 166AC455F71B32F8A88BEBA0 /* RimesCore */; };
 		15C8E9DF2F87DE79FBB21672 /* RimeMobile.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3EAB21FD96993A6C23136780 /* RimeMobile.mm */; };
 		177FBCAB4803C1E06B767D5E /* RimesCore in Frameworks */ = {isa = PBXBuildFile; productRef = BD70F7451E25B54A49DF7E2C /* RimesCore */; };
+		2554DF04A22475FD7B521586 /* BufferBlockStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5267BE2DE80307CA7424D16 /* BufferBlockStrip.swift */; };
 		272E9A702E215BA565D36909 /* EngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05F694330D783C5822C8798A /* EngineTests.swift */; };
 		34ED8AECFF8B222576516BC0 /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00BED878670FDB179561899 /* Settings.swift */; };
+		359E9CC6938EB1BBDB219690 /* BufferPlugins.swift in Sources */ = {isa = PBXBuildFile; fileRef = C51625B30F552E79ED0A6F8C /* BufferPlugins.swift */; };
+		36D91B350C9E1AF30D66DE52 /* BufferPlugins.swift in Sources */ = {isa = PBXBuildFile; fileRef = C51625B30F552E79ED0A6F8C /* BufferPlugins.swift */; };
 		3B433873A2CDC9AFA98CC523 /* EngineData in Resources */ = {isa = PBXBuildFile; fileRef = FC8031DB5E05D900912B3101 /* EngineData */; };
 		3C33666CE829A6A1E01AD044 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 74F4E20EEDD01DC7F5CC2F6A /* Assets.xcassets */; };
 		3E11FAC0D97F5886CDCC43B0 /* ProxyTextDelivery.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC2A712CDC7868E1C11B6DAA /* ProxyTextDelivery.swift */; };
+		3E147968371E22274FF45E11 /* KeycapButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE4D3A2A8A76FA57F6693DE9 /* KeycapButton.swift */; };
 		49D0B8B96EA1C4435CFC0051 /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00BED878670FDB179561899 /* Settings.swift */; };
 		5127AF8F2477691DBF3B141A /* Rime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = D2AE2CA88B327774FC437F4A /* Rime.xcframework */; };
 		630E928793178DCD96B5DD17 /* MobileEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E21B5038BEE6B784ABA0CB35 /* MobileEngine.swift */; };
 		6676C678F69E9C29144B1955 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD234B056A3AB0890E5F757B /* KeyboardViewController.swift */; };
+		71617EA2CC1E7B8590ABFF7C /* TranslationSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33A420AE1C9DDD5196FF7C94 /* TranslationSetupView.swift */; };
 		72D3C6D0179CC33FE13C8DA4 /* RimesCore in Frameworks */ = {isa = PBXBuildFile; productRef = 62445D535B1D7A6366C0234B /* RimesCore */; };
 		734B504D58D64C71145A9D92 /* Rime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = D2AE2CA88B327774FC437F4A /* Rime.xcframework */; };
+		7AC32F9E89FE68E4E8C8B859 /* KeyboardFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5069B7A0CE0CA7FA60C8A05B /* KeyboardFeedback.swift */; };
 		7B44FFB1E8A3171A6FC96728 /* THIRD_PARTY.txt in Resources */ = {isa = PBXBuildFile; fileRef = 8C9250B1ED23E7A955B90C53 /* THIRD_PARTY.txt */; };
 		7C801FD873B35BEC029F7469 /* ProxyTextDelivery.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC2A712CDC7868E1C11B6DAA /* ProxyTextDelivery.swift */; };
+		7D04B7DC48863EA19A5A4AE5 /* CandidateStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7946B62F3AF352493F425710 /* CandidateStrip.swift */; };
 		7E4183786A0A39941DB4FE2A /* EngineData in Resources */ = {isa = PBXBuildFile; fileRef = FC8031DB5E05D900912B3101 /* EngineData */; };
+		802DBBE669D7024D9EB737DA /* DocumentIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8843154BA7094F00E538F6A7 /* DocumentIdentity.swift */; };
+		8D68698F672965C3F08BD8BF /* RepeatKeycapButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE0C7AE3AD47B418D0BB14A /* RepeatKeycapButton.swift */; };
 		91E6E22CA8D776230DF306A3 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2C7665ECABBBF5946A99BE50 /* PrivacyInfo.xcprivacy */; };
+		92163C597796278856E657A5 /* RepeatKeycapButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE0C7AE3AD47B418D0BB14A /* RepeatKeycapButton.swift */; };
 		92849E5F457028B115B1FF68 /* RimesApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDCAEBF5822184603F11002A /* RimesApp.swift */; };
 		983BF5641DF0DEB2422295E5 /* MobileEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E21B5038BEE6B784ABA0CB35 /* MobileEngine.swift */; };
+		98C4B2DF0BB9CAD7A2C89052 /* KeyboardMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39F8533A3C0C77C8132DCDB6 /* KeyboardMetrics.swift */; };
 		A4903D0AB35165B2EC3A3B2C /* KeySurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = B579639B42DCF0E4CECDE063 /* KeySurface.swift */; };
+		B0C0DA13F6F97994AD468B1A /* KeyboardLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DE121F1A33DDDCC5A07EB42 /* KeyboardLayoutTests.swift */; };
 		B128CD8F9F802BF9045E8BE2 /* RimeMobile.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3EAB21FD96993A6C23136780 /* RimeMobile.mm */; };
+		B25F7EF2358BAE1D1A68B9C9 /* BufferComposition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E1C9123D22B409520688270 /* BufferComposition.swift */; };
+		BA2C38C95D71718C2B4AAA4A /* KeyboardGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C72B7FA3BDA41A0631169E86 /* KeyboardGeometry.swift */; };
+		C6DC870A22C6E3C67814072D /* CandidateStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7946B62F3AF352493F425710 /* CandidateStrip.swift */; };
+		CC9298AE26DEDC6B9284B637 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD234B056A3AB0890E5F757B /* KeyboardViewController.swift */; };
 		D601A3A1318186EE51DB5690 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2C7665ECABBBF5946A99BE50 /* PrivacyInfo.xcprivacy */; };
+		DFFC9A8B3C618EB494A659CB /* KeyboardMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39F8533A3C0C77C8132DCDB6 /* KeyboardMetrics.swift */; };
+		E05C19918F44E90A49CBB47C /* DocumentIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8843154BA7094F00E538F6A7 /* DocumentIdentity.swift */; };
+		E2BD4AD074AC6BDD6B5DA1FE /* KeyboardGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C72B7FA3BDA41A0631169E86 /* KeyboardGeometry.swift */; };
 		E614C97975864D22B5670551 /* DevelopmentSmoke.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89364C5C5A24F3CA907FAF2E /* DevelopmentSmoke.swift */; };
+		F94D4DE0296412D481BA1321 /* KeycapButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE4D3A2A8A76FA57F6693DE9 /* KeycapButton.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -70,21 +94,33 @@
 		2663C56751557C40F55C6B96 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		2C7665ECABBBF5946A99BE50 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		328406AEBF3F70DBFC497D85 /* RIMESKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RIMESKeyboard.entitlements; sourceTree = "<group>"; };
+		33A420AE1C9DDD5196FF7C94 /* TranslationSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationSetupView.swift; sourceTree = "<group>"; };
+		39F8533A3C0C77C8132DCDB6 /* KeyboardMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardMetrics.swift; sourceTree = "<group>"; };
 		3EAB21FD96993A6C23136780 /* RimeMobile.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = RimeMobile.mm; sourceTree = "<group>"; };
+		4DE121F1A33DDDCC5A07EB42 /* KeyboardLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardLayoutTests.swift; sourceTree = "<group>"; };
+		5069B7A0CE0CA7FA60C8A05B /* KeyboardFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardFeedback.swift; sourceTree = "<group>"; };
 		5BA81208AC7C835E461080D2 /* RIMESTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = RIMESTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		74F4E20EEDD01DC7F5CC2F6A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7946B62F3AF352493F425710 /* CandidateStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CandidateStrip.swift; sourceTree = "<group>"; };
+		7EE0C7AE3AD47B418D0BB14A /* RepeatKeycapButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepeatKeycapButton.swift; sourceTree = "<group>"; };
+		8843154BA7094F00E538F6A7 /* DocumentIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentIdentity.swift; sourceTree = "<group>"; };
 		89364C5C5A24F3CA907FAF2E /* DevelopmentSmoke.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevelopmentSmoke.swift; sourceTree = "<group>"; };
 		8C9250B1ED23E7A955B90C53 /* THIRD_PARTY.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = THIRD_PARTY.txt; sourceTree = "<group>"; };
 		9D160F8F1C1D6930650DD221 /* RimeMobile.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RimeMobile.h; sourceTree = "<group>"; };
+		9E1C9123D22B409520688270 /* BufferComposition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BufferComposition.swift; sourceTree = "<group>"; };
 		A4B419A120442590CD0E3351 /* RIMES.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RIMES.entitlements; sourceTree = "<group>"; };
 		B00BED878670FDB179561899 /* Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings.swift; sourceTree = "<group>"; };
 		B579639B42DCF0E4CECDE063 /* KeySurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeySurface.swift; sourceTree = "<group>"; };
 		B5C6E4AD5FD1AD736D377EAB /* RIMESKeyboard.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = RIMESKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		BD234B056A3AB0890E5F757B /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
 		C382D89140A17145FACC18AB /* RIMES.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = RIMES.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C51625B30F552E79ED0A6F8C /* BufferPlugins.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BufferPlugins.swift; sourceTree = "<group>"; };
+		C72B7FA3BDA41A0631169E86 /* KeyboardGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardGeometry.swift; sourceTree = "<group>"; };
 		CDCAEBF5822184603F11002A /* RimesApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimesApp.swift; sourceTree = "<group>"; };
 		D2AE2CA88B327774FC437F4A /* Rime.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = Rime.xcframework; path = ../../Vendor/Rime.xcframework; sourceTree = "<group>"; };
 		E21B5038BEE6B784ABA0CB35 /* MobileEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileEngine.swift; sourceTree = "<group>"; };
+		E5267BE2DE80307CA7424D16 /* BufferBlockStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BufferBlockStrip.swift; sourceTree = "<group>"; };
+		EE4D3A2A8A76FA57F6693DE9 /* KeycapButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeycapButton.swift; sourceTree = "<group>"; };
 		F19BE59861921D5B014A41BC /* Shared */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Shared; path = ../../Shared; sourceTree = SOURCE_ROOT; };
 		FC2A712CDC7868E1C11B6DAA /* ProxyTextDelivery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyTextDelivery.swift; sourceTree = "<group>"; };
 		FC8031DB5E05D900912B3101 /* EngineData */ = {isa = PBXFileReference; lastKnownFileType = folder; name = EngineData; path = Resources/EngineData; sourceTree = SOURCE_ROOT; };
@@ -125,6 +161,7 @@
 			isa = PBXGroup;
 			children = (
 				05F694330D783C5822C8798A /* EngineTests.swift */,
+				4DE121F1A33DDDCC5A07EB42 /* KeyboardLayoutTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -164,6 +201,7 @@
 				FE341F6EF7C61004FFDE9930 /* Info.plist */,
 				A4B419A120442590CD0E3351 /* RIMES.entitlements */,
 				CDCAEBF5822184603F11002A /* RimesApp.swift */,
+				33A420AE1C9DDD5196FF7C94 /* TranslationSetupView.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -171,6 +209,8 @@
 		9CEB379C21A4F9696282CEAE /* Support */ = {
 			isa = PBXGroup;
 			children = (
+				C51625B30F552E79ED0A6F8C /* BufferPlugins.swift */,
+				8843154BA7094F00E538F6A7 /* DocumentIdentity.swift */,
 				E21B5038BEE6B784ABA0CB35 /* MobileEngine.swift */,
 				FC2A712CDC7868E1C11B6DAA /* ProxyTextDelivery.swift */,
 				B00BED878670FDB179561899 /* Settings.swift */,
@@ -214,9 +254,17 @@
 		FB5C935122DB3171C66C2192 /* Keyboard */ = {
 			isa = PBXGroup;
 			children = (
+				E5267BE2DE80307CA7424D16 /* BufferBlockStrip.swift */,
+				9E1C9123D22B409520688270 /* BufferComposition.swift */,
+				7946B62F3AF352493F425710 /* CandidateStrip.swift */,
 				2663C56751557C40F55C6B96 /* Info.plist */,
+				5069B7A0CE0CA7FA60C8A05B /* KeyboardFeedback.swift */,
+				C72B7FA3BDA41A0631169E86 /* KeyboardGeometry.swift */,
+				39F8533A3C0C77C8132DCDB6 /* KeyboardMetrics.swift */,
 				BD234B056A3AB0890E5F757B /* KeyboardViewController.swift */,
+				EE4D3A2A8A76FA57F6693DE9 /* KeycapButton.swift */,
 				B579639B42DCF0E4CECDE063 /* KeySurface.swift */,
+				7EE0C7AE3AD47B418D0BB14A /* RepeatKeycapButton.swift */,
 				328406AEBF3F70DBFC497D85 /* RIMESKeyboard.entitlements */,
 			);
 			path = Keyboard;
@@ -362,12 +410,15 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				36D91B350C9E1AF30D66DE52 /* BufferPlugins.swift in Sources */,
 				E614C97975864D22B5670551 /* DevelopmentSmoke.swift in Sources */,
+				E05C19918F44E90A49CBB47C /* DocumentIdentity.swift in Sources */,
 				983BF5641DF0DEB2422295E5 /* MobileEngine.swift in Sources */,
 				3E11FAC0D97F5886CDCC43B0 /* ProxyTextDelivery.swift in Sources */,
 				B128CD8F9F802BF9045E8BE2 /* RimeMobile.mm in Sources */,
 				92849E5F457028B115B1FF68 /* RimesApp.swift in Sources */,
 				49D0B8B96EA1C4435CFC0051 /* Settings.swift in Sources */,
+				71617EA2CC1E7B8590ABFF7C /* TranslationSetupView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -375,7 +426,18 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				081C517706973AD4C1512CFA /* BufferBlockStrip.swift in Sources */,
+				0E3F096AF85A9F91E7741EBA /* BufferComposition.swift in Sources */,
+				7D04B7DC48863EA19A5A4AE5 /* CandidateStrip.swift in Sources */,
 				272E9A702E215BA565D36909 /* EngineTests.swift in Sources */,
+				0FC1EF3D45A3AE16603B9FF1 /* KeySurface.swift in Sources */,
+				7AC32F9E89FE68E4E8C8B859 /* KeyboardFeedback.swift in Sources */,
+				BA2C38C95D71718C2B4AAA4A /* KeyboardGeometry.swift in Sources */,
+				B0C0DA13F6F97994AD468B1A /* KeyboardLayoutTests.swift in Sources */,
+				DFFC9A8B3C618EB494A659CB /* KeyboardMetrics.swift in Sources */,
+				CC9298AE26DEDC6B9284B637 /* KeyboardViewController.swift in Sources */,
+				F94D4DE0296412D481BA1321 /* KeycapButton.swift in Sources */,
+				8D68698F672965C3F08BD8BF /* RepeatKeycapButton.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -383,10 +445,20 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2554DF04A22475FD7B521586 /* BufferBlockStrip.swift in Sources */,
+				B25F7EF2358BAE1D1A68B9C9 /* BufferComposition.swift in Sources */,
+				359E9CC6938EB1BBDB219690 /* BufferPlugins.swift in Sources */,
+				C6DC870A22C6E3C67814072D /* CandidateStrip.swift in Sources */,
+				802DBBE669D7024D9EB737DA /* DocumentIdentity.swift in Sources */,
 				A4903D0AB35165B2EC3A3B2C /* KeySurface.swift in Sources */,
+				07278CA48F1961A0966D176D /* KeyboardFeedback.swift in Sources */,
+				E2BD4AD074AC6BDD6B5DA1FE /* KeyboardGeometry.swift in Sources */,
+				98C4B2DF0BB9CAD7A2C89052 /* KeyboardMetrics.swift in Sources */,
 				6676C678F69E9C29144B1955 /* KeyboardViewController.swift in Sources */,
+				3E147968371E22274FF45E11 /* KeycapButton.swift in Sources */,
 				630E928793178DCD96B5DD17 /* MobileEngine.swift in Sources */,
 				7C801FD873B35BEC029F7469 /* ProxyTextDelivery.swift in Sources */,
+				92163C597796278856E657A5 /* RepeatKeycapButton.swift in Sources */,
 				15C8E9DF2F87DE79FBB21672 /* RimeMobile.mm in Sources */,
 				34ED8AECFF8B222576516BC0 /* Settings.swift in Sources */,
 			);
@@ -425,7 +497,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = org.scholay.rimes.ios;
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
@@ -446,7 +518,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = org.scholay.rimes.ios;
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};
@@ -486,7 +558,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 22;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 585J2TL9U6;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -533,6 +605,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Keyboard/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -540,8 +613,12 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = org.scholay.rimes.ios.tests;
 				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = (
+					"$(inherited)",
+					KEYBOARD_LAYOUT_TESTS,
+				);
 				SWIFT_OBJC_BRIDGING_HEADER = "";
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RIMES.app/RIMES";
 			};
 			name = Debug;
@@ -551,6 +628,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Keyboard/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -558,8 +636,12 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = org.scholay.rimes.ios.tests;
 				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = (
+					"$(inherited)",
+					KEYBOARD_LAYOUT_TESTS,
+				);
 				SWIFT_OBJC_BRIDGING_HEADER = "";
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RIMES.app/RIMES";
 			};
 			name = Release;
@@ -582,7 +664,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = org.scholay.rimes.ios.keyboard;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
@@ -604,7 +686,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = org.scholay.rimes.ios.keyboard;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};
@@ -644,7 +726,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 22;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 585J2TL9U6;
 				ENABLE_NS_ASSERTIONS = NO;

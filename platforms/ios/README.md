@@ -1,16 +1,79 @@
 # RIMES iOS 0.1
 
-Native iPhone application and keyboard extension (iOS 17+). Development preview,
-not an App Store or TestFlight release. macOS input-method source and installation
-are unchanged.
+Native iPhone application and keyboard extension (iOS 17+). The current local
+development build is **0.1.0 (22)**. App Store build **10** was submitted on
+22 September 2026; this development round does not change that submission.
+The iPhone 15 Pro was updated in place and its version read back as **0.1.0 (22)**.
+Physical thumb ergonomics and haptics still need user confirmation. See `VALIDATION.md`
+for build 22 checks and `AppStore/README.md` for the separate store handoff.
+macOS input-method source and installation are unchanged.
 
 ## Implemented
 
 - Offline simplified Pinyin, Ziranma, Wubi 86 and English; local Rime learning.
-- FlyYao and imported JSON mappings, with per-hand start/end sliding, live chord
-  preview and a single commit when both hands release. No traversed-key accumulation.
+- Extension-private last-scheme memory, independent of Full Access. An explicit
+  app selection overrides it once; ordinary app configuration saves do not.
+- Uppercase mechanical keycaps, depressed states and 30% opacity for unreachable
+  chord keys. Haptics distinguish presses, changed combinations and commits;
+  toggle them in the Settings menu. Letter, utility and tool keys share the mechanical
+  cap style; candidates are borderless text with a transient touch highlight.
+- Default chord now runs through the desktop-style Ziranma encoding layer:
+  sequential G then H produces gang; EF maps sh to u, then H produces shang.
+  Default one-finger left-to-right shortcuts: TY → ting, GH → gang, BN → bin;
+  TYU → tu, GHJ → gan, BNM → bian; BH → bang, TH → tang, GY → guai. Second/third endpoints update preview;
+  blank/unmapped positions preserve it, returning to the start resets the slide.
+  Stored mapping JSON remains unchanged; imported profiles retain their encoding.
+- The Default chord example and imported JSON mappings, with per-hand start/end sliding, live chord
+  preview and a single commit when both hands release. Unmapped slide endpoints
+  preserve the last valid combination; returning to the start or reaching another
+  valid combination updates it. No traversed-key accumulation.
+- Only two chord layouts remain: gapless orthogonal and 12 pt split orthogonal.
+  Removed staggered/stacked preferences migrate to gapless orthogonal without
+  resetting other settings. Chord letter caps are square, with 2 pt horizontal
+  and 1 pt vertical frame gaps. Wide landscape layouts center a grid capped at
+  480 pt so square caps do not inflate the keyboard height. The bottom row keeps
+  its wider Space/function keys. Imported mappings and blank-slide protection remain.
+- Haptics offer Off, Light, Strong and Stronger. The two stronger levels use
+  medium/heavy UIKit impact generators and persist independently of the off switch;
+  combination deduplication and the 35 ms minimum interval remain active.
+- Backspace deletes immediately, then after 400 ms repeats every 75 ms; lifting,
+  leaving the key, cancellation, target changes, rotation and hiding stop it.
+  Each deletion tick emits feedback at the selected haptic strength.
+- Shift latches uppercase ASCII entry while preserving the chord layout. Return
+  commits the engine's raw code without choosing a candidate or adding a newline;
+  only automatically added chord separators are omitted. Space chooses a candidate.
+- 中/EN toggles direct English and the previous Chinese scheme. Simplified/
+  Traditional output is retained in More. Emoji remains in the right-side grid
+  cell, or More outside the chord grid; the palette contains 29 local items.
 - Explicit Buffer mode, character cursor editing, ordered next/all insertion,
-  in-memory drafts and manual AI result confirmation.
+  in-memory drafts and manual result confirmation. The fixed order above the keys
+  is output → input → candidates. Buffer controls are embedded in their rows: toggle
+  at candidate left, plugin at input left, Send at output right. Buffer shows both
+  rows when enabled and hides both when disabled; source/result text scrolls internally;
+  candidates wrap by measured text width when expanded, including while Buffer is open.
+  Tap the paper plane for one block; hold it for one second for all remaining blocks.
+  The More menu contains explicit source insertion, cursor movement and Clear.
+- Composition appears inline as native marked text in the host, or at the Buffer
+  cursor. Confirming a candidate replaces it once; unconfirmed text stays out of
+  Buffer source revisions and translation requests. There is no separate preedit row.
+- Settings is a gear at candidate-row right; input schemes and translation languages
+  are nested in its menu. There is no top toolbar. A conditional system-required globe and wide Space
+  key. The candidate row always reserves at least 32 pt, even when empty;
+  the typing block stays anchored to the bottom while auxiliaries grow upward.
+- Default Buffer shows committed characters/minute, touch starts/character,
+  touch starts/second and backspace presses centered across the output row.
+  Default does not duplicate source text in that row. Its input row uses horizontal
+  block chips and desktop clause/phrase segmentation, shared with actual delivery. Repeats do not
+  inflate touch counts; a six-second idle gap starts a new burst. No accuracy is
+  inferred for free typing. Gear → Default automatic insertion offers Off/1/2/3/5 s
+  (default Off). Blocks age separately, edited text restarts, composition pauses,
+  and only the head is delivered through the existing proxy. Switching targets
+  suspends automatic delivery until explicitly re-enabled; hiding clears drafts
+  and timers. Translation/AI output remains explicitly inserted.
+- Compiled-in Buffer plugins with serial, cancellable, revision-bound execution.
+  Apple on-device translation on iOS 26+ previews after a 400 ms pause; defaults
+  to Simplified Chinese → English. Download languages in the containing app first.
+  iOS 17–25 retain offline input and existing AI. No automatic cloud fallback.
 - Multiple HTTPS Chat Completions providers, manual model IDs, optional model lookup,
   endpoint consent, shared device-only Keychain credentials, cancellable streaming.
 - Containing app with keyboard setup, typing playground, profile editor/import/export,
@@ -85,7 +148,7 @@ This smoke is not a substitute for keyboard-extension lifecycle or physical test
   and preserves pending blocks for a fresh Insert action. Hiding/resigning the
   keyboard ends the session and clears its in-memory draft.
 - iOS's proxy gives no host acknowledgement of successful application-level send.
-  RIMES makes one explicit `insertText` call and consumes that local block; it does
+  RIMES makes one explicit proxy insertion and consumes that local block; it does
   not retry, synthesize Return or claim a message was sent.
 - Basic typing and Buffer work without Full Access. AI requires both Full Access
   and separate recipient consent. Password fields and opting-out host apps use the
@@ -93,15 +156,16 @@ This smoke is not a substitute for keyboard-extension lifecycle or physical test
 
 ## Distribution gate
 
-`distribution-audit.json` is the release checklist and evidence record.
-`python3 platforms/ios/scripts/verify.py --distribution` currently exits 2 because
-Wubi's store-distribution/provenance review, FlyYao provenance, developer membership,
-physical acceptance and public privacy/support details remain unresolved.
+`distribution-audit.json` records evidence and outstanding physical acceptance.
+The Wubi license/source packaging and the publisher's representation about the
+functional default chord mapping are documented in `AppStore/RESOURCE_CLEARANCE.md`.
+App Store Content Rights and review contact are saved. The owner explicitly
+requested release; this does not mark unexecuted physical acceptance checks passed.
+The strict local `--distribution` checklist remains incomplete for those checks.
+Current upload/review state is recorded in `AppStore/README.md`.
 
-All planned schemes are present in local development builds. They are not silently
-removed to pass distribution checks. This repository's MIT license does not replace
-third-party terms. Do not distribute the local app or upload it to TestFlight until
-those recorded items are resolved with evidence.
+All planned schemes remain present; public default chord naming preserves existing
+configuration IDs and JSON import. Third-party terms remain bundled.
 
 Once ready, set the real team through `RIMES_DEVELOPMENT_TEAM` and run
 `scripts/archive.sh` from this directory. The script checks the gate before creating
@@ -111,7 +175,37 @@ uploading for internal TestFlight testing. External testing additionally require
 Beta App Review. Never commit provisioning profiles, certificates or credentials.
 
 See `VALIDATION.md` for actual results and remaining acceptance, and
-`PRIVACY.md` for the draft public policy and App Store privacy declaration inputs.
+`PRIVACY.md` for the published policy and saved App Store privacy declarations.
 `RESOURCE_INVENTORY.md` records the source, changes and license obligations of each
 shipped dependency. `TESTFLIGHT.md` contains prepared signing, beta description,
 review notes and device-acceptance handoff materials.
+
+## Historical physical acceptance: build 5
+
+Version 0.1.0 (5) removes the extra chord-center gutter, makes candidates borderless,
+and moves composition into the host field or Buffer cursor. The equal-size grid,
+Emoji, script toggle and tap/hold insertion from earlier builds remain intact.
+See `validation/build5-status.json` and `validation/build5/COMPARISON.md` for current
+build/device evidence and screenshots. All 25 shared-core and 22 hosted iOS tests
+pass. Eleven layout fixtures use UIKit with a test proxy; actual simulator extension
+captures verify native host typing, Buffer composition and refocusing separately.
+Physical thumb/haptic and cross-app acceptance remain device tasks.
+
+In the tested simulator, a field that has lost focus can retain its visual marked
+underline until it regains focus. RIMES ends stale marking during UIKit's document
+reset before starting new composition; the field's existing text is preserved.
+The earlier refocus failure caused by a temporarily missing document ID is fixed.
+This host-rendering behavior and physical cross-app coverage are recorded in
+`VALIDATION.md`, rather than counted as fully passed device acceptance.
+
+Choose Buffer → Plugins → Apple translation to enable automatic previews for the
+current session. Choose a language pair from the adjacent direction menu. The paper plane inserts the active result; explicit source insertion lives in More; incomplete translation never falls
+back to source insertion. First insertion retires the translated source and keeps
+remaining translated blocks, preventing retranslating already-inserted material.
+Hiding the keyboard clears drafts and disables the active plugin for that session.
+
+The DEBUG-only `--translation-smoke` app argument checks the actual Apple service
+with synthetic Chinese text and writes `Documents/translation-smoke.json`; it does
+not download missing models. Extension debug metrics contain only aggregate
+controller presentation, synchronous input-processing timings and sampled memory,
+not input text. They do not establish OS-level cold-start or frame latency targets.

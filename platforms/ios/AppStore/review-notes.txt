@@ -1,0 +1,15 @@
+Historical review notes submitted for build 10; not instructions for the current build 22 UI.
+
+RIMES is an iPhone custom keyboard extension and containing setup app. No app login or paid entitlement is required for offline keyboard and Buffer features.
+
+Setup: Settings > General > Keyboard > Keyboards > Add New Keyboard > RIMES. Return to RIMES > Try typing, focus either field and select RIMES with the system globe. Leave Full Access disabled for ordinary typing and Buffer.
+
+Use the short scheme button for Pinyin, Ziranma, Wubi, English or Chord. Chord mode uses one start/end pair per hand and resolves after both hands release. Single letter taps remain valid. The emoji and Simplified/Traditional controls occupy the two rightmost utility cells.
+
+Tap the stacked-layers icon to enable Buffer. Tap the paper plane to insert one block; hold it for one second to insert all remaining blocks. More contains source insertion, clear and cursor movement. Inserting text does not send a message in the host app. Hiding the keyboard clears its in-memory draft.
+
+Apple translation: iOS 26 or later. Prepare models through Apple translation languages in the containing app, then choose the translation plugin and language pair in Buffer. Missing or unsupported languages show their availability state. No cloud fallback is used. Results require explicit insertion. iOS 17-25 retain ordinary keyboard, Buffer and provider-based AI.
+
+Optional third-party AI: users configure their own HTTPS Chat Completions provider, model and API key, enable Full Access and grant recipient consent. Only explicitly submitted Buffer text is transmitted. No provider credential is bundled. Ordinary keyboard and Buffer features do not require any app account, API key or network access.
+
+Secure fields and host apps that prohibit third-party keyboards use the system keyboard. The extension uses only public APIs. Privacy and third-party licenses are available in the containing app and on the support site.

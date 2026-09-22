@@ -36,6 +36,7 @@ public struct BufferSession {
     public private(set) var generation: UUID?
     public private(set) var preview = ""
     public private(set) var result: [String]?
+    public private(set) var retainedResults: [String] = []
     public private(set) var cursor = 0 // Character offset, not UTF-16.
     public private(set) var requestSourceRevision: UUID?
     public init() {}
@@ -64,11 +65,23 @@ public struct BufferSession {
         result = TextBlocks.split(text); preview = text; generation = nil
     }
     public mutating func cancel() { generation = nil; requestSourceRevision = nil; preview = "" }
-    public var pending: [String] { result ?? TextBlocks.split(source) }
+    public var pluginPending: [String] { retainedResults + (result ?? []) }
+    public var pending: [String] { retainedResults + (result ?? DefaultBlockSegmenter.segments(from: source)) }
+    public mutating func invalidateResult() { cancel(); result = nil }
+    public mutating func consumeSource() { edit("") }
+    /// Once a translated block is inserted, retire its full source before another edit.
+    public mutating func consumePlugin(all: Bool) {
+        guard !generating else { return }
+        if all { retainedResults = []; if result != nil { edit("") } else { cancel() }; return }
+        if !retainedResults.isEmpty { retainedResults.removeFirst(); return }
+        guard let blocks = result, !blocks.isEmpty else { return }
+        retainedResults = Array(blocks.dropFirst()); edit("")
+    }
     /// Called only after one explicit foreground proxy insertion. Never retries automatically.
     public mutating func consumed(all: Bool) {
         guard !generating else { return }
-        if var blocks = result { if all { blocks = [] } else if !blocks.isEmpty { blocks.removeFirst() }; result = blocks; if blocks.isEmpty { edit("") } }
-        else { let remainder = all ? "" : TextBlocks.split(source).dropFirst().joined(); edit(remainder) }
+        if all { retainedResults = []; edit(""); return }
+        if result != nil || !retainedResults.isEmpty { consumePlugin(all: all) }
+        else { let remainder = all ? "" : DefaultBlockSegmenter.segments(from: source).dropFirst().joined(); edit(remainder) }
     }
 }
