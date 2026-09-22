@@ -1,0 +1,42 @@
+{
+  "allPassed" : true,
+  "checks" : [
+    {
+      "keyMilliseconds" : [
+        0.25129166897386312,
+        0.079416669905185699,
+        0.14504167484119534,
+        0.22041663760319352,
+        0.063374987803399563
+      ],
+      "passed" : true,
+      "schema" : "rimes_pinyin"
+    },
+    {
+      "keyMilliseconds" : [
+        0.11974998051300645,
+        0.29395835008472204,
+        0.048124988097697496,
+        0.29137497767806053
+      ],
+      "passed" : true,
+      "schema" : "rimes_ziranma"
+    },
+    {
+      "keyMilliseconds" : [
+        1.5484582982026041,
+        0.49283332191407681
+      ],
+      "passed" : true,
+      "schema" : "rimes_wubi"
+    },
+    {
+      "keychain" : true,
+      "passed" : true
+    }
+  ],
+  "deviceModel" : "iPhone",
+  "engineInitializationMilliseconds" : 31.540958327241242,
+  "environment" : "iOS simulator, not physical-device acceptance",
+  "osVersion" : "26.5"
+}
