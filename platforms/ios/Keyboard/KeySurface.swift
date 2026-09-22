@@ -2,81 +2,164 @@ import UIKit
 import RimesCore
 
 final class KeySurface: UIView {
+    let feedback = KeyboardFeedback()
+    private var reachable = ChordReachability(profile: .builtIn)
+    var onTypingPress: (() -> Void)?
     var onKey: ((String) -> Void)?
     var onChord: ((ChordResolution?) -> Void)?
     var onPreview: ((String) -> Void)?
-    var profile = ChordProfile.builtIn { didSet { retire() } }
+    var onEmoji: ((String) -> Void)?
+    var onLanguageToggle: (() -> Void)?
+    var profile = ChordProfile.builtIn { didSet { if oldValue != profile { reachable = ChordReachability(profile: profile) }; retire(); setNeedsLayout() } }
     var chordMode = false { didSet { retire(); setNeedsLayout() } }
     var numeric = false { didSet { retire(); setNeedsLayout() } }
-    var shifted = false { didSet { setNeedsDisplay() } }
+    var shifted = false { didSet { if oldValue != shifted { retire() }; setNeedsDisplay() } }
+    var englishInput = false { didSet { if oldValue != englishInput { retire() }; updateLanguageButton() } }
+    var chordLayout: ChordLayout = .orthogonal { didSet { if oldValue != chordLayout { retire(); setNeedsLayout() } } }
+    var resolvesChords: Bool { chordMode && !numeric && !emojiMode && !shifted && !englishInput }
+    var hasUtilityCells: Bool { chordMode && !numeric }
+    var onModeChanged: (() -> Void)?
+    private(set) var emojiMode = false { didSet { cancel(); setNeedsLayout(); if oldValue != emojiMode { onModeChanged?() } } }
+    private let emojiButton = UtilityKeycapButton(), languageButton = UtilityKeycapButton(), backButton = UtilityKeycapButton()
+    private var emojiButtons: [UtilityKeycapButton] = []
+    private var utilityGeneration = UUID()
     private var boxes: [(String, CGRect)] = []
     private var gesture = ChordGesture()
+    var isChordActive: Bool { resolvesChords && gesture.active }
     private var touchIDs: [ObjectIdentifier: Int] = [:]
     private var nextID = 0
     private var ordinary: [ObjectIdentifier: String] = [:]
     override init(frame: CGRect) {
         super.init(frame: frame); isMultipleTouchEnabled = true; backgroundColor = .clear
         accessibilityLabel = L("字母键盘", "Letter keyboard")
+        emojiButton.symbol("face.smiling", label: L("表情", "Emoji"))
+        emojiButton.accessibilityIdentifier = "keyboard.emoji"
+        languageButton.accessibilityIdentifier = "keyboard.mode"
+        languageButton.titleLabel?.font = .systemFont(ofSize: 18, weight: .medium)
+        installUtility(emojiButton) { [weak self] in self?.emojiMode = true }
+        installUtility(languageButton) { [weak self] in self?.onLanguageToggle?() }
+        backButton.symbol("arrow.uturn.backward", label: L("返回字母键盘", "Back to letters"))
+        backButton.accessibilityIdentifier = "keyboard.emoji.back"
+        let emojis = ["😀", "😄", "😂", "🥹", "😊", "😍", "😘", "😎", "🤔", "😅",
+                      "😭", "🥲", "😮", "😴", "😡", "🥳", "👍", "👎", "👏", "🙏",
+                      "👋", "👌", "💪", "❤️", "💔", "🔥", "🎉", "✅", "🌹"]
+        for (index, emoji) in emojis.enumerated() {
+            let button = UtilityKeycapButton(); button.setTitle(emoji, for: .normal)
+            button.titleLabel?.font = .systemFont(ofSize: 21)
+            button.accessibilityIdentifier = "keyboard.emoji.preset.\(index)"
+            installUtility(button) { [weak self] in self?.onEmoji?(emoji) }
+            button.titleHorizontalInset = 0.5
+            emojiButtons.append(button)
+        }
+        installUtility(backButton) { [weak self] in self?.emojiMode = false }
+        updateLanguageButton()
     }
     required init?(coder: NSCoder) { fatalError() }
-    func cancel() { gesture.cancel(); ordinary.removeAll(); onPreview?(""); setNeedsDisplay() }
+    private func installUtility(_ button: UtilityKeycapButton, action: @escaping () -> Void) {
+        addSubview(button); button.isHidden = true; button.isExclusiveTouch = true; button.titleHorizontalInset = 2
+        // A utility tap cannot change mode in the middle of a two-thumb chord.
+        // Sliding onto a utility preserves the last letter endpoint and never
+        // activates that utility; only a fresh tap may invoke it.
+        var beganIn: UUID?
+        button.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            beganIn = self.touchIDs.isEmpty && !self.gesture.active && self.ordinary.isEmpty ? self.utilityGeneration : nil
+            if beganIn != nil { self.feedback.send(.press) }
+        }, for: .touchDown)
+        button.addAction(UIAction { [weak self] _ in
+            defer { beganIn = nil }
+            guard let self, beganIn == self.utilityGeneration, !self.gesture.active, self.touchIDs.isEmpty else { return }
+            action()
+        }, for: .touchUpInside)
+        button.addAction(UIAction { _ in beganIn = nil }, for: [.touchCancel, .touchUpOutside])
+        button.onAccessibilityActivate = { [weak self, weak button] in
+            guard let self, button?.isHidden == false, !self.gesture.active, self.touchIDs.isEmpty else { return false }
+            self.feedback.send(.press); action(); return true
+        }
+    }
+    private func updateLanguageButton() {
+        languageButton.setTitle(englishInput ? "EN" : "中", for: .normal)
+        languageButton.isSelected = englishInput
+        languageButton.accessibilityLabel = englishInput ? L("英文，切换中文", "English; switch to Chinese") : L("中文，切换英文", "Chinese; switch to English")
+    }
+    func showEmoji() { retire(); emojiMode = true }
+
+    private func redraw() {
+        let dimmed = resolvesChords && gesture.active
+        [emojiButton, languageButton].forEach { $0.alpha = dimmed ? 0.3 : 1 }
+        setNeedsDisplay()
+    }
+    func cancel() { utilityGeneration = UUID(); feedback.reset(); gesture.cancel(); ordinary.removeAll(); onPreview?(""); redraw() }
     /// Context loss may never deliver matching touch-up events. Retire old IDs so
     /// late callbacks cannot commit and a fresh keyboard session is not stuck.
-    func retire() { gesture.reset(); touchIDs.removeAll(); ordinary.removeAll(); onPreview?(""); setNeedsDisplay() }
+    func retire() { feedback.reset(); gesture.reset(); touchIDs.removeAll(); ordinary.removeAll(); emojiMode = false; onPreview?(""); redraw() }
     override func layoutSubviews() {
         super.layoutSubviews(); boxes.removeAll()
         let rowHeight = bounds.height / 3
-        if chordMode && !numeric {
-            let w = (bounds.width - 14) / 2
-            for (side, keys) in [profile.leftKeys, profile.rightKeys].enumerated() {
-                let rows = ["qwertyuiop", "asdfghjkl", "zxcvbnm,."].map { row in row.filter { keys.contains($0) }.map(String.init) }
-                for (r, row) in rows.enumerated() {
-                    let columns = CGFloat(max(5, row.count))
-                    for (c, key) in row.enumerated() { boxes.append((key, CGRect(x: CGFloat(side) * (w + 14) + CGFloat(c) * w / columns + 2, y: CGFloat(r) * rowHeight + 3, width: w / columns - 4, height: rowHeight - 6))) }
-                }
+        let utilitiesVisible = hasUtilityCells && !emojiMode
+        emojiButton.isHidden = !utilitiesVisible; languageButton.isHidden = !utilitiesVisible
+        (emojiButtons + [backButton]).forEach { $0.isHidden = !emojiMode }
+        if emojiMode {
+            let unit = bounds.width / 10
+            for (index, button) in (emojiButtons + [backButton]).enumerated() {
+                button.frame = CGRect(x: CGFloat(index % 10) * unit + 2, y: CGFloat(index / 10) * rowHeight + 3, width: unit - 4, height: rowHeight - 6)
             }
         } else {
-            let rows = numeric ? [Array("1234567890"), Array("-/:;()$&@\""), Array(".,?!'[]#%")] : [Array("qwertyuiop"), Array("asdfghjkl"), Array("zxcvbnm,.")]
-            let unit = bounds.width / 10
-            for (r,row) in rows.enumerated() {
-                let inset = (bounds.width - CGFloat(row.count) * unit) / 2
-                for (c,key) in row.enumerated() { boxes.append((String(key), CGRect(x: inset + CGFloat(c) * unit + 2, y: CGFloat(r) * rowHeight + 3, width: unit - 4, height: rowHeight - 6))) }
-            }
+            let geometry = KeyboardGeometry.make(size: bounds.size, profile: profile, chord: chordMode, numeric: numeric, layout: chordLayout)
+            boxes = geometry.keys
+            emojiButton.isHidden = geometry.emoji == nil; languageButton.isHidden = geometry.language == nil
+            emojiButton.frame = geometry.emoji ?? .zero; languageButton.frame = geometry.language ?? .zero
+            emojiButton.compactCap = chordMode && !numeric; languageButton.compactCap = chordMode && !numeric
         }
-        accessibilityElements = boxes.map { key, rect in
-            let item = KeyAccessibility(accessibilityContainer: self); item.accessibilityLabel = key; item.accessibilityTraits = .keyboardKey; item.accessibilityFrameInContainerSpace = rect
-            item.activate = { [weak self] in self?.onKey?(key) }; return item
+        let letters: [Any] = boxes.map { key, rect in
+            let item = KeyAccessibility(accessibilityContainer: self); item.accessibilityLabel = key.uppercased(); item.accessibilityTraits = .keyboardKey; item.accessibilityFrameInContainerSpace = rect
+            item.activate = { [weak self] in guard let self else { return }; self.onTypingPress?(); self.feedback.send(.press); self.onKey?(self.shifted && !self.numeric ? key.uppercased() : key) }; return item
         }
-        setNeedsDisplay()
+        accessibilityElements = letters + ([emojiButton, languageButton] + emojiButtons + [backButton]).filter { !$0.isHidden }
+        redraw()
     }
     override func draw(_ rect: CGRect) {
         let selected = gesture.keys ?? []
+        let eligible = gesture.availableKeys(in: reachable)
         for (key, box) in boxes {
-            let active = key.first.map(selected.contains) ?? false
-            (active ? UIColor.systemTeal : UIColor.secondarySystemGroupedBackground).setFill()
-            UIBezierPath(roundedRect: box, cornerRadius: 7).fill()
-            let value = shifted && !numeric && !chordMode ? key.uppercased() : key
-            let attr: [NSAttributedString.Key: Any] = [.font:UIFont.systemFont(ofSize: 22, weight: .regular), .foregroundColor:active ? UIColor.white : UIColor.label]
+            let active = (key.first.map(selected.contains) ?? false) || ordinary.values.contains(key)
+            let dimmed = resolvesChords && gesture.active && !active && !(key.first.map(eligible.contains) ?? false)
+            let context = UIGraphicsGetCurrentContext()!
+            context.saveGState(); context.setAlpha(dimmed ? 0.30 : 1)
+            let cap = KeycapStyle.capRect(in: box, pressed: active, compact: chordMode && !numeric)
+            KeycapStyle.draw(in: box, pressed: active, compact: chordMode && !numeric)
+            let value = key.uppercased()
+            let font = UIFont.monospacedSystemFont(ofSize: 21, weight: .medium)
+            let fittedFont = font.withSize(min(21, max(1, floor(21 * cap.height / font.lineHeight))))
+            let attr: [NSAttributedString.Key: Any] = [.font: fittedFont, .foregroundColor: active ? UIColor.white : UIColor.label]
             let size = value.size(withAttributes: attr)
-            value.draw(at: CGPoint(x: box.midX - size.width / 2, y: box.midY - size.height / 2), withAttributes: attr)
+            value.draw(at: CGPoint(x: cap.midX - size.width / 2, y: cap.midY - size.height / 2), withAttributes: attr)
+            context.restoreGState()
         }
     }
     private func key(at point: CGPoint) -> String? { boxes.first { $0.1.contains(point) }?.0 }
     private func preview() {
-        if let keys = gesture.keys { onPreview?(profile.canonical(keys).uppercased() + "  →  " + (profile.resolve(keys)?.preview ?? L("无映射", "No mapping"))) }
-        else { onPreview?(gesture.cancelled ? L("已取消", "Cancelled") : L("滑回本区选择字母", "Slide back to a letter")) }
-        setNeedsDisplay()
+        onPreview?(gesture.resolution(in: profile)?.preview ?? "")
+        feedback.send(.selection, combination: gesture.resolution(in: profile)?.keys)
+        redraw()
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !emojiMode else { return }
+        utilityGeneration = UUID()
         for t in touches {
-            let oid = ObjectIdentifier(t); let key = key(at: t.location(in: self))
-            if chordMode && !numeric { nextID += 1; touchIDs[oid] = nextID; gesture.begin(id: nextID, key: key?.first, profile: profile) }
+            // Mapping captions and blank areas never start or poison a chord.
+            guard let key = key(at: t.location(in: self)) else { continue }
+            let oid = ObjectIdentifier(t)
+            onTypingPress?(); feedback.send(.press)
+            if resolvesChords {
+                nextID += 1; touchIDs[oid] = nextID; gesture.begin(id: nextID, key: key.first, profile: profile)
+            }
             else { ordinary[oid] = key }
         }
-        if chordMode && !numeric { preview() }
+        if resolvesChords { preview() }; redraw()
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard chordMode && !numeric else { return }
+        guard resolvesChords else { return }
         for t in touches { if let id = touchIDs[ObjectIdentifier(t)] { gesture.move(id: id, key: key(at: t.location(in: self))?.first, profile: profile) } }
         preview()
     }
@@ -85,16 +168,36 @@ final class KeySurface: UIView {
             let oid = ObjectIdentifier(t), key = key(at: t.location(in: self))
             if let id = touchIDs.removeValue(forKey: oid) {
                 let result = gesture.end(id: id, key: key?.first, profile: profile)
-                if !gesture.active { onPreview?(""); onChord?(result) }
+                if !gesture.active { if result != nil { feedback.send(.commit) }; feedback.reset(); onChord?(result); onPreview?("") }
             } else if let original = ordinary.removeValue(forKey: oid), key == original { onKey?(shifted && !numeric ? original.uppercased() : original) }
         }
-        setNeedsDisplay()
+        redraw()
     }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         gesture.cancel()
         for t in touches { let oid = ObjectIdentifier(t); if let id = touchIDs.removeValue(forKey: oid) { _ = gesture.end(id: id, key: nil, profile: profile) }; ordinary.removeValue(forKey: oid) }
-        onPreview?(""); setNeedsDisplay()
+        onPreview?(""); redraw()
     }
+    #if DEBUG
+    var developmentKeyFrames: [String: CGRect] {
+        var frames = Dictionary(uniqueKeysWithValues: boxes)
+        if !emojiButton.isHidden { frames["emoji"] = emojiButton.frame; frames["mode"] = languageButton.frame }
+        return frames
+    }
+    func developmentKey(at point: CGPoint) -> String? { key(at: point) }
+    func developmentPress(_ start: Character, end: Character, id: Int = 900) {
+        gesture.begin(id: id, key: start, profile: profile)
+        gesture.move(id: id, key: end, profile: profile); preview()
+    }
+    func developmentMove(_ key: Character?, id: Int = 900) {
+        gesture.move(id: id, key: key, profile: profile); preview()
+    }
+    #endif
+
+}
+private final class UtilityKeycapButton: KeycapButton {
+    var onAccessibilityActivate: (() -> Bool)?
+    override func accessibilityActivate() -> Bool { onAccessibilityActivate?() ?? false }
 }
 private final class KeyAccessibility: UIAccessibilityElement {
     var activate: (() -> Void)?

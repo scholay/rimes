@@ -24,6 +24,8 @@ public struct ChordProfile: Codable, Identifiable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         formatVersion = try c.decode(Int.self, forKey: .formatVersion)
         id = try c.decode(String.self, forKey: .id); name = try c.decode(String.self, forKey: .name)
+        // Keep the persisted identity for existing selections, while migrating its public name.
+        if id == "builtin.flyyao" { name = "默认并击" }
         leftKeys = try c.decode(String.self, forKey: .leftKeys); rightKeys = try c.decode(String.self, forKey: .rightKeys)
         mappings = try c.decode([ChordEntry].self, forKey: .mappings)
         boundaryPolicy = try c.decodeIfPresent(ChordBoundaryPolicy.self, forKey: .boundaryPolicy) ?? .explicitSyllables
@@ -113,25 +115,84 @@ public struct ChordGesture {
     private struct Contact { let hand: Hand; let start: Character; var end: Character?; var released = false }
     private var contacts: [Int: Contact] = [:]
     private var down = Set<Int>()
+    // Explicit directional shortcuts, separate from unordered two-hand mappings.
+    private static let slides = [("ty", "ting"), ("tyu", "tu"), ("gh", "gang"),
+                                 ("ghj", "gan"), ("bn", "bin"), ("bnm", "bian"),
+                                 ("bh", "bang"), ("th", "tang"), ("gy", "guai")]
+    private var slide: (path: String, pinyin: String)?
+    public func resolution(in profile: ChordProfile) -> ChordResolution? {
+        if let slide, !cancelled {
+            let entry = ChordEntry(keys: slide.path, output: slide.pinyin, kind: .syllable)
+            guard let code = profile.encoded(entry) else { return nil }
+            return .init(keys: slide.path, preview: slide.pinyin,
+                         input: code + (profile.outputEncoding == .fullPinyin ? "'" : ""))
+        }
+        return keys.flatMap(profile.resolve)
+    }
     public private(set) var cancelled = false
     public init() {}
     public var active: Bool { !down.isEmpty }
     public var keys: Set<Character>? {
         guard !cancelled, !contacts.isEmpty else { return nil }
+        if let slide { return Set(slide.path) }
         var result = Set<Character>()
         for c in contacts.values { guard let end = c.end else { return nil }; result.insert(c.start); result.insert(end) }
         return result
     }
+    /// Endpoints reachable from immutable starts; released hands stay frozen.
+    public func availableKeys(in index: ChordReachability) -> Set<Character> {
+        guard active, !cancelled else { return active ? [] : index.allKeys }
+        var available = Set<Character>()
+        if index.supportsDirectionalSlides, contacts.count == 1, let contact = contacts.values.first, !contact.released {
+            for (path, _) in Self.slides where path.first == contact.start {
+                available.formUnion(path)
+            }
+        }
+        for keys in index.combinations {
+            var valid = true
+            for contact in contacts.values {
+                let side = keys.intersection(index.keys(for: contact.hand))
+                if !side.contains(contact.start) { valid = false; break }
+                if contact.released && side != Set([contact.start, contact.end].compactMap { $0 }) { valid = false; break }
+            }
+            if valid { available.formUnion(keys) }
+        }
+        return available
+    }
     public mutating func begin(id: Int, key: Character?, profile: ChordProfile) {
         if down.isEmpty { reset() }
         down.insert(id)
+        if slide != nil { cancel(); return }
         guard !cancelled, let key, let hand = profile.hand(for: key), contacts.values.allSatisfy({ $0.hand != hand }) else { cancel(); return }
         contacts[id] = Contact(hand: hand, start: key, end: key)
     }
     public mutating func move(id: Int, key: Character?, profile: ChordProfile) {
         guard !cancelled, var c = contacts[id], !c.released else { return }
-        c.end = key.flatMap { profile.hand(for: $0) == c.hand ? $0 : nil }
+        if profile.id == "builtin.flyyao", contacts.count == 1, let key {
+            if key == c.start { slide = nil }
+            else if let route = Self.slides.first(where: { $0.0.first == c.start && $0.0.last == key }) {
+                // The intermediate key is known from the row: fast movement may
+                // skip its touch sample, but still traverses that same route.
+                slide = (route.0, route.1); return
+            } else if slide != nil { return }
+        }
+        // Empty space (including the other hand's region) is not a new endpoint.
+        // Keep the last endpoint until this finger reaches another key of its hand.
+        guard let key, profile.hand(for: key) == c.hand else { return }
+        let previous = c
+        let previousKeys = keys
+        c.end = key
         contacts[id] = c
+        // Returning to the start explicitly collapses this hand to a single key.
+        // Otherwise an unmapped endpoint cannot erase an already valid chord.
+        let previousHand = Set([previous.start, previous.end].compactMap { $0 })
+        let nextHand = Set([c.start, key])
+        let hadCombination = previousKeys.map { $0.count > 1 && profile.resolve($0) != nil } == true
+        let hadHandCombination = previousHand.count > 1 && profile.resolve(previousHand) != nil
+        if key != c.start, keys.flatMap(profile.resolve) == nil,
+           hadCombination || (hadHandCombination && profile.resolve(nextHand) == nil) {
+            contacts[id] = previous
+        }
     }
     public mutating func end(id: Int, key: Character?, profile: ChordProfile) -> ChordResolution? {
         guard down.contains(id) else { return nil }
@@ -140,10 +201,37 @@ public struct ChordGesture {
         contacts[id]?.released = true
         down.remove(id)
         guard down.isEmpty else { return nil }
-        let resolution = keys.flatMap(profile.resolve)
+        let resolution = resolution(in: profile)
         reset()
         return resolution
     }
     public mutating func cancel() { cancelled = true }
-    public mutating func reset() { contacts.removeAll(); down.removeAll(); cancelled = false }
+    public mutating func reset() { contacts.removeAll(); down.removeAll(); slide = nil; cancelled = false }
+}
+
+/// Compile once per profile, never scan all mappings on every drawing frame.
+public struct ChordReachability {
+    let supportsDirectionalSlides: Bool
+    public let allKeys: Set<Character>
+    public let combinations: [Set<Character>]
+    private let left: Set<Character>, right: Set<Character>
+    public func keys(for hand: Hand) -> Set<Character> { hand == .left ? left : right }
+    public init(profile: ChordProfile) {
+        supportsDirectionalSlides = profile.id == "builtin.flyyao"
+        left = Set(profile.leftKeys); right = Set(profile.rightKeys); allKeys = left.union(right)
+        var sets = Set<Set<Character>>(allKeys.map { Set([$0]) })
+        for entry in profile.mappings where profile.encoded(entry) != nil { sets.insert(Set(entry.keys)) }
+        func fragments(_ side: Set<Character>) -> [(Set<Character>, String)] {
+            var values = side.map { (Set([$0]), String($0)) }
+            values += profile.mappings.filter { $0.kind == .fragment && Set($0.keys).isSubset(of: side) }.map { (Set($0.keys), $0.output) }
+            return values
+        }
+        for (l, a) in fragments(left) {
+            for (r, b) in fragments(right) where ZiranmaShuangpin.syllables.contains(a + b) {
+                let set = l.union(r)
+                if profile.resolve(set) != nil { sets.insert(set) }
+            }
+        }
+        combinations = Array(sets)
+    }
 }

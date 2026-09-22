@@ -1,6 +1,6 @@
 # iOS resource and dependency inventory
 
-Checked 2026-09-21. Exact commits and download SHA-256 values are in
+Checked 2026-09-22. Exact commits and download SHA-256 values are in
 `dependencies.lock.json`. Full license texts are in `Licenses/` and are displayed
 by the containing app through `Resources/THIRD_PARTY.txt`.
 
@@ -15,10 +15,10 @@ by the containing app through `Resources/THIRD_PARTY.txt`.
 | OpenCC RapidJSON headers | `deps/rapidjson-1.1.0` at the pinned OpenCC revision | Source unmodified | Upstream MIT/Tencent license and third-party statements retained in the included license file |
 | Boost headers | [Boost 1.86.0](https://archives.boost.io/release/1.86.0/source/) | Headers used by librime, no Boost runtime downloaded at launch | Boost Software License 1.0; included license |
 | Simplified Pinyin dictionary | [rime-pinyin-simp](https://github.com/rime/rime-pinyin-simp/tree/0c6861ef7420ee780270ca6d993d18d4101049d0) | Dictionary source unchanged; compiled into table/prism assets | Apache-2.0; original source metadata and license retained |
-| Wubi 86 dictionary | [rime-wubi](https://github.com/rime/rime-wubi/tree/152a0d3f3efe40cae216d1e3b338242446848d07) | Dictionary bytes match pinned source; compiled into table/prism assets | LGPL-3.0. License/GPL texts and pinned source provided. Underlying table provenance and store distribution obligations remain **pending**; including notices alone does not clear this gate |
-| FlyYao map | Repository `chord-keymaps/Isaac2025.json` at `20651da` | 426 mappings unchanged; iOS ID/name and default full-Pinyin metadata applied | Origin/redistribution evidence **pending**; do not infer authorization from repository MIT license |
+| Wubi 86 dictionary | [rime-wubi](https://github.com/rime/rime-wubi/tree/152a0d3f3efe40cae216d1e3b338242446848d07) | Dictionary bytes match pinned source; compiled into table/prism assets | LGPL-3.0; full license texts, unchanged corresponding source, attribution and source URL bundled. See AppStore/RESOURCE_CLEARANCE.md for distribution basis. |
+| FlyYao map | Repository `chord-keymaps/Isaac2025.json` at `20651da` | 426 mappings unchanged; iOS ID/name and default full-Pinyin metadata applied | Publisher-declared functional mapping example; public name Default chord. Source provenance retained. This is not an upstream license grant or an independently verified patent clearance; see AppStore/RESOURCE_CLEARANCE.md. |
 | iOS schemas and Ziranma algebra | RIMES original schemas; portable encoding algorithm copied from this repository | Minimal schemas use only built-in Rime processors; no desktop schema chain, Lua, prediction or language model | Repository MIT; generated schema headers identify RIMES authorship; parity check protects desktop encoding behavior |
-| App icon | Original RIMES lettermark generated for this implementation | Teal background and original text treatment | Repository MIT; no external artwork |
+| App icon | Generated from the owner's existing Scholay Rhino 2D reference assets, at their request | Flat black monoline rhino and backwards cap on white; 1024-square opaque PNG | Owner-provided character reference; generated with built-in image_gen. Prompt and provenance in `AppStore/icon/monoline/`; model version not exposed by tool |
 
 XcodeGen 2.46.0 is a checksum-pinned build tool and is not shipped in the app.
 CMake, Git, Python and the Apple toolchain are host tools. OpenCC's test frameworks,

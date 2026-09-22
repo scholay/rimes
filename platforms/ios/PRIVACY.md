@@ -1,4 +1,10 @@
-# Privacy disclosure draft — RIMES iOS 0.1
+# Privacy disclosure — RIMES iOS 0.1
+
+Effective 22 September 2026. Publisher: Haiyang Cui.
+Published policy: <https://scholay.github.io/rimes/ios/privacy/>.
+Support and privacy contact: <https://scholay.github.io/rimes/ios/support/>
+and the linked project issue tracker. Do not include credentials or private typing
+in public issues. The website contains the complete bilingual public policy.
 
 ## 中文
 
@@ -37,15 +43,28 @@ sending consent, or disable Full Access while continuing offline typing and Buff
 Uninstalling does not guarantee Keychain deletion; delete configured providers first
 and revoke the key at the provider when needed.
 
-## Before publication
+## App Store disclosure recorded on 22 September 2026
 
-Replace this section with the actual publisher identity, privacy/support contact,
-public policy URL and effective date before distribution. No contact details have
-been invented or published by this implementation.
+The App Store Connect privacy answers are published for app `6814620242`. They
+disclose **Other User Content** and **User ID**, used for app functionality, linked
+to the user and not used for tracking. This conservatively covers optional BYOK
+requests: the selected text is transmitted, and the provider credential identifies
+an API account. Build 8's privacy manifest declares the same two types.
 
-App Store privacy questionnaire must disclose the optional third-party transmission
-of user content for app functionality. The checked-in manifest conservatively marks
-Other User Content as potentially linked (provider credentials can identify an API
-account), not used for tracking. Do not advertise the AI mode as "no data leaves the
-device" or universally "not linked". Recheck disclosures against the actual provider
-integration and current Apple requirements before submission.
+Ordinary local typing does not create a collection event. Do not advertise the AI
+mode as "no data leaves the device" or universally "not linked". Policy URLs are
+saved for English, Simplified Chinese and Traditional Chinese. Published privacy
+answers do not mean that the app has been submitted, approved or released.
+
+## Build 2 local translation and preferences
+
+The keyboard stores its last selected input scheme, haptics preference and language
+pair in its own preferences container. Buffer text and plugin results remain in
+memory and are cleared when the keyboard session ends. These preferences do not
+require Full Access or contain API keys or typed text.
+
+Apple translation uses downloaded on-device language models through Translation.
+The containing app offers the system model-download flow, which can require a
+network connection. The keyboard does not fall back to an external AI endpoint
+when local translation is unavailable. Existing explicitly selected AI providers
+retain their separate recipient consent and Keychain behavior.

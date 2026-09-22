@@ -6,5 +6,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSDictionary *)processKey:(int32_t)key;
 - (NSDictionary *)selectCandidate:(NSUInteger)index;
 - (void)clear;
+@property(nonatomic, readonly) NSString *rawInput;
+@property(nonatomic, readonly) NSUInteger inputCaret;
 @end
 NS_ASSUME_NONNULL_END

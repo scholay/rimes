@@ -58,4 +58,9 @@
 }
 - (NSDictionary *)selectCandidate:(NSUInteger)index { rime_get_api()->select_candidate(_session, index); return [self snapshot]; }
 - (void)clear { if (_session) rime_get_api()->clear_composition(_session); }
+- (NSString *)rawInput {
+    const char *input = rime_get_api()->get_input(_session);
+    return input ? ([NSString stringWithUTF8String:input] ?: @"") : @"";
+}
+- (NSUInteger)inputCaret { return rime_get_api()->get_caret_pos(_session); }
 @end

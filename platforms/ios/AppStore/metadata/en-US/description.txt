@@ -1,0 +1,20 @@
+RIMES brings Chinese input, slide chords and a writing Buffer to your iPhone.
+
+CHOOSE HOW YOU TYPE
+Use Pinyin, Ziranma double Pinyin, Wubi 86 or English. Your last input scheme is remembered. Switch Simplified and Traditional Chinese, and use the built-in emoji palette.
+
+SLIDE CHORDS
+Combine a starting key and an endpoint with each thumb. Available combinations stay clear while other keys fade. Release both thumbs to enter the resolved combination. Copy or import JSON mappings to adapt your layout.
+
+A BUFFER FOR YOUR WORDS
+Compose in a local Buffer before inserting text into your app. Tap to insert the next block, or hold for one second to insert everything remaining. Unconfirmed composition appears at the cursor instead of occupying another keyboard row.
+
+OPTIONAL TRANSLATION AND AI
+On iOS 26 or later, Apple on-device translation can preview confirmed Buffer text after a brief pause. Prepare the required languages in the RIMES app first. Availability depends on supported languages and downloaded models.
+
+You can also configure your own HTTPS AI provider and API key for translation, polishing and rewriting. These optional requests send only the Buffer text you explicitly submit after granting recipient consent. Third-party providers may require their own account or payment.
+
+LOCAL EVERYDAY INPUT
+Ordinary typing and Buffer editing work offline without Full Access, an account or a subscription. No ads or keyboard-text telemetry. Optional provider-based AI requires Full Access. The app explains how to enable the keyboard in Settings; secure fields and apps that disallow third-party keyboards use the system keyboard.
+
+Requires an iPhone running iOS 17 or later. Haptics depend on device and system settings.

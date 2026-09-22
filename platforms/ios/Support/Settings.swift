@@ -6,7 +6,15 @@ func L(_ zh: String, _ en: String) -> String { Locale.preferredLanguages.first?.
 
 struct AppConfiguration: Codable {
     var scheme: InputScheme = .pinyin
+    var schemeSelectionRevision: UUID?
     var chord = ChordProfile.builtIn
+    /// Keep the persisted mapping format intact; the default keyboard uses the
+    /// same pinyin-to-Ziranma encoding layer as desktop Ziranma chord profiles.
+    var keyboardChord: ChordProfile {
+        var profile = chord
+        if profile.id == ChordProfile.builtIn.id { profile.outputEncoding = .ziranma }
+        return profile
+    }
     var profiles: [ChordProfile] = []
     var providers: [ProviderConfiguration] = []
     var selectedProvider: UUID?
@@ -25,8 +33,8 @@ final class ConfigurationStore: ConfigurationStorage {
     func load() -> AppConfiguration {
         guard let data = try? Data(contentsOf: file), data.count < 8 * 1024 * 1024,
               var value = try? JSONDecoder().decode(AppConfiguration.self, from: data),
-              let active = try? value.chord.validated(), value.providers.count <= 32, value.profiles.count <= 128 else { return AppConfiguration() }
-        value.chord = active
+              value.providers.count <= 32, value.profiles.count <= 128 else { return AppConfiguration() }
+        value.chord = (try? value.chord.validated()) ?? .builtIn
         value.profiles = value.profiles.compactMap { try? $0.validated() }
         return value
     }
@@ -64,5 +72,18 @@ final class KeychainStore: ProviderSecretStore {
     func delete(_ id: UUID) throws {
         let status = SecItemDelete(query(id) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+    }
+}
+
+final class KeyboardPreferenceStore {
+    private let defaults: UserDefaults
+    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    func load() -> KeyboardPreferences {
+        guard let data = defaults.data(forKey: "keyboard-preferences-v1"),
+              let value = try? JSONDecoder().decode(KeyboardPreferences.self, from: data) else { return .init() }
+        return value
+    }
+    func save(_ value: KeyboardPreferences) {
+        if let data = try? JSONEncoder().encode(value) { defaults.set(data, forKey: "keyboard-preferences-v1") }
     }
 }
