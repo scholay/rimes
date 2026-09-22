@@ -603,8 +603,11 @@ jobs:
             mailbox-store-smoke
             mailbox-window-smoke
             capsule-window-smoke
+            capsule-rail-smoke
+            capsule-interaction-smoke
             capture-smoke
             capture-permission-smoke
+            window-chrome-smoke
             capsule-sync-smoke
             plugin-smoke
             plugin-stream-smoke

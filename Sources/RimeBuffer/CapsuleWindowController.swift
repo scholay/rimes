@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import AVFoundation
 import CoreGraphics
 import CryptoKit
@@ -52,6 +53,8 @@ enum CapsuleWindowSelectionRules {
 }
 
 enum CapsuleWindowGeometry {
+    static let detailContentSize = NSSize(width: 460, height: 400)
+    static let detailMinimumSize = NSSize(width: 360, height: 300)
     static let defaultContentSize = NSSize(width: 940, height: 660)
     static let minimumContentSize = NSSize(width: 620, height: 430)
     static let screenInset: CGFloat = 12
@@ -65,6 +68,7 @@ enum CapsuleWindowGeometry {
     ) {
         window.contentViewController = contentController
         window.contentView?.autoresizingMask = []
+        RoundedWindowChrome.apply(to: window)
     }
 
     static func constrainedFrame(
@@ -977,6 +981,25 @@ final class CapsuleWindowRepository {
         }.joined()
     }
 
+    /// Encrypt first, then conditionally remove the exact source revision.
+    /// On a concurrent edit, keep the note and roll back only our new record.
+    func moveNoteToPassword(_ row: CapsuleWindowEntryRow) throws -> CapsuleWindowEntryRow {
+        guard row.kind == .note else { throw CapsuleWindowRepositoryError.staleRecord }
+        let source = try draft(for: row)
+        guard source.loadedRevision == row.revision else {
+            throw CapsuleWindowRepositoryError.staleRecord
+        }
+        let destination = try save(CapsuleWindowDraft(kind: .password,
+                                                     title: source.title, content: source.content))
+        do {
+            try remove(row, expectedRevision: row.revision)
+            return destination
+        } catch {
+            try? remove(destination, expectedRevision: destination.revision)
+            throw error
+        }
+    }
+
     private func publishChange() {
         let publish = { [self] in
             NotificationCenter.default.post(
@@ -1045,10 +1068,11 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
         return action
     }
 
-    func show() {
+    func show(compact: Bool = false) {
         // Capsule is a standalone AppKit manager. It has no IMK client or
         // delivery authority, so the selected input source must not gate it.
         if window == nil { build() }
+        contentController?.setCompactDetail(compact)
         if window?.isVisible == true {
             clampWindowToVisibleScreens(display: false)
         } else {
@@ -1086,13 +1110,13 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
 
     /// Opens the manager on a new, unsaved entry prefilled from the rail.
     func show(draftKind kind: CapsuleEntryKind, title: String, content: String) {
-        show()
+        show(compact: true)
         contentController?.beginDraft(kind: kind, title: title, content: content)
     }
 
-    /// Opens the manager on one entry, as the rail's edit brush asks.
+    /// Opens a compact detail form on the entry chosen in a card's menu.
     func show(revealing kind: CapsuleEntryKind, id: UUID) {
-        show()
+        show(compact: true)
         contentController?.reveal(kind: kind, id: id)
     }
 
@@ -1140,7 +1164,6 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.contentMinSize = CapsuleWindowGeometry.minimumContentSize
         window.appearance = RimeUI.appKitAppearance
-        window.backgroundColor = RimeUI.workbenchChrome
         window.animationBehavior = .documentWindow
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.delegate = self
@@ -1183,8 +1206,9 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
         } ?? NSScreen.main
         let visible = screen?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
-        let minimum = CapsuleWindowGeometry.minimumContentSize
-        let preferred = CapsuleWindowGeometry.defaultContentSize
+        let compact = contentController?.isCompactDetail == true
+        let minimum = compact ? CapsuleWindowGeometry.detailMinimumSize : CapsuleWindowGeometry.minimumContentSize
+        let preferred = compact ? CapsuleWindowGeometry.detailContentSize : CapsuleWindowGeometry.defaultContentSize
         let width = min(preferred.width, max(minimum.width, visible.width - 32))
         let height = min(preferred.height, max(minimum.height, visible.height - 48))
         let content = NSRect(
@@ -1210,7 +1234,7 @@ final class CapsuleWindowController: NSObject, NSWindowDelegate {
 
     private func applyAppearance() {
         window?.appearance = RimeUI.appKitAppearance
-        window?.backgroundColor = RimeUI.workbenchChrome
+        if let window { RoundedWindowChrome.apply(to: window) }
         contentController?.applyAppearance()
     }
 }
@@ -1228,6 +1252,7 @@ final class CapsulePaneViewController: NSViewController,
 
     private let repository: CapsuleWindowRepository
     private let cloudSyncController: CapsuleCloudSyncController?
+    private let revealPasscodeStore: CapsuleRevealPasscodeStore
     private let mediaPreviewLoader = CapsuleMediaPreviewLoader.shared
     private let fileCopyQueue = DispatchQueue(
         label: "RIMES.CapsuleWindow.file-copy",
@@ -1249,6 +1274,10 @@ final class CapsulePaneViewController: NSViewController,
     private let hintLabel = NSTextField(labelWithString: "⌘S SAVE   ESC BACK TO RAIL")
     private weak var headerStack: NSStackView?
     private weak var toolbarStack: NSStackView?
+    private weak var listDivider: NSView?
+    private var libraryLayout: [NSLayoutConstraint] = []
+    private var detailLayout: [NSLayoutConstraint] = []
+    private(set) var isCompactDetail = false
     private let syncStatusLabel = NSTextField(labelWithString: "iCloud 未设置")
     private let syncNowButton = RimePointingHandButton(
         title: "立即同步",
@@ -1300,9 +1329,12 @@ final class CapsulePaneViewController: NSViewController,
     private weak var fileCopyButton: NSButton?
     private weak var editorActions: NSStackView?
     private var passwordSecretTextView: NSTextView?
+    private var inlinePasswordChallenge: CapsuleInlinePasscodeView?
+    private var newPasswordEditable = true
     private var previousPasswordFields: [NSTextField] = []
     private var passwordRevealButton: NSButton?
     private var passwordRevealState = CapsulePasswordRevealState()
+    var passwordClipboardWriter: (String) -> Bool = { CapsulePasswordClipboard.write($0) }
     private var passwordRevealTimer: Timer?
     private var passwordChallengeGeneration: UInt64 = 0
     private var passwordChallengeController:
@@ -1323,10 +1355,12 @@ final class CapsulePaneViewController: NSViewController,
 
     init(
         repository: CapsuleWindowRepository = CapsuleWindowRepository(),
-        cloudSyncController: CapsuleCloudSyncController? = .shared
+        cloudSyncController: CapsuleCloudSyncController? = .shared,
+        revealPasscodeStore: CapsuleRevealPasscodeStore = .shared
     ) {
         self.repository = repository
         self.cloudSyncController = cloudSyncController
+        self.revealPasscodeStore = revealPasscodeStore
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -1475,6 +1509,7 @@ final class CapsulePaneViewController: NSViewController,
         listScrollView.translatesAutoresizingMaskIntoConstraints = false
         listContainer.wantsLayer = true
         listContainer.layer?.cornerRadius = 6
+        listContainer.layer?.masksToBounds = true
         listContainer.layer?.borderWidth = 1
         listContainer.translatesAutoresizingMaskIntoConstraints = false
         listContainer.addSubview(listScrollView)
@@ -1491,6 +1526,7 @@ final class CapsulePaneViewController: NSViewController,
         divider.wantsLayer = true
         divider.translatesAutoresizingMaskIntoConstraints = false
         divider.identifier = NSUserInterfaceItemIdentifier("capsule-divider")
+        listDivider = divider
 
         header.translatesAutoresizingMaskIntoConstraints = false
         toolbar.translatesAutoresizingMaskIntoConstraints = false
@@ -1502,7 +1538,7 @@ final class CapsulePaneViewController: NSViewController,
         root.addSubview(divider)
         root.addSubview(editorContainer)
         root.addSubview(hintLabel)
-        NSLayoutConstraint.activate([
+        libraryLayout = [
             header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
             header.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
@@ -1532,13 +1568,24 @@ final class CapsulePaneViewController: NSViewController,
             hintLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             hintLabel.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -14),
             hintLabel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
-        ])
+        ]
         let preferredListWidth = listContainer.widthAnchor.constraint(
             equalTo: root.widthAnchor,
             multiplier: 0.31
         )
         preferredListWidth.priority = .defaultHigh
-        preferredListWidth.isActive = true
+        libraryLayout.append(preferredListWidth)
+        NSLayoutConstraint.activate(libraryLayout)
+        detailLayout = [
+            header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
+            header.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
+            header.heightAnchor.constraint(equalToConstant: 28),
+            editorContainer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            editorContainer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            editorContainer.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
+            editorContainer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
+        ]
 
         view = root
         renderCloudSyncStatus()
@@ -1595,7 +1642,7 @@ final class CapsulePaneViewController: NSViewController,
         // enough width is available.
         let hidesInlineSyncStatus = view.bounds.width < 760
         let shouldHideSyncStatus = cloudSyncController == nil
-            || hidesInlineSyncStatus
+            || hidesInlineSyncStatus || isCompactDetail
         if syncStatusLabel.isHidden != shouldHideSyncStatus {
             syncStatusLabel.isHidden = shouldHideSyncStatus
         }
@@ -1626,9 +1673,10 @@ final class CapsulePaneViewController: NSViewController,
         searchField.stringValue = ""
         cancelPendingReload()
         draft = CapsuleWindowDraft(kind: kind, title: title, content: content)
+        newPasswordEditable = true
         editorDirty = true
         renderEditor()
-        reloadFromStore()
+        scheduleReload(after: 0)
     }
 
     /// Switches to `kind` and selects entry `id` once the list reloads. An
@@ -1652,7 +1700,30 @@ final class CapsulePaneViewController: NSViewController,
     }
 
     func windowBecameKey() {
-        view.window?.makeFirstResponder(searchField)
+        if isCompactDetail {
+            if let inlinePasswordChallenge { inlinePasswordChallenge.focus() }
+            else { view.window?.makeFirstResponder(titleField) }
+        } else { view.window?.makeFirstResponder(searchField) }
+    }
+
+    func setCompactDetail(_ compact: Bool) {
+        _ = view
+        guard compact != isCompactDetail else { return }
+        isCompactDetail = compact
+        NSLayoutConstraint.deactivate(compact ? libraryLayout : detailLayout)
+        NSLayoutConstraint.activate(compact ? detailLayout : libraryLayout)
+        [countLabel, tabStrip, syncStatusLabel, syncNowButton, syncManageButton,
+         listContainer, hintLabel].forEach { $0.isHidden = compact }
+        toolbarStack?.isHidden = compact
+        listDivider?.isHidden = compact
+        editorContainer.layer?.borderWidth = compact ? 0 : 1
+        deleteButton.isHidden = compact
+        statusLabel.isHidden = compact
+        if let window = view.window {
+            window.contentMinSize = compact ? CapsuleWindowGeometry.detailMinimumSize : CapsuleWindowGeometry.minimumContentSize
+            window.setContentSize(compact ? CapsuleWindowGeometry.detailContentSize : CapsuleWindowGeometry.defaultContentSize)
+        }
+        renderEditor()
     }
 
     var hasUnsavedChanges: Bool { editorDirty }
@@ -1667,10 +1738,13 @@ final class CapsulePaneViewController: NSViewController,
         passwordChallengeGeneration &+= 1
         passwordChallengeController?.cancel()
         passwordChallengeController = nil
+        inlinePasswordChallenge?.reset()
         passwordRevealTimer?.invalidate()
         passwordRevealTimer = nil
-        guard passwordRevealState.isPlaintextVisible else { return }
+        let wasCreating = newPasswordEditable && draft.kind == .password && draft.id == nil
+        guard passwordRevealState.isPlaintextVisible || wasCreating else { return }
         captureDraftFromFields()
+        newPasswordEditable = false
         passwordRevealState.conceal()
         renderEditor()
     }
@@ -1751,9 +1825,9 @@ final class CapsulePaneViewController: NSViewController,
             return
         }
         let status = cloudSyncController.status
-        syncStatusLabel.isHidden = view.bounds.width < 760
-        syncNowButton.isHidden = false
-        syncManageButton.isHidden = false
+        syncStatusLabel.isHidden = isCompactDetail || view.bounds.width < 760
+        syncNowButton.isHidden = isCompactDetail
+        syncManageButton.isHidden = isCompactDetail
         switch status.phase {
         case .unconfigured:
             syncStatusLabel.stringValue = "iCloud 未设置"
@@ -1904,6 +1978,7 @@ final class CapsulePaneViewController: NSViewController,
         selectedKind = kind
         tabStrip.select(.saved(kind))
         draft = .empty(kind: kind)
+        newPasswordEditable = false
         editorDirty = false
         renderEditor()
 
@@ -2084,6 +2159,7 @@ final class CapsulePaneViewController: NSViewController,
         tabStrip.select(.saved(.password))
         draft = .empty(kind: .password)
         draft.content = "- 示例：值"
+        newPasswordEditable = false
         editorDirty = false
         passwordRevealState.conceal()
         if plaintextVisible {
@@ -2298,6 +2374,7 @@ final class CapsulePaneViewController: NSViewController,
     private func configureEditor() {
         editorContainer.wantsLayer = true
         editorContainer.layer?.cornerRadius = 6
+        editorContainer.layer?.masksToBounds = true
         editorContainer.layer?.borderWidth = 1
 
         formStack.orientation = .vertical
@@ -2343,7 +2420,9 @@ final class CapsulePaneViewController: NSViewController,
             ofSize: 10,
             weight: .semibold
         )
-        let actions = NSStackView(views: [statusLabel, deleteButton, saveButton])
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(rawValue: 1), for: .horizontal)
+        let actions = NSStackView(views: [statusLabel, spacer, deleteButton, saveButton])
         actions.orientation = .horizontal
         actions.alignment = .centerY
         actions.spacing = 8
@@ -2366,6 +2445,11 @@ final class CapsulePaneViewController: NSViewController,
 
     private func renderEditor(scrollToTop: Bool = true) {
         guard isViewLoaded else { return }
+        // Callers capture the draft before rebuilding. Scrub the detached
+        // secret control as well, including AppKit's undo storage.
+        passwordSecretTextView?.delegate = nil
+        passwordSecretTextView?.undoManager?.removeAllActions()
+        passwordSecretTextView?.string = ""
         mediaPreviewOperation?.cancel()
         mediaPreviewOperation = nil
         mediaPreviewGeneration &+= 1
@@ -2386,19 +2470,22 @@ final class CapsulePaneViewController: NSViewController,
         formBottomSpacer = nil
         fileCopyButton = nil
         passwordSecretTextView = nil
+        inlinePasswordChallenge?.reset()
+        inlinePasswordChallenge = nil
         previousPasswordFields = []
         passwordRevealButton = nil
 
-        let mode = draft.id == nil ? "NEW" : "EDIT"
+        let mode = draft.id == nil ? "新建" : "编辑"
+        titleLabel.stringValue = isCompactDetail ? "\(mode)\(draft.kind.tabLabel)" : "Capsule"
         let heading = NSTextField(
-            labelWithString: "// \(mode) \(draft.kind.displayName.uppercased())"
+            labelWithString: "\(mode)\(draft.kind.tabLabel)"
         )
         heading.font = MailboxTerminalTypography.font(
             ofSize: 10,
             weight: .semibold
         )
         heading.textColor = RimeUI.accentTextColor
-        if draft.kind == .password {
+        if draft.kind == .password && !(draft.id == nil && newPasswordEditable) {
             let revealButton = RimePointingHandButton(
                 title: passwordRevealState.isPlaintextVisible
                     ? "隐藏明文"
@@ -2427,9 +2514,18 @@ final class CapsulePaneViewController: NSViewController,
             headingRow.orientation = .horizontal
             headingRow.alignment = .centerY
             headingRow.spacing = 8
-            addFormRow(headingRow)
+            if passwordRevealState.isPlaintextVisible {
+                let copy = RimePointingHandButton(title: "复制", target: self, action: #selector(copyPasswordPlaintext))
+                copy.image = RimeUI.symbol("doc.on.doc", pointSize: 12, weight: .regular)
+                copy.imagePosition = .imageLeading
+                copy.bezelStyle = .inline
+                copy.identifier = NSUserInterfaceItemIdentifier("capsule-password-detail-copy")
+                copy.setAccessibilityLabel("复制密码内容")
+                headingRow.addArrangedSubview(copy)
+                addFormRow(headingRow)
+            }
         } else {
-            addFormRow(heading)
+            if !isCompactDetail { addFormRow(heading) }
         }
 
         let title = NSTextField(string: draft.title)
@@ -2438,14 +2534,14 @@ final class CapsulePaneViewController: NSViewController,
         title.setAccessibilityLabel("标题")
         title.delegate = self
         titleField = title
-        titleFormRow = addField(label: "TITLE", field: title)
+        titleFormRow = addField(label: "标题", field: title)
 
         switch draft.kind {
         case .note:
             let textView = makeContentTextView(text: draft.content)
             contentTextView = textView
             firstDetailFormRow = addTextArea(
-                label: "NOTE · MARKDOWN",
+                label: "内容",
                 textView: textView
             )
         case .skill:
@@ -2522,18 +2618,44 @@ final class CapsulePaneViewController: NSViewController,
     /// is free-form, and it is only rendered or editable once the passcode has
     /// been entered.
     private func addPasswordFields() {
-        guard passwordRevealState.isPlaintextVisible else {
+        guard passwordRevealState.isPlaintextVisible || (draft.id == nil && newPasswordEditable) else {
             passwordSecretTextView = nil
-            firstDetailFormRow = addField(
-                label: "SECRET · SECURE",
-                field: makeConcealedSecretPlaceholder()
-            )
+            let challenge = CapsuleInlinePasscodeView(store: revealPasscodeStore)
+            inlinePasswordChallenge = challenge
+            let expectedID = draft.id
+            challenge.onCancel = { [weak self] in self?.view.window?.makeFirstResponder(self?.titleField) }
+            challenge.onVerified = { [weak self, weak challenge] in
+                guard let self, self.inlinePasswordChallenge === challenge,
+                      self.draft.kind == .password, self.draft.id == expectedID,
+                      self.view.window?.isKeyWindow == true,
+                      !IsSecureEventInputEnabled() else { return }
+                self.captureDraftFromFields()
+                self.passwordRevealState.reveal(now: Date())
+                self.schedulePasswordAutoConceal()
+                self.renderEditor(scrollToTop: false)
+            }
+            firstDetailFormRow = challenge
+            addFormRow(challenge)
+            if isCompactDetail {
+                DispatchQueue.main.async { [weak self, weak challenge] in
+                    guard let self, self.inlinePasswordChallenge === challenge,
+                          self.view.window?.isKeyWindow == true else { return }
+                    challenge?.focus()
+                }
+            }
             return
         }
         let textView = makeContentTextView(text: draft.content)
+        textView.allowsUndo = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.isGrammarCheckingEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
         passwordSecretTextView = textView
         firstDetailFormRow = addTextArea(
-            label: "SECRET · MARKDOWN · SECURE",
+            label: draft.id == nil ? "密码内容 · 保存时加密" : "密码内容 · 15 秒后隐藏",
             textView: textView
         )
     }
@@ -2606,7 +2728,7 @@ final class CapsulePaneViewController: NSViewController,
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.borderType = .bezelBorder
-        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: isCompactDetail ? 120 : 220).isActive = true
         return addField(label: label, field: scroll, expandsVertically: true)
     }
 
@@ -2994,8 +3116,8 @@ final class CapsulePaneViewController: NSViewController,
         guard let delay = passwordRevealState.remainingDuration(now: Date()) else {
             return
         }
-        passwordRevealTimer = Timer.scheduledTimer(
-            withTimeInterval: max(0.001, delay),
+        let timer = Timer(
+            timeInterval: max(0.001, delay),
             repeats: false
         ) { [weak self] _ in
             guard let self else { return }
@@ -3007,6 +3129,8 @@ final class CapsulePaneViewController: NSViewController,
             self.captureDraftFromFields()
             self.renderEditor(scrollToTop: false)
         }
+        passwordRevealTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     @discardableResult
@@ -3016,6 +3140,7 @@ final class CapsulePaneViewController: NSViewController,
         do {
             let loadedDraft = try repository.draft(for: rows[index])
             draft = loadedDraft
+            newPasswordEditable = false
             editorDirty = false
             renderEditor()
             setStatus("已加载本地条目")
@@ -3036,6 +3161,7 @@ final class CapsulePaneViewController: NSViewController,
     private func setStatus(_ value: String, isError: Bool = false) {
         statusLabel.stringValue = value
         statusLabel.textColor = isError ? .systemRed : RimeUI.textSecondary
+        statusLabel.isHidden = isCompactDetail && !isError
     }
 
     /// Switches the list and editor to `kind`, confirming an unsaved draft
@@ -3058,6 +3184,7 @@ final class CapsulePaneViewController: NSViewController,
             : "搜索标题或内容"
         cancelPendingReload()
         draft = .empty(kind: selectedKind)
+        newPasswordEditable = true
         editorDirty = false
         renderEditor()
         reloadFromStore()
@@ -3097,7 +3224,9 @@ final class CapsulePaneViewController: NSViewController,
         cancelPendingReload()
         tableView.deselectAll(nil)
         draft = .empty(kind: selectedKind)
+        newPasswordEditable = true
         editorDirty = false
+        setCompactDetail(true)
         renderEditor()
         setStatus("新建 \(selectedKind.displayName) 条目")
         view.window?.makeFirstResponder(titleField)
@@ -3269,31 +3398,16 @@ final class CapsulePaneViewController: NSViewController,
             concealPasswordPlaintext()
             return
         }
-        guard let window = view.window else { return }
+        inlinePasswordChallenge?.focus()
+    }
 
-        passwordChallengeGeneration &+= 1
-        let generation = passwordChallengeGeneration
-        let expectedID = draft.id
-        let challenge = CapsuleRevealPasscodeChallengeController(
-            purpose: .verify
-        )
-        passwordChallengeController?.cancel()
-        passwordChallengeController = challenge
-        challenge.beginSheet(for: window) { [weak self, weak challenge] success in
-            guard let self else { return }
-            if self.passwordChallengeController === challenge {
-                self.passwordChallengeController = nil
-            }
-            guard success,
-                  self.passwordChallengeGeneration == generation,
-                  self.draft.kind == .password,
-                  self.draft.id == expectedID,
-                  self.view.window === window else { return }
-            self.captureDraftFromFields()
-            self.passwordRevealState.reveal(now: Date())
-            self.schedulePasswordAutoConceal()
-            self.renderEditor(scrollToTop: false)
-        }
+    @objc private func copyPasswordPlaintext() {
+        guard draft.kind == .password, passwordRevealState.isPlaintextVisible,
+              (passwordRevealState.remainingDuration(now: Date()) ?? 0) > 0,
+              view.window?.isKeyWindow == true, !IsSecureEventInputEnabled(),
+              let text = passwordSecretTextView?.string else { return }
+        if passwordClipboardWriter(text) { setStatus("已复制") }
+        else { NSSound.beep() }
     }
 
     private func installPrivacyObservers() {

@@ -148,7 +148,7 @@ enum CapsuleRailSmoke {
         )
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        window.contentViewController = pane
+        CapsuleWindowGeometry.install(contentController: pane, in: window)
         window.setContentSize(size)
         pane.reloadFromStore()
         let deadline = Date().addingTimeInterval(1.5)
@@ -171,7 +171,7 @@ enum CapsuleRailSmoke {
         expect: (_ condition: @autoclosure () -> Bool, _ message: String) -> Void
     ) {
         expect(
-            CapsuleRailTab.ordered.map(\.label) == ["最近", "捕获", "笔记", "图片", "视频", "PDF", "技能", "密码"],
+            CapsuleRailTab.ordered.map(\.label) == ["临时", "捕获", "笔记", "图库", "影集", "PDF", "技能", "密码"],
             "tab order"
         )
         expect(CapsuleRailTab.recent.cycled(by: -1) == .saved(.password), "tabs wrap backward")
@@ -184,7 +184,7 @@ enum CapsuleRailSmoke {
                 "\(kind.rawValue) pastes a file"
             )
         }
-        expect(CapsuleRailActivationRules.action(for: .password) == .refuse, "password is refused")
+        expect(CapsuleRailActivationRules.action(for: .password) == .revealInPlace, "password authenticates in place")
         expect(!CapsuleRailActivationRules.allowsCopy(.password), "password never copies")
         expect(CapsuleRailActivationRules.allowsCopy(.note), "note copies")
         expect(CapsuleRailCountText.items(1) == "1 ITEM", "singular count")
@@ -292,16 +292,20 @@ enum CapsuleRailSmoke {
         )
         var activated: [CapsuleRailEntry] = []
         var copied: [CapsuleRailEntry] = []
+        var managed: [CapsuleRailEntry] = []
         var historyActivations = 0
         pane.onActivateSaved = { activated.append($0); return true }
         pane.onCopySaved = { copied.append($0); return true }
+        pane.onEditSaved = { managed.append($0) }
+        var passwordInputRequests = 0
+        pane.onRequestPasswordInput = { passwordInputRequests += 1; return true }
         pane.onActivate = { _ in historyActivations += 1; return true }
         pane.layoutSubtreeIfNeeded()
 
         let recent = pane.capsuleRailSnapshotForSmoke()
         expect(recent.tab == .recent, "rail opens on Recent")
         expect(recent.clearButtonVisible, "Recent shows clear")
-        expect(recent.editableCardCount == 1, "a text history card offers the brush")
+        expect(recent.editableCardCount == 1, "a text history card offers editing in its menu")
         var savedFromHistory: [[UUID]] = []
         pane.onSaveHistory = { items in savedFromHistory.append(items.map(\.id)); return true }
         expect(pane.handleKeyDown(key(kVK_ANSI_S, modifiers: .command)), "Command-S owned on Recent")
@@ -353,12 +357,16 @@ enum CapsuleRailSmoke {
         pane.layoutSubtreeIfNeeded()
         let passwords = pane.capsuleRailSnapshotForSmoke()
         expect(passwords.cardCount == 1, "Password shows its entry")
-        expect(passwords.hint.contains("PASSWORDS"), "Password hint says it stays in the manager")
+        expect(passwords.hint.isEmpty, "Password verification has no instruction text")
         let activationsBefore = activated.count
         let copiesBefore = copied.count
         _ = pane.handleKeyDown(key(kVK_Return))
         _ = pane.handleKeyDown(key(kVK_ANSI_1, modifiers: .command))
         _ = pane.handleKeyDown(key(kVK_ANSI_C, modifiers: .command))
+        expect(pane.handleSavedCardInteraction(id: password.id, clickCount: 1), "password click selects")
+        expect(managed.isEmpty, "single click does not open password manager")
+        expect(pane.handleSavedCardInteraction(id: password.id, clickCount: 2), "password double click authenticates in place")
+        expect(passwordInputRequests == 3 && managed.isEmpty, "Return, Command-1 and double click request native in-place verification, never manager")
         expect(activated.count == activationsBefore, "a password never activates")
         expect(copied.count == copiesBefore, "a password never copies")
 
@@ -371,6 +379,9 @@ enum CapsuleRailSmoke {
         let shielded = pane.capsuleRailSnapshotForSmoke()
         expect(shielded.cardCount == 0, "protection hides saved cards")
         expect(shielded.stateMessage == "安全输入期间已隐藏内容", "protection message on a saved tab")
+        pane.selectTab(.saved(.password))
+        expect(!pane.activateSelectedItems(), "protected password cannot open manager")
+        expect(passwordInputRequests == 3 && managed.isEmpty, "protection prevents in-place verification")
     }
 
     private static func checkSaveRules(
@@ -414,6 +425,14 @@ enum CapsuleRailSmoke {
                 == [.file(kind: .pdf, title: "报告.pdf", path: "/tmp/报告.pdf"), .unsupported(.fileType)],
             "a PDF file becomes a PDF entry; other files are refused"
         )
+        if let mixed = try? ClipboardPasteboardArchive(items: [
+            .init(types: ["public.file-url"], dataByType: ["public.file-url": Data("file:///tmp/clip.mov".utf8)]),
+            .init(types: ["public.file-url"], dataByType: ["public.file-url": Data("not a file URL".utf8)]),
+        ]) {
+            expect(CapsuleRailSaveRules.plans(kind: .files, completeText: nil, capturedAt: now, archive: mixed)
+                   == [.file(kind: .video, title: "clip.mov", path: "/tmp/clip.mov"), .unsupported(.fileType)],
+                   "video routes to Video and a malformed file keeps migration incomplete")
+        } else { expect(false, "mixed file fixture") }
         if case let .imageData(_, data, fileExtension)? = CapsuleRailSaveRules.plans(
             kind: .image, completeText: nil, capturedAt: now, archive: imageArchive
         ).first {

@@ -153,7 +153,7 @@ private final class ClipboardHistoryChromeView: NSVisualEffectView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.masksToBounds = false
+        RoundedWindowChrome.maskMaterial(self, radius: ClipboardHistoryWindowMetrics.cornerRadius)
         borderLayer.fillColor = NSColor.clear.cgColor
         layer?.addSublayer(borderLayer)
     }
@@ -777,7 +777,7 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
                 return false
             }
             return MainActor.assumeIsolated {
-                self.pane.handleStandaloneKeyEquivalent(event)
+                return self.pane.handleStandaloneKeyEquivalent(event)
             }
         }
         panel.setAccessibilityTitle("RIMES Capsule")
@@ -814,11 +814,22 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
             pane.onManage = { [weak self] in
                 self?.openCapsuleManager(revealing: nil)
             }
+            pane.onCreateSaved = { [weak self] kind in
+                guard let self, self.isVisible, self.captureState().allowsContentPresentation else { return }
+                self.hide()
+                CapsuleWindowController.shared.show(draftKind: kind, title: "", content: "")
+            }
             pane.onSaveHistory = { [weak self] items in
                 self?.saveHistoryToCapsule(items) ?? false
             }
             pane.onEditHistory = { [weak self] item in
                 self?.openHistoryDraft(item)
+            }
+            pane.onRequestPasswordInput = { [weak self] in self?.beginCardNativeInput() ?? false }
+            pane.onDeleteSaved = { [weak self] in self?.confirmSavedCardAction($0, migrate: false) }
+            pane.onMigrateSaved = { [weak self] in self?.confirmSavedCardAction($0, migrate: true) }
+            pane.onMigrateHistory = { [weak self] item in
+                _ = self?.saveHistoryToCapsule([item], moveAfterSave: true)
             }
         }
         applyAppearance()
@@ -1147,7 +1158,9 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
             return false
         }
         switch CapsuleRailActivationRules.action(for: entry.kind) {
-        case .refuse:
+        case .revealInPlace:
+            // The pane verifies this in place. Never let a password enter
+            // the shared delivery / clipboard-write path.
             IMELog.write("capsule rail refused \(entry.kind.rawValue) activation")
             NSSound.beep()
             return false
@@ -1275,7 +1288,7 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
     /// ⌘S on Recent: saves the selected cards into Capsule at once, without
     /// a dialog, and says what happened in a toast above the rail. The rail
     /// stays open.
-    private func saveHistoryToCapsule(_ items: [ClipboardHistoryItem]) -> Bool {
+    private func saveHistoryToCapsule(_ items: [ClipboardHistoryItem], moveAfterSave: Bool = false) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
         guard isVisible,
               captureState().allowsContentPresentation,
@@ -1331,6 +1344,13 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
                             }
                         }
                         self.capsuleLibrary.reload()
+                        if moveAfterSave {
+                            let completedIDs = sources.compactMap { source -> UUID? in
+                                let outcomes = results.filter { $0.historyID == source.id }.map(\.outcome)
+                                return CapsuleRailSaveRules.mayRemoveSource(after: outcomes) ? source.id : nil
+                            }
+                            _ = self.historyModel.delete(ids: completedIDs)
+                        }
                         let outcomes = results.map(\.outcome) + unsupported
                         IMELog.write("capsule rail saved cards=\(sources.count) outcomes=\(outcomes.count)")
                         self.showCapsuleToast(CapsuleRailSaveRules.toast(for: outcomes))
@@ -1341,7 +1361,7 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
         return true
     }
 
-    /// The brush on a Recent card: opens it in the manager as a new entry the
+    /// Edit on a Recent card: opens a compact detail form as a new entry the
     /// user still has to save. A pasted image is written to Capsule's assets
     /// first, because an Image entry has to point at a file.
     private func openHistoryDraft(_ item: ClipboardHistoryItem) {
@@ -1413,10 +1433,63 @@ final class ClipboardHistoryWindowController: NSObject, NSWindowDelegate {
         )
     }
 
+    /// Native chord authentication owns the rail's keyboard only while the
+    /// user is interacting with it; the former external IMK lease is retired.
+    private func beginCardNativeInput() -> Bool {
+        guard isVisible, captureState().allowsContentPresentation,
+              !IsSecureEventInputEnabled(), !sessionProtectionActive else { return false }
+        detachPresentationTargetAndRetireSearch(restoreHostPresentation: true)
+        presentationMode = .standalonePasteboard
+        MainActor.assumeIsolated { pane.setStandaloneSearchEnabled(true) }
+        panel.acceptsKeyInput = true
+        registerStandaloneFocusIfNeeded()
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        // App activation can finish on the next run-loop turn. Decryption
+        // still requires the real key window at the verification boundary.
+        return panel.isVisible && panel.canBecomeKey
+    }
+
+    private func confirmSavedCardAction(_ entry: CapsuleRailEntry, migrate: Bool) {
+        guard beginCardNativeInput(), !migrate || entry.kind == .note else { return }
+        let repository = CapsuleWindowRepository()
+        do {
+            guard let row = try repository.list(kind: entry.kind).first(where: {
+                $0.id == entry.id && $0.updatedAt == entry.updatedAt && $0.title == entry.title
+            }) else { throw CapsuleWindowRepositoryError.staleRecord }
+            let alert = NSAlert()
+            alert.messageText = migrate ? "将这条笔记迁移为密码？" : "删除这条 Capsule 内容？"
+            alert.informativeText = migrate
+                ? "先加密保存，再移除原笔记。标题仍用于检索；此前同步或备份的明文副本不会因此被收回。"
+                : "只删除 Capsule 条目，不删除所引用的原始媒体文件。"
+            alert.addButton(withTitle: migrate ? "迁移为密码" : "删除")
+            alert.addButton(withTitle: "取消")
+            alert.beginSheetModal(for: panel) { [weak self] response in
+                guard let self, response == .alertFirstButtonReturn,
+                      self.isVisible, self.captureState().allowsContentPresentation,
+                      !IsSecureEventInputEnabled(), !self.sessionProtectionActive else { return }
+                self.capsuleSaveQueue.async {
+                    let result = Result {
+                        if migrate { _ = try repository.moveNoteToPassword(row) }
+                        else { try repository.remove(row, expectedRevision: row.revision) }
+                    }
+                    DispatchQueue.main.async {
+                        self.capsuleLibrary.reload()
+                        switch result {
+                        case .success: self.showCapsuleToast(migrate ? "已加密迁移为密码" : "已删除 Capsule 条目")
+                        case .failure: self.showCapsuleToast("操作未完成，请刷新后重试；原内容不会被强制覆盖")
+                        }
+                    }
+                }
+            }
+        } catch { showCapsuleToast("条目已变化，请刷新后重试") }
+    }
+
     /// The manager is a normal key window. The rail closes first, so its
     /// borrowed search session is retired before the application activates.
     private func openCapsuleManager(revealing entry: CapsuleRailEntry?) {
         dispatchPrecondition(condition: .onQueue(.main))
+        guard isVisible, captureState().allowsContentPresentation else { return }
         let railKind = MainActor.assumeIsolated { pane.selectedTab.savedKind }
         hide()
         if let entry {

@@ -218,6 +218,7 @@ final class CaptureCardControls: NSView {
         super.init(frame: frame)
         let glass = NSVisualEffectView()
         glass.material = .hudWindow; glass.blendingMode = .withinWindow; glass.state = .active
+        RoundedWindowChrome.maskMaterial(glass, radius: RoundedWindowChrome.radius)
         CaptureUI.fill(glass, in: self, inset: 0)
         for button in [copyButton, saveButton, closeButton, pinButton, editButton] {
             button.light = true; button.font = .systemFont(ofSize: 12, weight: .semibold)

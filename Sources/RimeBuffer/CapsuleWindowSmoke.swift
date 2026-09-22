@@ -104,6 +104,8 @@ func runCapsuleWindowSmokeTest() -> Bool {
         }
 
         _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        NSApp.activate(ignoringOtherApps: true)
 
         // Beginning a sheet necessarily makes its parent resign key. That
         // transition must not cancel authentication, while a real loss of the
@@ -200,6 +202,9 @@ func runCapsuleWindowSmokeTest() -> Bool {
         passcodeSettings.frame = NSRect(x: 0, y: 0, width: 650, height: 150)
         passcodeParent.contentView = passcodeSettings
         passcodeParent.layoutIfNeeded()
+        guard capsulePasscodeUIConcealsChords(in: passcodeSettings) else {
+            return capsuleWindowSmokeFail("settings must not display the default passcode")
+        }
         let passcodeButtons = capsuleDescendants(in: passcodeSettings)
             .compactMap { $0 as? NSButton }
         guard !passcodeSettings.hasAmbiguousLayout,
@@ -252,7 +257,8 @@ func runCapsuleWindowSmokeTest() -> Bool {
         }
         guard passcodeParent.attachedSheet == nil,
               passcodeStore.matches(customPasscode),
-              !passcodeStore.matches(.defaultValue) else {
+              !passcodeStore.matches(.defaultValue),
+              capsulePasscodeUIConcealsChords(in: passcodeSettings) else {
             return capsuleWindowSmokeFail("authenticated passcode change")
         }
 
@@ -284,7 +290,8 @@ func runCapsuleWindowSmokeTest() -> Bool {
 
         let pane = CapsulePaneViewController(
             repository: repository,
-            cloudSyncController: nil
+            cloudSyncController: nil,
+            revealPasscodeStore: passcodeStore
         )
         guard pane.validatesEntryRowPointerForSmoke() else {
             return capsuleWindowSmokeFail("entry-row pointing-hand policy")
@@ -343,7 +350,7 @@ func runCapsuleWindowSmokeTest() -> Bool {
                         (8...12).contains($0)
                     } == true
                     && (!fixedFormKinds.contains(kind)
-                        || layout.firstDetailRowHeight.map { $0 <= 50 } == true)
+                        || layout.firstDetailRowHeight.map { $0 <= (kind == .password ? 110 : 50) } == true)
                     && (fixedFormKinds.contains(kind)
                         == (layout.bottomSpacerHeight != nil))
                     && !layout.hasAmbiguousLayout
@@ -857,12 +864,62 @@ func runCapsuleWindowSmokeTest() -> Bool {
             return capsuleWindowSmokeFail("password list/search disclosure boundary")
         }
 
+        // Verify the manager's single input and fail-closed inactive window.
+        // Successful native authentication is covered in interaction-smoke,
+        // whose single key-window fixture avoids this suite's sheet lifecycle.
+        let passwordWindow = NSWindow(
+            contentRect: NSRect(origin: .zero, size: CapsuleWindowGeometry.defaultContentSize),
+            styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false
+        )
+        passwordWindow.isReleasedWhenClosed = false
+        CapsuleWindowGeometry.install(contentController: pane, in: passwordWindow)
+        passwordWindow.makeKeyAndOrderFront(nil)
+        passwordWindow.becomeKey()
+        pane.reveal(kind: .password, id: passwordRow.id)
+        guard capsuleRunLoop(until: {
+            capsuleDescendants(in: pane.view).contains { ($0 as? NSTextField)?.stringValue == "Smoke Password" }
+        }) else {
+            return capsuleWindowSmokeFail("manager must load the requested password entry")
+        }
+        pane.view.layoutSubtreeIfNeeded()
+        guard let verifier = capsuleDescendants(in: pane.view).compactMap({ $0 as? CapsuleInlinePasscodeView }).first,
+              capsuleDescendants(in: verifier).filter({
+                  $0.identifier?.rawValue.hasPrefix("capsule-passcode-slot-") == true
+              }).count == 4 else {
+            return capsuleWindowSmokeFail("password entry must offer four slots and native input without a reveal-button step")
+        }
+        let inputCenter = pane.view.convert(NSPoint(x: verifier.capture.bounds.midX, y: verifier.capture.bounds.midY), from: verifier.capture)
+        guard pane.view.hitTest(pane.view.convert(inputCenter, to: pane.view.superview)) === verifier.capture else {
+            return capsuleWindowSmokeFail("single password input must be hit-testable")
+        }
+        verifier.focus()
+        guard passwordWindow.firstResponder is CapsuleRevealChordCaptureView else { return capsuleWindowSmokeFail("manager verifier first responder") }
+        guard passwordWindow.attachedSheet == nil,
+              capsuleSendPasscode(customChordKeyCodes, to: passwordWindow),
+              passwordWindow.attachedSheet == nil,
+              !capsuleDescendants(in: pane.view).contains(where: { ($0 as? NSButton)?.title == "隐藏明文" }) else {
+            return capsuleWindowSmokeFail("manager must reject a wrong code")
+        }
+        passwordWindow.resignKey()
+        guard capsuleSendPasscode(defaultChordKeyCodes, to: passwordWindow),
+              !capsuleDescendants(in: pane.view).contains(where: { ($0 as? NSButton)?.title == "隐藏明文" }) else {
+            return capsuleWindowSmokeFail("inactive window must never reveal plaintext")
+        }
+        pane.concealPasswordPlaintext()
+        passwordWindow.orderOut(nil)
+
         let hiddenEditor = pane.passwordEditorSnapshotForSmoke(
             plaintextVisible: false
         )
         let revealedEditor = pane.passwordEditorSnapshotForSmoke(
             plaintextVisible: true
         )
+        guard hiddenEditor.secretIsConcealed, !revealedEditor.secretIsConcealed,
+              hiddenEditor.revealRequiresChordAuthentication,
+              hiddenEditor.revealButtonTitle == "查看明文",
+              revealedEditor.revealButtonTitle == "隐藏明文" else {
+            return capsuleWindowSmokeFail("password editor reveal/conceal presentation")
+        }
         guard capsulePointingHandControlsAreValid(in: pane.view) else {
             return capsuleWindowSmokeFail(
                 "pointing-hand control coverage for Password history"
@@ -1066,6 +1123,12 @@ private func capsuleSendPasscodeChord(
     _ keyCodes: [UInt16],
     to window: NSWindow
 ) -> Bool {
+    // Manager forms now embed the verifier alongside arbitrary entry titles.
+    // Audit the verifier, not unrelated labels that may legitimately contain
+    // the same letters (e.g. an uppercase PASSWORD or PDF label).
+    let privacyRoot = window.contentView.flatMap { root in
+        capsuleDescendants(in: root).first { $0 is CapsuleInlinePasscodeView } ?? root
+    }
     func event(
         type: NSEvent.EventType,
         keyCode: UInt16
@@ -1089,14 +1152,28 @@ private func capsuleSendPasscodeChord(
             return false
         }
         window.sendEvent(keyDown)
+        guard privacyRoot.map(capsulePasscodeUIConcealsChords) == true else { return false }
     }
     for keyCode in keyCodes.reversed() {
         guard let keyUp = event(type: .keyUp, keyCode: keyCode) else {
             return false
         }
         window.sendEvent(keyUp)
+        guard privacyRoot.map(capsulePasscodeUIConcealsChords) == true else { return false }
     }
     return true
+}
+
+private func capsulePasscodeUIConcealsChords(in view: NSView) -> Bool {
+    // Known test/default sequences only; never inspect a live credential.
+    let forbidden = ["RH", "WO", "CVN", "QU", "AB", "DF", "JK", "MN"]
+    return capsuleDescendants(in: view).allSatisfy { item in
+        let values = [(item as? NSTextField)?.stringValue, item.toolTip,
+                      item.accessibilityLabel(), item.accessibilityHelp()]
+        return values.compactMap { $0 }.allSatisfy { text in
+            forbidden.allSatisfy { !text.contains($0) }
+        }
+    }
 }
 
 /// Sheets animate in and out, and AppKit holds a queued sheet until the
