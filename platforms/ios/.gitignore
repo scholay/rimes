@@ -8,3 +8,9 @@ build/
 xcuserdata/
 Resources/EngineData/pinyin_simp.dict.yaml
 Resources/EngineData/wubi86.dict.yaml
+
+# Local CI dependencies and reports
+.bundle/
+vendor/bundle/
+fastlane/report.xml
+fastlane/README.md

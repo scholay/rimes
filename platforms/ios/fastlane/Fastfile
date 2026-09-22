@@ -1,0 +1,73 @@
+require 'base64'
+require 'tmpdir'
+require 'securerandom'
+require 'json'
+require_relative '../scripts/release-config'
+
+ROOT = File.expand_path('..', __dir__)
+def version_state(version)
+  version.app_version_state || version.app_store_state
+end
+TEAM = '585J2TL9U6'
+BUNDLE = 'org.scholay.rimes.ios'
+default_platform(:ios)
+platform :ios do
+  desc 'Build, upload and submit the exact ios-v* tag; release after Apple approval'
+  lane :release do
+    version = RimesRelease.version(ENV.fetch('GITHUB_REF_NAME'))
+    build = ENV.fetch('IOS_BUILD_NUMBER')
+    notes = RimesRelease.notes(ROOT, version)
+    missing = RimesRelease::SECRETS.select { |key| ENV[key].to_s.empty? }
+    UI.user_error!("Missing GitHub Secrets: #{missing.join(', ')}") unless missing.empty?
+    api = app_store_connect_api_key(key_id: ENV.fetch('ASC_KEY_ID'), issuer_id: ENV.fetch('ASC_ISSUER_ID'), key_content: ENV.fetch('ASC_PRIVATE_KEY_BASE64'), is_key_content_base64: true, in_house: false)
+    app = Spaceship::ConnectAPI::App.find(BUNDLE)
+    UI.user_error!('Unexpected App Store app') unless app && app.id == '6814620242'
+    active = app.get_app_store_versions(filter: { platform: 'IOS' }, limit: 10).find { |v| %w[WAITING_FOR_REVIEW IN_REVIEW PENDING_DEVELOPER_RELEASE PENDING_APPLE_RELEASE].include?(version_state(v)) }
+    UI.user_error!("Version #{active.version_string} is #{version_state(active)}; will not interrupt it") if active
+    editing = app.get_edit_app_store_version(platform: 'IOS')
+    if editing && !%w[PREPARE_FOR_SUBMISSION DEVELOPER_REJECTED REJECTED METADATA_REJECTED].include?(version_state(editing))
+      UI.user_error!("Existing version #{editing.version_string} is #{version_state(editing)}; will not withdraw or replace it")
+    end
+    if editing && editing.version_string != version
+      UI.user_error!("Another draft version #{editing.version_string} exists; resolve it first")
+    end
+    existing = app.get_app_store_versions(filter: { versionString: version, platform: 'IOS' }).first
+    if existing && %w[WAITING_FOR_REVIEW IN_REVIEW PENDING_DEVELOPER_RELEASE READY_FOR_SALE READY_FOR_DISTRIBUTION].include?(version_state(existing))
+      UI.user_error!("Version #{version} already submitted/released; refusing duplicate submission")
+    end
+    keychain = File.join(ENV.fetch('RUNNER_TEMP'), 'rimes-ios-signing.keychain-db')
+    password = SecureRandom.hex(32)
+    installed_profiles = []
+    begin
+      create_keychain(path: keychain, password: password, default_keychain: false, unlock: true, timeout: 3600, lock_when_sleeps: true, add_to_search_list: true)
+      Dir.mktmpdir('rimes-signing-', ENV.fetch('RUNNER_TEMP')) do |dir|
+        cert = File.join(dir, 'distribution.p12')
+        File.binwrite(cert, Base64.strict_decode64(ENV.fetch('IOS_DISTRIBUTION_P12_BASE64')))
+        File.chmod(0600, cert)
+        import_certificate(certificate_path: cert, certificate_password: ENV.fetch('IOS_DISTRIBUTION_P12_PASSWORD'), keychain_path: keychain, keychain_password: password)
+        profiles = {}
+        { 'RIMES' => ['IOS_APP_PROFILE_BASE64', BUNDLE], 'RIMESKeyboard' => ['IOS_KEYBOARD_PROFILE_BASE64', "#{BUNDLE}.keyboard"] }.each do |target, (secret, bundle)|
+          path = File.join(dir, "#{target}.mobileprovision")
+          File.binwrite(path, Base64.strict_decode64(ENV.fetch(secret)))
+          decoded = FastlaneCore::ProvisioningProfile.parse(path)
+          UI.user_error!("Invalid App Store profile for #{target}") unless decoded['TeamIdentifier'] == [TEAM] && decoded['Entitlements']['application-identifier'] == "#{TEAM}.#{bundle}" && !decoded.key?('ProvisionedDevices') && !decoded['Entitlements']['get-task-allow'] && decoded['ExpirationDate'].to_time > Time.now
+          installed_profiles << install_provisioning_profile(path: path)
+          profiles[bundle] = decoded.fetch('UUID')
+          update_code_signing_settings(path: File.join(ROOT, 'RIMES.xcodeproj'), use_automatic_signing: false, team_id: TEAM, targets: [target], build_configurations: ['Release'], code_sign_identity: 'Apple Distribution', profile_uuid: decoded.fetch('UUID'))
+        end
+        ipa = build_app(project: File.join(ROOT, 'RIMES.xcodeproj'), scheme: 'RIMES', configuration: 'Release', clean: true, destination: 'generic/platform=iOS', output_directory: File.join(ROOT, 'build/ci-release'), output_name: 'RIMES.ipa', export_method: 'app-store', export_options: { method: 'app-store-connect', signingStyle: 'manual', teamID: TEAM, provisioningProfiles: profiles, manageAppVersionAndBuildNumber: false }, xcargs: "MARKETING_VERSION=#{version} CURRENT_PROJECT_VERSION=#{build}")
+        sh('python3', File.join(ROOT, 'scripts/verify-release-ipa.py'), ipa, version, build)
+        upload_to_testflight(api_key: api, ipa: ipa, app_identifier: BUNDLE, skip_submission: true, submit_beta_review: false, distribute_external: false, skip_waiting_for_build_processing: false, wait_processing_timeout_duration: 2400)
+        FileUtils.mkdir_p(File.join(dir, 'empty-metadata'))
+        upload_to_app_store(api_key: api, app_identifier: BUNDLE, app_version: version, build_number: build, skip_binary_upload: true, skip_screenshots: true, skip_metadata: false, metadata_path: File.join(dir, 'empty-metadata'), release_notes: notes, submit_for_review: true, automatic_release: true, force: true, reject_if_possible: false, run_precheck_before_submit: false, submission_information: { export_compliance_uses_encryption: false, content_rights_contains_third_party_content: true, content_rights_has_rights: true })
+        submitted = app.get_app_store_versions(filter: { versionString: version, platform: 'IOS' }).first
+        receipt = { version: version, build: build, commit: ENV['GITHUB_SHA'], app_store_state: submitted && version_state(submitted), app_store_version_id: submitted&.id }
+        File.write(File.join(ROOT, 'build/ci-release/submission.json'), JSON.pretty_generate(receipt))
+        UI.user_error!('Submission did not reach Apple review queue; inspect submission.json') unless submitted && %w[WAITING_FOR_REVIEW IN_REVIEW].include?(version_state(submitted))
+      end
+    ensure
+      installed_profiles.compact.each { |path| File.delete(path) if File.file?(path) }
+      delete_keychain(keychain_path: keychain) if File.exist?(keychain)
+    end
+  end
+end

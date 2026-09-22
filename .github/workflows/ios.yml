@@ -1,21 +1,30 @@
-name: iOS development build
+name: iOS checks
 on:
   pull_request:
-    paths: ['Shared/**', 'platforms/ios/**', 'Sources/RimeBuffer/ChordOutputEncoding.swift', 'chord-keymaps/**', '.github/workflows/ios.yml']
+    paths: ['Shared/**', 'platforms/ios/**', 'Sources/RimeBuffer/ChordOutputEncoding.swift', 'chord-keymaps/**', '.github/workflows/ios*.yml']
+  push:
+    branches: [main, "codex/ios-*"]
+    paths: ["Shared/**", "platforms/ios/**", "Sources/RimeBuffer/ChordOutputEncoding.swift", "chord-keymaps/**", ".github/workflows/ios*.yml"]
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   build:
-    runs-on: macos-15
-    timeout-minutes: 45
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
       - name: Build and test without device credentials
         run: platforms/ios/scripts/build.sh
-      - name: Assert distribution remains gated until required evidence exists
+      - name: Test release configuration and hosted iOS tests
+        run: |
+          ruby platforms/ios/scripts/tests/release-config-test.rb
+          platforms/ios/scripts/test-simulator.sh
+      - name: Verify resources
         run: |
           python3 platforms/ios/scripts/verify.py
           # No upload, signing credentials or artifact publication in this workflow.
