@@ -211,8 +211,10 @@ final class KeyboardViewController: UIInputViewController {
         if !hasFullAccess && selectedPlugin?.hasPrefix("ai.") == true { cancelRequest(); render() }
     }
     override func selectionWillChange(_ textInput: UITextInput?) {
-        stopDefaultAutoSend(); autoSuspended = true
-        deleteButton.cancelPress(); abandonHostComposition()
+        if !delivery.isWriting {
+            autoClock.pause()
+            deleteButton.cancelPress(); abandonHostComposition()
+        }
         super.selectionWillChange(textInput)
     }
     override func textWillChange(_ textInput: UITextInput?) {
@@ -220,7 +222,7 @@ final class KeyboardViewController: UIInputViewController {
         super.textWillChange(textInput)
     }
     private func abandonHostComposition() {
-        guard !bufferEnabled, delivery.hasMarkedText else { return }
+        guard !delivery.isWriting, !bufferEnabled, delivery.hasMarkedText else { return }
         delivery.abandonMarkedText(); engine.clear(); snapshot = .init(); chordPreview = ""
         cancelRequest(); surface.retire(); render()
     }

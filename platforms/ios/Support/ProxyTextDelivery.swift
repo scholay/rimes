@@ -7,6 +7,8 @@ import RimesCore
     private var markedTarget: UUID?
     private var markedText = ""
     private var markedProxy: (any UITextDocumentProxy)?
+    private var writeDepth = 0
+    var isWriting: Bool { writeDepth > 0 }
     var hasMarkedText: Bool { markedTarget != nil }
     init(controller: UIInputViewController, active: @escaping () -> Bool) {
         self.controller = controller; self.active = active
@@ -17,6 +19,7 @@ import RimesCore
         return controller.textDocumentProxy
     }
     func insert(_ text: String, target: UUID) -> Bool {
+        writeDepth += 1; defer { writeDepth -= 1 }
         guard !text.isEmpty, let proxy = proxy(for: target) else { return false }
         if markedTarget == target {
             // Replace the entire composition explicitly; insertText can replace
@@ -27,6 +30,7 @@ import RimesCore
         return true
     }
     @discardableResult func updateMarkedText(_ text: String, target: UUID) -> Bool {
+        writeDepth += 1; defer { writeDepth -= 1 }
         guard let proxy = proxy(for: target) else { return false }
         if markedTarget != nil && markedTarget != target { forgetMarkedText() }
         if text.isEmpty { discardMarkedText(); return true }
@@ -36,6 +40,7 @@ import RimesCore
         return true
     }
     func discardMarkedText() {
+        writeDepth += 1; defer { writeDepth -= 1 }
         guard let target = markedTarget else { return }
         guard let ownedProxy = proxy(for: target) else { abandonMarkedText(); return }
         forgetMarkedText()
@@ -45,6 +50,7 @@ import RimesCore
     /// Once the host changes selection/document, ownership is gone. Never erase
     /// text at the new caret by trying to clean up an old marked range there.
     func abandonMarkedText() {
+        writeDepth += 1; defer { writeDepth -= 1 }
         let target = markedTarget
         let previous = target.flatMap { proxy(for: $0) } ?? markedProxy
         forgetMarkedText()
@@ -55,6 +61,8 @@ import RimesCore
         previous.unmarkText()
     }
     func finishDocumentResetIfNeeded() {
+        guard !isWriting else { return }
+        writeDepth += 1; defer { writeDepth -= 1 }
         guard active(), let controller, controller.isViewLoaded, controller.view.window != nil,
               DocumentIdentity.read(controller.textDocumentProxy) == nil else { return }
         // UIKit may withhold the new document ID while a refocused field still
@@ -64,6 +72,7 @@ import RimesCore
     }
     func forgetMarkedText() { markedTarget = nil; markedText = ""; markedProxy = nil }
     func deleteBackward(target: UUID) -> Bool {
+        writeDepth += 1; defer { writeDepth -= 1 }
         guard let proxy = proxy(for: target) else { return false }
         proxy.deleteBackward(); return true
     }

@@ -97,6 +97,7 @@ func L(_ zh: String, _ en: String) -> String { RIMES.L(zh, en) }
         if selector == #selector(getter: UITextDocumentProxy.documentIdentifier), !identityAvailable { return false }
         return super.responds(to: selector)
     }
+    var onProxyWrite: (() -> Void)?
     var insertions: [String] = []
     var markedUpdates: [String] = []
     var documentContextBeforeInput: String? { String((native.text as NSString).substring(to: native.selectedRange.location)) }
@@ -104,13 +105,13 @@ func L(_ zh: String, _ en: String) -> String { RIMES.L(zh, en) }
     var selectedText: String? { native.selectedRange.length == 0 ? nil : (native.text as NSString).substring(with: native.selectedRange) }
     var documentInputMode: UITextInputMode? { nil }
     var hasText: Bool { native.hasText }
-    func insertText(_ text: String) { insertions.append(text); native.insertText(text) }
-    func deleteBackward() { native.deleteBackward() }
+    func insertText(_ text: String) { insertions.append(text); native.insertText(text); onProxyWrite?() }
+    func deleteBackward() { native.deleteBackward(); onProxyWrite?() }
     func adjustTextPosition(byCharacterOffset offset: Int) {
         native.selectedRange = NSRange(location: max(0, min(native.text.utf16.count, native.selectedRange.location + offset)), length: 0)
     }
-    func setMarkedText(_ markedText: String, selectedRange: NSRange) { markedUpdates.append(markedText); native.setMarkedText(markedText, selectedRange: selectedRange) }
-    func unmarkText() { native.unmarkText() }
+    func setMarkedText(_ markedText: String, selectedRange: NSRange) { markedUpdates.append(markedText); native.setMarkedText(markedText, selectedRange: selectedRange); onProxyWrite?() }
+    func unmarkText() { native.unmarkText(); onProxyWrite?() }
 }
 
 @MainActor final class KeyboardInteractionTests: XCTestCase {
@@ -159,6 +160,27 @@ func L(_ zh: String, _ en: String) -> String { RIMES.L(zh, en) }
             XCTAssertEqual(buffered ? controller.developmentBufferSource.text : controller.layoutProxy.native.text, "gh")
             XCTAssertTrue(controller.developmentRaw.isEmpty)
         }
+    }
+    func testProxyWriteCallbacksPreserveCompositionAndAutomaticDelivery() {
+        let (window, controller) = host(); defer { window.isHidden = true; controller.developmentAutoDelay(0) }
+        controller.layoutProxy.onProxyWrite = { [weak controller] in
+            controller?.selectionWillChange(nil); controller?.textWillChange(nil); controller?.textDidChange(nil)
+        }
+        controller.developmentChoose(.pinyin)
+        controller.developmentType("ni")
+        XCTAssertEqual(controller.developmentRaw, "ni")
+        XCTAssertEqual(controller.layoutProxy.native.text, "ni")
+        controller.developmentEnter()
+        XCTAssertEqual(controller.layoutProxy.native.text, "ni")
+        XCTAssertTrue(controller.developmentRaw.isEmpty)
+        var time: TimeInterval = 0; controller.defaultClockNow = { time }
+        controller.developmentBuffer("A。B。"); controller.developmentAutoDelay(1)
+        controller.developmentAutoTick(); time = 1; controller.developmentAutoTick()
+        XCTAssertEqual(controller.layoutProxy.native.text, "niA。")
+        // A host may also deliver selection notifications asynchronously.
+        controller.selectionWillChange(nil)
+        time = 1.1; controller.developmentAutoTick()
+        XCTAssertEqual(controller.layoutProxy.native.text, "niA。B。")
     }
     func testDefaultBufferAutoDeliveryIsBoundToVisibleTargetAndOriginalMode() {
         let (window, controller) = host(); defer { window.isHidden = true; controller.developmentAutoDelay(0) }
