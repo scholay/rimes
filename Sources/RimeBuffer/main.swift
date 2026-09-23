@@ -1054,6 +1054,10 @@ if CommandLine.arguments.contains("inbound-smoke") {
 if CommandLine.arguments.contains("candidate-metrics-smoke") {
     exit(runCandidateMetricsSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("candidate-commit-smoke") {
+    _ = NSApplication.shared
+    exit(runCandidateCommitSmokeTest() ? 0 : 1)
+}
 if CommandLine.arguments.contains("activation-cache-smoke") {
     exit(runRimeActivationMetadataCacheSmokeTest() ? 0 : 1)
 }
@@ -3218,6 +3222,39 @@ func runStatsSmokeTest() -> Bool {
 /// must slide far enough to reach the last page, never past the ends, and must
 /// always keep the selected row on screen — a wrong base here would render one
 /// row while selecting a different page's candidate.
+/// Fast typing exposed a commit fade: candidates stayed nearly opaque beside
+/// text the host already showed. A commit must remove the panel before the
+/// host insertion, and only that keystroke's own follow-up composition may
+/// skip the entrance.
+func runCandidateCommitSmokeTest() -> Bool {
+    print("== \(ProductIdentity.displayName) candidate commit smoke test ==")
+    guard let snapshot = CandidateWindow.commitRetirementSnapshotForSmoke() else {
+        print("candidate-commit-smoke: SKIPPED (secure input forbids ordering the panel front)")
+        return true
+    }
+    let checks: [(String, Bool)] = [
+        ("panel presented", snapshot.presented),
+        ("another owner's commit leaves the panel", snapshot.strangerRetirementIgnored),
+        ("commit orders the panel out synchronously", snapshot.orderedOutSynchronously),
+        ("commit retires the logical presentation", snapshot.retiredLogicalPresentation),
+        ("same-keystroke composition continues without an entrance",
+         snapshot.sameKeystrokeContinuedWithoutEntrance),
+        ("continuation is consumed by one show", snapshot.continuationConsumedByOneShow),
+        ("continuation expires with its keystroke", snapshot.continuationExpiredAfterKeystroke),
+        ("hidden panel does not arm a continuation",
+         snapshot.hiddenRetirementDidNotArmContinuation),
+        ("a later composition makes a normal entrance",
+         snapshot.laterEntrancePhase == snapshot.expectedEntrancePhase),
+    ]
+    let failures = checks.filter { !$0.1 }.map(\.0)
+    guard failures.isEmpty else {
+        print("FAILED: \(failures.joined(separator: "; "))")
+        return false
+    }
+    print("candidate-commit-smoke: OK (synchronous commit retirement, stale owner, 顶字 continuation, expiry, entrance)")
+    return true
+}
+
 func runCandidateMatrixSmokeTest() -> Bool {
     print("== \(ProductIdentity.displayName) candidate matrix smoke test ==")
     let maxRows = CandidateWindow.expandedMaxRows
@@ -8690,6 +8727,12 @@ func runBufferWindowSmokeTest() -> Bool {
             panelIsVisible: false,
             phase: .hidden,
             reduceMotion: true
+          ),
+          !CandidatePanelAnimationRules.shouldFadeIn(
+            panelIsVisible: false,
+            phase: .hidden,
+            reduceMotion: false,
+            continuesCommittedSurface: true
           ),
           CandidatePanelAnimationRules.shouldFadeOut(
             panelIsVisible: true,
