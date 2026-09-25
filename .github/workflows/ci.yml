@@ -593,6 +593,7 @@ jobs:
             stats-smoke
             matrix-smoke
             candidate-metrics-smoke
+            candidate-commit-smoke
             activation-cache-smoke
             theme-smoke
             theme-appkit-smoke

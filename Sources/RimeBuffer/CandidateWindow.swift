@@ -33,10 +33,15 @@ enum CandidatePanelAnimationRules {
     static let fadeInDuration: TimeInterval = 0.06
     static let fadeOutDuration: TimeInterval = 0.045
 
+    /// `continuesCommittedSurface` marks a composition begun by the same
+    /// keystroke that committed the previous one (顶字上屏). Its candidates
+    /// replace a surface the user was already reading, so they appear at once
+    /// instead of replaying the entrance.
     static func shouldFadeIn(panelIsVisible: Bool,
                              phase: CandidatePanelVisibilityPhase,
-                             reduceMotion: Bool) -> Bool {
-        guard !reduceMotion else { return false }
+                             reduceMotion: Bool,
+                             continuesCommittedSurface: Bool = false) -> Bool {
+        guard !reduceMotion, !continuesCommittedSurface else { return false }
         return !panelIsVisible || phase == .hidden || phase == .fadingOut
     }
 
@@ -497,6 +502,19 @@ struct CandidateActionSurfaceSnapshot {
     let settingsAccessibilityLabel: String?
 }
 
+struct CandidateCommitRetirementSnapshot {
+    let presented: Bool
+    let strangerRetirementIgnored: Bool
+    let orderedOutSynchronously: Bool
+    let retiredLogicalPresentation: Bool
+    let sameKeystrokeContinuedWithoutEntrance: Bool
+    let continuationConsumedByOneShow: Bool
+    let continuationExpiredAfterKeystroke: Bool
+    let hiddenRetirementDidNotArmContinuation: Bool
+    let laterEntrancePhase: CandidatePanelVisibilityPhase
+    let expectedEntrancePhase: CandidatePanelVisibilityPhase
+}
+
 /// In-process candidate window. Candidates default to a compact one-line strip
 /// and can expand into a matrix of consecutive Rime pages, one page per row.
 /// The matrix renders at most three rows at a time, but that is a viewport, not
@@ -561,6 +579,10 @@ final class CandidateWindow {
     private var visibilityPhase: CandidatePanelVisibilityPhase = .hidden
     private var visibilityTransitionGeneration: UInt64 = 0
     private var scrubRenderedViewsWhenHidden = false
+    /// Set while the keystroke that retired a visible panel for a commit is
+    /// still being handled; see `retireForCommit`.
+    private var commitContinuationArmed = false
+    private var commitContinuationGeneration: UInt64 = 0
 
     var onSelect: ((FocusToken, CandidateSelection) -> Void)?
 
@@ -911,6 +933,33 @@ final class CandidateWindow {
         hidePanel(reason: "owner-hide",
                   clearsPresentation: true,
                   animated: mayFade)
+    }
+
+    /// Committing makes the shown candidates obsolete the moment the host
+    /// displays the text, so the panel leaves synchronously, before insertion.
+    /// The eased fade-out `hide` uses kept stale candidates nearly opaque
+    /// beside already-committed text for ~50 ms, which fast typing exposes.
+    func retireForCommit(owner: FocusToken) {
+        if let ownerToken, ownerToken != owner {
+            IMELog.write("candidate stale commit retirement ignored owner=\(owner)")
+            return
+        }
+        // No pixels outlive a commit boundary, including an earlier fade.
+        let replacedVisibleSurface = panel.isVisible
+        hidePanel(reason: "commit-retirement",
+                  clearsPresentation: true,
+                  animated: false)
+        guard replacedVisibleSurface else { return }
+        // The committing keystroke may already carry the next composition
+        // (顶字上屏); its update lands before control returns to the run loop.
+        commitContinuationGeneration &+= 1
+        let generation = commitContinuationGeneration
+        commitContinuationArmed = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.commitContinuationGeneration == generation else { return }
+            self.commitContinuationArmed = false
+        }
     }
 
     func hideAll() {
@@ -1448,10 +1497,13 @@ final class CandidateWindow {
         }
 
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let continuesCommittedSurface = commitContinuationArmed
+        commitContinuationArmed = false
         let shouldFade = CandidatePanelAnimationRules.shouldFadeIn(
             panelIsVisible: panel.isVisible,
             phase: visibilityPhase,
-            reduceMotion: reduceMotion
+            reduceMotion: reduceMotion,
+            continuesCommittedSurface: continuesCommittedSurface
         )
         scrubRenderedViewsWhenHidden = false
         panel.ignoresMouseEvents = false
@@ -2262,6 +2314,85 @@ final class CandidateWindow {
             renderedLegacyActionButtons: buttons.filter { $0.tag < 0 }.count,
             settingsButtonVisible: settings.map { !$0.isHidden } ?? false,
             settingsAccessibilityLabel: settings?.accessibilityLabel()
+        )
+    }
+
+    /// Drives a real panel across commit boundaries without IMK or librime.
+    /// Nil when secure input forbids ordering the panel front at all.
+    static func commitRetirementSnapshotForSmoke() -> CandidateCommitRetirementSnapshot? {
+        guard CandidatePanelSecurityRules.mayOrderFront(
+            secureInputEnabled: IsSecureEventInputEnabled()
+        ) else { return nil }
+        var epochs = FocusEpochState()
+        let owner = epochs.activate()
+        let stranger = epochs.activate()
+        let candidateWindow = CandidateWindow()
+        defer { candidateWindow.hideAll() }
+        func present() {
+            var context = RimeContextModel()
+            context.input = "smoke"
+            context.candidates = [
+                RimeCandidateModel(text: "候选", comment: "", label: "1"),
+            ]
+            candidateWindow.ownerToken = owner
+            candidateWindow.currentContext = context
+            candidateWindow.renderCandidates()
+            candidateWindow.showPanel(reason: "smoke")
+        }
+        func drainKeystroke() {
+            let deadline = Date(timeIntervalSinceNow: 1)
+            while candidateWindow.commitContinuationArmed, Date() < deadline {
+                _ = RunLoop.main.run(mode: .default,
+                                     before: Date(timeIntervalSinceNow: 0.01))
+            }
+        }
+
+        present()
+        let presented = candidateWindow.panel.isVisible
+        candidateWindow.retireForCommit(owner: stranger)
+        let strangerRetirementIgnored = candidateWindow.panel.isVisible
+            && candidateWindow.ownerToken == owner
+
+        // The panel must already be gone when control returns to the caller,
+        // which then hands the committed text to the host.
+        candidateWindow.retireForCommit(owner: owner)
+        let orderedOutSynchronously = !candidateWindow.panel.isVisible
+            && candidateWindow.visibilityPhase == .hidden
+            && candidateWindow.panel.alphaValue == 1
+        let retiredLogicalPresentation = candidateWindow.ownerToken == nil
+            && candidateWindow.currentContext.candidates.isEmpty
+            && !candidateWindow.hasCandidates
+
+        // 顶字上屏: the committing keystroke's next composition swaps in.
+        present()
+        let sameKeystrokeContinuedWithoutEntrance = candidateWindow.panel.isVisible
+            && candidateWindow.visibilityPhase == .visible
+            && candidateWindow.panel.alphaValue == 1
+        let continuationConsumedByOneShow = !candidateWindow.commitContinuationArmed
+
+        // A commit whose keystroke ends without a follow-up composition must
+        // not leak its continuation into a later, genuinely new entrance.
+        candidateWindow.retireForCommit(owner: owner)
+        drainKeystroke()
+        let continuationExpiredAfterKeystroke = !candidateWindow.commitContinuationArmed
+
+        // Nothing was on screen to continue from.
+        candidateWindow.retireForCommit(owner: owner)
+        let hiddenRetirementDidNotArmContinuation = !candidateWindow.commitContinuationArmed
+
+        present()
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        return CandidateCommitRetirementSnapshot(
+            presented: presented,
+            strangerRetirementIgnored: strangerRetirementIgnored,
+            orderedOutSynchronously: orderedOutSynchronously,
+            retiredLogicalPresentation: retiredLogicalPresentation,
+            sameKeystrokeContinuedWithoutEntrance: sameKeystrokeContinuedWithoutEntrance,
+            continuationConsumedByOneShow: continuationConsumedByOneShow,
+            continuationExpiredAfterKeystroke: continuationExpiredAfterKeystroke,
+            hiddenRetirementDidNotArmContinuation: hiddenRetirementDidNotArmContinuation,
+            laterEntrancePhase: candidateWindow.visibilityPhase,
+            expectedEntrancePhase: reduceMotion ? .visible : .fadingIn
         )
     }
 

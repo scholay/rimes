@@ -133,7 +133,7 @@ signature_output="$(/usr/sbin/pkgutil --check-signature "$TMP/squirrel.pkg" 2>&1
     || die "Squirrel pkg signature is invalid"
 printf '%s\n' "$signature_output"
 printf '%s\n' "$signature_output" \
-    | /usr/bin/grep -Fq "$SQUIRREL_INSTALLER_IDENTITY" \
+    | /usr/bin/grep -F "$SQUIRREL_INSTALLER_IDENTITY" > /dev/null \
     || die "Squirrel pkg signer is not the reviewed Developer ID identity"
 /usr/sbin/spctl --assess --type install --verbose=4 "$TMP/squirrel.pkg" \
     || die "Gatekeeper rejected the Squirrel pkg"
@@ -186,7 +186,7 @@ for index in "${!runtime_files[@]}"; do
         || die "runtime signature is invalid: $runtime"
     runtime_signature="$(/usr/bin/codesign --display --verbose=4 "$runtime" 2>&1)"
     printf '%s\n' "$runtime_signature" \
-        | /usr/bin/grep -Fq "TeamIdentifier=$SQUIRREL_TEAM_ID" \
+        | /usr/bin/grep -F "TeamIdentifier=$SQUIRREL_TEAM_ID" > /dev/null \
         || die "runtime Team ID mismatch: $runtime"
 done
 

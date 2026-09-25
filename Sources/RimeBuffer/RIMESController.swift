@@ -1413,7 +1413,7 @@ final class RIMESController: IMKInputController {
                 client: client
               ) else { return false }
         BufferWindowController.shared.clearInlineComposition(owner: focusToken)
-        candidateWindow.hide(owner: focusToken)
+        candidateWindow.retireForCommit(owner: focusToken)
         clearCompositionPresentation(client: client)
         publishCompositionActive(false)
         IMELog.write("clipboard search commit accepted characters=\(text.count)")
@@ -1524,7 +1524,7 @@ final class RIMESController: IMKInputController {
                 )
             },
             hideCandidates: { owner in
-                candidateWindow.hide(owner: owner)
+                candidateWindow.retireForCommit(owner: owner)
             }
         )
         guard RimeInputSourceAuthority.currentSourceIsOwn(),
@@ -2537,7 +2537,7 @@ final class RIMESController: IMKInputController {
                 )
             },
             hideCandidates: { owner in
-                candidateWindow.hide(owner: owner)
+                candidateWindow.retireForCommit(owner: owner)
             }
         )
         guard RimeInputSourceAuthority.currentSourceIsOwn() else {
@@ -5268,7 +5268,7 @@ final class RIMESController: IMKInputController {
         } else if capturesInBuffer {
             if let focusToken {
                 BufferWindowController.shared.clearInlineComposition(owner: focusToken)
-                candidateWindow.hide(owner: focusToken)
+                candidateWindow.retireForCommit(owner: focusToken)
             }
             BufferModel.shared.append(text)
             clearCompositionPresentation(client: resolvedClient)
@@ -5713,7 +5713,7 @@ final class RIMESController: IMKInputController {
             BufferWindowController.shared.clearInlineComposition(
                 owner: expectedLease.token
             )
-            candidateWindow.hide(owner: expectedLease.token)
+            candidateWindow.retireForCommit(owner: expectedLease.token)
             // Rime declines ASCII letters in English mode and passes most
             // symbols straight through. Those keys are exactly how the user
             // writes English and punctuation, so in stream mode they belong in
@@ -6692,7 +6692,7 @@ final class RIMESController: IMKInputController {
         } else if capturesInBuffer {
             if let focusToken {
                 BufferWindowController.shared.clearInlineComposition(owner: focusToken)
-                candidateWindow.hide(owner: focusToken)
+                candidateWindow.retireForCommit(owner: focusToken)
             }
             // Return over a live composition is librime's "commit what I
             // actually typed". In stream mode those letters belong in the raw
@@ -6752,7 +6752,7 @@ final class RIMESController: IMKInputController {
         } else if capturesInBuffer {
             if let focusToken {
                 BufferWindowController.shared.clearInlineComposition(owner: focusToken)
-                candidateWindow.hide(owner: focusToken)
+                candidateWindow.retireForCommit(owner: focusToken)
             }
             // Consciousness-stream input is an ordinary input surface, so what
             // Rime commits is what the user wrote: it belongs in that raw line

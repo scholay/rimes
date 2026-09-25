@@ -288,11 +288,11 @@ final class CaptureEditor {
                 if let selected = self.selected { self.mutate { doc in if let i = doc.annotations.firstIndex(where: { $0.id == selected }) { doc.annotations[i].width = self.canvas.stroke } } }
             }
         }
-        let saveAs = CaptureChromeButton("另存为…", size: NSSize(width: 76, height: 32)) { [weak self] in self?.exportImage() }
-        let done = CaptureChromeButton("完成", size: NSSize(width: 58, height: 32)) { [weak self] in self?.save { [weak self] _ in self?.panel.close() } }; done.active = true
+        let saveAs = CaptureChromeButton(symbol: "square.and.arrow.down", help: "另存为…") { [weak self] in self?.exportImage() }
+        let done = CaptureChromeButton(symbol: "checkmark", help: "完成") { [weak self] in self?.save { [weak self] _ in self?.panel.close() } }; done.active = true
         let topRow = CaptureUI.row([traffic, crop, add, background, group, color, stroke, CaptureChrome.spacer(), saveAs, done], spacing: 6)
         CaptureUI.fill(topRow, in: top, inset: 12)
-        let zoom = CaptureChromeButton("适合", help: "画布缩放", size: NSSize(width: 82, height: 32)); zoom.dropdown = true
+        let zoom = CaptureChromeButton(symbol: "plus.magnifyingglass", help: "画布缩放", size: NSSize(width: 48, height: 32)); zoom.dropdown = true
         zoom.onClick = { [weak self, weak zoom] in
             guard let self, let zoom else { return }
             self.showMenu(["适合", "50%", "100%", "200%"], from: zoom) { index in
@@ -434,8 +434,8 @@ final class CaptureEditor {
             enabled, CaptureUI.field("颜色", color), CaptureUI.field("留白", padding),
             CaptureUI.field("圆角", corner), CaptureUI.field("阴影", shadow),
             CaptureUI.row([
-                CaptureChromeButton("旋转", size: NSSize(width: 80, height: 30)) { [weak self] in self?.mutate { $0.turns += 1 }; self?.preview = true; self?.render() },
-                CaptureChromeButton("翻转", size: NSSize(width: 80, height: 30)) { [weak self] in self?.mutate { $0.flip.toggle() }; self?.preview = true; self?.render() }
+                CaptureChromeButton(symbol: "rotate.right", help: "旋转") { [weak self] in self?.mutate { $0.turns += 1 }; self?.preview = true; self?.render() },
+                CaptureChromeButton(symbol: "arrow.left.and.right.righttriangle.left.righttriangle.right", help: "翻转") { [weak self] in self?.mutate { $0.flip.toggle() }; self?.preview = true; self?.render() }
             ])
         ], spacing: 10)
         let body = CaptureChromeSurface(); body.frame = CGRect(x: 0, y: 0, width: 228, height: 248)
