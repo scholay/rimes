@@ -133,3 +133,61 @@ final class InsertKeycapButton: KeycapButton {
         guard isEnabled else { return false }; onPressBegan?(); onInsert?(.all); return true
     }
 }
+
+/// Horizontal caret stepping shared by the space key and its tests.
+struct CursorDrag {
+    static let holdDuration: TimeInterval = 0.35
+    static let step: CGFloat = 10
+    private var anchor: CGFloat = 0
+    private(set) var active = false
+    mutating func activate(at x: CGFloat) { active = true; anchor = x }
+    mutating func cancel() { active = false }
+    /// Whole steps since the last call; the remainder carries over.
+    mutating func steps(to x: CGFloat) -> Int {
+        guard active else { return 0 }
+        let count = Int(((x - anchor) / Self.step).rounded(.towardZero))
+        anchor += CGFloat(count) * Self.step; return count
+    }
+}
+
+/// Space: a tap types; holding it and dragging left or right moves the caret
+/// one character per step, and releasing then types nothing.
+final class SpaceCursorButton: KeycapButton {
+    var onCursorBegan: (() -> Bool)?
+    var onCursorMove: ((Int) -> Void)?
+    private var drag = CursorDrag()
+    private var holdTimer: Timer?
+    private var lastX: CGFloat = 0
+    private var suppressTap = false
+    var isMovingCursor: Bool { drag.active }
+    /// False once a hold has turned this press into caret movement.
+    func consumeTap() -> Bool { defer { suppressTap = false }; return !suppressTap }
+    override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
+        finish(); suppressTap = false; lastX = touch.location(in: self).x
+        let timer = Timer(timeInterval: CursorDrag.holdDuration, repeats: false) { [weak self] _ in self?.beginCursor(requireTracking: true) }
+        holdTimer = timer; RunLoop.main.add(timer, forMode: .common)
+        return super.beginTracking(touch, with: event)
+    }
+    func beginCursor(requireTracking: Bool) {
+        holdTimer?.invalidate(); holdTimer = nil
+        guard isTracking || !requireTracking, !drag.active, onCursorBegan?() == true else { return }
+        drag.activate(at: lastX); suppressTap = true; isSelected = true
+    }
+    func moveCursor(to x: CGFloat) {
+        lastX = x
+        let count = drag.steps(to: x)
+        if count != 0 { onCursorMove?(count) }
+    }
+    override func continueTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
+        if drag.active { moveCursor(to: touch.location(in: self).x); return true }
+        lastX = touch.location(in: self).x
+        return super.continueTracking(touch, with: event)
+    }
+    override func endTracking(_ touch: UITouch?, with event: UIEvent?) { finish(); super.endTracking(touch, with: event) }
+    override func cancelTracking(with event: UIEvent?) { finish(); super.cancelTracking(with: event) }
+    override func didMoveToWindow() { super.didMoveToWindow(); if window == nil { finish(); suppressTap = false } }
+    func finish() {
+        holdTimer?.invalidate(); holdTimer = nil
+        if drag.active { drag.cancel(); isSelected = false }
+    }
+}

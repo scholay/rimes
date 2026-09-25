@@ -91,6 +91,26 @@ public struct ChordProfile: Codable, Identifiable, Equatable {
         return result(.init(keys: canonical(keys), output: a + b, kind: .syllable))
     }
 }
+/// Live per-hand readout shown while a two-thumb chord is held.
+public struct ChordHandPreview: Equatable {
+    public struct Side: Equatable {
+        public let keys: String
+        /// Mapping output for this hand alone; nil when the key set has no mapping.
+        public let output: String?
+    }
+    public let left: Side?
+    public let right: Side?
+    /// Result that releasing now would commit.
+    public let combined: String?
+}
+extension ChordProfile {
+    /// One hand's own mapping: a single key reads as itself, a pair uses its entry.
+    public func handOutput(_ keys: Set<Character>) -> String? {
+        guard !keys.isEmpty else { return nil }
+        if keys.count == 1 { return canonical(keys) }
+        return mappings.first { Set($0.keys) == keys }?.output
+    }
+}
 public struct ChordResolution: Equatable {
     public let keys: String
     public let preview: String
@@ -131,6 +151,15 @@ public struct ChordGesture {
     }
     public private(set) var cancelled = false
     public init() {}
+    /// Per-hand keys and mappings for display only; commit still uses `resolution`.
+    public func handPreview(in profile: ChordProfile) -> ChordHandPreview? {
+        guard active, let keys else { return nil }
+        func side(_ hand: String) -> ChordHandPreview.Side? {
+            let set = keys.intersection(Set(hand))
+            return set.isEmpty ? nil : .init(keys: profile.canonical(set), output: profile.handOutput(set))
+        }
+        return .init(left: side(profile.leftKeys), right: side(profile.rightKeys), combined: resolution(in: profile)?.preview)
+    }
     public var active: Bool { !down.isEmpty }
     public var keys: Set<Character>? {
         guard !cancelled, !contacts.isEmpty else { return nil }

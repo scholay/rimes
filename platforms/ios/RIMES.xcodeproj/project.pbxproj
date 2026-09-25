@@ -9,13 +9,11 @@
 /* Begin PBXBuildFile section */
 		061AF7384B28E8EF7F2FFC29 /* RIMESKeyboard.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B5C6E4AD5FD1AD736D377EAB /* RIMESKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		07278CA48F1961A0966D176D /* KeyboardFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5069B7A0CE0CA7FA60C8A05B /* KeyboardFeedback.swift */; };
-		081C517706973AD4C1512CFA /* BufferBlockStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5267BE2DE80307CA7424D16 /* BufferBlockStrip.swift */; };
 		0E3F096AF85A9F91E7741EBA /* BufferComposition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E1C9123D22B409520688270 /* BufferComposition.swift */; };
 		0FC1EF3D45A3AE16603B9FF1 /* KeySurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = B579639B42DCF0E4CECDE063 /* KeySurface.swift */; };
 		12ED10B7FAED3657E4132730 /* RimesCore in Frameworks */ = {isa = PBXBuildFile; productRef = 166AC455F71B32F8A88BEBA0 /* RimesCore */; };
 		15C8E9DF2F87DE79FBB21672 /* RimeMobile.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3EAB21FD96993A6C23136780 /* RimeMobile.mm */; };
 		177FBCAB4803C1E06B767D5E /* RimesCore in Frameworks */ = {isa = PBXBuildFile; productRef = BD70F7451E25B54A49DF7E2C /* RimesCore */; };
-		2554DF04A22475FD7B521586 /* BufferBlockStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5267BE2DE80307CA7424D16 /* BufferBlockStrip.swift */; };
 		272E9A702E215BA565D36909 /* EngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05F694330D783C5822C8798A /* EngineTests.swift */; };
 		34ED8AECFF8B222576516BC0 /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00BED878670FDB179561899 /* Settings.swift */; };
 		359E9CC6938EB1BBDB219690 /* BufferPlugins.swift in Sources */ = {isa = PBXBuildFile; fileRef = C51625B30F552E79ED0A6F8C /* BufferPlugins.swift */; };
@@ -26,6 +24,7 @@
 		3E147968371E22274FF45E11 /* KeycapButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE4D3A2A8A76FA57F6693DE9 /* KeycapButton.swift */; };
 		49D0B8B96EA1C4435CFC0051 /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00BED878670FDB179561899 /* Settings.swift */; };
 		5127AF8F2477691DBF3B141A /* Rime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = D2AE2CA88B327774FC437F4A /* Rime.xcframework */; };
+		51BE676C9B57DCF8AB6B8B20 /* SingleLineTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF6CD944F6471C08640346FA /* SingleLineTextView.swift */; };
 		630E928793178DCD96B5DD17 /* MobileEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E21B5038BEE6B784ABA0CB35 /* MobileEngine.swift */; };
 		6676C678F69E9C29144B1955 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD234B056A3AB0890E5F757B /* KeyboardViewController.swift */; };
 		71617EA2CC1E7B8590ABFF7C /* TranslationSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33A420AE1C9DDD5196FF7C94 /* TranslationSetupView.swift */; };
@@ -37,6 +36,7 @@
 		7D04B7DC48863EA19A5A4AE5 /* CandidateStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7946B62F3AF352493F425710 /* CandidateStrip.swift */; };
 		7E4183786A0A39941DB4FE2A /* EngineData in Resources */ = {isa = PBXBuildFile; fileRef = FC8031DB5E05D900912B3101 /* EngineData */; };
 		802DBBE669D7024D9EB737DA /* DocumentIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8843154BA7094F00E538F6A7 /* DocumentIdentity.swift */; };
+		861BF46BEEC215A7023FBB87 /* SingleLineTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF6CD944F6471C08640346FA /* SingleLineTextView.swift */; };
 		8D68698F672965C3F08BD8BF /* RepeatKeycapButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE0C7AE3AD47B418D0BB14A /* RepeatKeycapButton.swift */; };
 		91E6E22CA8D776230DF306A3 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2C7665ECABBBF5946A99BE50 /* PrivacyInfo.xcprivacy */; };
 		92163C597796278856E657A5 /* RepeatKeycapButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE0C7AE3AD47B418D0BB14A /* RepeatKeycapButton.swift */; };
@@ -119,8 +119,8 @@
 		CDCAEBF5822184603F11002A /* RimesApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimesApp.swift; sourceTree = "<group>"; };
 		D2AE2CA88B327774FC437F4A /* Rime.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = Rime.xcframework; path = ../../Vendor/Rime.xcframework; sourceTree = "<group>"; };
 		E21B5038BEE6B784ABA0CB35 /* MobileEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileEngine.swift; sourceTree = "<group>"; };
-		E5267BE2DE80307CA7424D16 /* BufferBlockStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BufferBlockStrip.swift; sourceTree = "<group>"; };
 		EE4D3A2A8A76FA57F6693DE9 /* KeycapButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeycapButton.swift; sourceTree = "<group>"; };
+		EF6CD944F6471C08640346FA /* SingleLineTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleLineTextView.swift; sourceTree = "<group>"; };
 		F19BE59861921D5B014A41BC /* Shared */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Shared; path = ../../Shared; sourceTree = SOURCE_ROOT; };
 		FC2A712CDC7868E1C11B6DAA /* ProxyTextDelivery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyTextDelivery.swift; sourceTree = "<group>"; };
 		FC8031DB5E05D900912B3101 /* EngineData */ = {isa = PBXFileReference; lastKnownFileType = folder; name = EngineData; path = Resources/EngineData; sourceTree = SOURCE_ROOT; };
@@ -254,7 +254,6 @@
 		FB5C935122DB3171C66C2192 /* Keyboard */ = {
 			isa = PBXGroup;
 			children = (
-				E5267BE2DE80307CA7424D16 /* BufferBlockStrip.swift */,
 				9E1C9123D22B409520688270 /* BufferComposition.swift */,
 				7946B62F3AF352493F425710 /* CandidateStrip.swift */,
 				2663C56751557C40F55C6B96 /* Info.plist */,
@@ -266,6 +265,7 @@
 				B579639B42DCF0E4CECDE063 /* KeySurface.swift */,
 				7EE0C7AE3AD47B418D0BB14A /* RepeatKeycapButton.swift */,
 				328406AEBF3F70DBFC497D85 /* RIMESKeyboard.entitlements */,
+				EF6CD944F6471C08640346FA /* SingleLineTextView.swift */,
 			);
 			path = Keyboard;
 			sourceTree = "<group>";
@@ -426,7 +426,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				081C517706973AD4C1512CFA /* BufferBlockStrip.swift in Sources */,
 				0E3F096AF85A9F91E7741EBA /* BufferComposition.swift in Sources */,
 				7D04B7DC48863EA19A5A4AE5 /* CandidateStrip.swift in Sources */,
 				272E9A702E215BA565D36909 /* EngineTests.swift in Sources */,
@@ -438,6 +437,7 @@
 				CC9298AE26DEDC6B9284B637 /* KeyboardViewController.swift in Sources */,
 				F94D4DE0296412D481BA1321 /* KeycapButton.swift in Sources */,
 				8D68698F672965C3F08BD8BF /* RepeatKeycapButton.swift in Sources */,
+				861BF46BEEC215A7023FBB87 /* SingleLineTextView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -445,7 +445,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				2554DF04A22475FD7B521586 /* BufferBlockStrip.swift in Sources */,
 				B25F7EF2358BAE1D1A68B9C9 /* BufferComposition.swift in Sources */,
 				359E9CC6938EB1BBDB219690 /* BufferPlugins.swift in Sources */,
 				C6DC870A22C6E3C67814072D /* CandidateStrip.swift in Sources */,
@@ -461,6 +460,7 @@
 				92163C597796278856E657A5 /* RepeatKeycapButton.swift in Sources */,
 				15C8E9DF2F87DE79FBB21672 /* RimeMobile.mm in Sources */,
 				34ED8AECFF8B222576516BC0 /* Settings.swift in Sources */,
+				51BE676C9B57DCF8AB6B8B20 /* SingleLineTextView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

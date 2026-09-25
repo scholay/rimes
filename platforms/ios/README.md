@@ -39,31 +39,49 @@ macOS input-method source and installation are unchanged.
 - Backspace deletes immediately, then after 400 ms repeats every 75 ms; lifting,
   leaving the key, cancellation, target changes, rotation and hiding stop it.
   Each deletion tick emits feedback at the selected haptic strength.
+- Outside chord resolution (QWERTY, numbers, Shift or EN), the cap under the finger
+  at release is typed and the highlight follows the finger; taps in the 6 pt gutters
+  between caps snap to the nearest cap. Chord hit testing is unchanged.
+- Hold Space for 0.35 s, then drag: each 10 pt moves the caret one character (an
+  emoji counts as one) in the host field or the Buffer, with a haptic tick. Releasing
+  after a hold types no space. Holding during composition does not start it.
+- Touches near the screen edges are no longer held back by the system's edge-swipe
+  recognizers; their touch delay is released while the gestures stay enabled.
 - Shift latches uppercase ASCII entry while preserving the chord layout. Return
   commits the engine's raw code without choosing a candidate or adding a newline;
   only automatically added chord separators are omitted. Space chooses a candidate.
 - 中/EN toggles direct English and the previous Chinese scheme. Simplified/
   Traditional output is retained in More. Emoji remains in the right-side grid
   cell, or More outside the chord grid; the palette contains 29 local items.
+  In the chord grid, Delete (with repeat) takes the right-hand cell below Emoji and
+  中/EN takes Delete's place in the bottom row; numbers and emoji keep the usual order.
+- While a chord is held the candidate row shows, mirrored about the centre: left keys,
+  left mapping, the combined result in a teal pill, right mapping, right keys. `?`
+  marks an unmapped hand and `—` an idle one. It is display only; release commits
+  exactly the combined result.
 - Explicit Buffer mode, character cursor editing, ordered next/all insertion,
   in-memory drafts and manual result confirmation. The fixed order above the keys
-  is output → input → candidates. Buffer controls are embedded in their rows: toggle
-  at candidate left, plugin at input left, Send at output right. Buffer shows both
-  rows when enabled and hides both when disabled; source/result text scrolls internally;
-  candidates wrap by measured text width when expanded, including while Buffer is open.
+  is output → input → candidates. Send, plugin and the Buffer toggle form one
+  right-hand column (output, input and candidate rows). Buffer shows both rows
+  when enabled and hides both when disabled. Every mode uses the same two single
+  lines that never wrap and scroll horizontally: a grey display-only output line
+  and a teal-outlined input line with the caret. Candidates wrap by measured text
+  width when expanded, including while Buffer is open; choosing a candidate or
+  typing collapses them to one row until expanded again.
   Tap the paper plane for one block; hold it for one second for all remaining blocks.
   The More menu contains explicit source insertion, cursor movement and Clear.
 - Composition appears inline as native marked text in the host, or at the Buffer
   cursor. Confirming a candidate replaces it once; unconfirmed text stays out of
   Buffer source revisions and translation requests. There is no separate preedit row.
-- Settings is a gear at candidate-row right; input schemes and translation languages
+- Settings is a gear at candidate-row left; input schemes and translation languages
   are nested in its menu. There is no top toolbar. A conditional system-required globe and wide Space
   key. The candidate row always reserves at least 32 pt, even when empty;
   the typing block stays anchored to the bottom while auxiliaries grow upward.
 - Default Buffer shows committed characters/minute, touch starts/character,
-  touch starts/second and backspace presses centered across the output row.
-  Default does not duplicate source text in that row. Its input row uses horizontal
-  block chips and desktop clause/phrase segmentation, shared with actual delivery. Repeats do not
+  touch starts/second and backspace presses centered in the output line.
+  Default does not duplicate source text there. Its input line is the same plain
+  line as plugins; desktop clause/phrase segmentation still splits delivery blocks,
+  without drawing them. Repeats do not
   inflate touch counts; a six-second idle gap starts a new burst. No accuracy is
   inferred for free typing. Gear → Default automatic insertion offers Off/1/2/3/5 s
   (default Off). Blocks age separately, edited text restarts, composition pauses,

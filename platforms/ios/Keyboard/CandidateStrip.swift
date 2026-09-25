@@ -1,4 +1,5 @@
 import UIKit
+import RimesCore
 
 struct CandidateLayout {
     let frames: [CGRect]
@@ -101,5 +102,65 @@ final class CandidateButton: UIButton {
         if let imageView, let image = imageView.image {
             imageView.frame = CGRect(x: (bounds.width - image.size.width) / 2, y: (bounds.height - image.size.height) / 2, width: image.size.width, height: image.size.height)
         }
+    }
+}
+
+/// Temporarily replaces the candidate row while a chord is held. Mirrored about
+/// the centre: left keys, left mapping, [combined result], right mapping, right keys.
+final class ChordHandPreviewView: UIView {
+    private let leftKeys = UILabel(), leftOutput = UILabel(), combined = UILabel(), rightOutput = UILabel(), rightKeys = UILabel()
+    private let pill = UIView()
+    private var columns: [UILabel] { [leftKeys, leftOutput, combined, rightOutput, rightKeys] }
+    private(set) var preview: ChordHandPreview?
+    var landscape = false { didSet { if oldValue != landscape { update(preview) } } }
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false; isHidden = true
+        pill.layer.cornerRadius = 8; pill.layer.cornerCurve = .continuous; addSubview(pill)
+        for (label, id) in zip(columns, ["left.keys", "left.output", "combined", "right.output", "right.keys"]) {
+            label.textAlignment = .center; label.adjustsFontSizeToFitWidth = true; label.minimumScaleFactor = 0.5
+            label.accessibilityIdentifier = "keyboard.chord.\(id)"; addSubview(label)
+        }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let h = bounds.height, mid = bounds.midX
+        func natural(_ label: UILabel) -> CGFloat { (label.text?.isEmpty ?? true) ? 0 : ceil(label.intrinsicContentSize.width) }
+        // Result pill stays centred; each side packs outward from it.
+        let pillWidth = min(bounds.width * 0.42, max(58, natural(combined) + 20))
+        pill.frame = CGRect(x: mid - pillWidth / 2, y: 2, width: pillWidth, height: max(0, h - 4))
+        combined.frame = pill.frame.insetBy(dx: 6, dy: 0)
+        let room = max(0, (bounds.width - pillWidth) / 2 - 4)
+        for (output, keys, sign) in [(leftOutput, leftKeys, CGFloat(-1)), (rightOutput, rightKeys, CGFloat(1))] {
+            let outputWidth = min(natural(output), room * 0.55), keysWidth = min(natural(keys), max(0, room - outputWidth - 14))
+            let outputCentre = mid + sign * (pillWidth / 2 + 8 + outputWidth / 2)
+            output.frame = CGRect(x: outputCentre - outputWidth / 2, y: 0, width: outputWidth, height: h)
+            let keysCentre = outputCentre + sign * (outputWidth / 2 + 6 + keysWidth / 2)
+            keys.frame = CGRect(x: keysCentre - keysWidth / 2, y: 0, width: keysWidth, height: h)
+        }
+    }
+    /// Column texts left to right, for tests and accessibility.
+    var texts: [String] { columns.map { $0.text ?? "" } }
+    func update(_ value: ChordHandPreview?) {
+        preview = value
+        let keyFont = UIFont.monospacedSystemFont(ofSize: landscape ? 12 : 13, weight: .medium)
+        let outputFont = UIFont.systemFont(ofSize: landscape ? 15 : 17, weight: .semibold)
+        func side(_ side: ChordHandPreview.Side?, keys: UILabel, output: UILabel) {
+            keys.font = keyFont; keys.textColor = .secondaryLabel; keys.text = side?.keys.uppercased() ?? ""
+            output.font = outputFont
+            output.text = side == nil ? "—" : side?.output ?? "?"
+            output.textColor = side == nil ? .tertiaryLabel : side?.output == nil ? .systemRed : .systemTeal
+        }
+        side(value?.left, keys: leftKeys, output: leftOutput)
+        side(value?.right, keys: rightKeys, output: rightOutput)
+        let mapped = value?.combined != nil
+        combined.font = mapped ? .systemFont(ofSize: landscape ? 20 : 22, weight: .bold) : .systemFont(ofSize: 13, weight: .semibold)
+        combined.textColor = mapped ? .white : .secondaryLabel
+        combined.text = value == nil ? "" : value?.combined ?? L("无映射", "No mapping")
+        pill.backgroundColor = mapped ? .systemTeal : .tertiarySystemFill
+        pill.isHidden = value == nil
+        accessibilityLabel = value == nil ? nil : texts.filter { !$0.isEmpty }.joined(separator: " ")
+        setNeedsLayout()
     }
 }

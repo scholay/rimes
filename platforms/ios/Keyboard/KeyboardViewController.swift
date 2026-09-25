@@ -28,7 +28,7 @@ final class KeyboardViewController: UIInputViewController {
     private var autoTarget: UUID?
     private var autoSuspended = false
     private var defaultDelay = UserDefaults.standard.double(forKey: "defaultBuffer.autoDelay")
-    private let typingStats = UILabel(), sourceBlocks = BufferBlockStrip()
+    private let typingStats = UILabel()
     private var isDefaultBuffer: Bool { bufferEnabled && selectedPlugin == nil }
     var defaultClockNow: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     private var uptime: TimeInterval { defaultClockNow() }
@@ -47,15 +47,19 @@ final class KeyboardViewController: UIInputViewController {
     private var onscreen = false
     private var expanded = false
     private let bottom = UIStackView(), candidateStrip = CandidateStrip()
+    private let handPreview = ChordHandPreviewView()
     private var bottomKeyWidths: [NSLayoutConstraint] = []
     private var compactTypingKeys: Bool { surface.chordMode && !surface.numeric && !surface.emojiMode }
-    private let status = UILabel(), source = UITextView(), result = UITextView(), surface = KeySurface()
+    private let status = UILabel(), source = SingleLineTextView(), result = SingleLineTextView(), surface = KeySurface()
     private let bufferPanel = UIView(), insertionSlot = UIView(), candidatePanel = UIView()
     private let bufferButton = KeycapButton(), aiButton = KeycapButton(), moreButton = KeycapButton()
     private let deleteButton = RepeatKeycapButton()
+    /// Chord mode swaps Delete into the right-hand 中/EN cell and 中/EN into Delete's slot.
+    private let chordDelete = RepeatKeycapButton(), bottomLanguage = KeycapButton()
     private var deletionTarget: UUID?
     private var directEnglish: Bool { scheme == .english || preferences.englishInput }
-    private let globe = KeycapButton(), numbers = KeycapButton(), shiftButton = KeycapButton(), spaceKey = KeycapButton()
+    private let globe = KeycapButton(), numbers = KeycapButton(), shiftButton = KeycapButton(), spaceKey = SpaceCursorButton()
+    private var caretSteps = 0
     private var height: NSLayoutConstraint!
     private var previousWidth: CGFloat = 0
     private var chordPreview = ""
@@ -77,18 +81,18 @@ final class KeyboardViewController: UIInputViewController {
         view.backgroundColor = .systemGroupedBackground
         height = view.heightAnchor.constraint(equalToConstant: 240); height.isActive = true
         for item in [bufferPanel, candidatePanel, surface, bottom, status] { view.addSubview(item) }
-        candidatePanel.addSubview(bufferButton); candidatePanel.addSubview(candidateStrip); candidatePanel.addSubview(moreButton)
+        candidatePanel.addSubview(bufferButton); candidatePanel.addSubview(candidateStrip); candidatePanel.addSubview(moreButton); candidatePanel.addSubview(handPreview)
         typingStats.font = .monospacedDigitSystemFont(ofSize: 16, weight: .medium)
         typingStats.textAlignment = .center
         typingStats.textColor = .secondaryLabel; typingStats.adjustsFontSizeToFitWidth = true; typingStats.minimumScaleFactor = 0.8
         typingStats.accessibilityIdentifier = "keyboard.buffer.metrics"
-        bufferPanel.addSubview(typingStats); bufferPanel.addSubview(sourceBlocks)
+        typingStats.isUserInteractionEnabled = false
         bufferPanel.addSubview(aiButton); bufferPanel.addSubview(insertionSlot)
         configure(bufferButton, "") { [weak self] in self?.toggleBuffer() }
         bufferButton.symbol("square.stack.3d.up", label: L("Buffer 开关", "Toggle Buffer"))
         configure(aiButton, "") {}; aiButton.showsMenuAsPrimaryAction = true
         configure(moreButton, "") {}; moreButton.symbol("gearshape", label: L("键盘设置", "Keyboard settings")); moreButton.showsMenuAsPrimaryAction = true
-        moreButton.addAction(UIAction { [weak self] _ in self?.surface.cancel(); self?.insertButton.cancelPress(); self?.deleteButton.cancelPress() }, for: .touchDown)
+        moreButton.addAction(UIAction { [weak self] _ in self?.surface.cancel(); self?.insertButton.cancelPress(); self?.cancelDeletes() }, for: .touchDown)
         insertButton.symbol("paperplane", label: L("插入下一块", "Insert next block"))
         insertButton.accessibilityHint = L("单击逐块上屏，长按一秒插入全部", "Tap for the next block; hold one second to insert all")
         insertButton.addAction(UIAction { [weak self] _ in self?.surface.feedback.send(.press) }, for: .touchDown)
@@ -103,16 +107,16 @@ final class KeyboardViewController: UIInputViewController {
         stopButton.symbol("stop.fill", label: L("停止处理", "Stop processing"))
         insertionSlot.addSubview(insertButton); insertionSlot.addSubview(stopButton)
         candidateStrip.onSelect = { [weak self] index in
-            guard let self else { return }; self.surface.cancel(); self.receive(self.engine.candidate(index))
+            guard let self else { return }; self.collapseCandidates(); self.surface.cancel(); self.receive(self.engine.candidate(index))
         }
         candidateStrip.onPress = { [weak self] in self?.surface.feedback.send(.press) }
         candidateStrip.onExpand = { [weak self] in self?.expanded.toggle(); self?.resize() }
-        for (textView, name) in [(source, "source"), (result, "result")] {
-            textView.isEditable = false; textView.isSelectable = false
-            textView.textContainerInset = .init(top: 3, left: 4, bottom: 3, right: 4)
-            textView.layer.cornerRadius = 7; textView.accessibilityIdentifier = "keyboard.buffer.\(name)"
-            bufferPanel.addSubview(textView)
+        for (line, name) in [(source, "source"), (result, "result")] {
+            line.accessibilityIdentifier = "keyboard.buffer.\(name)"
+            bufferPanel.addSubview(line)
         }
+        source.role = .input; result.role = .output
+        result.addSubview(typingStats)
         refreshPluginMenu(); refreshLanguageMenu()
         if #available(iOS 26, *) {
             Task { [weak self] in
@@ -147,31 +151,42 @@ final class KeyboardViewController: UIInputViewController {
             self?.toggleShift()
         }
         shiftButton.symbol("shift", label: L("大写切换", "Shift"))
-        configure(spaceKey, "") { [weak self] in self?.noteTypingKey(); self?.space() }; spaceKey.symbol("space", label: L("空格", "Space"))
-        deleteButton.symbol("delete.left", label: L("删除", "Delete"))
-        deleteButton.onPressBegan = { [weak self] in
-            guard let self, self.onscreen, let target = self.currentDocument,
-                  target == DocumentIdentity.read(self.textDocumentProxy) else { return false }
-            self.noteTypingKey(backspace: true)
-            self.deletionTarget = target
-            self.surface.cancel(); self.insertButton.cancelPress()
-            return true
+        configure(spaceKey, "") { [weak self] in guard let self, self.spaceKey.consumeTap() else { return }; self.noteTypingKey(); self.space() }
+        spaceKey.symbol("space", label: L("空格", "Space"))
+        spaceKey.accessibilityHint = L("按住并左右拖动可移动光标", "Hold and drag left or right to move the cursor")
+        spaceKey.onCursorBegan = { [weak self] in self?.beginCaretDrag() ?? false }
+        spaceKey.onCursorMove = { [weak self] steps in self?.moveCaret(steps) }
+        for delete in [deleteButton, chordDelete] {
+            delete.symbol("delete.left", label: L("删除", "Delete"))
+            delete.onPressBegan = { [weak self, weak delete] in
+                guard let self, self.onscreen, let target = self.currentDocument,
+                      target == DocumentIdentity.read(self.textDocumentProxy) else { return false }
+                self.noteTypingKey(backspace: true)
+                self.deletionTarget = target
+                self.surface.cancel(); self.insertButton.cancelPress()
+                if delete !== self.deleteButton { self.deleteButton.cancelPress() } else { self.chordDelete.cancelPress() }
+                return true
+            }
+            delete.onDelete = { [weak self] in
+                guard let self, self.onscreen, self.deletionTarget == self.currentDocument,
+                      self.currentDocument == DocumentIdentity.read(self.textDocumentProxy) else { return false }
+                self.backspace(); self.surface.feedback.send(.press); return self.onscreen
+            }
         }
-        deleteButton.onDelete = { [weak self] in
-            guard let self, self.onscreen, self.deletionTarget == self.currentDocument,
-                  self.currentDocument == DocumentIdentity.read(self.textDocumentProxy) else { return false }
-            self.backspace(); self.surface.feedback.send(.press); return self.onscreen
-        }
+        chordDelete.compactCap = true; chordDelete.titleHorizontalInset = 2
+        surface.languageCellView = chordDelete
+        configure(bottomLanguage, "中") { [weak self] in self?.toggleLanguage() }
+        bottomLanguage.titleLabel?.font = .systemFont(ofSize: 18, weight: .medium)
         let enter = button("") { [weak self] in self?.noteTypingKey(); self?.enter() }; enter.symbol("return", label: L("回车", "Return"))
-        for item in [globe, numbers, shiftButton, spaceKey, deleteButton, enter] { bottom.addArrangedSubview(item) }
+        for item in [globe, numbers, shiftButton, spaceKey, deleteButton, bottomLanguage, enter] { bottom.addArrangedSubview(item) }
         // The functional widths never depend on the optional globe; its removal widens Space.
-        for item in [globe, numbers, shiftButton, deleteButton, enter] {
+        for item in [globe, numbers, shiftButton, deleteButton, bottomLanguage, enter] {
             let width = item.widthAnchor.constraint(equalTo: bottom.widthAnchor, multiplier: 1 / 7.5, constant: -20 / 7.5)
             width.priority = .defaultHigh; width.isActive = true; bottomKeyWidths.append(width)
         }
         spaceKey.widthAnchor.constraint(greaterThanOrEqualTo: numbers.widthAnchor, multiplier: 2.5).isActive = true
         status.font = .systemFont(ofSize: 11); status.textColor = .secondaryLabel; status.numberOfLines = 2
-        for (item, id) in [(bufferButton, "buffer"), (aiButton, "plugin"), (insertButton, "insert"), (stopButton, "stop"), (moreButton, "more"), (globe, "globe"), (spaceKey, "space"), (shiftButton, "shift"), (deleteButton, "delete"), (enter, "enter")] {
+        for (item, id) in [(bufferButton, "buffer"), (aiButton, "plugin"), (insertButton, "insert"), (stopButton, "stop"), (moreButton, "more"), (globe, "globe"), (spaceKey, "space"), (shiftButton, "shift"), (deleteButton, "delete"), (chordDelete, "delete.chord"), (bottomLanguage, "mode.bottom"), (enter, "enter")] {
             item.accessibilityIdentifier = "keyboard.\(id)"
         }
         NotificationCenter.default.addObserver(self, selector: #selector(protect), name: .NSExtensionHostWillResignActive, object: nil)
@@ -182,7 +197,18 @@ final class KeyboardViewController: UIInputViewController {
         super.viewWillAppear(animated); onscreen = true; reloadPreferences()
         if currentDocument != DocumentIdentity.read(textDocumentProxy) { delivery.abandonMarkedText(); cancelRequest(); buffer = .init() }; currentDocument = DocumentIdentity.read(textDocumentProxy); choose(preferences.scheme); render()
     }
-    override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); metrics.presented(since: initializationStart) }
+    override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); releaseEdgeTouchDelay(); metrics.presented(since: initializationStart) }
+    /// iOS edge-swipe recognizers above the keyboard hold back touches that start
+    /// near the screen edges until a swipe is ruled out, so quick taps on the outer
+    /// keys feel dead and long presses land late. Keys own their touches: let them
+    /// begin immediately. The system gestures themselves stay enabled.
+    private func releaseEdgeTouchDelay() {
+        var node: UIView? = view
+        while let current = node {
+            for recognizer in current.gestureRecognizers ?? [] where recognizer.delaysTouchesBegan { recognizer.delaysTouchesBegan = false }
+            node = current.superview
+        }
+    }
     override func viewWillDisappear(_ animated: Bool) { protect(); super.viewWillDisappear(animated) }
     @objc private func resume() {
         guard isViewLoaded, view.window != nil else { return }
@@ -191,12 +217,12 @@ final class KeyboardViewController: UIInputViewController {
     }
     @objc private func protect() {
         stopDefaultAutoSend(); liveTyping.reset()
-        deleteButton.cancelPress(); surface.shifted = false; shiftButton.isSelected = false
+        cancelDeletes(); surface.shifted = false; shiftButton.isSelected = false
         metrics.sampleMemory(); metrics.save()
         delivery.discardMarkedText()
         onscreen = false; consentThisSession.removeAll(); surface.retire(); cancelRequest(); engine.clear(); snapshot = .init(); buffer = .init(); bufferEnabled = false; selectedPlugin = nil; status.text = ""; refreshPluginMenu(); render()
     }
-    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) { deleteButton.cancelPress(); insertButton.cancelPress(); surface.retire(); super.viewWillTransition(to: size, with: coordinator); coordinator.animate(alongsideTransition: { _ in self.resize() }) }
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) { cancelDeletes(); insertButton.cancelPress(); surface.retire(); super.viewWillTransition(to: size, with: coordinator); coordinator.animate(alongsideTransition: { _ in self.resize() }) }
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
         delivery.finishDocumentResetIfNeeded()
@@ -204,7 +230,7 @@ final class KeyboardViewController: UIInputViewController {
             // A field change within this visible session stops work for the old
             // target, but keeps unsubmitted blocks for another explicit insertion.
             // Hiding/resigning the keyboard ends the session and clears the draft.
-            deleteButton.cancelPress(); delivery.abandonMarkedText(); cancelRequest(); engine.clear(); snapshot = .init(); chordPreview = ""; surface.retire()
+            cancelDeletes(); delivery.abandonMarkedText(); cancelRequest(); engine.clear(); snapshot = .init(); chordPreview = ""; surface.retire()
             stopDefaultAutoSend(); autoSuspended = true; liveTyping.reset()
             currentDocument = DocumentIdentity.read(textDocumentProxy); render()
         }
@@ -213,7 +239,7 @@ final class KeyboardViewController: UIInputViewController {
     override func selectionWillChange(_ textInput: UITextInput?) {
         if !delivery.isWriting {
             autoClock.pause()
-            deleteButton.cancelPress(); abandonHostComposition()
+            cancelDeletes(); abandonHostComposition()
         }
         super.selectionWillChange(textInput)
     }
@@ -235,7 +261,7 @@ final class KeyboardViewController: UIInputViewController {
         let button = KeycapButton(); configure(button, title, action: action); return button
     }
     private func choose(_ value: InputScheme) {
-        deleteButton.cancelPress()
+        cancelDeletes()
         engine.clear(); snapshot = .init(); chordPreview = ""; surface.cancel(); scheme = value
         surface.profile = config.keyboardChord; surface.chordMode = value == .chord; surface.numeric = false; surface.shifted = false
         surface.chordLayout = preferences.chordLayout; surface.englishInput = directEnglish
@@ -260,20 +286,20 @@ final class KeyboardViewController: UIInputViewController {
         render()
     }
     private func toggleShift() {
-        deleteButton.cancelPress(); surface.cancel()
+        cancelDeletes(); surface.cancel()
         if !surface.shifted { commitRawInput() }
         surface.shifted.toggle(); shiftButton.isSelected = surface.shifted; render()
     }
     private func toggleLanguage() {
         guard onscreen else { return }
-        deleteButton.cancelPress(); surface.cancel(); commitRawInput()
+        cancelDeletes(); surface.cancel(); commitRawInput()
         preferences.toggleLanguage(); preferencesStore.save(preferences)
         if scheme != preferences.scheme { choose(preferences.scheme) }
         surface.shifted = false; shiftButton.isSelected = false
         surface.englishInput = directEnglish; render()
     }
     private func changeLayout(_ layout: ChordLayout) {
-        deleteButton.cancelPress(); insertButton.cancelPress(); surface.retire()
+        cancelDeletes(); insertButton.cancelPress(); surface.retire()
         preferences.chordLayout = layout
         preferencesStore.save(preferences)
         surface.chordLayout = layout; render()
@@ -309,32 +335,34 @@ final class KeyboardViewController: UIInputViewController {
     private func space() { surface.cancel(); if !snapshot.preedit.isEmpty { settle() } else { insert(" "); render() } }
     private func enter() { surface.cancel(); if !engine.rawInput.isEmpty { commitRawInput() } else { insert("\n"); render() } }
     private func backspace() {
-        guard onscreen, currentDocument == DocumentIdentity.read(textDocumentProxy) else { deleteButton.cancelPress(); return }
+        guard onscreen, currentDocument == DocumentIdentity.read(textDocumentProxy) else { cancelDeletes(); return }
         surface.cancel(); if !engine.rawInput.isEmpty { receive(engine.process(key: 0xff08)) }
         else if bufferEnabled { cancelRequest(); buffer.backspace(); sourceChanged(); render() }
         else if let target = currentDocument { _ = delivery.deleteBackward(target:target) }
     }
-    private func toggleBuffer() { stopDefaultAutoSend(); autoSuspended = false; liveTyping.reset(); deleteButton.cancelPress(); surface.cancel(); settle(); bufferEnabled.toggle(); if !bufferEnabled { cancelRequest(); selectedPlugin = nil; refreshPluginMenu() }; bufferButton.isSelected = bufferEnabled; render() }
+    private func toggleBuffer() { stopDefaultAutoSend(); autoSuspended = false; liveTyping.reset(); cancelDeletes(); surface.cancel(); settle(); bufferEnabled.toggle(); if !bufferEnabled { cancelRequest(); selectedPlugin = nil; refreshPluginMenu() }; bufferButton.isSelected = bufferEnabled; render() }
     private func render() {
         if onscreen {
             if bufferEnabled { delivery.discardMarkedText() }
             else if let target = currentDocument { delivery.updateMarkedText(compositionText, target: target) }
         }
-        candidateStrip.update(snapshot.candidates); renderBuffer(); resize()
+        candidateStrip.update(snapshot.candidates); renderHandPreview(); refreshLanguageSwap(); renderBuffer(); resize()
+    }
+    private func renderHandPreview() {
+        let preview = surface.handPreview
+        handPreview.update(preview)
+        handPreview.isHidden = preview == nil; candidateStrip.isHidden = preview != nil
     }
     private func renderBuffer() {
         bufferPanel.isHidden = !bufferEnabled; bufferButton.isSelected = bufferEnabled
         let display = BufferComposition(source: buffer.source, cursor: buffer.cursor, preedit: compositionText,
                                         font: .systemFont(ofSize: view.bounds.width > 600 ? 14 : 15))
         source.attributedText = display.text; source.scrollRangeToVisible(display.caretRange)
-        source.isHidden = isDefaultBuffer
-        sourceBlocks.isHidden = !isDefaultBuffer
-        if isDefaultBuffer {
-            sourceBlocks.update(source: buffer.source, cursor: buffer.cursor, preedit: compositionText,
-                                font: .systemFont(ofSize: view.bounds.width > 600 ? 16 : 18))
-        }
-        result.isHidden = isDefaultBuffer
+        // Every Buffer mode uses the same two lines: a display-only output line
+        // above an input line. Default shows its live typing stats as output.
         result.text = isDefaultBuffer ? "" : buffer.generating ? L("处理中… ", "Working… ") + buffer.preview : (needsPluginResult ? buffer.pluginPending.joined() : buffer.pending.joined())
+        // Streaming output follows its newest text; finished output opens at its start.
+        result.scrollRangeToVisible(NSRange(location: buffer.generating ? (result.text as NSString).length : 0, length: 0))
         aiButton.isHidden = !bufferEnabled
         insertionSlot.isHidden = !bufferEnabled
         stopButton.isHidden = !buffer.generating; insertButton.isHidden = buffer.generating
@@ -353,7 +381,6 @@ final class KeyboardViewController: UIInputViewController {
         }
         for constraint in bottomKeyWidths { constraint.constant = -5 * bottom.spacing / 7.5 }
         candidateStrip.expanded = expanded; candidateStrip.landscape = landscape
-        candidateStrip.isHidden = false
         status.isHidden = status.text?.isEmpty != false
         globe.isHidden = !onscreen || !needsInputModeSwitchKey
         let bufferHeight: CGFloat = landscape ? 60 : 76
@@ -378,20 +405,57 @@ final class KeyboardViewController: UIInputViewController {
         let landscape = view.bounds.width > 600
         let bufferRowHeight: CGFloat = landscape ? 28 : 36
         result.frame = CGRect(x: 0, y: 0, width: max(0, bufferPanel.bounds.width - 36), height: bufferRowHeight)
-        typingStats.frame = CGRect(x: 36, y: 0, width: max(0, bufferPanel.bounds.width - 72), height: bufferRowHeight)
+        typingStats.frame = CGRect(x: 8, y: 0, width: max(0, result.bounds.width - 16), height: bufferRowHeight)
         typingStats.font = .monospacedDigitSystemFont(ofSize: landscape ? 14 : 16, weight: .medium)
         insertionSlot.frame = CGRect(x: bufferPanel.bounds.width - 32, y: 0, width: 32, height: bufferRowHeight)
-        aiButton.frame = CGRect(x: 0, y: bufferRowHeight + 4, width: 32, height: bufferRowHeight)
-        source.frame = CGRect(x: 36, y: bufferRowHeight + 4, width: max(0, bufferPanel.bounds.width - 36), height: bufferRowHeight)
-        sourceBlocks.frame = source.frame
-        bufferButton.frame = CGRect(x: 0, y: 0, width: 32, height: 32)
+        // Right column: Send, plugin and the Buffer switch line up above each other;
+        // settings sits alone on the left of the candidate row.
+        aiButton.frame = CGRect(x: bufferPanel.bounds.width - 32, y: bufferRowHeight + 4, width: 32, height: bufferRowHeight)
+        source.frame = CGRect(x: 0, y: bufferRowHeight + 4, width: max(0, bufferPanel.bounds.width - 36), height: bufferRowHeight)
+        bufferButton.frame = CGRect(x: candidatePanel.bounds.width - 32, y: 0, width: 32, height: 32)
         candidateStrip.frame = CGRect(x: 36, y: 0, width: max(0, candidatePanel.bounds.width - 72), height: candidatePanel.bounds.height)
-        moreButton.frame = CGRect(x: candidatePanel.bounds.width - 32, y: 0, width: 32, height: 32)
+        moreButton.frame = CGRect(x: 0, y: 0, width: 32, height: 32)
+        handPreview.frame = CGRect(x: 36, y: 0, width: max(0, candidatePanel.bounds.width - 72), height: 32)
+        handPreview.landscape = landscape
         result.font = .systemFont(ofSize: landscape ? 14 : 15)
         bottom.layoutIfNeeded()
         insertButton.frame = insertionSlot.bounds; stopButton.frame = insertionSlot.bounds
     }
+    private func cancelDeletes() { deleteButton.cancelPress(); chordDelete.cancelPress() }
+    private func refreshLanguageSwap() {
+        let swapped = compactTypingKeys
+        if deleteButton.isHidden != swapped { deleteButton.isHidden = swapped }
+        if bottomLanguage.isHidden == swapped { bottomLanguage.isHidden = !swapped }
+        if swapped { deleteButton.cancelPress() } else { chordDelete.cancelPress() }
+        bottomLanguage.setTitle(surface.englishInput ? "EN" : "中", for: .normal)
+        bottomLanguage.isSelected = surface.englishInput
+        bottomLanguage.accessibilityLabel = surface.englishInput ? L("英文，切换中文", "English; switch to Chinese") : L("中文，切换英文", "Chinese; switch to English")
+    }
+    /// Space hold starts caret movement only when nothing is being composed.
+    private func beginCaretDrag() -> Bool {
+        guard onscreen, !hasComposition, engine.rawInput.isEmpty else { return false }
+        if !bufferEnabled { guard let target = currentDocument, target == DocumentIdentity.read(textDocumentProxy) else { return false } }
+        cancelDeletes(); insertButton.cancelPress(); surface.cancel()
+        surface.feedback.send(.press); return true
+    }
+    private func moveCaret(_ steps: Int) {
+        guard onscreen, steps != 0 else { return }
+        if bufferEnabled {
+            let before = buffer.cursor; buffer.moveCursor(steps)
+            guard buffer.cursor != before else { return }
+            render()
+        } else {
+            guard let target = currentDocument, delivery.moveCaret(by: steps, target: target) else { return }
+        }
+        caretSteps += 1; surface.feedback.send(.selection, combination: String(caretSteps))
+    }
+    /// Expanded candidates are a one-shot view: choosing or typing returns to one row.
+    private func collapseCandidates() {
+        guard expanded else { return }
+        expanded = false; candidateStrip.setNeedsLayout(); resize()
+    }
     private func noteTypingKey(backspace: Bool = false) {
+        if !backspace { collapseCandidates() }
         guard isDefaultBuffer else { return }
         liveTyping.noteKey(at: uptime, isRepeat: false, isBackspace: backspace)
     }
@@ -582,13 +646,18 @@ final class KeyboardViewController: UIInputViewController {
         } catch { status.text = (error as? CoreError)?.localizedDescription ?? L("无法读取 AI 配置", "Unable to read AI configuration"); render() }
     }
     #if KEYBOARD_LAYOUT_TESTS
-    var layoutViews: (buffer: UIView, candidates: CandidateStrip, keys: KeySurface, settings: KeycapButton, bottom: UIStackView, source: UITextView, insert: InsertKeycapButton, globe: KeycapButton, result: UITextView, stop: KeycapButton) {
+    var layoutViews: (buffer: UIView, candidates: CandidateStrip, keys: KeySurface, settings: KeycapButton, bottom: UIStackView, source: SingleLineTextView, insert: InsertKeycapButton, globe: KeycapButton, result: SingleLineTextView, stop: KeycapButton) {
         (bufferPanel, candidateStrip, surface, moreButton, bottom, source, insertButton, globe, result, stopButton)
     }
     func developmentType(_ text: String) { type(text) }
     func developmentResetPreferences() { preferences = .init(); choose(.pinyin); render() }
     func developmentChoose(_ value: InputScheme) { preferences.select(value); choose(value); render() }
     func developmentChord(_ text: String) { type(text, chord: true) }
+    var developmentHandPreview: ChordHandPreviewView { handPreview }
+    var developmentSpaceKey: SpaceCursorButton { spaceKey }
+    func developmentReleaseEdgeTouchDelay() { releaseEdgeTouchDelay() }
+    func developmentNumeric() { numbers.sendActions(for: .touchUpInside) }
+    var developmentBufferCursor: Int { buffer.cursor }
     func developmentShift() { toggleShift() }
     func developmentLanguage() { toggleLanguage() }
     func developmentEnter() { enter() }
