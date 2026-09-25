@@ -51,6 +51,32 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(p.resolve(Set("sd"))?.input,"u")
         XCTAssertEqual(p.resolve(Set("j"))?.input,"j")
     }
+    func testHandPreviewShowsEachHandsMappingAndLiveCombination() throws {
+        var p = ChordProfile.builtIn.copy(); p.boundaryPolicy = .explicitSyllables
+        p.mappings = [.init(keys:"sd",output:"sh",kind:.fragment), .init(keys:"jk",output:"ang",kind:.fragment)]
+        _ = try p.validated()
+        var g = ChordGesture()
+        XCTAssertNil(g.handPreview(in: p))
+        g.begin(id: 1, key: "s", profile: p)
+        var preview = try XCTUnwrap(g.handPreview(in: p))
+        XCTAssertEqual(preview.left, .init(keys: "s", output: "s")); XCTAssertNil(preview.right)
+        g.move(id: 1, key: "d", profile: p)
+        g.begin(id: 2, key: "j", profile: p)
+        preview = try XCTUnwrap(g.handPreview(in: p))
+        XCTAssertEqual(preview.left?.output, "sh"); XCTAssertEqual(preview.right, .init(keys: "j", output: "j"))
+        g.move(id: 2, key: "k", profile: p)
+        preview = try XCTUnwrap(g.handPreview(in: p))
+        XCTAssertEqual(preview.left?.keys, "sd"); XCTAssertEqual(preview.right?.output, "ang")
+        XCTAssertEqual(preview.combined, "shang")
+        // Display never changes what release commits.
+        XCTAssertEqual(preview.combined, g.resolution(in: p)?.preview)
+        _ = g.end(id: 1, key: "d", profile: p)
+        XCTAssertEqual(g.handPreview(in: p)?.combined, "shang") // other thumb still down
+        XCTAssertEqual(g.end(id: 2, key: "k", profile: p)?.input, "shang'")
+        XCTAssertNil(g.handPreview(in: p))
+        g.begin(id: 3, key: "s", profile: p); g.cancel()
+        XCTAssertNil(g.handPreview(in: p))
+    }
     func testEmptySpaceKeepsEndpointAndEitherReleaseOrderCommitsOnce() {
         let p = ChordProfile.builtIn
         for reverse in [false, true] {

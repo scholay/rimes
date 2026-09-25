@@ -71,6 +71,22 @@ import RimesCore
         controller.textDocumentProxy.unmarkText()
     }
     func forgetMarkedText() { markedTarget = nil; markedText = ""; markedProxy = nil }
+    /// Steps the host caret by whole characters. Offsets are measured from the
+    /// proxy context so an emoji or combined character counts as one step.
+    func moveCaret(by steps: Int, target: UUID) -> Bool {
+        writeDepth += 1; defer { writeDepth -= 1 }
+        guard steps != 0, markedTarget == nil, let proxy = proxy(for: target) else { return false }
+        for _ in 0..<abs(steps) {
+            if steps < 0 {
+                guard let last = proxy.documentContextBeforeInput?.last else { break }
+                proxy.adjustTextPosition(byCharacterOffset: -String(last).utf16.count)
+            } else {
+                guard let first = proxy.documentContextAfterInput?.first else { break }
+                proxy.adjustTextPosition(byCharacterOffset: String(first).utf16.count)
+            }
+        }
+        return true
+    }
     func deleteBackward(target: UUID) -> Bool {
         writeDepth += 1; defer { writeDepth -= 1 }
         guard let proxy = proxy(for: target) else { return false }

@@ -14,11 +14,15 @@ final class KeySurface: UIView {
     var chordMode = false { didSet { retire(); setNeedsLayout() } }
     var numeric = false { didSet { retire(); setNeedsLayout() } }
     var shifted = false { didSet { if oldValue != shifted { retire() }; setNeedsDisplay() } }
-    var englishInput = false { didSet { if oldValue != englishInput { retire() }; updateLanguageButton() } }
+    var englishInput = false { didSet { if oldValue != englishInput { retire() }; updateLanguageButton(); setNeedsDisplay() } }
     var chordLayout: ChordLayout = .orthogonal { didSet { if oldValue != chordLayout { retire(); setNeedsLayout() } } }
     var resolvesChords: Bool { chordMode && !numeric && !emojiMode && !shifted && !englishInput }
     var hasUtilityCells: Bool { chordMode && !numeric }
     var onModeChanged: (() -> Void)?
+    /// When set, replaces the 中/EN utility cell in chord mode (the controller puts Delete here).
+    var languageCellView: UIView? {
+        didSet { oldValue?.removeFromSuperview(); if let languageCellView { addSubview(languageCellView); languageCellView.isHidden = true }; setNeedsLayout() }
+    }
     private(set) var emojiMode = false { didSet { cancel(); setNeedsLayout(); if oldValue != emojiMode { onModeChanged?() } } }
     private let emojiButton = UtilityKeycapButton(), languageButton = UtilityKeycapButton(), backButton = UtilityKeycapButton()
     private var emojiButtons: [UtilityKeycapButton] = []
@@ -26,6 +30,7 @@ final class KeySurface: UIView {
     private var boxes: [(String, CGRect)] = []
     private var gesture = ChordGesture()
     var isChordActive: Bool { resolvesChords && gesture.active }
+    var handPreview: ChordHandPreview? { resolvesChords ? gesture.handPreview(in: profile) : nil }
     private var touchIDs: [ObjectIdentifier: Int] = [:]
     private var nextID = 0
     private var ordinary: [ObjectIdentifier: String] = [:]
@@ -97,7 +102,8 @@ final class KeySurface: UIView {
         super.layoutSubviews(); boxes.removeAll()
         let rowHeight = bounds.height / 3
         let utilitiesVisible = hasUtilityCells && !emojiMode
-        emojiButton.isHidden = !utilitiesVisible; languageButton.isHidden = !utilitiesVisible
+        emojiButton.isHidden = !utilitiesVisible; languageButton.isHidden = !utilitiesVisible || languageCellView != nil
+        languageCellView?.isHidden = !utilitiesVisible
         (emojiButtons + [backButton]).forEach { $0.isHidden = !emojiMode }
         if emojiMode {
             let unit = bounds.width / 10
@@ -107,15 +113,16 @@ final class KeySurface: UIView {
         } else {
             let geometry = KeyboardGeometry.make(size: bounds.size, profile: profile, chord: chordMode, numeric: numeric, layout: chordLayout)
             boxes = geometry.keys
-            emojiButton.isHidden = geometry.emoji == nil; languageButton.isHidden = geometry.language == nil
+            emojiButton.isHidden = geometry.emoji == nil; languageButton.isHidden = geometry.language == nil || languageCellView != nil
             emojiButton.frame = geometry.emoji ?? .zero; languageButton.frame = geometry.language ?? .zero
+            languageCellView?.isHidden = geometry.language == nil; languageCellView?.frame = geometry.language ?? .zero
             emojiButton.compactCap = chordMode && !numeric; languageButton.compactCap = chordMode && !numeric
         }
         let letters: [Any] = boxes.map { key, rect in
             let item = KeyAccessibility(accessibilityContainer: self); item.accessibilityLabel = key.uppercased(); item.accessibilityTraits = .keyboardKey; item.accessibilityFrameInContainerSpace = rect
             item.activate = { [weak self] in guard let self else { return }; self.onTypingPress?(); self.feedback.send(.press); self.onKey?(self.shifted && !self.numeric ? key.uppercased() : key) }; return item
         }
-        accessibilityElements = letters + ([emojiButton, languageButton] + emojiButtons + [backButton]).filter { !$0.isHidden }
+        accessibilityElements = letters + ([emojiButton, languageButton] + [languageCellView].compactMap { $0 } + emojiButtons + [backButton]).filter { !$0.isHidden }
         redraw()
     }
     override func draw(_ rect: CGRect) {
@@ -138,6 +145,14 @@ final class KeySurface: UIView {
         }
     }
     private func key(at point: CGPoint) -> String? { boxes.first { $0.1.contains(point) }?.0 }
+    /// Snaps only across the narrow inter-cap gutters, never across blank row ends.
+    static let gapTolerance: CGFloat = 6
+    private func nearestKey(to point: CGPoint) -> String? {
+        guard bounds.contains(point) else { return nil }
+        func distance(_ rect: CGRect) -> CGFloat { hypot(max(rect.minX - point.x, 0, point.x - rect.maxX), max(rect.minY - point.y, 0, point.y - rect.maxY)) }
+        guard let best = boxes.min(by: { distance($0.1) < distance($1.1) }), distance(best.1) <= Self.gapTolerance else { return nil }
+        return best.0
+    }
     private func preview() {
         onPreview?(gesture.resolution(in: profile)?.preview ?? "")
         feedback.send(.selection, combination: gesture.resolution(in: profile)?.keys)
@@ -148,7 +163,9 @@ final class KeySurface: UIView {
         utilityGeneration = UUID()
         for t in touches {
             // Mapping captions and blank areas never start or poison a chord.
-            guard let key = key(at: t.location(in: self)) else { continue }
+            // Ordinary typing forgives a tap that lands in the gap between caps.
+            let point = t.location(in: self)
+            guard let key = key(at: point) ?? (resolvesChords ? nil : nearestKey(to: point)) else { continue }
             let oid = ObjectIdentifier(t)
             onTypingPress?(); feedback.send(.press)
             if resolvesChords {
@@ -159,7 +176,16 @@ final class KeySurface: UIView {
         if resolvesChords { preview() }; redraw()
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard resolvesChords else { return }
+        guard resolvesChords else {
+            // The highlighted cap follows the finger; gaps keep the last cap.
+            var changed = false
+            for t in touches {
+                let oid = ObjectIdentifier(t)
+                if let current = ordinary[oid], let key = key(at: t.location(in: self)), key != current { ordinary[oid] = key; changed = true }
+            }
+            if changed { redraw() }
+            return
+        }
         for t in touches { if let id = touchIDs[ObjectIdentifier(t)] { gesture.move(id: id, key: key(at: t.location(in: self))?.first, profile: profile) } }
         preview()
     }
@@ -169,7 +195,12 @@ final class KeySurface: UIView {
             if let id = touchIDs.removeValue(forKey: oid) {
                 let result = gesture.end(id: id, key: key?.first, profile: profile)
                 if !gesture.active { if result != nil { feedback.send(.commit) }; feedback.reset(); onChord?(result); onPreview?("") }
-            } else if let original = ordinary.removeValue(forKey: oid), key == original { onKey?(shifted && !numeric ? original.uppercased() : original) }
+            } else if let tracked = ordinary.removeValue(forKey: oid) {
+                // Commit the cap under the finger at release, as the system keyboard does;
+                // lifting in a gap or outside the caps commits the last highlighted cap.
+                let value = key ?? tracked
+                onKey?(shifted && !numeric ? value.uppercased() : value)
+            }
         }
         redraw()
     }
@@ -185,9 +216,14 @@ final class KeySurface: UIView {
         return frames
     }
     func developmentKey(at point: CGPoint) -> String? { key(at: point) }
+    func developmentOrdinaryKey(at point: CGPoint) -> String? { key(at: point) ?? (resolvesChords ? nil : nearestKey(to: point)) }
     func developmentPress(_ start: Character, end: Character, id: Int = 900) {
         gesture.begin(id: id, key: start, profile: profile)
         gesture.move(id: id, key: end, profile: profile); preview()
+    }
+    func developmentRelease(_ key: Character, id: Int = 900) {
+        let result = gesture.end(id: id, key: key, profile: profile)
+        if !gesture.active { onChord?(result); onPreview?("") }
     }
     func developmentMove(_ key: Character?, id: Int = 900) {
         gesture.move(id: id, key: key, profile: profile); preview()

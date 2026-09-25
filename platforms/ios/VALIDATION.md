@@ -3,6 +3,30 @@
 Historical operational JSON readbacks remain local. The current build 22 UIKit
 fixtures and test summary are checked in under validation/build22/.
 
+## Development round after build 22 (2026-09-24, build number unchanged)
+
+Interaction tuning from physical feedback, installed in place on the iPhone 15 Pro
+as 0.1.0 (22); no new build number, archive or store submission.
+
+- Expanded candidates collapse after a selection or any typing key and stay one row.
+- Held chords show left keys/mapping, combined result, right mapping/keys in the
+  candidate row (display only; commit unchanged).
+- Buffer output/input are single non-wrapping lines with horizontal scrolling;
+  Default adopts the plugin style (stats in the grey output line, plain input line).
+  The visible block chips are gone; delivery segmentation is unchanged.
+- Settings moved to candidate-row left; Send, plugin and Buffer toggle form the right column.
+- Chord grid: Delete takes the 中/EN cell, 中/EN takes Delete's bottom-row slot.
+- Space hold-and-drag steps the caret in host or Buffer.
+- Ordinary (non-chord) typing commits the cap under the finger and snaps gutter taps.
+- Edge-swipe recognizers no longer delay touches on outer keys.
+- A blind (unlabelled) chord-cap experiment was reverted at the user's request.
+
+Passed: 36 shared + 43 hosted iOS tests on the iPhone 17 Pro simulator, resource
+verification, signed device build and signature check, device install, and the
+on-device engine/Keychain smoke. Swift sources build without warnings (librime's
+header documentation warnings remain). Physical feel of edge keys, caret dragging
+and the chord preview remains user acceptance.
+
 ## Build 22: Default row correction and visible semantic blocks
 
 Fixes physical feedback: Default hides its duplicate source/result text view.
