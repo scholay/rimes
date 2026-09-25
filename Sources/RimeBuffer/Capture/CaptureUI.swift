@@ -265,16 +265,17 @@ class CapturePanel: NSPanel, NSWindowDelegate {
     var captureChrome = false { didSet { updateTheme() } }
     var closed: (() -> Void)?
     var escapeCloses = true
+    var escapeAction: (() -> Void)?
     var shouldClose: (() -> Bool)?
     private let acceptsKeyboard: Bool
     private let surface: Surface
     private var registered = false
     private var themeObserver: NSObjectProtocol?
-    init(size: NSSize, key: Bool = true, surface: Surface = .rounded) {
+    init(size: NSSize, key: Bool = true, nonactivating: Bool = false, surface: Surface = .rounded) {
         acceptsKeyboard = key
         self.surface = surface
         super.init(contentRect: NSRect(origin: .zero, size: size),
-                   styleMask: key ? [.titled, .fullSizeContentView, .resizable] : [.borderless, .nonactivatingPanel],
+                   styleMask: nonactivating || !key ? [.borderless, .nonactivatingPanel] : [.titled, .fullSizeContentView, .resizable],
                    backing: .buffered, defer: false)
         titleVisibility = .hidden; titlebarAppearsTransparent = true
         for type: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] { standardWindowButton(type)?.isHidden = true }
@@ -320,7 +321,17 @@ class CapturePanel: NSPanel, NSWindowDelegate {
             makeKeyAndOrderFront(nil)
         } else { orderFrontRegardless() }
     }
-    override func cancelOperation(_ sender: Any?) { if escapeCloses { close() } }
+    override func cancelOperation(_ sender: Any?) {
+        if let escapeAction { escapeAction() } else if escapeCloses { close() }
+    }
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, event.keyCode == 53, let escapeAction { escapeAction(); return }
+        if event.type == .keyDown, [UInt16(36), 76].contains(event.keyCode),
+           let selection = contentView as? CaptureSelectionView, selection.requiresConfirmation {
+            selection.confirmSelection(); return
+        }
+        super.sendEvent(event)
+    }
     func windowShouldClose(_ sender: NSWindow) -> Bool { shouldClose?() ?? true }
     func windowDidBecomeKey(_ notification: Notification) {
         if !registered { StandaloneWindowFocusCoordinator.shared.windowWillPresent(self); registered = true }
@@ -401,12 +412,15 @@ final class CaptureDragImageView: NSImageView, NSDraggingSource {
 /// document at drag start, including every redaction and unsaved edit.
 final class CaptureCurrentDragView: NSView, NSDraggingSource {
     var snapshot: (() -> (CaptureDocument, URL, CaptureStore, UUID)?)?
-    override var intrinsicContentSize: NSSize { NSSize(width: 132, height: 32) }
+    override var intrinsicContentSize: NSSize { NSSize(width: 42, height: 32) }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {}
     override func draw(_ dirtyRect: NSRect) {
         CaptureChrome.control.setFill(); NSBezierPath(roundedRect: bounds, xRadius: 16, yRadius: 16).fill()
-        ("≡   拖出图片   ≡" as NSString).draw(at: CGPoint(x: 18, y: 8), withAttributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: CaptureChrome.muted])
+        toolTip = "拖出图片"; setAccessibilityLabel("拖出图片")
+        NSImage(systemSymbolName: "hand.draw", accessibilityDescription: "拖出图片")?
+            .withSymbolConfiguration(.init(paletteColors: [CaptureChrome.text]))?
+            .draw(in: CGRect(x: bounds.midX - 9, y: bounds.midY - 9, width: 18, height: 18))
     }
     override func mouseDragged(with event: NSEvent) {
         guard let (document, directory, store, id) = snapshot?() else { return }

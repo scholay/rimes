@@ -67,7 +67,7 @@ enum CaptureSelectionSmoke {
         }
         func mouse(_ view: CaptureSelectionView, _ type: NSEvent.EventType, _ point: CGPoint) throws {
             guard let event = NSEvent.mouseEvent(with: type, location: view.convert(point, to: nil), modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber, context: nil,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: view.window?.windowNumber ?? panel.windowNumber, context: nil,
                 eventNumber: 1, clickCount: 1, pressure: 1) else { throw CaptureError.message("selection: mouse fixture") }
             switch type {
             case .leftMouseDown: view.mouseDown(with: event)
@@ -113,7 +113,90 @@ enum CaptureSelectionSmoke {
         try require(fixed.pendingSelection == CGRect(x: 20, y: 30, width: 80, height: 60), "fixed-size selection retained")
         let ratio = CaptureSelectionView(); install(ratio); ratio.ratio = 2
         try drag(ratio)
-        try require(ratio.pendingSelection == CGRect(x: 20, y: 30, width: 160, height: 80), "aspect ratio retained")
+        try require(ratio.pendingSelection == CGRect(x: 20, y: 30, width: 200, height: 100), "aspect ratio retained")
+
+        let framed = CaptureSelectionView(); install(framed)
+        framed.requiresConfirmation = true; framed.ratio = 2
+        var confirmed: [CGRect] = []
+        framed.selected = { rect, _ in confirmed.append(rect) }
+        framed.acceptSnapshot(image)
+        try drag(framed)
+        try require(confirmed.isEmpty && framed.draftRect == CGRect(x: 20, y: 30, width: 200, height: 100), "frame waits for Return and preserves ratio")
+        try mouse(framed, .leftMouseDown, CGPoint(x: 40, y: 50))
+        try mouse(framed, .leftMouseDragged, CGPoint(x: 70, y: 70))
+        try mouse(framed, .leftMouseUp, CGPoint(x: 70, y: 70))
+        try require(framed.draftRect == CGRect(x: 50, y: 50, width: 200, height: 100) && confirmed.isEmpty, "dragging a frame translates without resizing or capturing")
+        framed.confirmSelection(); framed.confirmSelection()
+        try require(confirmed == [CGRect(x: 50, y: 50, width: 200, height: 100)], "Return delivers exactly once")
+        let edge = CaptureSelectionView(); install(edge); edge.requiresConfirmation = true; edge.ratio = 2
+        try mouse(edge, .leftMouseDown, CGPoint(x: 350, y: 270))
+        try mouse(edge, .leftMouseUp, CGPoint(x: 450, y: 370))
+        try require(edge.draftRect == CGRect(x: 350, y: 270, width: 50, height: 25), "screen-edge clamping preserves aspect ratio")
+        let suite = "capture-frame-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        CaptureFramePreferences.save(size: CGSize(width: 200, height: 100), ratio: 2, defaults: defaults)
+        try require(CaptureFramePreferences.size(defaults) == CGSize(width: 200, height: 100) && CaptureFramePreferences.ratio(defaults) == 2, "frame size and aspect persist together")
+        edge.restoreSelection(CaptureFramePreferences.size(defaults)!)
+        try require(edge.draftRect == CGRect(x: 100, y: 100, width: 200, height: 100), "reopening centers the previous dimensions")
+        // Two live view surfaces model distinct displays. Restoring a frame
+        // must not clone it, and beginning elsewhere must retire old geometry.
+        let secondPanel = CapturePanel(size: size, nonactivating: true)
+        defer { secondPanel.close() }
+        let firstDisplay = CaptureSelectionView(), secondDisplay = CaptureSelectionView()
+        install(firstDisplay); secondPanel.contentView = secondDisplay
+        secondDisplay.frame = CGRect(origin: .zero, size: size)
+        firstDisplay.requiresConfirmation = true; secondDisplay.requiresConfirmation = true
+        let session = CaptureSelectionSession(views: [firstDisplay, secondDisplay])
+        session.restore(CGSize(width: 200, height: 100), on: firstDisplay)
+        try require(firstDisplay.draftRect != nil && secondDisplay.draftRect == nil, "restore last frame on exactly one display")
+        var firstDeliveries = 0, secondDeliveries = 0
+        firstDisplay.selected = { _, _ in firstDeliveries += 1 }
+        secondDisplay.selected = { _, _ in secondDeliveries += 1 }
+        firstDisplay.confirmSelection() // pixels are still pending on display 1
+        try drag(secondDisplay)
+        try require(session.activeView === secondDisplay && firstDisplay.draftRect == nil
+                    && firstDisplay.pendingSelection == nil && secondDisplay.draftRect == expected,
+                    "drawing on another display removes the previous frame and queued capture")
+        firstDisplay.acceptSnapshot(image); firstDisplay.confirmSelection()
+        try require(firstDeliveries == 0, "late pixels or Return on inactive display cannot capture the old frame")
+        secondDisplay.acceptSnapshot(image)
+        try mouse(firstDisplay, .leftMouseDown, CGPoint(x: 10, y: 10))
+        try mouse(firstDisplay, .leftMouseUp, CGPoint(x: 90, y: 70))
+        try require(secondDisplay.draftRect == nil && secondDisplay.pendingSelection == nil
+                    && firstDisplay.draftRect == CGRect(x: 10, y: 10, width: 80, height: 60),
+                    "switching back still leaves exactly one frame")
+        secondDisplay.confirmSelection(); firstDisplay.confirmSelection()
+        try require(firstDeliveries == 1 && secondDeliveries == 0, "only the final active frame is delivered")
+        firstDisplay.invalidate(); secondDisplay.invalidate()
+        try require(firstDisplay.draftRect == nil && secondDisplay.draftRect == nil, "closing a session clears all geometry")
+
+        // Repaint the same backing bitmap after a move. Geometry assertions
+        // alone miss borders accidentally retained in the displayed pixels.
+        let pixels = CaptureSelectionView(); install(pixels); pixels.requiresConfirmation = true
+        let cleanContext = try CaptureRenderer.context(size)
+        cleanContext.setFillColor(CGColor(gray: 1, alpha: 1)); cleanContext.fill(CGRect(origin: .zero, size: size))
+        let cleanImage = cleanContext.makeImage()!
+        pixels.acceptSnapshot(cleanImage); pixels.restoreSelection(CGSize(width: 100, height: 80))
+        guard let bitmap = pixels.bitmapImageRepForCachingDisplay(in: pixels.bounds) else { throw CaptureError.message("selection: pixel regression bitmap") }
+        pixels.cacheDisplay(in: pixels.bounds, to: bitmap)
+        try mouse(pixels, .leftMouseDown, CGPoint(x: 170, y: 130))
+        try mouse(pixels, .leftMouseUp, CGPoint(x: 70, y: 50))
+        pixels.cacheDisplay(in: pixels.bounds, to: bitmap)
+        let pixelScale = CGFloat(bitmap.pixelsWide) / size.width
+        let retiredEdge = bitmap.colorAt(x: Int(151 * pixelScale), y: Int(150 * pixelScale))!.usingColorSpace(.deviceRGB)!
+        try require(abs(retiredEdge.redComponent - retiredEdge.blueComponent) < 0.02 && retiredEdge.redComponent > 0.4,
+                    "moving a frame repaints its old blue border from the clean backdrop")
+        try require(pixels.snapshot === cleanImage, "drawing and moving never modify the frozen source image")
+
+        let escapePanel = CapturePanel(size: size, nonactivating: true)
+        defer { escapePanel.close() }
+        var escaped = false
+        escapePanel.escapeCloses = false; escapePanel.escapeAction = { escaped = true }
+        let key = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: escapePanel.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!
+        escapePanel.sendEvent(key)
+        try require(escaped && escapePanel.styleMask.contains(.nonactivatingPanel), "panel Escape bypasses IME/responder routing and selector is nonactivating from initialization")
 
         let windows = CaptureSelectionView(mode: .window); install(windows)
         var chosen: [CGWindowID] = []
@@ -154,7 +237,7 @@ enum CaptureSelectionSmoke {
             let scale = CGFloat(bitmap.pixelsWide) / size.width
             let holeAlpha = bitmap.colorAt(x: Int(150 * scale), y: Int(100 * scale))?.alphaComponent ?? 1
             let maskAlpha = bitmap.colorAt(x: Int(10 * scale), y: Int(100 * scale))?.alphaComponent ?? 0
-            try require(holeAlpha < 0.01 && maskAlpha > 0.3 && maskAlpha < 0.5,
+            try require(holeAlpha >= 0.01 && holeAlpha < 0.04 && maskAlpha > 0.3 && maskAlpha < 0.5,
                         "window mask must reveal the real desktop and dim only outside the target")
             // Composite the transparent window over synthetic pixels only.
             // Drawing a backdrop sibling into the same cache would erase it
@@ -172,6 +255,6 @@ enum CaptureSelectionSmoke {
             }
             try CaptureImageIO.write(composite, to: previewDirectory.appendingPathComponent("window-picker.png"))
         }
-        print("capture-selection-smoke: OK (early drag, delayed frame, cancellation, fixed size/ratio, window overlap, cross-display hit testing)")
+        print("capture-selection-smoke: OK (early drag, delayed frame, cancellation, fixed size/ratio, window overlap, single active frame across displays)")
     }
 }

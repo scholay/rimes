@@ -89,7 +89,7 @@ enum CaptureChromeSmoke {
         defer { launchPanel.close() }
         var modes: [String] = []; launcher.capture = { mode, _, _, _ in modes.append(mode) }; launcher.recording = { modes.append("record") }
         for button in descendants(launcher).compactMap({ $0 as? CaptureModeButton }) where button.title != "延时" { button.performClick(nil) }
-        try require(modes == ["area", "screen", "window", "scroll", "ocr", "record"], "all six mode actions route correctly")
+        try require(modes == ["area", "screen", "window", "scroll", "ocr", "record", "frame"], "all seven mode actions route correctly")
         try snapshot(launcher, "launcher")
 
         let coordinator = CaptureCoordinator(isolatedStore: store); coordinator.showOverlay(record)

@@ -107,7 +107,7 @@ final class CaptureModeButton: NSButton {
         setAccessibilityLabel(title); toolTip = title
     }
     required init?(coder: NSCoder) { fatalError() }
-    override var intrinsicContentSize: NSSize { NSSize(width: 70, height: 56) }
+    override var intrinsicContentSize: NSSize { NSSize(width: 44, height: 44) }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     @objc private func invoke() { onClick() }
     override func draw(_ dirtyRect: NSRect) {
@@ -115,11 +115,25 @@ final class CaptureModeButton: NSButton {
             CaptureChrome.control.setFill(); NSBezierPath(roundedRect: bounds, xRadius: 11, yRadius: 11).fill()
         }
         if let image {
-            (image.withSymbolConfiguration(.init(paletteColors: [CaptureChrome.text])) ?? image).draw(in: CGRect(x: bounds.midX - 10, y: 28, width: 20, height: 20))
+            (image.withSymbolConfiguration(.init(paletteColors: [CaptureChrome.text])) ?? image).draw(in: CGRect(x: bounds.midX - 10, y: bounds.midY - 10, width: 20, height: 20))
         }
-        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: CaptureChrome.muted]
-        let size = (title as NSString).size(withAttributes: attributes)
-        (title as NSString).draw(at: CGPoint(x: bounds.midX - size.width / 2, y: 7), withAttributes: attributes)
+
+    }
+}
+
+enum CaptureFramePreferences {
+    static func size(_ defaults: UserDefaults = .standard) -> CGSize? {
+        let w = defaults.double(forKey: "capture.frame.width"), h = defaults.double(forKey: "capture.frame.height")
+        guard w.isFinite, h.isFinite, w >= 4, h >= 4, w <= 16384, h <= 16384 else { return nil }
+        return CGSize(width: w, height: h)
+    }
+    static func ratio(_ defaults: UserDefaults = .standard) -> CGFloat? {
+        let value = defaults.double(forKey: "capture.frame.ratio")
+        return value.isFinite && value > 0 ? value : nil
+    }
+    static func save(size: CGSize, ratio: CGFloat?, defaults: UserDefaults = .standard) {
+        defaults.set(size.width, forKey: "capture.frame.width"); defaults.set(size.height, forKey: "capture.frame.height")
+        defaults.set(ratio ?? 0, forKey: "capture.frame.ratio")
     }
 }
 
@@ -128,11 +142,10 @@ final class CaptureModeButton: NSButton {
 final class CaptureLauncherView: NSView {
     var capture: ((String, Int, CGFloat?, CGSize?) -> Void)?
     var recording: (() -> Void)?
+    var dismiss: (() -> Void)?
     var utilities: [(String, () -> Void)] = []
     private var delay = 0
-    private var ratio: CGFloat?
-    private let width = NSTextField(string: "")
-    private let height = NSTextField(string: "")
+    private var ratio: CGFloat? = CaptureFramePreferences.ratio()
     private var menuActions: [CaptureControlAction] = []
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -150,25 +163,25 @@ final class CaptureLauncherView: NSView {
             CaptureModeButton("录屏", symbol: "video") { [weak self] in self?.recording?() }
         ], spacing: 0, inset: 6)
         (modes as? CaptureChromeSurface)?.color = NSColor(srgbRed: 0.15, green: 0.14, blue: 0.20, alpha: 0.96)
-        for field in [width, height] {
-            field.placeholderString = "自动"; field.alignment = .center; field.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
-            field.textColor = CaptureChrome.text; field.backgroundColor = NSColor(white: 0.08, alpha: 0.5)
-            field.isBezeled = false; field.focusRingType = .none
-            field.widthAnchor.constraint(equalToConstant: 50).isActive = true
-            field.heightAnchor.constraint(equalToConstant: 23).isActive = true
+        let reset = CaptureChromeButton(symbol: "arrow.counterclockwise", help: "重设画幅", size: NSSize(width: 36, height: 32)) { [weak self] in
+            UserDefaults.standard.removeObject(forKey: "capture.frame.width")
+            UserDefaults.standard.removeObject(forKey: "capture.frame.height")
+            self?.capture?("frame", self?.delay ?? 0, self?.ratio, nil)
         }
-        width.setAccessibilityLabel("选区宽度，点"); height.setAccessibilityLabel("选区高度，点")
-        let reset = CaptureChromeButton(symbol: "arrow.up.left.and.arrow.down.right", help: "清除固定尺寸", size: NSSize(width: 28, height: 30)) { [weak self] in self?.width.stringValue = ""; self?.height.stringValue = "" }
         reset.bare = true
         let aspect = CaptureChromeButton(symbol: "crop", help: "选区比例", size: NSSize(width: 44, height: 30)); aspect.bare = true; aspect.dropdown = true
+        aspect.active = ratio != nil
         aspect.onClick = { [weak self, weak aspect] in
             guard let self, let aspect else { return }
             self.menu([("自由比例", 0), ("1:1", 1), ("4:3", 2), ("16:9", 3), ("9:16", 4)], from: aspect) { index in
                 self.ratio = [nil, 1, 4 / 3, 16 / 9, 9 / 16][index]; aspect.active = index != 0
+                UserDefaults.standard.set(self.ratio ?? 0, forKey: "capture.frame.ratio")
                 aspect.toolTip = "选区比例：" + ["自由", "1:1", "4:3", "16:9", "9:16"][index]
             }
         }
-        let options = CaptureChrome.group([width, CaptureChrome.label("×"), height, reset, CaptureUI.verticalSeparator(), aspect], spacing: 7, inset: 12)
+        let close = CaptureChromeButton(symbol: "xmark", help: "关闭截图工具条", size: NSSize(width: 32, height: 32)) { [weak self] in self?.dismiss?() }
+        close.bare = true
+        let options = CaptureChrome.group([aspect, mode("画幅：框选后回车截图", "crop", "frame"), reset, CaptureUI.verticalSeparator(), close], spacing: 4, inset: 6)
         (options as? CaptureChromeSurface)?.color = NSColor(srgbRed: 0.15, green: 0.14, blue: 0.20, alpha: 0.96)
         let row = CaptureUI.row([modes, options], spacing: 10)
         CaptureUI.fill(row, in: self, inset: 0)
@@ -188,11 +201,7 @@ final class CaptureLauncherView: NSView {
     private func mode(_ label: String, _ symbol: String, _ id: String) -> CaptureModeButton {
         CaptureModeButton(label, symbol: symbol) { [weak self] in
             guard let self else { return }
-            let w = self.width.doubleValue, h = self.height.doubleValue
-            guard self.width.stringValue.isEmpty && self.height.stringValue.isEmpty || (w.isFinite && h.isFinite && w >= 1 && h >= 1 && w <= 16384 && h <= 16384) else {
-                NSSound.beep(); self.window?.makeFirstResponder(w <= 0 ? self.width : self.height); return
-            }
-            self.capture?(id, self.delay, self.ratio, w > 0 && h > 0 ? CGSize(width: w, height: h) : nil)
+            self.capture?(id, self.delay, self.ratio, nil)
         }
     }
     private func menu(_ choices: [(String, Int)], from view: NSView, picked: @escaping (Int) -> Void) {
@@ -209,8 +218,8 @@ final class CaptureLauncherView: NSView {
 /// Hover chrome remains a sibling of the image: the thumbnail still handles
 /// file dragging, and the passive overlay never activates the input method.
 final class CaptureCardControls: NSView {
-    let copyButton = CaptureChromeButton("复制", help: "复制并移除卡片", size: NSSize(width: 52, height: 26))
-    let saveButton = CaptureChromeButton("保存", size: NSSize(width: 52, height: 26))
+    let copyButton = CaptureChromeButton(symbol: "doc.on.doc", help: "复制并移除卡片", size: NSSize(width: 52, height: 26))
+    let saveButton = CaptureChromeButton(symbol: "square.and.arrow.down", help: "保存", size: NSSize(width: 52, height: 26))
     let closeButton = CaptureChromeButton(symbol: "xmark", help: "关闭卡片", size: NSSize(width: 22, height: 22))
     let pinButton = CaptureChromeButton(symbol: "pin.fill", help: "贴图", size: NSSize(width: 22, height: 22))
     let editButton = CaptureChromeButton(symbol: "pencil", help: "标注", size: NSSize(width: 22, height: 22))

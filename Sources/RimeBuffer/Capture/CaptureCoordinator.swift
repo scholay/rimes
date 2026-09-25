@@ -17,6 +17,7 @@ final class CaptureCoordinator {
     static let shared = CaptureCoordinator()
     private var launcher: CapturePanel?
     private var selectors: [CapturePanel] = []
+    private var selectionSession: CaptureSelectionSession?
     private(set) var overlays: [UUID: CaptureResultPanel] = [:]
     /// Stacking order; the dictionary alone cannot say which card is newest.
     private(set) var overlayOrder: [UUID] = []
@@ -178,7 +179,7 @@ final class CaptureCoordinator {
 
     func showLauncher() {
         guard !sessionProtected, !IsSecureEventInputEnabled() else { NSSound.beep(); return }
-        if countdown != nil { cancelSelection(generation); return }
+        if countdown != nil || preparingCapture || !selectors.isEmpty { cancelSelection(generation); return }
         if NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier { sourceApplication = NSWorkspace.shared.frontmostApplication }
         sourceName = sourceApplication?.localizedName ?? ""
         ClipboardHistoryWindowController.shared.hide()
@@ -188,9 +189,10 @@ final class CaptureCoordinator {
         panel.styleMask = [.borderless]
         panel.isOpaque = false; panel.backgroundColor = .clear
         let strip = CaptureLauncherView(frame: .zero)
-        strip.capture = { [weak self, weak panel] mode, delay, ratio, size in
-            panel?.close(); self?.begin(mode, delay: delay, ratio: ratio, size: size)
+        strip.capture = { [weak self] mode, delay, ratio, size in
+            self?.begin(mode, delay: delay, ratio: ratio, size: size)
         }
+        strip.dismiss = { [weak panel] in panel?.close() }
         strip.recording = { [weak self, weak panel] in panel?.close(); self?.showRecorder() }
         strip.utilities = [
             ("恢复最近关闭的卡片", { [weak self] in self?.restoreOverlay() }),
@@ -218,7 +220,9 @@ final class CaptureCoordinator {
         closeSelectors()
         let started = requestedAt ?? ProcessInfo.processInfo.systemUptime
         IMELog.write("capture prepare start mode=\(mode)")
-        launcher?.close()
+        // Keep the launcher focus lease until the replacement selector exists.
+        // Closing first queues an external-app activation that races the mask.
+        launcher?.orderOut(nil)
         if isolatedStore == nil { ClipboardHistoryWindowController.shared.hide() }
         // Result overlays used to be closed here, which is why only ever one
         // was on screen: each capture destroyed the stack it was about to
@@ -228,6 +232,7 @@ final class CaptureCoordinator {
         setResultOverlaysSuspended(true)
         temporarilyHidden.forEach { $0.orderOut(nil) }
         let countdownLabel = delay > 0 ? presentCountdown(seconds: delay, request: token) : nil
+        if delay > 0 { launcher?.close() }
         preparationTask = Task {
             defer { if generation == token { preparingCapture = false; preparationTask = nil } }
             do {
@@ -240,21 +245,23 @@ final class CaptureCoordinator {
                     closeCountdown()
                 }
                 guard selectionIsCurrent(token) else { return }
-                // Preflight only decides whether to cover the desktop before
-                // the real gate. Never obscure a first-use system prompt, and
+                // Window picking can precede enumeration; area selection must
+                // wait until its clean background has been captured. Never obscure a first-use system prompt, and
                 // never reject capture just because preflight reports false.
                 let usesSelection = !["previous", "screen", "recordScreen"].contains(mode)
-                var surfaces = usesSelection && CGPreflightScreenCaptureAccess()
+                let windowSelection = mode == "window" || mode == "recordWindow"
+                var surfaces = windowSelection && CGPreflightScreenCaptureAccess()
                     ? try presentSelectors(mode: mode, ratio: ratio, size: size, request: token) : []
-                if !surfaces.isEmpty { logPreparation("mask-visible", started: started) }
+                if !surfaces.isEmpty { launcher?.close(); logPreparation("mask-visible", started: started) }
                 let content = try await CaptureEngine.content()
                 guard selectionIsCurrent(token) else { return }
                 logPreparation("content-ready", started: started)
-                if usesSelection && surfaces.isEmpty {
+                if windowSelection && surfaces.isEmpty {
                     surfaces = try presentSelectors(mode: mode, ratio: ratio, size: size, request: token)
                     logPreparation("mask-visible", started: started)
                 }
-                if usesSelection {
+                if windowSelection || !usesSelection { launcher?.close() }
+                if windowSelection {
                     surfaces = try supportedSurfaces(surfaces, displayIDs: Set(content.displays.map(\.displayID)))
                 }
                 if mode == "previous", let previousTarget {
@@ -274,8 +281,7 @@ final class CaptureCoordinator {
                     try await finish(target: CaptureTarget(display: display, window: nil, rect: nil), content: content, mode: mode == "recordScreen" ? "record" : mode, snapshot: nil)
                     return
                 }
-                let selectionSurfaces = usesSelection ? surfaces : try presentSelectors(mode: mode, ratio: ratio, size: size, request: token)
-                try await select(content, surfaces: selectionSurfaces, mode: mode, freeze: freeze, request: token, started: started)
+                try await select(content, mode: mode, ratio: ratio, size: size, freeze: freeze, request: token, started: started)
             } catch {
                 guard generation == token, !sessionProtected else { return }
                 if IsSecureEventInputEnabled() { setProtection(.secureInput, active: true); return }
@@ -344,12 +350,14 @@ final class CaptureCoordinator {
             $0.close()
         }
         selectors.removeAll()
+        selectionSession = nil
     }
     private func invalidateSelection() {
         generation = UUID(); preparingCapture = false
         preparationTask?.cancel(); preparationTask = nil
         closeSelectors()
         closeCountdown()
+        launcher?.close()
     }
     private func cancelSelection(_ request: UUID) {
         guard generation == request else { return }
@@ -363,22 +371,32 @@ final class CaptureCoordinator {
         var surfaces: [SelectionSurface] = []
         for screen in NSScreen.screens {
             guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else { continue }
-            let panel = CapturePanel(size: screen.frame.size, surface: .transparent)
-            panel.styleMask = [.borderless]; panel.level = .screenSaver; panel.isMovableByWindowBackground = false
+            let panel = CapturePanel(size: screen.frame.size, nonactivating: true, surface: .transparent)
+            panel.styleMask = [.borderless, .nonactivatingPanel]; panel.level = .screenSaver; panel.isMovableByWindowBackground = false
             panel.backgroundColor = .clear; panel.isOpaque = false; panel.hasShadow = false
             panel.acceptsMouseMovedEvents = true; panel.escapeCloses = false
             panel.setFrame(screen.frame, display: false)
             let view = CaptureSelectionView(mode: mode == "window" || mode == "recordWindow" ? .window : .area)
             view.fixedSize = size; view.ratio = ratio
+            view.requiresConfirmation = mode == "frame"
+            panel.escapeAction = { [weak self] in self?.cancelSelection(request) }
             view.cancelled = { [weak self] in self?.cancelSelection(request) }
-            panel.contentView = view; selectors.append(panel)
+            panel.contentView = view
+            selectors.append(panel)
             panel.present(center: false); panel.makeFirstResponder(view); panel.displayIfNeeded()
             surfaces.append(SelectionSurface(screen: screen, displayID: id, view: view))
         }
         guard !surfaces.isEmpty else { throw CaptureError.message("没有可捕获的显示器") }
-        // Leave keyboard cancellation on the display under the pointer.
-        if let panel = selectors.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) {
-            panel.makeKeyAndOrderFront(nil); panel.makeFirstResponder(panel.contentView)
+        let session = CaptureSelectionSession(views: surfaces.map(\.view))
+        selectionSession = session
+        // Restore once, on the pointer's display, never once per display.
+        if let initial = surfaces.first(where: { $0.screen.frame.contains(NSEvent.mouseLocation) }) ?? surfaces.first {
+            session.activate(initial.view)
+            if mode == "frame", let last = CaptureFramePreferences.size(), size == nil {
+                session.restore(ratio.map { CGSize(width: last.width, height: last.width / $0) } ?? last, on: initial.view)
+            }
+            initial.view.window?.makeKeyAndOrderFront(nil)
+            initial.view.window?.makeFirstResponder(initial.view)
         }
         return surfaces
     }
@@ -415,30 +433,53 @@ final class CaptureCoordinator {
         }
     }
 
-    private func select(_ content: SCShareableContent, surfaces: [SelectionSurface], mode: String, freeze: Bool,
+    private func select(_ content: SCShareableContent, mode: String, ratio: CGFloat?, size: CGSize?, freeze: Bool,
                         request: UUID, started: TimeInterval) async throws {
-        try await withThrowingTaskGroup(of: (Int, CGImage).self) { group in
-            for (index, surface) in surfaces.enumerated() {
-                guard let display = content.displays.first(where: { $0.displayID == surface.displayID }) else { continue }
-                let scale = surface.screen.backingScaleFactor
-                let screenWidth = surface.screen.frame.width
+        // Never photograph a visible selector. App exclusion is not enough for
+        // IME/nonactivating windows: a captured border becomes immovable pixels.
+        // Capture every display first, then publish the entire selection UI.
+        guard !NSApp.windows.contains(where: { $0.isVisible && $0.contentView is CaptureSelectionView }) else {
+            throw CaptureError.message("旧选区仍在显示，请取消后重试")
+        }
+        logPreparation("clean-background-no-selectors", started: started)
+        let screens = NSScreen.screens
+        let frames = try await withThrowingTaskGroup(of: (CGDirectDisplayID, CGImage).self) { group in
+            for screen in screens {
+                guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value,
+                      let display = content.displays.first(where: { $0.displayID == id }) else { continue }
+                let scale = screen.backingScaleFactor
                 let target = CaptureTarget(display: display, window: nil, rect: nil)
-                group.addTask { (index, try await CaptureEngine.image(target, content: content, scale: scale)) }
-                surface.view.selected = { [weak self] rect, image in
-                    guard let self, self.selectionIsCurrent(request) else { return }
-                    self.invalidateSelection()
-                    let target = CaptureTarget(display: display, window: nil, rect: rect)
-                    let factor = CGFloat(image.width) / screenWidth
-                    let crop = freeze ? image.cropping(to: CGRect(x: rect.minX * factor, y: rect.minY * factor, width: rect.width * factor, height: rect.height * factor)) : nil
-                    Task { do { try await self.finish(target: target, content: content, mode: mode, snapshot: mode == "scroll" || mode == "record" ? nil : crop) } catch { CaptureUI.error(error) } }
-                }
+                group.addTask { (id, try await CaptureEngine.image(target, content: content, scale: scale)) }
             }
-            for try await (index, image) in group {
-                guard selectionIsCurrent(request) else { group.cancelAll(); return }
-                logPreparation("display-ready", started: started)
-                surfaces[index].view.acceptSnapshot(image)
-                if !selectionIsCurrent(request) { group.cancelAll(); return }
+            var images: [CGDirectDisplayID: CGImage] = [:]
+            for try await (id, image) in group {
+                guard selectionIsCurrent(request) else { group.cancelAll(); return images }
+                logPreparation("clean-display-ready", started: started)
+                images[id] = image
             }
+            return images
+        }
+        guard selectionIsCurrent(request) else { return }
+        guard !frames.isEmpty else { throw CaptureError.message("没有可捕获的显示器") }
+        let surfaces = try supportedSurfaces(
+            presentSelectors(mode: mode, ratio: ratio, size: size, request: request), displayIDs: Set(frames.keys))
+        launcher?.close()
+        logPreparation("mask-visible-after-background", started: started)
+        for surface in surfaces {
+            guard let display = content.displays.first(where: { $0.displayID == surface.displayID }),
+                  let image = frames[surface.displayID] else { continue }
+            let screenWidth = surface.screen.frame.width
+            let selectedRatio = surface.view.ratio
+            surface.view.selected = { [weak self] rect, image in
+                guard let self, self.selectionIsCurrent(request) else { return }
+                if mode == "frame" { CaptureFramePreferences.save(size: rect.size, ratio: selectedRatio) }
+                self.invalidateSelection()
+                let target = CaptureTarget(display: display, window: nil, rect: rect)
+                let factor = CGFloat(image.width) / screenWidth
+                let crop = freeze ? image.cropping(to: CGRect(x: rect.minX * factor, y: rect.minY * factor, width: rect.width * factor, height: rect.height * factor)) : nil
+                Task { do { try await self.finish(target: target, content: content, mode: mode, snapshot: mode == "scroll" || mode == "record" ? nil : crop) } catch { CaptureUI.error(error) } }
+            }
+            surface.view.acceptSnapshot(image)
         }
     }
 
