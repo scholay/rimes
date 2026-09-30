@@ -11466,7 +11466,7 @@ func runCandidateMetricsSmokeTest() -> Bool {
           "index label should be bounded by candidate glyph")
     check(CandidateWindowMetric.selectedCandidateCornerRadius.range == 0...16,
           "selected-candidate corner radius should be adjustable from square to rounded")
-    check(CandidateWindowMetric.selectedCandidateCornerRadius.defaultValue == 16,
+    check(CandidateWindowMetric.selectedCandidateCornerRadius.defaultValue == 15,
           "selected-candidate corner radius should use the shipped appearance default")
     for m in [CandidateWindowMetric.baseWidth, .compactStripHeight, .preeditHeight] {
         check(m.containerMetric == nil, "\(m.rawValue) should be a free container metric")

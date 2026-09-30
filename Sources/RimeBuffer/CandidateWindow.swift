@@ -211,12 +211,12 @@ enum CandidateWindowMetric: String, CaseIterable {
         case .compactStripHeight: return 40
         case .compactCandidateHeight: return 32
         case .preeditHeight: return 30
-        case .candidateFontSize: return 23
-        case .englishCandidateFontSize: return 23
-        case .englishCandidateCornerRadius: return 8
+        case .candidateFontSize: return 24
+        case .englishCandidateFontSize: return 12
+        case .englishCandidateCornerRadius: return 9
         case .labelFontSize: return 11
-        case .selectedCandidateCornerRadius: return 16
-        case .candidateStripCornerRadius: return 19
+        case .selectedCandidateCornerRadius: return 15
+        case .candidateStripCornerRadius: return 20
         case .preeditCornerRadius: return 0
         }
     }
@@ -267,11 +267,11 @@ struct CandidateWindowMetrics {
          compactCandidateHeight: CGFloat,
          preeditHeight: CGFloat,
          candidateFontSize: CGFloat,
-         englishCandidateFontSize: CGFloat = 23,
-         englishCandidateCornerRadius: CGFloat = 8,
+         englishCandidateFontSize: CGFloat = 12,
+         englishCandidateCornerRadius: CGFloat = 9,
          labelFontSize: CGFloat,
-         selectedCandidateCornerRadius: CGFloat = 16,
-         candidateStripCornerRadius: CGFloat = 19,
+         selectedCandidateCornerRadius: CGFloat = 15,
+         candidateStripCornerRadius: CGFloat = 20,
          preeditCornerRadius: CGFloat = 0) {
         self.baseWidth = baseWidth
         self.compactStripHeight = compactStripHeight

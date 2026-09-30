@@ -460,7 +460,7 @@ private final class SettingsThemeCardButton: SettingsPointingButton {
             let glass = NSGlassEffectView(frame: .zero)
             glass.style = .regular
             glass.cornerRadius = 14
-            glass.tintColor = nil
+            glass.tintColor = RimeGlassPalette.panelTint
             RimeCandidateSurfaceView.setInteractiveEffect(true, on: glass)
             glass.contentView = row
             glass.translatesAutoresizingMaskIntoConstraints = false
@@ -481,15 +481,15 @@ private final class SettingsThemeCardButton: SettingsPointingButton {
             row.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
         layer?.backgroundColor = mode == .liquidGlass
-            ? NSColor.clear.cgColor
+            ? RimeGlassPalette.panelFill.cgColor
             : RimeUI.color(palette.surfaceSecondary).cgColor
         if mode == .liquidGlass {
             layer?.cornerRadius = 14
             layer?.masksToBounds = false
             layer?.borderColor = selected
                 ? NSColor.controlAccentColor.withAlphaComponent(0.62).cgColor
-                : NSColor.clear.cgColor
-            layer?.borderWidth = selected ? 1 : 0
+                : RimeGlassPalette.edgeHighlight.cgColor
+            layer?.borderWidth = selected ? 1 : RimeGlassPalette.edgeLineWidth
         } else {
             layer?.borderColor = RimeUI.color(
                 selected ? palette.selectedCandidateBackground : palette.border

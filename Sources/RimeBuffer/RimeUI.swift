@@ -1,6 +1,29 @@
 import Cocoa
 import QuartzCore
 
+/// Shared translucency and edge values, matched to the MailGlass prototype.
+enum RimeGlassPalette {
+    static let panelFillOpacity: CGFloat = 0.05
+    static let panelTintOpacity: CGFloat = 0.22
+    static let edgeLineWidth: CGFloat = 0.6
+    static let edgeHighlightOpacity: CGFloat = 0.24
+    static let edgeShadowOpacity: CGFloat = 0.08
+    static let edgeGlowOpacity: CGFloat = 0.10
+    static let edgeGlowRadius: CGFloat = 1.2
+
+    static var panelFill: NSColor {
+        NSColor.windowBackgroundColor.withAlphaComponent(panelFillOpacity)
+    }
+
+    static var panelTint: NSColor {
+        NSColor.underPageBackgroundColor.withAlphaComponent(panelTintOpacity)
+    }
+
+    static var edgeHighlight: NSColor {
+        NSColor.white.withAlphaComponent(edgeHighlightOpacity)
+    }
+}
+
 enum RimeThemeFamily: String, CaseIterable {
     case classic
     case rasta
