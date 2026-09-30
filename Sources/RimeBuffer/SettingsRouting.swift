@@ -33,6 +33,13 @@ enum SettingsCoreRoute: String, CaseIterable, Codable {
     case plugins = "core.plugins"
     case maintenance = "core.maintenance"
 
+    var isVisibleInSettings: Bool {
+        switch self {
+        case .mailbox, .connectors, .plugins: return false
+        case .inputMethod, .appearance, .buffer, .capsule, .maintenance: return true
+        }
+    }
+
     var id: SettingsRouteID { SettingsRouteID(rawValue: rawValue) }
 
     var title: String {
@@ -281,7 +288,7 @@ struct SettingsRouteCatalog: Equatable {
     }
 
     private static func makeCoreRoutes() -> [SettingsRouteDescriptor] {
-        SettingsCoreRoute.allCases.map { route in
+        SettingsCoreRoute.allCases.filter(\.isVisibleInSettings).map { route in
             return SettingsRouteDescriptor(id: route.id,
                                            title: route.title,
                                            symbolName: route.symbolName,
@@ -382,9 +389,8 @@ struct SettingsNavigationState: Equatable {
         selectedSubpageByRoute[routeID ?? currentRouteID]
     }
 
-    /// Reconcile after enabled settings contributions change. Disabling the
-    /// currently visible extension returns the user to 插件 ▸ 内置扩展, where it
-    /// can be re-enabled. Removed subpages fall back to their route's first tab.
+/// Reconcile after enabled settings contributions change. Removed routes fall
+/// back to Input Method, and removed subpages fall back to their route's first tab.
     mutating func reconcile(with catalog: SettingsRouteCatalog) {
         selectedSubpageByRoute = selectedSubpageByRoute.filter { routeID, subpageID in
             guard let route = catalog.route(for: routeID) else { return false }
@@ -392,13 +398,7 @@ struct SettingsNavigationState: Equatable {
         }
 
         if !catalog.contains(currentRouteID) {
-            if currentRouteID.rawValue.hasPrefix(SettingsRouteCatalog.extensionNamespace) {
-                currentRouteID = SettingsCoreRoute.plugins.id
-                selectedSubpageByRoute[currentRouteID] =
-                    PluginManagementSubpage.builtInExtensions.id
-            } else {
-                currentRouteID = SettingsCoreRoute.inputMethod.id
-            }
+            currentRouteID = SettingsCoreRoute.inputMethod.id
         }
         ensureValidSubpage(for: currentRouteID, catalog: catalog)
     }
@@ -516,23 +516,21 @@ func runSettingsRoutingSmokeTest() -> Bool {
             contributions: [chordExtension, statistics]
         )
 
-        guard catalog.coreRoutes.map(\.id) == SettingsCoreRoute.allCases.map(\.id),
+        let visibleCoreRoutes = SettingsCoreRoute.allCases.filter(\.isVisibleInSettings)
+        guard catalog.coreRoutes.map(\.id) == visibleCoreRoutes.map(\.id),
               catalog.coreRoutes.map(\.title)
                 == [
                     "输入法",
                     "外观",
                     "Buffer",
-                    "Mailbox",
                     "Capsule",
-                    "连接器",
-                    "插件",
                     "维护",
                 ],
               catalog.extensionRoutes.map(\.id.rawValue)
                 == ["extension.statistics", "extension.feiyao-learning"],
               catalog.sections.map(\.id) == [.core, .extensions],
-              catalog.route(for: SettingsCoreRoute.plugins.id)?.subpages.map(\.id)
-                == PluginManagementSubpage.allCases.map(\.id),
+              SettingsCoreRoute.allCases.filter({ !$0.isVisibleInSettings })
+                .allSatisfy({ catalog.route(for: $0.id) == nil }),
               catalog.route(for: SettingsCoreRoute.inputMethod.id)?.subpages.map(\.id)
                 == [
                     SettingsSubpageID(rawValue: "encoding"),
@@ -555,28 +553,18 @@ func runSettingsRoutingSmokeTest() -> Bool {
                 == [
                     SettingsSubpageID(rawValue: "buffer"),
                 ],
-              catalog.route(for: SettingsCoreRoute.mailbox.id)?.subpages.map(\.id)
-                == [
-                    SettingsSubpageID(rawValue: "mailbox"),
-                ],
               catalog.route(for: SettingsCoreRoute.capsule.id)?.subpages.map(\.id)
                 == [
                     SettingsSubpageID(rawValue: "capsule"),
-                ],
-              catalog.route(for: SettingsCoreRoute.connectors.id)?.subpages.map(\.id)
-                == [
-                    SettingsSubpageID(rawValue: "ai-model"),
-                    SettingsSubpageID(rawValue: "local-gateway"),
                 ] else {
             return fail("stable route catalog")
         }
 
         var navigation = SettingsNavigationState(catalog: catalog)
         guard navigation.currentRouteID == SettingsCoreRoute.inputMethod.id,
-              navigation.selectRoute(SettingsCoreRoute.plugins.id, catalog: catalog),
-              navigation.selectedSubpage() == PluginManagementSubpage.all.id,
-              navigation.selectSubpage(PluginManagementSubpage.bufferPlugins.id,
-                                       catalog: catalog),
+              !navigation.selectRoute(SettingsCoreRoute.plugins.id, catalog: catalog),
+              !navigation.selectRoute(SettingsCoreRoute.mailbox.id, catalog: catalog),
+              !navigation.selectRoute(SettingsCoreRoute.connectors.id, catalog: catalog),
               navigation.selectRoute(SettingsRouteID(rawValue: "extension.statistics"),
                                      catalog: catalog),
               navigation.selectedSubpage() == SettingsSubpageID(rawValue: "daily"),
@@ -589,10 +577,8 @@ func runSettingsRoutingSmokeTest() -> Bool {
             contributions: [chordExtension]
         )
         navigation.reconcile(with: withoutStatistics)
-        guard navigation.currentRouteID == SettingsCoreRoute.plugins.id,
-              navigation.selectedSubpage()
-                == PluginManagementSubpage.builtInExtensions.id else {
-            return fail("disabled dynamic route fallback")
+        guard navigation.currentRouteID == SettingsCoreRoute.inputMethod.id else {
+            return fail("removed dynamic route fallback")
         }
 
         let statisticsWithoutHeatmap = contribution(

@@ -148,6 +148,10 @@ enum RimeShortcutAction: String, CaseIterable {
     case previousPlugin
     case nextPlugin
 
+    static var settingsVisibleCases: [RimeShortcutAction] {
+        allCases.filter { $0 != .openMailbox }
+    }
+
     var title: String {
         switch self {
         case .captureScreen: return "打开 Capsule 捕获面板"

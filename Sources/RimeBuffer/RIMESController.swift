@@ -7650,10 +7650,6 @@ final class RIMESController: IMKInputController {
     @objc func openMaintenanceFromInputMenu(_ sender: Any?) {
         StatusMenu.shared.showMaintenanceMenu(target: self)
     }
-    @objc func openMailboxFromInputMenu(_ sender: Any?) {
-        StatusMenu.shared.openMailbox()
-    }
-
     @objc func openCodexSessionFromInputMenu(_ sender: Any?) {
         StatusMenu.shared.openCodexSession()
     }

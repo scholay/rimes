@@ -5,7 +5,6 @@ import Foundation
 enum GlobalHotKeyRoute: Equatable {
     case toggleWorkbench
     case toggleClipboardHistory
-    case openMailbox
     case openSettings
     case ignore
 }
@@ -38,12 +37,10 @@ struct GlobalHotKeyDefinition {
     let keyCode: UInt32
     let modifiers: UInt32
 
-    /// Content-window visibility is a deliberate global command. Register
-    /// Capsule and Mailbox exclusively so another Carbon listener cannot
-    /// observe the same chord; ordinary AppKit editing remains outside here.
+    /// Capsule visibility is a deliberate global command. Register it
+    /// exclusively so another Carbon listener cannot observe the same chord.
     var registrationOptions: OptionBits {
         action == .toggleClipboardHistory
-            || action == .openMailbox
             ? OptionBits(kEventHotKeyExclusive)
             : OptionBits(kEventHotKeyNoOptions)
     }
@@ -76,7 +73,8 @@ enum GlobalHotKeyRouting {
     static func registeredActions(currentSourceIsOwn: Bool)
         -> Set<GlobalHotKeyAction> {
         Set(GlobalHotKeyAction.allCases.filter {
-            currentSourceIsOwn || !$0.requiresRimeInputSource
+            $0 != .openMailbox
+                && (currentSourceIsOwn || !$0.requiresRimeInputSource)
         })
     }
 
@@ -85,7 +83,7 @@ enum GlobalHotKeyRouting {
         RimeShortcutPreferences.migrateGlobalHotKeyShortcutsIfNeeded(
             defaults: defaults
         )
-        return GlobalHotKeyAction.allCases.map { action in
+        return GlobalHotKeyAction.allCases.filter { $0 != .openMailbox }.map { action in
             let shortcut = RimeShortcutPreferences.shortcut(
                 for: action.shortcutAction,
                 defaults: defaults
@@ -128,7 +126,9 @@ enum GlobalHotKeyRouting {
         switch action {
         case .toggleWorkbench: return .toggleWorkbench
         case .toggleClipboardHistory: return .toggleClipboardHistory
-        case .openMailbox: return .openMailbox
+        // Retain the old action ID only so stale Carbon events are ignored and
+        // existing shortcut preferences can still be migrated safely.
+        case .openMailbox: return .ignore
         case .openSettings: return .openSettings
         }
     }
@@ -488,9 +488,6 @@ final class GlobalHotKeyController {
             case .toggleClipboardHistory:
                 ClipboardHistoryWindowController.shared.toggleVisibility()
                 IMELog.write("global hotkey toggled Capsule rail")
-            case .openMailbox:
-                let action = MailboxWindowController.shared.toggleVisibility()
-                IMELog.write("global hotkey toggled Mailbox action=\(action)")
             case .openSettings:
                 SettingsWindowController.shared.show()
                 IMELog.write("global hotkey opened settings")

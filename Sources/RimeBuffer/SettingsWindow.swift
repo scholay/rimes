@@ -1968,9 +1968,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
     private func rebuildRouteCatalog() {
         do {
-            let next = try SettingsRouteCatalog(
-                pluginContributions: PluginRegistry.shared.enabledSettingsContributions()
-            )
+            let next = try SettingsRouteCatalog()
             routeCatalog = next
             navigation.reconcile(with: next)
             if window != nil { rebuildSidebar() }
@@ -4424,7 +4422,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         shortcutFeedbackLabel.stringValue = ""
         shortcutFeedbackLabel.isHidden = true
 
-        let rows = RimeShortcutAction.allCases.map { action -> NSView in
+        let rows = RimeShortcutAction.settingsVisibleCases.map { action -> NSView in
             let titleLabel = NSTextField(labelWithString: action.title)
             titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
             titleLabel.textColor = RimeUI.textPrimary

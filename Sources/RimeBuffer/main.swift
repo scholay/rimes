@@ -1453,16 +1453,6 @@ ActionPluginHost.shared.onChange = {
 BufferWindowController.shared.showOnLaunchIfNeeded()
 ClipboardHistoryWindowController.shared.start()
 
-// Local gateway: accept MCP / HTTP pushes from local agents into the inbound
-// bus (loopback-only, token-gated). Off is a one-line setting.
-MailboxInteractionBridge.shared.aiReplyCoordinator =
-    AITextMailboxGenerationCoordinator.shared
-_ = InboundToast.shared
-InboundBus.shared.onChange = {
-    MailboxWindowController.refreshIfOpen()
-}
-LocalGateway.shared.startIfEnabled()
-
 // No standalone NSStatusItem: ETInput's commands are supplied by
 // RIMESController.menu() under the system input-source icon.
 StatusMenu.shared.setHealthy(rimeEngine.isHealthy)
@@ -7232,10 +7222,13 @@ func runBufferWindowSmokeTest() -> Bool {
     guard externalUtilityActions == [
             .toggleWorkbench,
             .toggleClipboardHistory,
-            .openMailbox,
           ],
           !externalUtilityActions.contains(.openSettings),
-          rimeUtilityActions == Set(GlobalHotKeyAction.allCases) else {
+          rimeUtilityActions == Set(
+            GlobalHotKeyAction.allCases.filter { $0 != .openMailbox }
+          ),
+          GlobalHotKeyRouting.definitions(defaults: hotKeyDefaults)
+            .allSatisfy({ $0.action != .openMailbox }) else {
         print("FAILED: global utility registration scope")
         return false
     }
@@ -7462,7 +7455,7 @@ func runBufferWindowSmokeTest() -> Bool {
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed),
             identifier: mailboxHotKeyID
-          ) == .openMailbox,
+          ) == .ignore,
           GlobalHotKeyRouting.route(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyReleased),
@@ -7473,7 +7466,7 @@ func runBufferWindowSmokeTest() -> Bool {
             eventKind: UInt32(kEventHotKeyPressed),
             identifier: unrelatedHotKeyID
           ) == .ignore else {
-        print("FAILED: global workbench/Capsule/Mailbox/settings hotkey routing")
+        print("FAILED: global workbench/Capsule/settings hotkey routing")
         return false
     }
 
