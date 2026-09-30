@@ -557,6 +557,7 @@ final class RimeCandidateSurfaceView: NSView {
     let contentHost = NSView()
 
     private let fallbackVibrancy = NSVisualEffectView()
+    private let glassEdgeOverlay = RimeGlassEdgeOverlayView()
     private var nativeGlass: NSView?
 
     override init(frame frameRect: NSRect) {
@@ -564,12 +565,16 @@ final class RimeCandidateSurfaceView: NSView {
         wantsLayer = true
         layer?.masksToBounds = false
 
-        fallbackVibrancy.material = .hudWindow
+        fallbackVibrancy.material = .popover
         fallbackVibrancy.blendingMode = .behindWindow
         fallbackVibrancy.state = .active
         fallbackVibrancy.isHidden = true
         fallbackVibrancy.translatesAutoresizingMaskIntoConstraints = false
         addSubview(fallbackVibrancy)
+
+        glassEdgeOverlay.isHidden = true
+        glassEdgeOverlay.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(glassEdgeOverlay)
 
         contentHost.translatesAutoresizingMaskIntoConstraints = false
         addSubview(contentHost)
@@ -583,6 +588,10 @@ final class RimeCandidateSurfaceView: NSView {
             contentHost.trailingAnchor.constraint(equalTo: trailingAnchor),
             contentHost.topAnchor.constraint(equalTo: topAnchor),
             contentHost.bottomAnchor.constraint(equalTo: bottomAnchor),
+            glassEdgeOverlay.leadingAnchor.constraint(equalTo: leadingAnchor),
+            glassEdgeOverlay.trailingAnchor.constraint(equalTo: trailingAnchor),
+            glassEdgeOverlay.topAnchor.constraint(equalTo: topAnchor),
+            glassEdgeOverlay.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
 
         if #available(macOS 26.0, *) {
@@ -615,9 +624,11 @@ final class RimeCandidateSurfaceView: NSView {
         layer?.borderWidth = usesLiquidGlass ? 0 : borderWidth
         layer?.borderColor = usesLiquidGlass ? NSColor.clear.cgColor : borderColor.cgColor
         layer?.masksToBounds = !usesLiquidGlass
+        glassEdgeOverlay.cornerRadius = cornerRadius
+        glassEdgeOverlay.isHidden = !usesLiquidGlass
 
         if usesLiquidGlass {
-            layer?.backgroundColor = NSColor.clear.cgColor
+            layer?.backgroundColor = RimeGlassPalette.panelFill.cgColor
             if #available(macOS 26.0, *),
                let glass = nativeGlass as? NSGlassEffectView {
                 if glass.contentView !== contentHost {
@@ -625,9 +636,7 @@ final class RimeCandidateSurfaceView: NSView {
                 }
                 glass.style = .regular
                 glass.cornerRadius = cornerRadius
-                // Keep the material system-colored. Accent color belongs on
-                // the selected candidate pill, not over the entire glass bar.
-                glass.tintColor = nil
+                glass.tintColor = RimeGlassPalette.panelTint
                 Self.setInteractiveEffect(interactiveGlass, on: glass)
                 glass.isHidden = false
                 fallbackVibrancy.isHidden = true
@@ -661,6 +670,55 @@ final class RimeCandidateSurfaceView: NSView {
         let setter = NSSelectorFromString("setEffectIsInteractive:")
         guard view.responds(to: setter) else { return }
         view.setValue(NSNumber(value: enabled), forKey: "effectIsInteractive")
+    }
+}
+
+/// Adds the fine highlight and inner edge visible on RIMES's MailGlass panels.
+private final class RimeGlassEdgeOverlayView: NSView {
+    var cornerRadius: CGFloat = 0 {
+        didSet { needsDisplay = true }
+    }
+
+    override var isOpaque: Bool { false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let lineWidth = RimeGlassPalette.edgeLineWidth
+        guard bounds.width > lineWidth * 2,
+              bounds.height > lineWidth * 2 else { return }
+
+        let outerRect = bounds.insetBy(dx: lineWidth / 2, dy: lineWidth / 2)
+        let innerInset = lineWidth + 0.8
+        let innerRect = bounds.insetBy(dx: innerInset, dy: innerInset)
+        let outer = NSBezierPath(
+            roundedRect: outerRect,
+            xRadius: max(0, cornerRadius - lineWidth / 2),
+            yRadius: max(0, cornerRadius - lineWidth / 2)
+        )
+        let inner = NSBezierPath(
+            roundedRect: innerRect,
+            xRadius: max(0, cornerRadius - innerInset),
+            yRadius: max(0, cornerRadius - innerInset)
+        )
+        let edgeBand = NSBezierPath()
+        edgeBand.windingRule = .evenOdd
+        edgeBand.append(outer)
+        edgeBand.append(inner)
+
+        NSGraphicsContext.saveGraphicsState()
+        edgeBand.addClip()
+        NSGradient(colors: [
+            .white.withAlphaComponent(RimeGlassPalette.edgeHighlightOpacity),
+            .white.withAlphaComponent(0.08),
+            .black.withAlphaComponent(RimeGlassPalette.edgeShadowOpacity),
+            .white.withAlphaComponent(0.16),
+        ])?.draw(in: bounds, angle: -45)
+        NSGraphicsContext.restoreGraphicsState()
+
+        inner.lineWidth = 0.8
+        NSColor.white.withAlphaComponent(RimeGlassPalette.edgeGlowOpacity).setStroke()
+        inner.stroke()
     }
 }
 
