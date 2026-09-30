@@ -435,15 +435,19 @@ private final class SettingsThemeCardButton: SettingsPointingButton {
         )
         let name = NSTextField(labelWithString: mode.title)
         name.font = .systemFont(ofSize: 11, weight: .semibold)
-        name.textColor = RimeUI.color(palette.textPrimary)
+        name.textColor = mode == .liquidGlass
+            ? .labelColor
+            : RimeUI.color(palette.textPrimary)
         name.toolTip = detailText
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let status = NSTextField(labelWithString: selected ? "正在使用" : "可用")
         status.font = .systemFont(ofSize: 9, weight: .semibold)
-        status.textColor = selected
-            ? RimeUI.color(palette.accentText)
-            : RimeUI.color(palette.textMuted)
+        status.textColor = mode == .liquidGlass
+            ? (selected ? NSColor.controlAccentColor : .secondaryLabelColor)
+            : (selected
+                ? RimeUI.color(palette.accentText)
+                : RimeUI.color(palette.textMuted))
         status.setContentHuggingPriority(.required, for: .horizontal)
 
         let row = NSStackView(views: [icon, name, NSView(), status])
@@ -452,18 +456,46 @@ private final class SettingsThemeCardButton: SettingsPointingButton {
         row.spacing = 11
         row.edgeInsets = NSEdgeInsets(top: 9, left: 11, bottom: 9, right: 11)
         row.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(row)
+        if mode == .liquidGlass, #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView(frame: .zero)
+            glass.style = .regular
+            glass.cornerRadius = 14
+            glass.tintColor = nil
+            RimeCandidateSurfaceView.setInteractiveEffect(true, on: glass)
+            glass.contentView = row
+            glass.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(glass)
+            NSLayoutConstraint.activate([
+                glass.leadingAnchor.constraint(equalTo: leadingAnchor),
+                glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+                glass.topAnchor.constraint(equalTo: topAnchor),
+                glass.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
+        } else {
+            addSubview(row)
+        }
         NSLayoutConstraint.activate([
             row.leadingAnchor.constraint(equalTo: leadingAnchor),
             row.trailingAnchor.constraint(equalTo: trailingAnchor),
             row.topAnchor.constraint(equalTo: topAnchor),
             row.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        layer?.backgroundColor = RimeUI.color(palette.surfaceSecondary).cgColor
-        layer?.borderColor = RimeUI.color(
-            selected ? palette.selectedCandidateBackground : palette.border
-        ).cgColor
-        layer?.borderWidth = 1
+        layer?.backgroundColor = mode == .liquidGlass
+            ? NSColor.clear.cgColor
+            : RimeUI.color(palette.surfaceSecondary).cgColor
+        if mode == .liquidGlass {
+            layer?.cornerRadius = 14
+            layer?.masksToBounds = false
+            layer?.borderColor = selected
+                ? NSColor.controlAccentColor.withAlphaComponent(0.62).cgColor
+                : NSColor.clear.cgColor
+            layer?.borderWidth = selected ? 1 : 0
+        } else {
+            layer?.borderColor = RimeUI.color(
+                selected ? palette.selectedCandidateBackground : palette.border
+            ).cgColor
+            layer?.borderWidth = 1
+        }
         setAccessibilityLabel("\(mode.title)主题，\(selected ? "正在使用" : "可用")")
     }
 
@@ -2712,6 +2744,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 spacer(16),
                 sectionLabel("拉斯塔 · 主题"),
                 themePreviewCard(.rasta),
+                spacer(16),
+                sectionLabel("Apple 原生材质"),
+                themePreviewCard(.liquidGlass),
             ])
         }
         let preview = CandidatePreviewView(maxWidth: 620)
@@ -4743,7 +4778,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             compactCandidateHeight: get(.compactCandidateHeight),
             preeditHeight: get(.preeditHeight),
             candidateFontSize: get(.candidateFontSize),
-            labelFontSize: get(.labelFontSize)
+            englishCandidateFontSize: get(.englishCandidateFontSize),
+            englishCandidateCornerRadius: get(.englishCandidateCornerRadius),
+            labelFontSize: get(.labelFontSize),
+            selectedCandidateCornerRadius: get(.selectedCandidateCornerRadius),
+            candidateStripCornerRadius: get(.candidateStripCornerRadius),
+            preeditCornerRadius: get(.preeditCornerRadius)
         )
     }
 

@@ -13,6 +13,17 @@ by the RIMES import revision above; all later RIMES changes remain available in
 the public repository history. No generated Rime `build/` output or user
 database is distributed as source.
 
+## Dictionary refresh (2026-09-30)
+
+The upstream Chinese and English dictionary data under `cn_dicts/` and
+`en_dicts/` was refreshed from `iDvel/rime-ice` revision
+`3aea6d3694fb3d94ec663641f021f788822897ad` (2026-09-25). The top-level
+`rime_ice.dict.yaml` version was updated to `2026-01-26`. RIMES-specific schema,
+configuration, Lua, and the local `V...` trigger rows in that top-level
+dictionary were retained rather than replaced with upstream configuration.
+The previous import and the separately pinned Xiaohe inputs remain documented
+above and below.
+
 The preview closure derived from Rime Ice includes its full/double-pinyin
 schemas, supporting dictionaries, Lua modules, OpenCC data, symbol tables,
 custom phrases, and the radical-pinyin and melt-English dependencies. RIMES's

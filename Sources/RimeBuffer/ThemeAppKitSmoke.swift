@@ -322,6 +322,10 @@ func runThemeAppKitSmokeTest() -> Bool {
     }
 
     func matches(_ window: NSWindow?, mode: RimeAppearanceMode) -> Bool {
+        if mode == .liquidGlass {
+            return window?.appearance == nil
+                && window?.effectiveAppearance.name == app.effectiveAppearance.name
+        }
         let expected = mode.appKitAppearanceName(
             increasedContrast: NSWorkspace.shared
                 .accessibilityDisplayShouldIncreaseContrast
@@ -354,8 +358,18 @@ func runThemeAppKitSmokeTest() -> Bool {
     drainMainRunLoop { matches(settingsWindow, mode: .night) }
     check(matches(settingsWindow, mode: .night),
           "the same settings window should transition back to 墨竹")
-    check(appearanceNotificationCount == 3,
-          "墨竹→翡翠→静谧→墨竹 should emit exactly three appearance notifications")
+
+    RimeUI.appearance = .liquidGlass
+    drainMainRunLoop { matches(settingsWindow, mode: .liquidGlass) }
+    check(matches(settingsWindow, mode: .liquidGlass),
+          "Liquid Glass should follow the macOS appearance instead of forcing aqua or dark aqua")
+
+    RimeUI.appearance = .night
+    drainMainRunLoop { matches(settingsWindow, mode: .night) }
+    check(matches(settingsWindow, mode: .night),
+          "the settings window should return from Liquid Glass to 墨竹")
+    check(appearanceNotificationCount == 5,
+          "theme changes should emit one appearance notification each")
 
     NotificationCenter.default.removeObserver(observer)
     settingsWindow?.close()

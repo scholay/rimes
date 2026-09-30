@@ -11464,6 +11464,10 @@ func runCandidateMetricsSmokeTest() -> Bool {
           "candidate glyph should be bounded by button height")
     check(CandidateWindowMetric.labelFontSize.containerMetric?.metric == .candidateFontSize,
           "index label should be bounded by candidate glyph")
+    check(CandidateWindowMetric.selectedCandidateCornerRadius.range == 0...16,
+          "selected-candidate corner radius should be adjustable from square to rounded")
+    check(CandidateWindowMetric.selectedCandidateCornerRadius.defaultValue == 16,
+          "selected-candidate corner radius should use the shipped appearance default")
     for m in [CandidateWindowMetric.baseWidth, .compactStripHeight, .preeditHeight] {
         check(m.containerMetric == nil, "\(m.rawValue) should be a free container metric")
     }
@@ -11471,7 +11475,8 @@ func runCandidateMetricsSmokeTest() -> Bool {
     func vals(strip: Double, button: Double, glyph: Double, label: Double) -> [CandidateWindowMetric: Double] {
         [.baseWidth: 460, .preeditHeight: 20,
          .compactStripHeight: strip, .compactCandidateHeight: button,
-         .candidateFontSize: glyph, .labelFontSize: label]
+         .candidateFontSize: glyph, .labelFontSize: label,
+         .selectedCandidateCornerRadius: 8]
     }
 
     // Button ceiling tracks the strip (strip − 2), capped at its own max 44.
@@ -11500,6 +11505,8 @@ func runCandidateMetricsSmokeTest() -> Bool {
           "the full resolver should clamp candidate glyphs to their button")
     check(resolvedChain[.labelFontSize] == 16,
           "the full resolver should then clamp labels to the candidate glyph")
+    check(resolvedChain[.selectedCandidateCornerRadius] == 8,
+          "corner radius should be resolved independently of text sizing")
     check(CandidateLayout.candidateSeparatorRunWidth == 14,
           "preview and live candidate separators should occupy the same width")
 
@@ -11591,7 +11598,8 @@ func runCandidateMetricsSmokeTest() -> Bool {
     // The layout absorbs an over-tall button — the very reason the control forbids it.
     let over = CandidateWindowMetrics(baseWidth: 460, compactStripHeight: 32,
                                       compactCandidateHeight: 44, preeditHeight: 20,
-                                      candidateFontSize: 16, labelFontSize: 10)
+                                      candidateFontSize: 16, labelFontSize: 10,
+                                      selectedCandidateCornerRadius: 12)
     check(CandidateLayout.candidateButtonHeight(over) <= 30,
           "an over-tall button must be clamped by the strip during layout")
 
@@ -11633,13 +11641,14 @@ func runThemeSmokeTest() -> Bool {
           "quiet's visible theme name should be 静谧")
     check(RimeAppearanceMode.rasta.title == "拉斯塔",
           "rasta's visible theme name should be 拉斯塔")
-    check(RimeAppearanceMode.allCases == [.night, .day, .quiet, .rasta],
-          "theme order should keep Classic colorways before Rasta")
+    check(RimeAppearanceMode.allCases == [.night, .day, .quiet, .rasta, .liquidGlass],
+          "theme order should keep Classic colorways, Rasta, then Apple Liquid Glass")
     check(RimeAppearanceMode.night.family == .classic
             && RimeAppearanceMode.day.family == .classic
             && RimeAppearanceMode.quiet.family == .classic
-            && RimeAppearanceMode.rasta.family == .rasta,
-          "three legacy palettes must be Classic colorways while Rasta is independent")
+            && RimeAppearanceMode.rasta.family == .rasta
+            && RimeAppearanceMode.liquidGlass.family == .apple,
+          "legacy palettes, Rasta, and Apple Liquid Glass must remain separate families")
 
     let day = RimeThemePalettes.day
     let night = RimeThemePalettes.night
