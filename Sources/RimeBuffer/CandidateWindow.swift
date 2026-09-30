@@ -25,6 +25,38 @@ enum CandidateTranslationCommitRules {
     }
 }
 
+enum EnglishCandidateCommitFormatter {
+    static func format(translation: String, sourceCandidate: String) -> String {
+        let text = translation.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return "" }
+        let translatedEnd = text.last
+        let translatedTerminal: String? = {
+            switch translatedEnd {
+            case ".", "。": return "."
+            case "!", "！": return "!"
+            case "?", "？": return "?"
+            case "…": return "..."
+            default: return nil
+            }
+        }()
+        if let translatedTerminal {
+            return String(text.dropLast()) + translatedTerminal + " "
+        }
+        let sourceEnd = sourceCandidate.last
+        let sourceTerminal: Character? = {
+            switch sourceEnd {
+            case "。": return "."
+            case "！": return "!"
+            case "？": return "?"
+            case ".", "!", "?": return sourceEnd
+            default: return nil
+            }
+        }()
+        if let sourceTerminal { return text + String(sourceTerminal) + " " }
+        return text + " "
+    }
+}
+
 extension Notification.Name {
     static let candidateWindowMetricsDidChange = Notification.Name("CandidateWindowMetricsDidChange")
 }
@@ -607,6 +639,7 @@ final class CandidateWindow {
     private var commitContinuationArmed = false
     private var commitContinuationGeneration: UInt64 = 0
     private var outputLanguage = CandidateOutputLanguage.defaultForNextComposition
+    private var outputLanguagePinnedForComposition = false
     private var englishTranslations: [String: String] = [:]
     private var translationController: AnyObject?
     private var translationGeneration: UInt64 = 0
@@ -689,6 +722,7 @@ final class CandidateWindow {
     @discardableResult
     func toggleOutputLanguage() -> CandidateOutputLanguage {
         outputLanguage = outputLanguage == .chinese ? .english : .chinese
+        outputLanguagePinnedForComposition = true
         renderCandidates()
         candidateStack.alphaValue = 0.78
         NSAnimationContext.runAnimationGroup { context in
@@ -697,6 +731,29 @@ final class CandidateWindow {
             candidateStack.animator().alphaValue = 1
         }
         return outputLanguage
+    }
+
+    /// Resolve a number key against the visible row and make that candidate
+    /// active before committing it in the selected output language.
+    func selectVisibleCandidateForKeyboard(_ visibleIndex: Int) -> CandidateSelection? {
+        guard visibleIndex >= 0 else { return nil }
+        let selection: CandidateSelection
+        if isExpanded {
+            guard let visible = expandedSelection(atVisibleIndex: visibleIndex) else { return nil }
+            expandedSelectionPageOffset = visible.pageOffset
+            selectedIndex = visible.index
+            scrollExpandedColumnsToSelection()
+            selection = visible
+        } else {
+            let indices = currentVisualCandidateIndices(panelWidth: activePanelWidth())
+            guard indices.indices.contains(visibleIndex) else { return nil }
+            selectedIndex = indices[visibleIndex]
+            visualPageIndex = pageIndex(containing: selectedIndex, panelWidth: activePanelWidth())
+            selection = CandidateSelection(pageOffset: 0, index: selectedIndex)
+        }
+        renderCandidates()
+        resetCandidateScroll()
+        return selection
     }
     func recordCommittedOutputLanguage(_ language: CandidateOutputLanguage) {
         CandidateOutputLanguage.defaultForNextComposition = language
@@ -861,7 +918,7 @@ final class CandidateWindow {
                     self.cancelCandidateTranslations()
                     return
                 }
-                self.englishTranslations = translations
+                self.englishTranslations.merge(translations) { _, newValue in newValue }
                 self.renderCandidates()
                 self.layoutAndShowAccordingToPresentation()
                 self.onTranslationsChanged?(owner, generation, isFinal)
@@ -966,7 +1023,12 @@ final class CandidateWindow {
             resetCharacterSelectionState()
             selectedIndex = clamp(ctx.highlightedIndex, count: ctx.candidates.count)
             currentSignature = signature
-            outputLanguage = CandidateOutputLanguage.defaultForNextComposition
+            if ctx.input.isEmpty && ctx.preedit.isEmpty {
+                outputLanguage = CandidateOutputLanguage.defaultForNextComposition
+                outputLanguagePinnedForComposition = false
+            } else if !outputLanguagePinnedForComposition {
+                outputLanguage = CandidateOutputLanguage.defaultForNextComposition
+            }
             englishTranslations.removeAll()
             requestCandidateTranslations(ctx.candidates.map(\.text))
         }
@@ -1062,6 +1124,7 @@ final class CandidateWindow {
         cancelCandidateTranslations()
         englishTranslations.removeAll()
         outputLanguage = CandidateOutputLanguage.defaultForNextComposition
+        outputLanguagePinnedForComposition = false
         currentSignature = ""
         projectionPreedit = ""
         ownerToken = nil
@@ -1179,6 +1242,7 @@ final class CandidateWindow {
         let usablePages = pages.filter { !$0.candidates.isEmpty }
         guard !usablePages.isEmpty else { return false }
         expandedPages = usablePages
+        requestCandidateTranslations(usablePages.flatMap { $0.candidates.map(\.text) })
         expandedSelectionPageOffset = min(expandedSelectionPageOffset, expandedPages.count - 1)
         expandedColumnBases.removeAll()
         scrollExpandedWindowToSelection()
@@ -1202,6 +1266,7 @@ final class CandidateWindow {
         let usablePages = pages.filter { !$0.candidates.isEmpty }
         guard usablePages.count > expandedPages.count else { return }
         expandedPages = usablePages
+        requestCandidateTranslations(usablePages.flatMap { $0.candidates.map(\.text) })
         IMELog.write("candidate matrix pages fetched=\(expandedPages.count) last=\(expandedTailIsLastPage)")
     }
 

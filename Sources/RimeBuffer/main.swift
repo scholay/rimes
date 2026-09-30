@@ -3245,6 +3245,18 @@ func runCandidateBilingualSmokeTest() -> Bool {
     let unsupportedRetainsPaging = !CandidateKeyboardRoutingRules.togglesOutputLanguage(
         keycode: RimeKey.up, isExpanded: false, translationAvailable: false
     )
+    let englishNumberKeysAreLocal = CandidateKeyboardRoutingRules.ownsLocally(
+        keycode: 0x33, isExpanded: false, englishOutputActive: true
+    )
+    let chineseNumberKeysRemainEngineOwned = !CandidateKeyboardRoutingRules.ownsLocally(
+        keycode: 0x33, isExpanded: false, englishOutputActive: false
+    )
+    let wordCommitAddsSpace = EnglishCandidateCommitFormatter.format(
+        translation: "time", sourceCandidate: "时间"
+    ) == "time "
+    let sentenceCommitPreservesPunctuation = EnglishCandidateCommitFormatter.format(
+        translation: "That's all.", sourceCandidate: "结束。"
+    ) == "That's all. "
     let validPendingCommit = CandidateTranslationCommitRules.mayCommit(
         ownerMatches: true, focusIsCurrent: true, candidateMatches: true,
         generationMatches: true, englishModeActive: true,
@@ -3271,12 +3283,14 @@ func runCandidateBilingualSmokeTest() -> Bool {
         candidatesInteractable: false
     )
     guard routeToToggle, expandedRetainsNavigation, unsupportedRetainsPaging,
+          englishNumberKeysAreLocal, chineseNumberKeysRemainEngineOwned,
+          wordCommitAddsSpace, sentenceCommitPreservesPunctuation,
           validPendingCommit, staleOwnerRejected, changedCandidateRejected,
           staleGenerationRejected, hiddenPanelRejected else {
         print("candidate-bilingual-smoke: FAILED")
         return false
     }
-    print("candidate-bilingual-smoke: OK (compact up toggle, matrix navigation, stale translation guards)")
+    print("candidate-bilingual-smoke: OK (toggle, English digits, spacing, matrix navigation, stale translation guards)")
     return true
 }
 

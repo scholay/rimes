@@ -27,13 +27,15 @@ enum CandidateKeyboardRoutingRules {
     /// expanded matrix maps those digits onto its visible columns. Zero has no
     /// candidate-window action and must continue to librime like any other
     /// schema binding or printable input.
-    static func ownsLocally(keycode: Int32, isExpanded: Bool) -> Bool {
+    static func ownsLocally(keycode: Int32,
+                            isExpanded: Bool,
+                            englishOutputActive: Bool = false) -> Bool {
         switch keycode {
         case RimeKey.left, RimeKey.right, RimeKey.down, RimeKey.up,
              RimeKey.return, RimeKey.space:
             return true
         case 0x31...0x39:
-            return isExpanded
+            return isExpanded || englishOutputActive
         default:
             return false
         }
@@ -6495,7 +6497,8 @@ final class RIMESController: IMKInputController {
         }
         let isLocalCandidateAction = CandidateKeyboardRoutingRules.ownsLocally(
             keycode: keycode,
-            isExpanded: candidateWindow.isExpanded
+            isExpanded: candidateWindow.isExpanded,
+            englishOutputActive: candidateWindow.selectedOutputLanguage == .english
         )
         if isLocalCandidateAction {
             if chord.hasPending {
@@ -6558,11 +6561,24 @@ final class RIMESController: IMKInputController {
             }
             selectCandidate(selection)
             return true
+        case 0x31...0x39 where candidateWindow.selectedOutputLanguage == .english:
+            let visibleIndex = Int(keycode - 0x31)
+            guard let selection = candidateWindow.selectVisibleCandidateForKeyboard(visibleIndex) else {
+                IMELog.write("English candidate digit \(visibleIndex + 1) ignored; candidate is hidden")
+                return true
+            }
+            guard let owner = focusToken else { return false }
+            return selectCandidateFromPanel(selection, owner: owner)
         case 0x31...0x39 where candidateWindow.isExpanded:
             let visibleIndex = Int(keycode - 0x31)
             guard let selection = candidateWindow.expandedSelection(atVisibleIndex: visibleIndex) else {
                 IMELog.write("candidate matrix digit \(visibleIndex + 1) ignored; candidate is hidden")
                 return true
+            }
+            guard let owner = focusToken else { return false }
+            if candidateWindow.selectedOutputLanguage == .english {
+                _ = candidateWindow.selectVisibleCandidateForKeyboard(visibleIndex)
+                return selectCandidateFromPanel(selection, owner: owner)
             }
             selectCandidate(selection)
             return true
@@ -6616,14 +6632,20 @@ final class RIMESController: IMKInputController {
               lease.controller === self,
               lease.client === client else { return false }
         pendingEnglishCandidateCommit = nil
+        let sourceCandidate = candidateWindow.selectedCandidateText ?? ""
+        let committedEnglishText = EnglishCandidateCommitFormatter.format(
+            translation: text,
+            sourceCandidate: sourceCandidate
+        )
+        guard !committedEnglishText.isEmpty else { return false }
         rimeEngine.clearComposition(session: session)
         composition.markCleared()
         let inserted: Bool
         if shouldCaptureClipboardSearchCommit(from: client) {
-            inserted = appendClipboardSearchCommit(text, client: client)
+            inserted = appendClipboardSearchCommit(committedEnglishText, client: client)
         } else if shouldCaptureCommit(from: client) {
             if let focusToken,
-               deliverToStreamRawIfSelected(text, owner: focusToken) {
+               deliverToStreamRawIfSelected(committedEnglishText, owner: focusToken) {
                 clearCompositionPresentation(client: client)
                 publishAuthoredCommitTelemetry(characterCount: text.count,
                                                source: .buffer,
@@ -6634,7 +6656,7 @@ final class RIMESController: IMKInputController {
                     BufferWindowController.shared.clearInlineComposition(owner: focusToken)
                     candidateWindow.retireForCommit(owner: focusToken)
                 }
-                BufferModel.shared.append(text)
+                BufferModel.shared.append(committedEnglishText)
                 clearCompositionPresentation(client: client)
                 publishAuthoredCommitTelemetry(characterCount: text.count,
                                                source: .buffer,
@@ -6642,7 +6664,7 @@ final class RIMESController: IMKInputController {
                 inserted = true
             }
         } else {
-            inserted = deliverDirectText(text, client: client)
+            inserted = deliverDirectText(committedEnglishText, client: client)
             if inserted {
                 publishAuthoredCommitTelemetry(characterCount: text.count,
                                                source: .direct,
