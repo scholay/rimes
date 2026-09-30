@@ -2,6 +2,29 @@ import Cocoa
 import Carbon.HIToolbox
 import CoreText
 
+enum CandidateOutputLanguage: String {
+    case chinese
+    case english
+
+    private static let defaultsKey = "candidateWindow.outputLanguage"
+    static var defaultForNextComposition: CandidateOutputLanguage {
+        get { CandidateOutputLanguage(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "chinese") ?? .chinese }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey) }
+    }
+}
+
+enum CandidateTranslationCommitRules {
+    static func mayCommit(ownerMatches: Bool,
+                          focusIsCurrent: Bool,
+                          candidateMatches: Bool,
+                          generationMatches: Bool,
+                          englishModeActive: Bool,
+                          candidatesInteractable: Bool) -> Bool {
+        ownerMatches && focusIsCurrent && candidateMatches
+            && generationMatches && englishModeActive && candidatesInteractable
+    }
+}
+
 extension Notification.Name {
     static let candidateWindowMetricsDidChange = Notification.Name("CandidateWindowMetricsDidChange")
 }
@@ -388,7 +411,7 @@ extension CandidateWindowMetric {
     }
 }
 
-struct CandidateSelection {
+struct CandidateSelection: Equatable {
     let pageOffset: Int
     let index: Int
 }
@@ -583,8 +606,13 @@ final class CandidateWindow {
     /// still being handled; see `retireForCommit`.
     private var commitContinuationArmed = false
     private var commitContinuationGeneration: UInt64 = 0
+    private var outputLanguage = CandidateOutputLanguage.defaultForNextComposition
+    private var englishTranslations: [String: String] = [:]
+    private var translationController: AnyObject?
+    private var translationGeneration: UInt64 = 0
 
     var onSelect: ((FocusToken, CandidateSelection) -> Void)?
+    var onTranslationsChanged: ((FocusToken, UInt64, Bool) -> Void)?
 
     var hasCandidates: Bool {
         guard let ownerToken,
@@ -645,6 +673,27 @@ final class CandidateWindow {
         }
         guard !currentContext.candidates.isEmpty else { return nil }
         return currentContext.candidates[clamp(selectedIndex, count: currentContext.candidates.count)].text
+    }
+    var selectedCandidateEnglishText: String? {
+        guard let text = selectedCandidateText else { return nil }
+        return englishTranslations[text]
+    }
+    var supportsEnglishCandidateTranslation: Bool {
+        if #available(macOS 15.0, *) {
+            return translationController is CandidateEnglishTranslationController
+        }
+        return false
+    }
+    var selectedOutputLanguage: CandidateOutputLanguage { outputLanguage }
+    var currentTranslationGeneration: UInt64 { translationGeneration }
+    @discardableResult
+    func toggleOutputLanguage() -> CandidateOutputLanguage {
+        outputLanguage = outputLanguage == .chinese ? .english : .chinese
+        renderCandidates()
+        return outputLanguage
+    }
+    func recordCommittedOutputLanguage(_ language: CandidateOutputLanguage) {
+        CandidateOutputLanguage.defaultForNextComposition = language
     }
     var selectedSingleCharacterText: String? {
         guard isSingleCharacterSelectionActive else { return nil }
@@ -767,7 +816,6 @@ final class CandidateWindow {
         root.translatesAutoresizingMaskIntoConstraints = false
         root.addArrangedSubview(preeditPill)
         root.addArrangedSubview(strip)
-
         content.wantsLayer = true
         content.layer?.backgroundColor = NSColor.clear.cgColor
         content.translatesAutoresizingMaskIntoConstraints = false
@@ -789,6 +837,31 @@ final class CandidateWindow {
             to: panelHost,
             insets: NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
         )
+        if #available(macOS 15.0, *) {
+            let translator = CandidateEnglishTranslationController()
+            let host = translator.makeHostView()
+            content.addSubview(host)
+            NSLayoutConstraint.activate([
+                host.widthAnchor.constraint(equalToConstant: 1),
+                host.heightAnchor.constraint(equalToConstant: 1),
+                host.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                host.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            ])
+            translator.onUpdate = { [weak self] generation, translations, isFinal in
+                guard let self, self.translationGeneration == generation else { return }
+                guard let owner = self.ownerToken,
+                      InputFocusCoordinator.shared.interactionTarget(expected: owner) != nil,
+                      !IsSecureEventInputEnabled() else {
+                    self.cancelCandidateTranslations()
+                    return
+                }
+                self.englishTranslations = translations
+                self.renderCandidates()
+                self.layoutAndShowAccordingToPresentation()
+                self.onTranslationsChanged?(owner, generation, isFinal)
+            }
+            translationController = translator
+        }
 
         applyAppearance()
         NotificationCenter.default.addObserver(
@@ -887,6 +960,9 @@ final class CandidateWindow {
             resetCharacterSelectionState()
             selectedIndex = clamp(ctx.highlightedIndex, count: ctx.candidates.count)
             currentSignature = signature
+            outputLanguage = CandidateOutputLanguage.defaultForNextComposition
+            englishTranslations.removeAll()
+            requestCandidateTranslations(ctx.candidates.map(\.text))
         }
 
         currentContext = ctx
@@ -977,6 +1053,9 @@ final class CandidateWindow {
         resetExpandedState()
         resetCharacterSelectionState()
         currentContext = RimeContextModel()
+        cancelCandidateTranslations()
+        englishTranslations.removeAll()
+        outputLanguage = CandidateOutputLanguage.defaultForNextComposition
         currentSignature = ""
         projectionPreedit = ""
         ownerToken = nil
@@ -1648,15 +1727,25 @@ final class CandidateWindow {
                 candidateStack.addArrangedSubview(candidateSeparatorView())
             }
             let c = currentContext.candidates[i]
-            candidateStack.addArrangedSubview(candidateButton(
+            let button = candidateButton(
                 pageOffset: 0,
                 index: i,
                 candidate: c,
                 highlighted: i == selectedIndex,
                 compact: true,
                 width: nil,
-                maxWidth: candidateMaxWidth(panelWidth: panelWidth)
-            ))
+                maxWidth: candidateMaxWidth(panelWidth: panelWidth),
+                accessibilityTranslation: englishTranslations[c.text]
+            )
+            if supportsEnglishCandidateTranslation {
+                candidateStack.addArrangedSubview(compactCandidateCell(
+                    candidate: c,
+                    highlighted: i == selectedIndex,
+                    button: button
+                ))
+            } else {
+                candidateStack.addArrangedSubview(button)
+            }
         }
 
     }
@@ -1696,9 +1785,9 @@ final class CandidateWindow {
             row.alignment = .centerY
             row.spacing = Self.candidateSpacing
             row.translatesAutoresizingMaskIntoConstraints = false
-            row.heightAnchor.constraint(equalToConstant: compactCandidateButtonHeight(
-                for: CandidateWindowMetrics.current
-            )).isActive = true
+            let candidateHeight = compactCandidateButtonHeight(for: CandidateWindowMetrics.current)
+                + (supportsEnglishCandidateTranslation ? 16 : 0)
+            row.heightAnchor.constraint(equalToConstant: candidateHeight).isActive = true
 
             let displayedCandidates = renderedCandidates
             for (offset, element) in displayedCandidates.enumerated() {
@@ -1706,15 +1795,25 @@ final class CandidateWindow {
                 if offset > 0 {
                     row.addArrangedSubview(candidateSeparatorView())
                 }
-                row.addArrangedSubview(candidateButton(
+                let button = candidateButton(
                     pageOffset: pageOffset,
                     index: index,
                     candidate: candidate,
                     highlighted: isActiveRow && index == selectedIndex,
                     compact: true,
                     width: min(naturalWidths[index], available),
-                    showsLabel: isActiveRow
-                ))
+                    showsLabel: isActiveRow,
+                    accessibilityTranslation: englishTranslations[candidate.text]
+                )
+                if supportsEnglishCandidateTranslation {
+                    row.addArrangedSubview(compactCandidateCell(
+                        candidate: candidate,
+                        highlighted: isActiveRow && index == selectedIndex,
+                        button: button
+                    ))
+                } else {
+                    row.addArrangedSubview(button)
+                }
             }
             candidateStack.addArrangedSubview(row)
         }
@@ -1870,19 +1969,23 @@ final class CandidateWindow {
         width: CGFloat?,
         maxWidth: CGFloat? = nil,
         showsLabel: Bool = true,
+        accessibilityTranslation: String? = nil,
         tag: Int? = nil
     ) -> NSButton {
         let button = CandidatePillButton()
         button.tag = tag ?? candidateTag(pageOffset: pageOffset, index: index)
         button.target = self
         button.action = #selector(candidateTapped(_:))
+        let baseAccessibilityLabel = showsLabel && !candidate.label.isEmpty
+            ? "\(candidate.label) \(candidate.text)"
+            : candidate.text
         button.setCandidateTitle(
             candidateTitle(candidate,
                            highlighted: highlighted,
                            showsLabel: showsLabel),
-            accessibilityLabel: showsLabel && !candidate.label.isEmpty
-                ? "\(candidate.label) \(candidate.text)"
-                : candidate.text
+            accessibilityLabel: accessibilityTranslation.map {
+                "\(baseAccessibilityLabel), English: \($0)"
+            } ?? baseAccessibilityLabel
         )
         if !candidate.comment.isEmpty {
             button.setAccessibilityHelp(candidate.comment)
@@ -2150,11 +2253,57 @@ final class CandidateWindow {
 
     private func candidateAreaHeight(for metrics: CandidateWindowMetrics) -> CGFloat {
         let rowHeight = compactCandidateButtonHeight(for: metrics)
-        guard isExpanded, !isSingleCharacterSelectionActive else {
-            return rowHeight
+        if isSingleCharacterSelectionActive { return rowHeight }
+        if isExpanded {
+            let bilingualRowHeight = rowHeight + (supportsEnglishCandidateTranslation ? 16 : 0)
+            return Self.matrixViewportHeight(rowHeight: bilingualRowHeight,
+                                             rowCount: expandedPages.count)
         }
-        return Self.matrixViewportHeight(rowHeight: rowHeight,
-                                         rowCount: expandedPages.count)
+        return rowHeight + (supportsEnglishCandidateTranslation ? 16 : 0)
+    }
+
+    private func compactCandidateCell(candidate: RimeCandidateModel,
+                                      highlighted: Bool,
+                                      button: NSButton) -> NSView {
+        let cell = NSStackView()
+        cell.orientation = .vertical
+        cell.alignment = .centerX
+        cell.spacing = 0
+        let translated = englishTranslations[candidate.text] ?? ""
+        let activeEnglish = highlighted && outputLanguage == .english
+        let meaning = NSTextField(labelWithString:
+            translated.isEmpty || !activeEnglish ? translated : "EN · \(translated)")
+        meaning.font = .systemFont(ofSize: 10, weight: .medium)
+        meaning.textColor = activeEnglish ? RimeUI.selectedCandidateTextColor : RimeUI.textSecondary
+        meaning.alignment = .center
+        meaning.lineBreakMode = .byTruncatingTail
+        meaning.maximumNumberOfLines = 1
+        meaning.translatesAutoresizingMaskIntoConstraints = false
+        meaning.heightAnchor.constraint(equalToConstant: 14).isActive = true
+        cell.addArrangedSubview(meaning)
+        cell.addArrangedSubview(button)
+        if let candidateButton = button as? CandidatePillButton {
+            meaning.widthAnchor.constraint(equalTo: candidateButton.widthAnchor).isActive = true
+        }
+        return cell
+    }
+
+    private func requestCandidateTranslations(_ texts: [String]) {
+        guard #available(macOS 15.0, *),
+              !IsSecureEventInputEnabled(),
+              let translator = translationController as? CandidateEnglishTranslationController else {
+            return
+        }
+        translationGeneration = translator.translate(texts)
+    }
+
+    private func cancelCandidateTranslations() {
+        guard #available(macOS 15.0, *),
+              let translator = translationController as? CandidateEnglishTranslationController else {
+            translationGeneration &+= 1
+            return
+        }
+        translationGeneration = translator.cancel()
     }
 
     private func effectiveStripHeight(for metrics: CandidateWindowMetrics) -> CGFloat {
@@ -2199,6 +2348,7 @@ final class CandidateWindow {
 
         let metrics = CandidateWindowMetrics.current
         let expectedRowHeight = candidateWindow.compactCandidateButtonHeight(for: metrics)
+            + (candidateWindow.supportsEnglishCandidateTranslation ? 16 : 0)
         let expectedDocumentHeight = matrixViewportHeight(rowHeight: expectedRowHeight,
                                                           rowCount: rowCount)
         let expectedPanelHeight = candidateWindow.desiredPanelContentSize(
@@ -2280,7 +2430,7 @@ final class CandidateWindow {
             renderedCandidateViews: renderedCandidateViews,
             preeditHidden: candidateWindow.preeditPill.isHidden,
             stripOnlyHeight: stripOnlyHeight,
-            expectedStripOnlyHeight: metrics.compactStripHeight,
+            expectedStripOnlyHeight: candidateWindow.effectiveStripHeight(for: metrics),
             rejectedCachedHostAnchor: rejectedCachedHostAnchor,
             scrubbedCandidateViews: scrubbedCandidateViews,
             scrubbedPreedit: scrubbedPreedit
@@ -2304,8 +2454,10 @@ final class CandidateWindow {
         candidateWindow.renderCandidates()
         candidateWindow.panel.layoutIfNeeded()
 
-        let buttons = candidateWindow.candidateStack.arrangedSubviews
-            .compactMap { $0 as? NSButton }
+        let buttons = candidateWindow.candidateStack.arrangedSubviews.flatMap { view -> [NSButton] in
+            if let button = view as? NSButton { return [button] }
+            return (view as? NSStackView)?.arrangedSubviews.compactMap { $0 as? NSButton } ?? []
+        }
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         let settings = descendants(candidateWindow.content).compactMap { $0 as? NSButton }
             .first { $0.accessibilityLabel() == "打开设置" }
@@ -2426,8 +2578,15 @@ final class CandidateWindow {
             window.renderCandidates()
             window.panel.layoutIfNeeded()
             window.candidateStack.layoutSubtreeIfNeeded()
+            let renderedButtons = window.candidateStack.arrangedSubviews.reduce(0) { count, view in
+                if view is NSButton { return count + 1 }
+                if let cell = view as? NSStackView {
+                    return count + cell.arrangedSubviews.filter { $0 is NSButton }.count
+                }
+                return count
+            }
             fits = fits && window.candidatePages(panelWidth: window.activePanelWidth()) == pages
-                && window.candidateStack.arrangedSubviews.compactMap { $0 as? NSButton }.count == pages[page].count
+                && renderedButtons == pages[page].count
                 && window.candidateStack.fittingSize.width <= window.candidateScroll.contentSize.width + 1
         }
         checks.append(("adaptive pages keep all candidates reachable without clipping", fits))

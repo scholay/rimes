@@ -238,3 +238,82 @@ final class AppleTranslationStringService {
         }
     }
 }
+
+/// Translates the current compact candidate page as one owned generation.
+/// Results are keyed by candidate text so reordered candidates cannot inherit
+/// a neighbour's meaning. A newer composition, hide, or focus transition
+/// cancels the whole generation.
+@available(macOS 15.0, *)
+final class CandidateEnglishTranslationController {
+    private let bridge = AppleTranslationSessionBridge()
+    private var generation: UInt64 = 0
+    var onUpdate: ((UInt64, [String: String], Bool) -> Void)?
+
+    func makeHostView() -> NSView { bridge.makeHostView() }
+
+    @discardableResult
+    func translate(_ texts: [String]) -> UInt64 {
+        dispatchPrecondition(condition: .onQueue(.main))
+        generation &+= 1
+        let current = generation
+        var seen = Set<String>()
+        let uniqueTexts = texts.filter { seen.insert($0).inserted }
+        guard !uniqueTexts.isEmpty else {
+            bridge.cancel()
+            onUpdate?(current, [:], true)
+            return current
+        }
+        bridge.submit(sourceLanguageID: "zh-Hans", targetLanguageID: "en") { [weak self] session in
+            guard let self else { return }
+            let work = await MainActor.run { self.bridge.work }
+            guard let work else { return }
+            guard self.bridge.session(session, matches: work) else {
+                await MainActor.run { [weak self] in
+                    guard let self, self.generation == current else { return }
+                    self.onUpdate?(current, [:], true)
+                }
+                return
+            }
+            var translated: [String: String] = [:]
+            do {
+                try await session.prepareTranslation()
+                for text in uniqueTexts {
+                    try Task.checkCancellation()
+                    let result = try await session.translate(text)
+                    translated[text] = result.targetText
+                    let snapshot = translated
+                    await MainActor.run { [weak self] in
+                        guard let self, self.generation == current else { return }
+                        self.onUpdate?(current, snapshot, false)
+                    }
+                }
+                try Task.checkCancellation()
+                guard await self.bridge.isCurrent(work.id) else { return }
+                let completed = translated
+                await MainActor.run { [weak self] in
+                    guard let self, self.generation == current else { return }
+                    self.onUpdate?(current, completed, true)
+                }
+            } catch {
+                // Translation failure is intentionally silent in the candidate
+                // surface; callers keep the Chinese candidate selectable.
+                guard await self.bridge.isCurrent(work.id) else { return }
+                let partial = translated
+                await MainActor.run { [weak self] in
+                    guard let self, self.generation == current else { return }
+                    self.onUpdate?(current, partial, true)
+                }
+            }
+        }
+        return current
+    }
+
+    @discardableResult
+    func cancel() -> UInt64 {
+        dispatchPrecondition(condition: .onQueue(.main))
+        generation &+= 1
+        bridge.cancel()
+        onUpdate?(generation, [:], true)
+        return generation
+    }
+}

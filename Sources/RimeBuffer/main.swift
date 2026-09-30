@@ -1058,6 +1058,9 @@ if CommandLine.arguments.contains("candidate-commit-smoke") {
     _ = NSApplication.shared
     exit(runCandidateCommitSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("candidate-bilingual-smoke") {
+    exit(runCandidateBilingualSmokeTest() ? 0 : 1)
+}
 if CommandLine.arguments.contains("activation-cache-smoke") {
     exit(runRimeActivationMetadataCacheSmokeTest() ? 0 : 1)
 }
@@ -1405,7 +1408,13 @@ if ChordExtensionStore.shared.isEnabled,
 // shared window must never bind to one specific controller.
 candidateWindow.onSelect = { owner, selection in
     InputFocusCoordinator.shared.controller(for: owner)?
-        .selectCandidate(selection, owner: owner)
+        .selectCandidateFromPanel(selection, owner: owner)
+}
+candidateWindow.onTranslationsChanged = { owner, generation, isFinal in
+    InputFocusCoordinator.shared.controller(for: owner)?
+        .candidateTranslationsDidUpdate(owner: owner,
+                                        generation: generation,
+                                        isFinal: isFinal)
 }
 // Buffer presentation is independent from the caret-owned candidate panel.
 var lastBufferControlsActive = BufferModel.shared.active
@@ -3226,6 +3235,51 @@ func runStatsSmokeTest() -> Bool {
 /// text the host already showed. A commit must remove the panel before the
 /// host insertion, and only that keystroke's own follow-up composition may
 /// skip the entrance.
+func runCandidateBilingualSmokeTest() -> Bool {
+    let routeToToggle = CandidateKeyboardRoutingRules.togglesOutputLanguage(
+        keycode: RimeKey.up, isExpanded: false, translationAvailable: true
+    )
+    let expandedRetainsNavigation = !CandidateKeyboardRoutingRules.togglesOutputLanguage(
+        keycode: RimeKey.up, isExpanded: true, translationAvailable: true
+    )
+    let unsupportedRetainsPaging = !CandidateKeyboardRoutingRules.togglesOutputLanguage(
+        keycode: RimeKey.up, isExpanded: false, translationAvailable: false
+    )
+    let validPendingCommit = CandidateTranslationCommitRules.mayCommit(
+        ownerMatches: true, focusIsCurrent: true, candidateMatches: true,
+        generationMatches: true, englishModeActive: true,
+        candidatesInteractable: true
+    )
+    let staleOwnerRejected = !CandidateTranslationCommitRules.mayCommit(
+        ownerMatches: false, focusIsCurrent: false, candidateMatches: true,
+        generationMatches: true, englishModeActive: true,
+        candidatesInteractable: true
+    )
+    let changedCandidateRejected = !CandidateTranslationCommitRules.mayCommit(
+        ownerMatches: true, focusIsCurrent: true, candidateMatches: false,
+        generationMatches: true, englishModeActive: true,
+        candidatesInteractable: true
+    )
+    let staleGenerationRejected = !CandidateTranslationCommitRules.mayCommit(
+        ownerMatches: true, focusIsCurrent: true, candidateMatches: true,
+        generationMatches: false, englishModeActive: true,
+        candidatesInteractable: true
+    )
+    let hiddenPanelRejected = !CandidateTranslationCommitRules.mayCommit(
+        ownerMatches: true, focusIsCurrent: true, candidateMatches: true,
+        generationMatches: true, englishModeActive: true,
+        candidatesInteractable: false
+    )
+    guard routeToToggle, expandedRetainsNavigation, unsupportedRetainsPaging,
+          validPendingCommit, staleOwnerRejected, changedCandidateRejected,
+          staleGenerationRejected, hiddenPanelRejected else {
+        print("candidate-bilingual-smoke: FAILED")
+        return false
+    }
+    print("candidate-bilingual-smoke: OK (compact up toggle, matrix navigation, stale translation guards)")
+    return true
+}
+
 func runCandidateCommitSmokeTest() -> Bool {
     print("== \(ProductIdentity.displayName) candidate commit smoke test ==")
     guard let snapshot = CandidateWindow.commitRetirementSnapshotForSmoke() else {
