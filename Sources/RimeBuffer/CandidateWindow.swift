@@ -690,6 +690,12 @@ final class CandidateWindow {
     func toggleOutputLanguage() -> CandidateOutputLanguage {
         outputLanguage = outputLanguage == .chinese ? .english : .chinese
         renderCandidates()
+        candidateStack.alphaValue = 0.78
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            candidateStack.animator().alphaValue = 1
+        }
         return outputLanguage
     }
     func recordCommittedOutputLanguage(_ language: CandidateOutputLanguage) {
@@ -1731,7 +1737,7 @@ final class CandidateWindow {
                 pageOffset: 0,
                 index: i,
                 candidate: c,
-                highlighted: i == selectedIndex,
+                highlighted: i == selectedIndex && outputLanguage == .chinese,
                 compact: true,
                 width: nil,
                 maxWidth: candidateMaxWidth(panelWidth: panelWidth),
@@ -1740,7 +1746,7 @@ final class CandidateWindow {
             if supportsEnglishCandidateTranslation {
                 candidateStack.addArrangedSubview(compactCandidateCell(
                     candidate: c,
-                    highlighted: i == selectedIndex,
+                    highlighted: i == selectedIndex && outputLanguage == .english,
                     button: button
                 ))
             } else {
@@ -1786,7 +1792,7 @@ final class CandidateWindow {
             row.spacing = Self.candidateSpacing
             row.translatesAutoresizingMaskIntoConstraints = false
             let candidateHeight = compactCandidateButtonHeight(for: CandidateWindowMetrics.current)
-                + (supportsEnglishCandidateTranslation ? 16 : 0)
+                + (supportsEnglishCandidateTranslation ? 20 : 0)
             row.heightAnchor.constraint(equalToConstant: candidateHeight).isActive = true
 
             let displayedCandidates = renderedCandidates
@@ -1799,7 +1805,7 @@ final class CandidateWindow {
                     pageOffset: pageOffset,
                     index: index,
                     candidate: candidate,
-                    highlighted: isActiveRow && index == selectedIndex,
+                    highlighted: isActiveRow && index == selectedIndex && outputLanguage == .chinese,
                     compact: true,
                     width: min(naturalWidths[index], available),
                     showsLabel: isActiveRow,
@@ -1808,7 +1814,7 @@ final class CandidateWindow {
                 if supportsEnglishCandidateTranslation {
                     row.addArrangedSubview(compactCandidateCell(
                         candidate: candidate,
-                        highlighted: isActiveRow && index == selectedIndex,
+                        highlighted: isActiveRow && index == selectedIndex && outputLanguage == .english,
                         button: button
                     ))
                 } else {
@@ -2255,11 +2261,11 @@ final class CandidateWindow {
         let rowHeight = compactCandidateButtonHeight(for: metrics)
         if isSingleCharacterSelectionActive { return rowHeight }
         if isExpanded {
-            let bilingualRowHeight = rowHeight + (supportsEnglishCandidateTranslation ? 16 : 0)
+            let bilingualRowHeight = rowHeight + (supportsEnglishCandidateTranslation ? 20 : 0)
             return Self.matrixViewportHeight(rowHeight: bilingualRowHeight,
                                              rowCount: expandedPages.count)
         }
-        return rowHeight + (supportsEnglishCandidateTranslation ? 16 : 0)
+        return rowHeight + (supportsEnglishCandidateTranslation ? 20 : 0)
     }
 
     private func compactCandidateCell(candidate: RimeCandidateModel,
@@ -2270,20 +2276,31 @@ final class CandidateWindow {
         cell.alignment = .centerX
         cell.spacing = 0
         let translated = englishTranslations[candidate.text] ?? ""
-        let activeEnglish = highlighted && outputLanguage == .english
-        let meaning = NSTextField(labelWithString:
-            translated.isEmpty || !activeEnglish ? translated : "EN · \(translated)")
-        meaning.font = .systemFont(ofSize: 10, weight: .medium)
-        meaning.textColor = activeEnglish ? RimeUI.selectedCandidateTextColor : RimeUI.textSecondary
+        let meaning = NSTextField(labelWithString: translated)
+        meaning.font = .systemFont(ofSize: 11, weight: highlighted ? .semibold : .medium)
+        meaning.textColor = highlighted ? RimeUI.selectedCandidateTextColor : RimeUI.textSecondary
         meaning.alignment = .center
         meaning.lineBreakMode = .byTruncatingTail
         meaning.maximumNumberOfLines = 1
         meaning.translatesAutoresizingMaskIntoConstraints = false
-        meaning.heightAnchor.constraint(equalToConstant: 14).isActive = true
-        cell.addArrangedSubview(meaning)
+        let meaningPill = NSView()
+        meaningPill.wantsLayer = true
+        meaningPill.layer?.cornerRadius = 4
+        meaningPill.layer?.backgroundColor = highlighted
+            ? RimeUI.selectedCandidateBackgroundColor.cgColor
+            : NSColor.clear.cgColor
+        meaningPill.translatesAutoresizingMaskIntoConstraints = false
+        meaningPill.addSubview(meaning)
+        NSLayoutConstraint.activate([
+            meaningPill.heightAnchor.constraint(equalToConstant: 18),
+            meaning.leadingAnchor.constraint(equalTo: meaningPill.leadingAnchor, constant: 4),
+            meaning.trailingAnchor.constraint(equalTo: meaningPill.trailingAnchor, constant: -4),
+            meaning.centerYAnchor.constraint(equalTo: meaningPill.centerYAnchor),
+        ])
+        cell.addArrangedSubview(meaningPill)
         cell.addArrangedSubview(button)
         if let candidateButton = button as? CandidatePillButton {
-            meaning.widthAnchor.constraint(equalTo: candidateButton.widthAnchor).isActive = true
+            meaningPill.widthAnchor.constraint(equalTo: candidateButton.widthAnchor).isActive = true
         }
         return cell
     }
@@ -2348,7 +2365,7 @@ final class CandidateWindow {
 
         let metrics = CandidateWindowMetrics.current
         let expectedRowHeight = candidateWindow.compactCandidateButtonHeight(for: metrics)
-            + (candidateWindow.supportsEnglishCandidateTranslation ? 16 : 0)
+            + (candidateWindow.supportsEnglishCandidateTranslation ? 20 : 0)
         let expectedDocumentHeight = matrixViewportHeight(rowHeight: expectedRowHeight,
                                                           rowCount: rowCount)
         let expectedPanelHeight = candidateWindow.desiredPanelContentSize(
