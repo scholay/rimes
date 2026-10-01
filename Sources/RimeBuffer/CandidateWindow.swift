@@ -2,6 +2,93 @@ import Cocoa
 import Carbon.HIToolbox
 import CoreText
 
+enum CandidateOutputLanguage: String {
+    case chinese
+    case translated = "english"
+
+    private static let defaultsKey = "candidateWindow.outputLanguage"
+    static var defaultForNextComposition: CandidateOutputLanguage {
+        get { CandidateOutputLanguage(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "chinese") ?? .chinese }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey) }
+    }
+}
+
+enum CandidateTranslationCommitRules {
+    static func mayCommit(ownerMatches: Bool,
+                          focusIsCurrent: Bool,
+                          candidateMatches: Bool,
+                          generationMatches: Bool,
+                          translationModeActive: Bool,
+                          candidatesInteractable: Bool) -> Bool {
+        ownerMatches && focusIsCurrent && candidateMatches
+            && generationMatches && translationModeActive && candidatesInteractable
+    }
+}
+
+enum CandidateTranslationCommitFormatter {
+    static func format(translation: String,
+                       sourceCandidate: String,
+                       targetLanguageID: String = "en") -> String {
+        let text = translation.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return "" }
+        let languageCode = Locale.Language(identifier: targetLanguageID)
+            .languageCode?.identifier ?? targetLanguageID
+        if languageCode != "en" {
+            let noWordSpaces = ["zh", "ja", "th", "lo", "km", "my"]
+                .contains(languageCode)
+            let hasTerminal = [".", "。", "!", "！", "?", "？", "…"]
+                .contains(String(text.last ?? " "))
+            var result = text
+            if !hasTerminal, let sourceTerminal = sourceCandidate.last,
+               let translatedTerminal = localizedTerminal(
+                    sourceTerminal,
+                    targetLanguageCode: languageCode
+               ) {
+                result.append(translatedTerminal)
+            }
+            return result + (noWordSpaces ? "" : " ")
+        }
+        let translatedEnd = text.last
+        let translatedTerminal: String? = {
+            switch translatedEnd {
+            case ".", "。": return "."
+            case "!", "！": return "!"
+            case "?", "？": return "?"
+            case "…": return "..."
+            default: return nil
+            }
+        }()
+        if let translatedTerminal {
+            return String(text.dropLast()) + translatedTerminal + " "
+        }
+        let sourceEnd = sourceCandidate.last
+        let sourceTerminal: Character? = {
+            switch sourceEnd {
+            case "。": return "."
+            case "！": return "!"
+            case "？": return "?"
+            case ".", "!", "?": return sourceEnd
+            default: return nil
+            }
+        }()
+        if let sourceTerminal { return text + String(sourceTerminal) + " " }
+        return text + " "
+    }
+
+    private static func localizedTerminal(
+        _ sourceTerminal: Character,
+        targetLanguageCode: String
+    ) -> Character? {
+        switch sourceTerminal {
+        case ".", "。": return ["zh", "ja"].contains(targetLanguageCode) ? "。" : "."
+        case "!", "！": return targetLanguageCode == "ja" ? "！" : "!"
+        case "?", "？": return targetLanguageCode == "ja" ? "？" : "?"
+        case "…": return "…"
+        default: return nil
+        }
+    }
+}
+
 extension Notification.Name {
     static let candidateWindowMetricsDidChange = Notification.Name("CandidateWindowMetricsDidChange")
 }
@@ -120,7 +207,12 @@ enum CandidateWindowMetric: String, CaseIterable {
     case compactCandidateHeight
     case preeditHeight
     case candidateFontSize
+    case englishCandidateFontSize
+    case englishCandidateCornerRadius
     case labelFontSize
+    case selectedCandidateCornerRadius
+    case candidateStripCornerRadius
+    case preeditCornerRadius
 
     var title: String {
         switch self {
@@ -129,25 +221,35 @@ enum CandidateWindowMetric: String, CaseIterable {
         case .compactCandidateHeight: return "候选按钮高度"
         case .preeditHeight: return "预编辑高度"
         case .candidateFontSize: return "候选字大小"
+        case .englishCandidateFontSize: return "译文预选框字号"
+        case .englishCandidateCornerRadius: return "译文预选框圆角"
         case .labelFontSize: return "序号大小"
+        case .selectedCandidateCornerRadius: return "选中框圆角"
+        case .candidateStripCornerRadius: return "候选栏圆角"
+        case .preeditCornerRadius: return "预编辑框圆角"
         }
     }
 
     var unit: String {
         switch self {
-        case .candidateFontSize, .labelFontSize: return "pt"
+        case .candidateFontSize, .englishCandidateFontSize, .labelFontSize: return "pt"
         default: return "px"
         }
     }
 
     var defaultValue: Double {
         switch self {
-        case .baseWidth: return 460
-        case .compactStripHeight: return 34
-        case .compactCandidateHeight: return 24
-        case .preeditHeight: return 20
-        case .candidateFontSize: return 16
-        case .labelFontSize: return 10
+        case .baseWidth: return 900
+        case .compactStripHeight: return 40
+        case .compactCandidateHeight: return 32
+        case .preeditHeight: return 30
+        case .candidateFontSize: return 24
+        case .englishCandidateFontSize: return 12
+        case .englishCandidateCornerRadius: return 9
+        case .labelFontSize: return 11
+        case .selectedCandidateCornerRadius: return 15
+        case .candidateStripCornerRadius: return 20
+        case .preeditCornerRadius: return 0
         }
     }
 
@@ -157,8 +259,11 @@ enum CandidateWindowMetric: String, CaseIterable {
         case .compactStripHeight: return 32...64
         case .compactCandidateHeight: return 22...44
         case .preeditHeight: return 18...36
-        case .candidateFontSize: return 12...24
+        case .candidateFontSize, .englishCandidateFontSize: return 12...24
         case .labelFontSize: return 9...18
+        case .selectedCandidateCornerRadius, .englishCandidateCornerRadius: return 0...16
+        case .candidateStripCornerRadius: return 0...24
+        case .preeditCornerRadius: return 0...18
         }
     }
 
@@ -182,7 +287,36 @@ struct CandidateWindowMetrics {
     let compactCandidateHeight: CGFloat
     let preeditHeight: CGFloat
     let candidateFontSize: CGFloat
+    let englishCandidateFontSize: CGFloat
+    let englishCandidateCornerRadius: CGFloat
     let labelFontSize: CGFloat
+    let selectedCandidateCornerRadius: CGFloat
+    let candidateStripCornerRadius: CGFloat
+    let preeditCornerRadius: CGFloat
+
+    init(baseWidth: CGFloat,
+         compactStripHeight: CGFloat,
+         compactCandidateHeight: CGFloat,
+         preeditHeight: CGFloat,
+         candidateFontSize: CGFloat,
+         englishCandidateFontSize: CGFloat = 12,
+         englishCandidateCornerRadius: CGFloat = 9,
+         labelFontSize: CGFloat,
+         selectedCandidateCornerRadius: CGFloat = 15,
+         candidateStripCornerRadius: CGFloat = 20,
+         preeditCornerRadius: CGFloat = 0) {
+        self.baseWidth = baseWidth
+        self.compactStripHeight = compactStripHeight
+        self.compactCandidateHeight = compactCandidateHeight
+        self.preeditHeight = preeditHeight
+        self.candidateFontSize = candidateFontSize
+        self.englishCandidateFontSize = englishCandidateFontSize
+        self.englishCandidateCornerRadius = englishCandidateCornerRadius
+        self.labelFontSize = labelFontSize
+        self.selectedCandidateCornerRadius = selectedCandidateCornerRadius
+        self.candidateStripCornerRadius = candidateStripCornerRadius
+        self.preeditCornerRadius = preeditCornerRadius
+    }
 
     static var current: CandidateWindowMetrics {
         let values = resolvedValues(Dictionary(uniqueKeysWithValues:
@@ -197,7 +331,12 @@ struct CandidateWindowMetrics {
             compactCandidateHeight: get(.compactCandidateHeight),
             preeditHeight: get(.preeditHeight),
             candidateFontSize: get(.candidateFontSize),
-            labelFontSize: get(.labelFontSize)
+            englishCandidateFontSize: get(.englishCandidateFontSize),
+            englishCandidateCornerRadius: get(.englishCandidateCornerRadius),
+            labelFontSize: get(.labelFontSize),
+            selectedCandidateCornerRadius: get(.selectedCandidateCornerRadius),
+            candidateStripCornerRadius: get(.candidateStripCornerRadius),
+            preeditCornerRadius: get(.preeditCornerRadius)
         )
     }
 
@@ -311,9 +450,6 @@ enum CandidateLayout {
     /// CSS specifies `padding-inline: 6px`; the native width helper stores the
     /// combined inset because CoreText reports glyph width without padding.
     static let compactCandidateHorizontalPadding: CGFloat = 12
-    static let selectedCandidateCornerRadius: CGFloat = 6
-    static let stripCornerRadius: CGFloat = 6
-    static let preeditCornerRadius: CGFloat = 5
     static let preeditHorizontalPadding: CGFloat = 6
     static let annotationFontSize: CGFloat = 9
     static let rootSpacing: CGFloat = 5
@@ -340,6 +476,17 @@ enum CandidateLayout {
     static func candidateButtonHeight(_ m: CandidateWindowMetrics) -> CGFloat {
         let available = m.compactStripHeight - 2 * barVerticalPadding(m)
         return min(m.compactCandidateHeight, max(22, available))
+    }
+
+    /// The English translation pill uses its own font control and grows with
+    /// that font, so larger English text remains unclipped above the candidate.
+    static func englishCandidatePillHeight(_ m: CandidateWindowMetrics) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: m.englishCandidateFontSize)
+        return ceil(font.ascender - font.descender) + 4
+    }
+
+    static func bilingualCandidateRowHeight(_ m: CandidateWindowMetrics) -> CGFloat {
+        candidateButtonHeight(m) + englishCandidatePillHeight(m)
     }
 
     /// The compact strip's rendered height (grows to fit the button if needed).
@@ -388,7 +535,7 @@ extension CandidateWindowMetric {
     }
 }
 
-struct CandidateSelection {
+struct CandidateSelection: Equatable {
     let pageOffset: Int
     let index: Int
 }
@@ -537,9 +684,9 @@ final class CandidateWindow {
     private let panelHost = NSView()
     private let content = NSView()
     private let root = NSStackView()
-    private let preeditPill = NSView()
+    private let preeditPill = RimeCandidateSurfaceView(frame: .zero)
     private let preeditLabel = NSTextField(labelWithString: "")
-    private let strip = NSView()
+    private let strip = RimeCandidateSurfaceView(frame: .zero)
     private let candidateScroll = NSScrollView()
     private let candidateStack = NSStackView()
     private var stripHeightConstraint: NSLayoutConstraint!
@@ -583,8 +730,14 @@ final class CandidateWindow {
     /// still being handled; see `retireForCommit`.
     private var commitContinuationArmed = false
     private var commitContinuationGeneration: UInt64 = 0
+    private var outputLanguage = CandidateOutputLanguage.defaultForNextComposition
+    private var outputLanguagePinnedForComposition = false
+    private var candidateTranslations: [String: String] = [:]
+    private var translationController: AnyObject?
+    private var translationGeneration: UInt64 = 0
 
     var onSelect: ((FocusToken, CandidateSelection) -> Void)?
+    var onTranslationsChanged: ((FocusToken, UInt64, Bool) -> Void)?
 
     var hasCandidates: Bool {
         guard let ownerToken,
@@ -646,6 +799,57 @@ final class CandidateWindow {
         guard !currentContext.candidates.isEmpty else { return nil }
         return currentContext.candidates[clamp(selectedIndex, count: currentContext.candidates.count)].text
     }
+    var selectedCandidateTranslationText: String? {
+        guard let text = selectedCandidateText else { return nil }
+        return candidateTranslations[text]
+    }
+    var supportsCandidateTranslation: Bool {
+        if #available(macOS 15.0, *) {
+            return translationController is CandidateTranslationController
+        }
+        return false
+    }
+    var selectedOutputLanguage: CandidateOutputLanguage { outputLanguage }
+    var currentTranslationGeneration: UInt64 { translationGeneration }
+    @discardableResult
+    func toggleOutputLanguage() -> CandidateOutputLanguage {
+        outputLanguage = outputLanguage == .chinese ? .translated : .chinese
+        outputLanguagePinnedForComposition = true
+        renderCandidates()
+        candidateStack.alphaValue = 0.78
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            candidateStack.animator().alphaValue = 1
+        }
+        return outputLanguage
+    }
+
+    /// Resolve a number key against the visible row and make that candidate
+    /// active before committing it in the selected output language.
+    func selectVisibleCandidateForKeyboard(_ visibleIndex: Int) -> CandidateSelection? {
+        guard visibleIndex >= 0 else { return nil }
+        let selection: CandidateSelection
+        if isExpanded {
+            guard let visible = expandedSelection(atVisibleIndex: visibleIndex) else { return nil }
+            expandedSelectionPageOffset = visible.pageOffset
+            selectedIndex = visible.index
+            scrollExpandedColumnsToSelection()
+            selection = visible
+        } else {
+            let indices = currentVisualCandidateIndices(panelWidth: activePanelWidth())
+            guard indices.indices.contains(visibleIndex) else { return nil }
+            selectedIndex = indices[visibleIndex]
+            visualPageIndex = pageIndex(containing: selectedIndex, panelWidth: activePanelWidth())
+            selection = CandidateSelection(pageOffset: 0, index: selectedIndex)
+        }
+        renderCandidates()
+        resetCandidateScroll()
+        return selection
+    }
+    func recordCommittedOutputLanguage(_ language: CandidateOutputLanguage) {
+        CandidateOutputLanguage.defaultForNextComposition = language
+    }
     var selectedSingleCharacterText: String? {
         guard isSingleCharacterSelectionActive else { return nil }
         let chars = Array(characterSelectionText)
@@ -688,17 +892,13 @@ final class CandidateWindow {
         // not as a full-width row painted by the candidate strip. Preserve the
         // native label (and therefore IMK-safe, non-WebView rendering), while
         // mirroring its 12pt monospace typography and 6pt horizontal padding.
-        preeditPill.wantsLayer = true
-        preeditPill.layer?.cornerRadius = CandidateLayout.preeditCornerRadius
-        preeditPill.layer?.borderWidth = 1
-        preeditPill.layer?.masksToBounds = true
         preeditPill.translatesAutoresizingMaskIntoConstraints = false
         preeditPill.isHidden = true
 
         preeditLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         preeditLabel.lineBreakMode = .byTruncatingTail
         preeditLabel.translatesAutoresizingMaskIntoConstraints = false
-        preeditPill.addSubview(preeditLabel)
+        preeditPill.contentHost.addSubview(preeditLabel)
         preeditHeightConstraint = preeditPill.heightAnchor.constraint(equalToConstant: metrics.preeditHeight)
         preeditWidthConstraint = preeditPill.widthAnchor.constraint(
             equalToConstant: CandidateLayout.preeditHorizontalPadding * 2
@@ -707,20 +907,16 @@ final class CandidateWindow {
             preeditHeightConstraint,
             preeditWidthConstraint,
             preeditLabel.leadingAnchor.constraint(
-                equalTo: preeditPill.leadingAnchor,
+                equalTo: preeditPill.contentHost.leadingAnchor,
                 constant: CandidateLayout.preeditHorizontalPadding
             ),
             preeditLabel.trailingAnchor.constraint(
-                equalTo: preeditPill.trailingAnchor,
+                equalTo: preeditPill.contentHost.trailingAnchor,
                 constant: -CandidateLayout.preeditHorizontalPadding
             ),
             preeditLabel.centerYAnchor.constraint(equalTo: preeditPill.centerYAnchor),
         ])
 
-        strip.wantsLayer = true
-        strip.layer?.cornerRadius = CandidateLayout.stripCornerRadius
-        strip.layer?.borderWidth = 1
-        strip.layer?.masksToBounds = true
         stripHeightConstraint = strip.heightAnchor.constraint(equalToConstant: metrics.compactStripHeight)
         stripHeightConstraint.isActive = true
 
@@ -750,13 +946,13 @@ final class CandidateWindow {
         barRow.alignment = .centerY
         barRow.spacing = Self.barSpacing
         barRow.translatesAutoresizingMaskIntoConstraints = false
-        strip.addSubview(barRow)
+        strip.contentHost.addSubview(barRow)
         let padding = barVerticalPadding(for: metrics)
-        barTopConstraint = barRow.topAnchor.constraint(equalTo: strip.topAnchor, constant: padding)
-        barBottomConstraint = barRow.bottomAnchor.constraint(equalTo: strip.bottomAnchor, constant: -padding)
+        barTopConstraint = barRow.topAnchor.constraint(equalTo: strip.contentHost.topAnchor, constant: padding)
+        barBottomConstraint = barRow.bottomAnchor.constraint(equalTo: strip.contentHost.bottomAnchor, constant: -padding)
         NSLayoutConstraint.activate([
-            barRow.leadingAnchor.constraint(equalTo: strip.leadingAnchor, constant: Self.barHorizontalPadding),
-            barRow.trailingAnchor.constraint(equalTo: strip.trailingAnchor, constant: -Self.barHorizontalPadding),
+            barRow.leadingAnchor.constraint(equalTo: strip.contentHost.leadingAnchor, constant: Self.barHorizontalPadding),
+            barRow.trailingAnchor.constraint(equalTo: strip.contentHost.trailingAnchor, constant: -Self.barHorizontalPadding),
             barTopConstraint,
             barBottomConstraint,
         ])
@@ -767,16 +963,35 @@ final class CandidateWindow {
         root.translatesAutoresizingMaskIntoConstraints = false
         root.addArrangedSubview(preeditPill)
         root.addArrangedSubview(strip)
-
         content.wantsLayer = true
         content.layer?.backgroundColor = NSColor.clear.cgColor
         content.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(root)
+        if #available(macOS 26.0, *) {
+            let glassContainer = NSGlassEffectContainerView(frame: .zero)
+            glassContainer.spacing = 4
+            glassContainer.contentView = root
+            glassContainer.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(glassContainer)
+            NSLayoutConstraint.activate([
+                glassContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                glassContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                glassContainer.topAnchor.constraint(equalTo: content.topAnchor),
+                glassContainer.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+                root.leadingAnchor.constraint(equalTo: glassContainer.leadingAnchor),
+                root.trailingAnchor.constraint(equalTo: glassContainer.trailingAnchor),
+                root.topAnchor.constraint(equalTo: glassContainer.topAnchor),
+                root.bottomAnchor.constraint(equalTo: glassContainer.bottomAnchor),
+            ])
+        } else {
+            content.addSubview(root)
+            NSLayoutConstraint.activate([
+                root.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                root.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                root.topAnchor.constraint(equalTo: content.topAnchor),
+                root.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            ])
+        }
         NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            root.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            root.topAnchor.constraint(equalTo: content.topAnchor),
-            root.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             strip.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             strip.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             preeditPill.leadingAnchor.constraint(equalTo: root.leadingAnchor),
@@ -789,6 +1004,31 @@ final class CandidateWindow {
             to: panelHost,
             insets: NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
         )
+        if #available(macOS 15.0, *) {
+            let translator = CandidateTranslationController()
+            let host = translator.makeHostView()
+            content.addSubview(host)
+            NSLayoutConstraint.activate([
+                host.widthAnchor.constraint(equalToConstant: 1),
+                host.heightAnchor.constraint(equalToConstant: 1),
+                host.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                host.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            ])
+            translator.onUpdate = { [weak self] generation, translations, isFinal in
+                guard let self, self.translationGeneration == generation else { return }
+                guard let owner = self.ownerToken,
+                      InputFocusCoordinator.shared.interactionTarget(expected: owner) != nil,
+                      !IsSecureEventInputEnabled() else {
+                    self.cancelCandidateTranslations()
+                    return
+                }
+                self.candidateTranslations.merge(translations) { _, newValue in newValue }
+                self.renderCandidates()
+                self.layoutAndShowAccordingToPresentation()
+                self.onTranslationsChanged?(owner, generation, isFinal)
+            }
+            translationController = translator
+        }
 
         applyAppearance()
         NotificationCenter.default.addObserver(
@@ -799,6 +1039,13 @@ final class CandidateWindow {
             self?.applyAppearance()
             self?.renderCandidates()
             self?.layoutAndShowAccordingToPresentation()
+        }
+        NotificationCenter.default.addObserver(
+            forName: .candidateTranslationLanguageDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.candidateTranslationLanguageDidChange()
         }
         NotificationCenter.default.addObserver(
             forName: .candidateWindowMetricsDidChange,
@@ -887,6 +1134,14 @@ final class CandidateWindow {
             resetCharacterSelectionState()
             selectedIndex = clamp(ctx.highlightedIndex, count: ctx.candidates.count)
             currentSignature = signature
+            if ctx.input.isEmpty && ctx.preedit.isEmpty {
+                outputLanguage = CandidateOutputLanguage.defaultForNextComposition
+                outputLanguagePinnedForComposition = false
+            } else if !outputLanguagePinnedForComposition {
+                outputLanguage = CandidateOutputLanguage.defaultForNextComposition
+            }
+            candidateTranslations.removeAll()
+            requestCandidateTranslations(ctx.candidates.map(\.text))
         }
 
         currentContext = ctx
@@ -977,6 +1232,10 @@ final class CandidateWindow {
         resetExpandedState()
         resetCharacterSelectionState()
         currentContext = RimeContextModel()
+        cancelCandidateTranslations()
+        candidateTranslations.removeAll()
+        outputLanguage = CandidateOutputLanguage.defaultForNextComposition
+        outputLanguagePinnedForComposition = false
         currentSignature = ""
         projectionPreedit = ""
         ownerToken = nil
@@ -1094,6 +1353,7 @@ final class CandidateWindow {
         let usablePages = pages.filter { !$0.candidates.isEmpty }
         guard !usablePages.isEmpty else { return false }
         expandedPages = usablePages
+        requestCandidateTranslations(usablePages.flatMap { $0.candidates.map(\.text) })
         expandedSelectionPageOffset = min(expandedSelectionPageOffset, expandedPages.count - 1)
         expandedColumnBases.removeAll()
         scrollExpandedWindowToSelection()
@@ -1117,6 +1377,7 @@ final class CandidateWindow {
         let usablePages = pages.filter { !$0.candidates.isEmpty }
         guard usablePages.count > expandedPages.count else { return }
         expandedPages = usablePages
+        requestCandidateTranslations(usablePages.flatMap { $0.candidates.map(\.text) })
         IMELog.write("candidate matrix pages fetched=\(expandedPages.count) last=\(expandedTailIsLastPage)")
     }
 
@@ -1648,15 +1909,25 @@ final class CandidateWindow {
                 candidateStack.addArrangedSubview(candidateSeparatorView())
             }
             let c = currentContext.candidates[i]
-            candidateStack.addArrangedSubview(candidateButton(
+            let button = candidateButton(
                 pageOffset: 0,
                 index: i,
                 candidate: c,
-                highlighted: i == selectedIndex,
+                highlighted: i == selectedIndex && outputLanguage == .chinese,
                 compact: true,
                 width: nil,
-                maxWidth: candidateMaxWidth(panelWidth: panelWidth)
-            ))
+                maxWidth: candidateMaxWidth(panelWidth: panelWidth),
+                accessibilityTranslation: candidateTranslations[c.text]
+            )
+            if supportsCandidateTranslation {
+                candidateStack.addArrangedSubview(compactCandidateCell(
+                    candidate: c,
+                    highlighted: i == selectedIndex && outputLanguage == .translated,
+                    button: button
+                ))
+            } else {
+                candidateStack.addArrangedSubview(button)
+            }
         }
 
     }
@@ -1696,9 +1967,12 @@ final class CandidateWindow {
             row.alignment = .centerY
             row.spacing = Self.candidateSpacing
             row.translatesAutoresizingMaskIntoConstraints = false
-            row.heightAnchor.constraint(equalToConstant: compactCandidateButtonHeight(
-                for: CandidateWindowMetrics.current
-            )).isActive = true
+            let metrics = CandidateWindowMetrics.current
+            let candidateHeight = compactCandidateButtonHeight(for: metrics)
+                + (supportsCandidateTranslation
+                    ? CandidateLayout.englishCandidatePillHeight(metrics)
+                    : 0)
+            row.heightAnchor.constraint(equalToConstant: candidateHeight).isActive = true
 
             let displayedCandidates = renderedCandidates
             for (offset, element) in displayedCandidates.enumerated() {
@@ -1706,15 +1980,25 @@ final class CandidateWindow {
                 if offset > 0 {
                     row.addArrangedSubview(candidateSeparatorView())
                 }
-                row.addArrangedSubview(candidateButton(
+                let button = candidateButton(
                     pageOffset: pageOffset,
                     index: index,
                     candidate: candidate,
-                    highlighted: isActiveRow && index == selectedIndex,
+                    highlighted: isActiveRow && index == selectedIndex && outputLanguage == .chinese,
                     compact: true,
                     width: min(naturalWidths[index], available),
-                    showsLabel: isActiveRow
-                ))
+                    showsLabel: isActiveRow,
+                    accessibilityTranslation: candidateTranslations[candidate.text]
+                )
+                if supportsCandidateTranslation {
+                    row.addArrangedSubview(compactCandidateCell(
+                        candidate: candidate,
+                        highlighted: isActiveRow && index == selectedIndex && outputLanguage == .translated,
+                        button: button
+                    ))
+                } else {
+                    row.addArrangedSubview(button)
+                }
             }
             candidateStack.addArrangedSubview(row)
         }
@@ -1870,19 +2154,23 @@ final class CandidateWindow {
         width: CGFloat?,
         maxWidth: CGFloat? = nil,
         showsLabel: Bool = true,
+        accessibilityTranslation: String? = nil,
         tag: Int? = nil
     ) -> NSButton {
         let button = CandidatePillButton()
         button.tag = tag ?? candidateTag(pageOffset: pageOffset, index: index)
         button.target = self
         button.action = #selector(candidateTapped(_:))
+        let baseAccessibilityLabel = showsLabel && !candidate.label.isEmpty
+            ? "\(candidate.label) \(candidate.text)"
+            : candidate.text
         button.setCandidateTitle(
             candidateTitle(candidate,
                            highlighted: highlighted,
                            showsLabel: showsLabel),
-            accessibilityLabel: showsLabel && !candidate.label.isEmpty
-                ? "\(candidate.label) \(candidate.text)"
-                : candidate.text
+            accessibilityLabel: accessibilityTranslation.map {
+                "\(baseAccessibilityLabel), \(CandidateTranslationLanguagePreferences.languageName(for: CandidateTranslationLanguagePreferences.targetLanguageID)): \($0)"
+            } ?? baseAccessibilityLabel
         )
         if !candidate.comment.isEmpty {
             button.setAccessibilityHelp(candidate.comment)
@@ -1915,10 +2203,10 @@ final class CandidateWindow {
         let metrics = CandidateWindowMetrics.current
         let line = NSMutableAttributedString()
         let labelColor = highlighted
-            ? RimeUI.selectedCandidateTextColor
+            ? RimeUI.candidateSelectionTextColor
             : RimeUI.textSecondary
         let textColor = highlighted
-            ? RimeUI.selectedCandidateTextColor
+            ? RimeUI.candidateSelectionTextColor
             : RimeUI.textPrimary
         let labelFont = NSFont.monospacedDigitSystemFont(ofSize: metrics.labelFontSize,
                                                          weight: .semibold)
@@ -1952,7 +2240,7 @@ final class CandidateWindow {
                 attributes: [
                     .font: annotationFont,
                     .foregroundColor: highlighted
-                        ? RimeUI.selectedCandidateTextColor
+                        ? RimeUI.candidateSelectionTextColor
                         : RimeUI.textMuted,
                     .baselineOffset: annotationBaseline,
                 ]
@@ -2110,17 +2398,36 @@ final class CandidateWindow {
         panel.appearance = RimeUI.appKitAppearance
         content.layer?.backgroundColor = NSColor.clear.cgColor
         preeditLabel.textColor = RimeUI.textPrimary
-        preeditPill.layer?.backgroundColor = RimeUI.candidateBackgroundColor
-            .withAlphaComponent(0.95).cgColor
-        preeditPill.layer?.borderColor = RimeUI.borderStrong
-            .withAlphaComponent(0.72).cgColor
-        strip.layer?.backgroundColor = RimeUI.candidateBackgroundColor.cgColor
-        strip.layer?.borderColor = RimeUI.borderStrong.cgColor
+        let metrics = CandidateWindowMetrics.current
+        preeditPill.applyStyle(
+            cornerRadius: metrics.preeditCornerRadius,
+            backgroundColor: RimeUI.candidateBackgroundColor.withAlphaComponent(0.95),
+            borderColor: RimeUI.borderStrong.withAlphaComponent(0.72),
+            usesLiquidGlass: RimeUI.isLiquidGlass
+        )
+        strip.applyStyle(
+            cornerRadius: metrics.candidateStripCornerRadius,
+            backgroundColor: RimeUI.candidateBackgroundColor,
+            borderColor: RimeUI.borderStrong,
+            usesLiquidGlass: RimeUI.isLiquidGlass
+        )
     }
 
     private func applyMetrics() {
         let metrics = CandidateWindowMetrics.current
         preeditLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        preeditPill.applyStyle(
+            cornerRadius: metrics.preeditCornerRadius,
+            backgroundColor: RimeUI.candidateBackgroundColor.withAlphaComponent(0.95),
+            borderColor: RimeUI.borderStrong.withAlphaComponent(0.72),
+            usesLiquidGlass: RimeUI.isLiquidGlass
+        )
+        strip.applyStyle(
+            cornerRadius: metrics.candidateStripCornerRadius,
+            backgroundColor: RimeUI.candidateBackgroundColor,
+            borderColor: RimeUI.borderStrong,
+            usesLiquidGlass: RimeUI.isLiquidGlass
+        )
         preeditHeightConstraint.constant = metrics.preeditHeight
         updatePreeditWidth()
         stripHeightConstraint.constant = effectiveStripHeight(for: metrics)
@@ -2150,11 +2457,102 @@ final class CandidateWindow {
 
     private func candidateAreaHeight(for metrics: CandidateWindowMetrics) -> CGFloat {
         let rowHeight = compactCandidateButtonHeight(for: metrics)
-        guard isExpanded, !isSingleCharacterSelectionActive else {
-            return rowHeight
+        if isSingleCharacterSelectionActive { return rowHeight }
+        let translationHeight = supportsCandidateTranslation
+            ? CandidateLayout.englishCandidatePillHeight(metrics)
+            : 0
+        if isExpanded {
+            let bilingualRowHeight = rowHeight + translationHeight
+            return Self.matrixViewportHeight(rowHeight: bilingualRowHeight,
+                                             rowCount: expandedPages.count)
         }
-        return Self.matrixViewportHeight(rowHeight: rowHeight,
-                                         rowCount: expandedPages.count)
+        return rowHeight + translationHeight
+    }
+
+    private func compactCandidateCell(candidate: RimeCandidateModel,
+                                      highlighted: Bool,
+                                      button: NSButton) -> NSView {
+        let cell = NSStackView()
+        cell.orientation = .vertical
+        cell.alignment = .centerX
+        cell.spacing = 0
+        let translated = candidateTranslations[candidate.text] ?? ""
+        let metrics = CandidateWindowMetrics.current
+        let meaning = NSTextField(labelWithString: translated)
+        meaning.font = .systemFont(ofSize: metrics.englishCandidateFontSize,
+                                   weight: highlighted ? .semibold : .medium)
+        meaning.textColor = highlighted
+            ? RimeUI.candidateSelectionTextColor
+            : RimeUI.textPrimary
+        meaning.alignment = .center
+        meaning.lineBreakMode = .byTruncatingTail
+        meaning.maximumNumberOfLines = 1
+        meaning.translatesAutoresizingMaskIntoConstraints = false
+        let meaningPill = RimeCandidateSurfaceView(frame: .zero)
+        meaningPill.applyStyle(
+            cornerRadius: metrics.englishCandidateCornerRadius,
+            backgroundColor: highlighted
+                ? RimeUI.candidateSelectionBackgroundColor
+                : NSColor.clear,
+            borderColor: NSColor.clear,
+            borderWidth: 0,
+            usesLiquidGlass: false
+        )
+        meaningPill.translatesAutoresizingMaskIntoConstraints = false
+        meaningPill.contentHost.addSubview(meaning)
+        NSLayoutConstraint.activate([
+            meaningPill.heightAnchor.constraint(
+                equalToConstant: CandidateLayout.englishCandidatePillHeight(metrics)
+            ),
+            meaning.leadingAnchor.constraint(equalTo: meaningPill.contentHost.leadingAnchor, constant: 4),
+            meaning.trailingAnchor.constraint(equalTo: meaningPill.contentHost.trailingAnchor, constant: -4),
+            meaning.centerYAnchor.constraint(equalTo: meaningPill.contentHost.centerYAnchor),
+        ])
+        cell.addArrangedSubview(meaningPill)
+        cell.addArrangedSubview(button)
+        if let candidateButton = button as? CandidatePillButton {
+            meaningPill.widthAnchor.constraint(equalTo: candidateButton.widthAnchor).isActive = true
+        }
+        return cell
+    }
+
+    private func requestCandidateTranslations(_ texts: [String]) {
+        guard #available(macOS 15.0, *),
+              !IsSecureEventInputEnabled(),
+              let translator = translationController as? CandidateTranslationController else {
+            return
+        }
+        translationGeneration = translator.translate(texts)
+    }
+
+    private func candidateTranslationLanguageDidChange() {
+        candidateTranslations.removeAll()
+        guard #available(macOS 15.0, *),
+              let ownerToken,
+              InputFocusCoordinator.shared.interactionTarget(expected: ownerToken) != nil,
+              !currentContext.candidates.isEmpty,
+              !IsSecureEventInputEnabled() else {
+            cancelCandidateTranslations()
+            renderCandidates()
+            layoutAndShowAccordingToPresentation()
+            return
+        }
+        let texts = isExpanded && !expandedPages.isEmpty
+            ? expandedPages.flatMap { $0.candidates.map(\.text) }
+            : currentContext.candidates.map(\.text)
+        cancelCandidateTranslations()
+        requestCandidateTranslations(texts)
+        renderCandidates()
+        layoutAndShowAccordingToPresentation()
+    }
+
+    private func cancelCandidateTranslations() {
+        guard #available(macOS 15.0, *),
+              let translator = translationController as? CandidateTranslationController else {
+            translationGeneration &+= 1
+            return
+        }
+        translationGeneration = translator.cancel()
     }
 
     private func effectiveStripHeight(for metrics: CandidateWindowMetrics) -> CGFloat {
@@ -2199,6 +2597,9 @@ final class CandidateWindow {
 
         let metrics = CandidateWindowMetrics.current
         let expectedRowHeight = candidateWindow.compactCandidateButtonHeight(for: metrics)
+            + (candidateWindow.supportsCandidateTranslation
+                ? CandidateLayout.englishCandidatePillHeight(metrics)
+                : 0)
         let expectedDocumentHeight = matrixViewportHeight(rowHeight: expectedRowHeight,
                                                           rowCount: rowCount)
         let expectedPanelHeight = candidateWindow.desiredPanelContentSize(
@@ -2280,7 +2681,7 @@ final class CandidateWindow {
             renderedCandidateViews: renderedCandidateViews,
             preeditHidden: candidateWindow.preeditPill.isHidden,
             stripOnlyHeight: stripOnlyHeight,
-            expectedStripOnlyHeight: metrics.compactStripHeight,
+            expectedStripOnlyHeight: candidateWindow.effectiveStripHeight(for: metrics),
             rejectedCachedHostAnchor: rejectedCachedHostAnchor,
             scrubbedCandidateViews: scrubbedCandidateViews,
             scrubbedPreedit: scrubbedPreedit
@@ -2304,8 +2705,10 @@ final class CandidateWindow {
         candidateWindow.renderCandidates()
         candidateWindow.panel.layoutIfNeeded()
 
-        let buttons = candidateWindow.candidateStack.arrangedSubviews
-            .compactMap { $0 as? NSButton }
+        let buttons = candidateWindow.candidateStack.arrangedSubviews.flatMap { view -> [NSButton] in
+            if let button = view as? NSButton { return [button] }
+            return (view as? NSStackView)?.arrangedSubviews.compactMap { $0 as? NSButton } ?? []
+        }
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         let settings = descendants(candidateWindow.content).compactMap { $0 as? NSButton }
             .first { $0.accessibilityLabel() == "打开设置" }
@@ -2426,8 +2829,15 @@ final class CandidateWindow {
             window.renderCandidates()
             window.panel.layoutIfNeeded()
             window.candidateStack.layoutSubtreeIfNeeded()
+            let renderedButtons = window.candidateStack.arrangedSubviews.reduce(0) { count, view in
+                if view is NSButton { return count + 1 }
+                if let cell = view as? NSStackView {
+                    return count + cell.arrangedSubviews.filter { $0 is NSButton }.count
+                }
+                return count
+            }
             fits = fits && window.candidatePages(panelWidth: window.activePanelWidth()) == pages
-                && window.candidateStack.arrangedSubviews.compactMap { $0 as? NSButton }.count == pages[page].count
+                && renderedButtons == pages[page].count
                 && window.candidateStack.fittingSize.width <= window.candidateScroll.contentSize.width + 1
         }
         checks.append(("adaptive pages keep all candidates reachable without clipping", fits))
@@ -2650,6 +3060,7 @@ final class CandidateWindow {
 /// title rect and NSTextFieldCell's asymmetric single-line drawing offsets.
 private class CandidateTextButton: NSButton {
     private let candidateTitleLabel = CandidateTitleLabel()
+    let candidateSurface = RimeCandidateSurfaceView(frame: .zero)
 
     init(cornerRadius: CGFloat) {
         super.init(frame: .zero)
@@ -2668,7 +3079,16 @@ private class CandidateTextButton: NSButton {
         setContentHuggingPriority(.required, for: .horizontal)
         setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        addSubview(candidateTitleLabel)
+        candidateSurface.frame = bounds
+        candidateSurface.autoresizingMask = [.width, .height]
+        candidateSurface.applyStyle(
+            cornerRadius: cornerRadius,
+            backgroundColor: .clear,
+            borderColor: .clear,
+            usesLiquidGlass: false
+        )
+        addSubview(candidateSurface)
+        candidateSurface.contentHost.addSubview(candidateTitleLabel)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -2682,8 +3102,11 @@ private class CandidateTextButton: NSButton {
 
     override func layout() {
         super.layout()
+        candidateSurface.frame = bounds
+        candidateSurface.layoutSubtreeIfNeeded()
         let inset = CandidateLayout.compactCandidateHorizontalPadding / 2
-        candidateTitleLabel.frame = bounds.insetBy(dx: inset, dy: 0)
+        candidateTitleLabel.frame = candidateSurface.contentHost.bounds
+            .insetBy(dx: inset, dy: 0)
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -2695,7 +3118,7 @@ private final class CandidatePillButton: CandidateTextButton {
     private var isSelectedCandidate = false
 
     init() {
-        super.init(cornerRadius: CandidateLayout.selectedCandidateCornerRadius)
+        super.init(cornerRadius: CandidateWindowMetrics.current.selectedCandidateCornerRadius)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -2729,25 +3152,32 @@ private final class CandidatePillButton: CandidateTextButton {
     }
 
     private func updateVisualState() {
-        guard let layer else { return }
+        let cornerRadius = CandidateWindowMetrics.current.selectedCandidateCornerRadius
         if isSelectedCandidate {
-            layer.backgroundColor = RimeUI.selectedCandidateBackgroundColor.cgColor
-            layer.borderColor = NSColor.clear.cgColor
-            layer.borderWidth = 1
-            layer.shadowColor = NSColor.black.cgColor
-            layer.shadowOpacity = 0.18
-            layer.shadowRadius = 2
-            layer.shadowOffset = CGSize(width: 0, height: -1)
+            candidateSurface.applyStyle(
+                cornerRadius: cornerRadius,
+                backgroundColor: RimeUI.candidateSelectionBackgroundColor,
+                borderColor: NSColor.clear,
+                usesLiquidGlass: false
+            )
+            candidateSurface.layer?.masksToBounds = false
+            candidateSurface.layer?.shadowOpacity = 0
         } else if isHovered {
-            layer.backgroundColor = RimeUI.surface3.cgColor
-            layer.borderColor = RimeUI.border.cgColor
-            layer.borderWidth = 1
-            layer.shadowOpacity = 0
+            candidateSurface.applyStyle(
+                cornerRadius: cornerRadius,
+                backgroundColor: RimeUI.surface3,
+                borderColor: RimeUI.border,
+                usesLiquidGlass: false
+            )
+            candidateSurface.layer?.shadowOpacity = 0
         } else {
-            layer.backgroundColor = NSColor.clear.cgColor
-            layer.borderColor = NSColor.clear.cgColor
-            layer.borderWidth = 1
-            layer.shadowOpacity = 0
+            candidateSurface.applyStyle(
+                cornerRadius: cornerRadius,
+                backgroundColor: NSColor.clear,
+                borderColor: NSColor.clear,
+                usesLiquidGlass: false
+            )
+            candidateSurface.layer?.shadowOpacity = 0
         }
     }
 }
@@ -2839,13 +3269,15 @@ final class CandidatePreviewView: NSView {
     private let statusSpacing: CGFloat = 4
     private let maxWidth: CGFloat
     private let backdrop = NSView()
+    private let glassDemoBackdrop = NSView()
+    private let glassDemoGradient = CAGradientLayer()
     private let previewScroll = NSScrollView()
     private let previewDocument = NSView()
     private let widthStatusLabel = NSTextField(labelWithString: "")
     private let windowMock = NSView()
-    private let preeditPill = NSView()
+    private let preeditPill = RimeCandidateSurfaceView(frame: .zero)
     private let preeditLabel = NSTextField(labelWithString: "")
-    private let strip = NSView()
+    private let strip = RimeCandidateSurfaceView(frame: .zero)
     private let candidateRow = NSStackView()
     private var heightConstraint: NSLayoutConstraint!
 
@@ -2855,9 +3287,11 @@ final class CandidatePreviewView: NSView {
     private var windowWidthConstraint: NSLayoutConstraint!
     private var candidateRowHeightConstraint: NSLayoutConstraint!
 
-    private let sampleCandidates: [(label: String, text: String)] = [
-        ("1", "你好"), ("2", "拟好"), ("3", "你"), ("4", "尼"),
-        ("5", "泥"), ("6", "逆"), ("7", "拟"), ("8", "腻"), ("9", "妮"),
+    private let sampleCandidates: [(label: String, text: String, translation: String)] = [
+        ("1", "你好", "Hello"), ("2", "拟好", "Well done"),
+        ("3", "你", "You"), ("4", "尼", "Nun"),
+        ("5", "泥", "Mud"), ("6", "逆", "Reverse"),
+        ("7", "拟", "Imitate"), ("8", "腻", "Greasy"), ("9", "妮", "Girl"),
     ]
     private let samplePreedit = "ni hao"
 
@@ -2892,20 +3326,24 @@ final class CandidatePreviewView: NSView {
         windowMock.translatesAutoresizingMaskIntoConstraints = false
         previewDocument.addSubview(windowMock)
 
-        preeditPill.wantsLayer = true
-        preeditPill.layer?.cornerRadius = CandidateLayout.preeditCornerRadius
-        preeditPill.layer?.borderWidth = 1
-        preeditPill.layer?.masksToBounds = true
+        glassDemoBackdrop.wantsLayer = true
+        glassDemoBackdrop.layer = glassDemoGradient
+        glassDemoBackdrop.translatesAutoresizingMaskIntoConstraints = false
+        glassDemoGradient.colors = [
+            NSColor.systemBlue.withAlphaComponent(0.14).cgColor,
+            NSColor.systemGray.withAlphaComponent(0.07).cgColor,
+            NSColor.systemPurple.withAlphaComponent(0.10).cgColor,
+        ]
+        glassDemoGradient.startPoint = CGPoint(x: 0, y: 1)
+        glassDemoGradient.endPoint = CGPoint(x: 1, y: 0)
+        glassDemoBackdrop.isHidden = true
+        windowMock.addSubview(glassDemoBackdrop, positioned: .below, relativeTo: nil)
+
         preeditPill.translatesAutoresizingMaskIntoConstraints = false
 
         preeditLabel.lineBreakMode = .byTruncatingTail
         preeditLabel.translatesAutoresizingMaskIntoConstraints = false
-        preeditPill.addSubview(preeditLabel)
-
-        strip.wantsLayer = true
-        strip.layer?.cornerRadius = CandidateLayout.stripCornerRadius
-        strip.layer?.borderWidth = 1
-        strip.layer?.masksToBounds = true
+        preeditPill.contentHost.addSubview(preeditLabel)
         strip.translatesAutoresizingMaskIntoConstraints = false
 
         candidateRow.orientation = .horizontal
@@ -2919,7 +3357,7 @@ final class CandidatePreviewView: NSView {
         bar.alignment = .centerY
         bar.spacing = CandidateLayout.barSpacing
         bar.translatesAutoresizingMaskIntoConstraints = false
-        strip.addSubview(bar)
+        strip.contentHost.addSubview(bar)
 
         windowMock.addSubview(preeditPill)
         windowMock.addSubview(strip)
@@ -2929,12 +3367,7 @@ final class CandidatePreviewView: NSView {
         stripTopConstraint = strip.topAnchor.constraint(equalTo: preeditPill.bottomAnchor, constant: CandidateLayout.rootSpacing)
         stripHeightConstraint = strip.heightAnchor.constraint(equalToConstant: CandidateLayout.compactStripHeight(metrics))
         windowWidthConstraint = windowMock.widthAnchor.constraint(equalToConstant: metrics.baseWidth)
-        candidateRowHeightConstraint = candidateRow.heightAnchor.constraint(
-            equalToConstant: max(
-                CandidateLayout.candidateButtonHeight(metrics),
-                CandidateLayout.actionButtonSize
-            )
-        )
+        candidateRowHeightConstraint = candidateRow.heightAnchor.constraint(equalToConstant: 1)
 
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: maxWidth),
@@ -2961,16 +3394,20 @@ final class CandidatePreviewView: NSView {
                                                 constant: canvasPadding),
             windowMock.topAnchor.constraint(equalTo: previewDocument.topAnchor,
                                             constant: canvasPadding),
+            glassDemoBackdrop.leadingAnchor.constraint(equalTo: windowMock.leadingAnchor),
+            glassDemoBackdrop.trailingAnchor.constraint(equalTo: windowMock.trailingAnchor),
+            glassDemoBackdrop.topAnchor.constraint(equalTo: windowMock.topAnchor),
+            glassDemoBackdrop.bottomAnchor.constraint(equalTo: windowMock.bottomAnchor),
 
             preeditPill.leadingAnchor.constraint(equalTo: windowMock.leadingAnchor),
             preeditPill.topAnchor.constraint(equalTo: windowMock.topAnchor),
             preeditPill.trailingAnchor.constraint(lessThanOrEqualTo: windowMock.trailingAnchor),
             preeditLabel.leadingAnchor.constraint(
-                equalTo: preeditPill.leadingAnchor,
+                equalTo: preeditPill.contentHost.leadingAnchor,
                 constant: CandidateLayout.preeditHorizontalPadding
             ),
             preeditLabel.trailingAnchor.constraint(
-                equalTo: preeditPill.trailingAnchor,
+                equalTo: preeditPill.contentHost.trailingAnchor,
                 constant: -CandidateLayout.preeditHorizontalPadding
             ),
             preeditLabel.centerYAnchor.constraint(equalTo: preeditPill.centerYAnchor),
@@ -2979,9 +3416,9 @@ final class CandidatePreviewView: NSView {
             strip.trailingAnchor.constraint(equalTo: windowMock.trailingAnchor),
             strip.bottomAnchor.constraint(equalTo: windowMock.bottomAnchor),
 
-            bar.leadingAnchor.constraint(equalTo: strip.leadingAnchor, constant: CandidateLayout.barHorizontalPadding),
-            bar.trailingAnchor.constraint(equalTo: strip.trailingAnchor, constant: -CandidateLayout.barHorizontalPadding),
-            bar.centerYAnchor.constraint(equalTo: strip.centerYAnchor),
+            bar.leadingAnchor.constraint(equalTo: strip.contentHost.leadingAnchor, constant: CandidateLayout.barHorizontalPadding),
+            bar.trailingAnchor.constraint(equalTo: strip.contentHost.trailingAnchor, constant: -CandidateLayout.barHorizontalPadding),
+            bar.centerYAnchor.constraint(equalTo: strip.contentHost.centerYAnchor),
 
             preeditHeightConstraint, stripTopConstraint, stripHeightConstraint,
             windowWidthConstraint, candidateRowHeightConstraint,
@@ -2995,6 +3432,11 @@ final class CandidatePreviewView: NSView {
     /// Re-apply theme + geometry (call after a night/day switch).
     func reload() { rebuild() }
 
+    override func layout() {
+        super.layout()
+        glassDemoGradient.frame = glassDemoBackdrop.bounds
+    }
+
     private func rebuild() {
         let m = metrics
 
@@ -3002,12 +3444,19 @@ final class CandidatePreviewView: NSView {
         appearance = RimeUI.appKitAppearance
         backdrop.layer?.backgroundColor = RimeUI.surface3.cgColor
         windowMock.layer?.backgroundColor = NSColor.clear.cgColor
-        preeditPill.layer?.backgroundColor = RimeUI.candidateBackgroundColor
-            .withAlphaComponent(0.95).cgColor
-        preeditPill.layer?.borderColor = RimeUI.borderStrong
-            .withAlphaComponent(0.72).cgColor
-        strip.layer?.backgroundColor = RimeUI.candidateBackgroundColor.cgColor
-        strip.layer?.borderColor = RimeUI.borderStrong.cgColor
+        glassDemoBackdrop.isHidden = !RimeUI.isLiquidGlass
+        preeditPill.applyStyle(
+            cornerRadius: m.preeditCornerRadius,
+            backgroundColor: RimeUI.candidateBackgroundColor.withAlphaComponent(0.95),
+            borderColor: RimeUI.borderStrong.withAlphaComponent(0.72),
+            usesLiquidGlass: RimeUI.isLiquidGlass
+        )
+        strip.applyStyle(
+            cornerRadius: m.candidateStripCornerRadius,
+            backgroundColor: RimeUI.candidateBackgroundColor,
+            borderColor: RimeUI.borderStrong,
+            usesLiquidGlass: RimeUI.isLiquidGlass
+        )
 
         // Preedit.
         preeditLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
@@ -3015,8 +3464,14 @@ final class CandidatePreviewView: NSView {
         preeditLabel.stringValue = samplePreedit
 
         // Geometry (identical to the live window).
-        let stripHeight = CandidateLayout.compactStripHeight(m)
         let buttonHeight = CandidateLayout.candidateButtonHeight(m)
+        let translationHeight = CandidateLayout.englishCandidatePillHeight(m)
+        let candidateRowHeight = max(buttonHeight, CandidateLayout.actionButtonSize)
+            + translationHeight
+        let stripHeight = max(
+            CandidateLayout.compactStripHeight(m),
+            candidateRowHeight + 2 * CandidateLayout.barVerticalPadding(m)
+        )
         let widths = sampleCandidates.map { item in
             ceil(max(candidateAttr(label: item.label, text: item.text, highlighted: true, m: m).size().width,
                      candidateAttr(label: item.label, text: item.text, highlighted: false, m: m).size().width))
@@ -3038,7 +3493,7 @@ final class CandidatePreviewView: NSView {
 
         preeditHeightConstraint.constant = m.preeditHeight
         stripHeightConstraint.constant = stripHeight
-        candidateRowHeightConstraint.constant = max(buttonHeight, CandidateLayout.actionButtonSize)
+        candidateRowHeightConstraint.constant = candidateRowHeight
         windowWidthConstraint.constant = windowWidth
         previewDocument.frame = NSRect(x: 0, y: 0, width: documentWidth, height: scrollHeight)
         previewScroll.hasHorizontalScroller = overflows
@@ -3065,10 +3520,14 @@ final class CandidatePreviewView: NSView {
                 candidateRow.addArrangedSubview(candidateSeparator())
             }
             used = next
-            candidateRow.addArrangedSubview(candidatePill(attr,
-                                                          highlighted: i == 0,
-                                                          width: w,
-                                                          height: buttonHeight))
+            candidateRow.addArrangedSubview(candidateCell(
+                translation: item.translation,
+                candidate: attr,
+                highlighted: i == 0,
+                width: w,
+                buttonHeight: buttonHeight,
+                translationHeight: translationHeight
+            ))
         }
         heightConstraint.constant = scrollHeight + statusSpacing + statusHeight + 4
         let maxScrollX = max(0, documentWidth - maxWidth)
@@ -3084,32 +3543,83 @@ final class CandidatePreviewView: NSView {
         width: CGFloat,
         height: CGFloat
     ) -> NSView {
-        let pill = NSView()
-        pill.wantsLayer = true
-        pill.layer?.cornerRadius = CandidateLayout.selectedCandidateCornerRadius
-        pill.layer?.backgroundColor = highlighted
-            ? RimeUI.selectedCandidateBackgroundColor.cgColor
-            : NSColor.clear.cgColor
-        pill.layer?.borderWidth = 1
-        pill.layer?.borderColor = NSColor.clear.cgColor
-        if highlighted {
-            pill.layer?.shadowColor = NSColor.black.cgColor
-            pill.layer?.shadowOpacity = 0.18
-            pill.layer?.shadowRadius = 2
-            pill.layer?.shadowOffset = CGSize(width: 0, height: -1)
-        }
+        let pill = RimeCandidateSurfaceView(frame: .zero)
+        pill.applyStyle(
+            cornerRadius: metrics.selectedCandidateCornerRadius,
+            backgroundColor: highlighted
+                ? RimeUI.candidateSelectionBackgroundColor
+                : NSColor.clear,
+            borderColor: NSColor.clear,
+            usesLiquidGlass: false
+        )
         pill.translatesAutoresizingMaskIntoConstraints = false
         let label = NSTextField(labelWithAttributedString: title)
         label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
-        pill.addSubview(label)
+        pill.contentHost.addSubview(label)
         NSLayoutConstraint.activate([
             pill.widthAnchor.constraint(equalToConstant: width),
             pill.heightAnchor.constraint(equalToConstant: height),
-            label.centerXAnchor.constraint(equalTo: pill.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
+            label.centerXAnchor.constraint(equalTo: pill.contentHost.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: pill.contentHost.centerYAnchor),
         ])
         return pill
+    }
+
+    private func candidateCell(
+        translation: String,
+        candidate: NSAttributedString,
+        highlighted: Bool,
+        width: CGFloat,
+        buttonHeight: CGFloat,
+        translationHeight: CGFloat
+    ) -> NSView {
+        let cell = NSStackView()
+        cell.orientation = .vertical
+        cell.alignment = .centerX
+        cell.spacing = 0
+
+        let translationPill = RimeCandidateSurfaceView(frame: .zero)
+        translationPill.applyStyle(
+            cornerRadius: metrics.englishCandidateCornerRadius,
+            backgroundColor: highlighted
+                ? RimeUI.candidateSelectionBackgroundColor
+                : NSColor.clear,
+            borderColor: NSColor.clear,
+            borderWidth: 0,
+            usesLiquidGlass: false
+        )
+        translationPill.translatesAutoresizingMaskIntoConstraints = false
+
+        let translationLabel = NSTextField(labelWithString: translation)
+        translationLabel.font = .systemFont(
+            ofSize: metrics.englishCandidateFontSize,
+            weight: highlighted ? .semibold : .medium
+        )
+        translationLabel.textColor = highlighted
+            ? RimeUI.candidateSelectionTextColor
+            : RimeUI.textPrimary
+        translationLabel.alignment = .center
+        translationLabel.lineBreakMode = .byTruncatingTail
+        translationLabel.maximumNumberOfLines = 1
+        translationLabel.translatesAutoresizingMaskIntoConstraints = false
+        translationPill.contentHost.addSubview(translationLabel)
+        NSLayoutConstraint.activate([
+            translationPill.widthAnchor.constraint(equalToConstant: width),
+            translationPill.heightAnchor.constraint(equalToConstant: translationHeight),
+            translationLabel.leadingAnchor.constraint(equalTo: translationPill.contentHost.leadingAnchor, constant: 4),
+            translationLabel.trailingAnchor.constraint(equalTo: translationPill.contentHost.trailingAnchor, constant: -4),
+            translationLabel.centerYAnchor.constraint(equalTo: translationPill.contentHost.centerYAnchor),
+        ])
+
+        cell.addArrangedSubview(translationPill)
+        cell.addArrangedSubview(candidatePill(
+            candidate,
+            highlighted: highlighted,
+            width: width,
+            height: buttonHeight
+        ))
+        return cell
     }
 
     private func candidateSeparator() -> NSView {
@@ -3125,10 +3635,10 @@ final class CandidatePreviewView: NSView {
     private func candidateAttr(label: String, text: String, highlighted: Bool, m: CandidateWindowMetrics) -> NSAttributedString {
         let line = NSMutableAttributedString()
         let labelColor = highlighted
-            ? RimeUI.selectedCandidateTextColor
+            ? RimeUI.candidateSelectionTextColor
             : RimeUI.textSecondary
         let textColor = highlighted
-            ? RimeUI.selectedCandidateTextColor
+            ? RimeUI.candidateSelectionTextColor
             : RimeUI.textPrimary
         let labelFont = NSFont.monospacedDigitSystemFont(ofSize: m.labelFontSize,
                                                          weight: .semibold)

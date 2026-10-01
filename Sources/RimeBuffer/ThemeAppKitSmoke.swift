@@ -288,16 +288,11 @@ func runThemeAppKitSmokeTest() -> Bool {
             && popup.accessibilitySubrole() == nativePopup.accessibilitySubrole(),
           "fixed-accent popup should preserve native popup accessibility")
 
-    // Exercise the actual Settings observer in one window. Both the environment
-    // override and persisted preference are restored so this standalone smoke
-    // cannot change the user's selected theme.
+    // Exercise the actual Settings window and confirm legacy preferences
+    // migrate to the single supported Liquid Glass appearance.
     let defaults = UserDefaults.standard
     let appearanceKey = "appearanceMode"
     let previousPreference = defaults.object(forKey: appearanceKey)
-    let previousEnvironment = ProcessInfo.processInfo.environment[
-        "RIMEBUFFER_APPEARANCE_MODE"
-    ]
-    unsetenv("RIMEBUFFER_APPEARANCE_MODE")
     defaults.set(RimeAppearanceMode.night.rawValue, forKey: appearanceKey)
 
     SettingsWindowController.shared.show()
@@ -305,59 +300,18 @@ func runThemeAppKitSmokeTest() -> Bool {
         $0.title == "\(ProductIdentity.displayName) 设置"
     }
 
-    var appearanceNotificationCount = 0
-    let observer = NotificationCenter.default.addObserver(
-        forName: .rimeAppearanceDidChange,
-        object: nil,
-        queue: nil
-    ) { _ in
-        appearanceNotificationCount += 1
-    }
-
-    func drainMainRunLoop(until condition: () -> Bool) {
-        let deadline = Date(timeIntervalSinceNow: 1)
-        while !condition(), Date() < deadline {
-            _ = RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
-        }
-    }
-
-    func matches(_ window: NSWindow?, mode: RimeAppearanceMode) -> Bool {
-        let expected = mode.appKitAppearanceName(
-            increasedContrast: NSWorkspace.shared
-                .accessibilityDisplayShouldIncreaseContrast
-        )
-        return window?.appearance?.name == expected
-            && window?.effectiveAppearance.name == expected
-    }
-
     check(settingsWindow != nil && settingsWindow?.isVisible == true,
           "settings smoke should locate the live settings window")
     check(SettingsWindowController.shared.validateChoiceCardHitTestingForSmoke(),
-          "every theme and input-encoding card center should hit its own control")
-    check(matches(settingsWindow, mode: .night),
-          "settings should initially use 墨竹 AppKit appearance")
-
-    RimeUI.appearance = .day
-    drainMainRunLoop { matches(settingsWindow, mode: .day) }
-    check(matches(settingsWindow, mode: .day),
-          "the same settings window should transition to 翡翠")
-
-    RimeUI.appearance = .quiet
-    drainMainRunLoop {
-        RimeUI.appearance == .quiet && matches(settingsWindow, mode: .quiet)
-    }
-    check(RimeUI.appearance == .quiet
-            && matches(settingsWindow, mode: .quiet),
-          "the same settings window should transition to dark 静谧")
-
-    RimeUI.appearance = .night
-    drainMainRunLoop { matches(settingsWindow, mode: .night) }
-    check(matches(settingsWindow, mode: .night),
-          "the same settings window should transition back to 墨竹")
-    check(appearanceNotificationCount == 3,
-          "墨竹→翡翠→静谧→墨竹 should emit exactly three appearance notifications")
-
-    NotificationCenter.default.removeObserver(observer)
+          "the appearance page should contain only size controls and input scheme cards should remain interactive")
+    check(SettingsWindowController.shared.validateLiquidGlassPagesForSmoke(),
+          "every settings route should show its native Liquid Glass surfaces")
+    check(RimeUI.appearance == .liquidGlass
+            && defaults.string(forKey: appearanceKey) == RimeAppearanceMode.liquidGlass.rawValue,
+          "legacy appearance preference should migrate to Liquid Glass")
+    check(settingsWindow?.appearance == nil
+            && settingsWindow?.effectiveAppearance.name == app.effectiveAppearance.name,
+          "settings should follow system appearance for native Liquid Glass")
     settingsWindow?.close()
     if let previousPreference {
         defaults.set(previousPreference, forKey: appearanceKey)
@@ -365,11 +319,6 @@ func runThemeAppKitSmokeTest() -> Bool {
         defaults.removeObject(forKey: appearanceKey)
     }
     NotificationCenter.default.post(name: .rimeAppearanceDidChange, object: nil)
-    if let previousEnvironment {
-        setenv("RIMEBUFFER_APPEARANCE_MODE", previousEnvironment, 1)
-    } else {
-        unsetenv("RIMEBUFFER_APPEARANCE_MODE")
-    }
 
     if ok { print("theme AppKit smoke: OK") }
     return ok

@@ -1,14 +1,39 @@
 import Cocoa
 import QuartzCore
 
+/// Shared translucency and edge values, matched to the MailGlass prototype.
+enum RimeGlassPalette {
+    static let panelFillOpacity: CGFloat = 0.05
+    static let panelTintOpacity: CGFloat = 0.22
+    static let edgeLineWidth: CGFloat = 0.6
+    static let edgeHighlightOpacity: CGFloat = 0.24
+    static let edgeShadowOpacity: CGFloat = 0.08
+    static let edgeGlowOpacity: CGFloat = 0.10
+    static let edgeGlowRadius: CGFloat = 1.2
+
+    static var panelFill: NSColor {
+        NSColor.windowBackgroundColor.withAlphaComponent(panelFillOpacity)
+    }
+
+    static var panelTint: NSColor {
+        NSColor.underPageBackgroundColor.withAlphaComponent(panelTintOpacity)
+    }
+
+    static var edgeHighlight: NSColor {
+        NSColor.white.withAlphaComponent(edgeHighlightOpacity)
+    }
+}
+
 enum RimeThemeFamily: String, CaseIterable {
     case classic
     case rasta
+    case apple
 
     var title: String {
         switch self {
         case .classic: return "经典"
         case .rasta: return "拉斯塔"
+        case .apple: return "Apple"
         }
     }
 }
@@ -21,6 +46,7 @@ enum RimeAppearanceMode: String, CaseIterable {
     case day
     case quiet
     case rasta
+    case liquidGlass
 
     var title: String {
         switch self {
@@ -28,15 +54,24 @@ enum RimeAppearanceMode: String, CaseIterable {
         case .day: return "翡翠"
         case .quiet: return "静谧"
         case .rasta: return "拉斯塔"
+        case .liquidGlass: return "Liquid Glass"
         }
     }
 
     var family: RimeThemeFamily {
-        self == .rasta ? .rasta : .classic
+        switch self {
+        case .night, .day, .quiet: return .classic
+        case .rasta: return .rasta
+        case .liquidGlass: return .apple
+        }
     }
 
     var selectionTitle: String {
-        family == .classic ? "经典 · \(title)" : title
+        switch family {
+        case .classic: return "经典 · \(title)"
+        case .rasta: return title
+        case .apple: return "Apple · \(title)"
+        }
     }
 
     var detailText: String {
@@ -45,6 +80,7 @@ enum RimeAppearanceMode: String, CaseIterable {
         case .day: return "经典浅色配色，柔和边界与固定产品绿。"
         case .quiet: return "经典去色配色，降低视觉刺激。"
         case .rasta: return "深色精致骨架，以红、黄、绿三色共同组织状态与操作。"
+        case .liquidGlass: return "使用 macOS 原生 Liquid Glass 候选材质；支持时，选中候选还会响应点击。"
         }
     }
 
@@ -52,6 +88,8 @@ enum RimeAppearanceMode: String, CaseIterable {
         switch self {
         case .night, .quiet, .rasta: return true
         case .day: return false
+        case .liquidGlass:
+            return NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         }
     }
 
@@ -61,6 +99,9 @@ enum RimeAppearanceMode: String, CaseIterable {
         case .day: return RimeThemePalettes.day
         case .quiet: return RimeThemePalettes.quiet
         case .rasta: return RimeThemePalettes.rasta
+        // Glass uses semantic AppKit colors in RimeUI below; this palette is
+        // only a safe fallback for older UI surfaces that still read hex slots.
+        case .liquidGlass: return RimeThemePalettes.night
         }
     }
 
@@ -74,6 +115,10 @@ enum RimeAppearanceMode: String, CaseIterable {
         case (.quiet, true): return .accessibilityHighContrastDarkAqua
         case (.rasta, false): return .darkAqua
         case (.rasta, true): return .accessibilityHighContrastDarkAqua
+        // RimeUI.appKitAppearance intentionally returns nil for Liquid Glass
+        // so the system appearance drives the native material.
+        case (.liquidGlass, false): return .aqua
+        case (.liquidGlass, true): return .accessibilityHighContrastAqua
         }
     }
 }
@@ -373,33 +418,32 @@ enum RimeUI {
 
     static var appearance: RimeAppearanceMode {
         get {
-            // Development renderers can exercise every theme without
-            // mutating the user's persisted preference domain.
+            // Native preview and visual-smoke commands may force a legacy
+            // colorway without changing the user's persisted Glass default.
             if let raw = ProcessInfo.processInfo.environment["RIMEBUFFER_APPEARANCE_MODE"],
                let mode = RimeAppearanceMode(rawValue: raw) {
                 return mode
             }
-            if let raw = UserDefaults.standard.string(forKey: appearanceKey),
-               let mode = RimeAppearanceMode(rawValue: raw) {
-                return mode
-            }
-            return .night
-        }
-        set {
-            // Compare against persisted state, not the development-only
-            // environment override. A preview process may force one palette,
-            // but must not make a real preference write appear successful
-            // when the stored value is different.
-            let stored = UserDefaults.standard.string(forKey: appearanceKey)
-                .flatMap(RimeAppearanceMode.init(rawValue:)) ?? .night
-            guard newValue != stored else { return }
-            UserDefaults.standard.set(newValue.rawValue, forKey: appearanceKey)
-            if newValue.family == .classic {
+            // Liquid Glass is the only supported product appearance. Rewrite
+            // the former user preference on first access so upgrades converge
+            // on the same default as a fresh install.
+            if UserDefaults.standard.string(forKey: appearanceKey)
+                != RimeAppearanceMode.liquidGlass.rawValue {
                 UserDefaults.standard.set(
-                    newValue.rawValue,
-                    forKey: lastClassicAppearanceKey
+                    RimeAppearanceMode.liquidGlass.rawValue,
+                    forKey: appearanceKey
                 )
             }
+            return .liquidGlass
+        }
+        set {
+            guard newValue == .liquidGlass,
+                  UserDefaults.standard.string(forKey: appearanceKey)
+                    != RimeAppearanceMode.liquidGlass.rawValue else { return }
+            UserDefaults.standard.set(
+                RimeAppearanceMode.liquidGlass.rawValue,
+                forKey: appearanceKey
+            )
             NotificationCenter.default.post(name: .rimeAppearanceDidChange, object: nil)
         }
     }
@@ -415,69 +459,136 @@ enum RimeUI {
     }
 
     static func selectThemeFamily(_ family: RimeThemeFamily) {
-        appearance = family == .classic ? lastClassicAppearance : .rasta
+        switch family {
+        case .classic: appearance = lastClassicAppearance
+        case .rasta: appearance = .rasta
+        case .apple: appearance = .liquidGlass
+        }
     }
 
     static var isDark: Bool { appearance.usesDarkSurfaces }
     static var themeFamily: RimeThemeFamily { appearance.family }
     static var isRasta: Bool { themeFamily == .rasta }
+    static var isLiquidGlass: Bool { appearance == .liquidGlass }
+    static var usesLiquidGlassTransparency: Bool {
+        isLiquidGlass && !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+    }
 
     static var palette: RimeThemePalette {
         appearance.palette
     }
 
     static var appKitAppearance: NSAppearance? {
+        guard !isLiquidGlass else { return nil }
         let name = appearance.appKitAppearanceName(
             increasedContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         )
         return NSAppearance(named: name)
     }
 
-    static var accentBlue: NSColor { color(palette.accentBlue) }
-    static var accentGreen: NSColor { color(palette.accentGreen) }
-    static var accentSecondary: NSColor { color(palette.accentSecondary) }
-    static var accentTertiary: NSColor { color(palette.accentTertiary) }
+    static var accentBlue: NSColor { isLiquidGlass ? .controlAccentColor : color(palette.accentBlue) }
+    static var accentGreen: NSColor { isLiquidGlass ? .controlAccentColor : color(palette.accentGreen) }
+    static var accentSecondary: NSColor { isLiquidGlass ? .systemYellow : color(palette.accentSecondary) }
+    static var accentTertiary: NSColor { isLiquidGlass ? .systemRed : color(palette.accentTertiary) }
     static var brandRed: NSColor { color(palette.brandRed) }
     static var brandYellow: NSColor { color(palette.brandYellow) }
     static var brandGreen: NSColor { color(palette.brandGreen) }
-    static var accentForegroundColor: NSColor { color(palette.accentForeground) }
-    static var accentTextColor: NSColor { color(palette.accentText) }
-    static var bufferBg: NSColor { color(palette.bufferBackground) }
-    static var bufferBg2: NSColor { color(palette.bufferBackgroundSecondary) }
-    static var bufferBorder: NSColor { color(palette.bufferBorder) }
-    static var bufferDivider: NSColor { color(palette.bufferDivider) }
-    static var bufferSourceRail: NSColor { color(palette.bufferSourceRail) }
-    static var bufferTargetRail: NSColor { color(palette.bufferTargetRail) }
-    static var bufferChip: NSColor { color(palette.bufferChip) }
-    static var bufferChipSelected: NSColor { color(palette.bufferChipSelected) }
-    static var bufferPreedit: NSColor { color(palette.bufferPreedit) }
-    static var bufferMuted: NSColor { color(palette.bufferMuted) }
-    static var clipboardSelectedBackground: NSColor {
-        color(palette.clipboardSelected)
+    static var accentForegroundColor: NSColor { isLiquidGlass ? .labelColor : color(palette.accentForeground) }
+    static var accentTextColor: NSColor { isLiquidGlass ? .controlAccentColor : color(palette.accentText) }
+    static var bufferBg: NSColor {
+        guard isLiquidGlass else { return color(palette.bufferBackground) }
+        return usesLiquidGlassTransparency
+            ? NSColor.windowBackgroundColor.withAlphaComponent(0.08)
+            : .windowBackgroundColor
     }
-    static var surface: NSColor { color(palette.surface) }
-    static var surface2: NSColor { color(palette.surfaceSecondary) }
-    static var surface3: NSColor { color(palette.surfaceTertiary) }
-    static var workbenchChrome: NSColor { color(palette.bufferBackground) }
-    static var border: NSColor { color(palette.border) }
-    static var borderStrong: NSColor { color(palette.borderStrong) }
-    static var textPrimary: NSColor { color(palette.textPrimary) }
-    static var textSecondary: NSColor { color(palette.textSecondary) }
-    static var textMuted: NSColor { color(palette.textMuted) }
+    static var bufferBg2: NSColor {
+        guard isLiquidGlass else { return color(palette.bufferBackgroundSecondary) }
+        return usesLiquidGlassTransparency
+            ? NSColor.underPageBackgroundColor.withAlphaComponent(0.14)
+            : .underPageBackgroundColor
+    }
+    static var bufferBorder: NSColor { isLiquidGlass ? .separatorColor : color(palette.bufferBorder) }
+    static var bufferDivider: NSColor { isLiquidGlass ? .separatorColor : color(palette.bufferDivider) }
+    static var bufferSourceRail: NSColor {
+        usesLiquidGlassTransparency
+            ? NSColor.controlBackgroundColor.withAlphaComponent(0.20)
+            : color(palette.bufferSourceRail)
+    }
+    static var bufferTargetRail: NSColor {
+        usesLiquidGlassTransparency
+            ? NSColor.controlBackgroundColor.withAlphaComponent(0.20)
+            : color(palette.bufferTargetRail)
+    }
+    static var bufferChip: NSColor { isLiquidGlass ? .quaternaryLabelColor : color(palette.bufferChip) }
+    static var bufferChipSelected: NSColor { isLiquidGlass ? .controlAccentColor.withAlphaComponent(0.24) : color(palette.bufferChipSelected) }
+    static var bufferPreedit: NSColor { isLiquidGlass ? .controlAccentColor.withAlphaComponent(0.20) : color(palette.bufferPreedit) }
+    static var bufferMuted: NSColor { isLiquidGlass ? .secondaryLabelColor : color(palette.bufferMuted) }
+    static var clipboardSelectedBackground: NSColor {
+        isLiquidGlass ? NSColor.controlAccentColor.withAlphaComponent(0.22) : color(palette.clipboardSelected)
+    }
+    static var surface: NSColor {
+        guard isLiquidGlass else { return color(palette.surface) }
+        return usesLiquidGlassTransparency
+            ? NSColor.windowBackgroundColor.withAlphaComponent(0.08)
+            : .windowBackgroundColor
+    }
+    static var surface2: NSColor {
+        guard isLiquidGlass else { return color(palette.surfaceSecondary) }
+        return usesLiquidGlassTransparency
+            ? NSColor.controlBackgroundColor.withAlphaComponent(0.20)
+            : .controlBackgroundColor
+    }
+    static var surface3: NSColor {
+        guard isLiquidGlass else { return color(palette.surfaceTertiary) }
+        return usesLiquidGlassTransparency
+            ? NSColor.underPageBackgroundColor.withAlphaComponent(0.16)
+            : .underPageBackgroundColor
+    }
+    static var workbenchChrome: NSColor {
+        guard isLiquidGlass else { return color(palette.bufferBackground) }
+        return usesLiquidGlassTransparency
+            ? NSColor.windowBackgroundColor.withAlphaComponent(0.10)
+            : .windowBackgroundColor
+    }
+    static var border: NSColor { isLiquidGlass ? .separatorColor.withAlphaComponent(0.48) : color(palette.border) }
+    static var borderStrong: NSColor { isLiquidGlass ? .separatorColor : color(palette.borderStrong) }
+    static var textPrimary: NSColor { isLiquidGlass ? .labelColor : color(palette.textPrimary) }
+    static var textSecondary: NSColor { isLiquidGlass ? .secondaryLabelColor : color(palette.textSecondary) }
+    static var textMuted: NSColor { isLiquidGlass ? .tertiaryLabelColor : color(palette.textMuted) }
     static var selectedCandidateBackgroundColor: NSColor {
-        color(palette.selectedCandidateBackground)
+        isLiquidGlass ? NSColor.controlAccentColor.withAlphaComponent(0.30) : color(palette.selectedCandidateBackground)
     }
     static var selectedCandidateTextColor: NSColor {
-        color(palette.selectedCandidateText)
+        isLiquidGlass ? .labelColor : color(palette.selectedCandidateText)
     }
-    static var candidateBackgroundColor: NSColor { color(palette.candidateBackground) }
-    static var warningTextColor: NSColor { color(palette.warningText) }
-    static var warningSurfaceColor: NSColor { color(palette.warningSurface) }
-    static var warningBorderColor: NSColor { color(palette.warningBorder) }
-    static var dangerTextColor: NSColor { color(palette.dangerText) }
-    static var dangerFillColor: NSColor { color(palette.dangerFill) }
-    static var dangerForegroundColor: NSColor { color(palette.dangerForeground) }
-    static var dangerBorderColor: NSColor { color(palette.dangerBorder) }
+    /// Candidate selection follows the macOS accent used by Apple's input
+    /// method, independent of the active RIMES colorway.
+    static var candidateSelectionBackgroundColor: NSColor { .controlAccentColor }
+    static var candidateSelectionTextColor: NSColor { .white }
+    static var candidateBackgroundColor: NSColor { isLiquidGlass ? .clear : color(palette.candidateBackground) }
+    static var warningTextColor: NSColor { isLiquidGlass ? .systemOrange : color(palette.warningText) }
+    static var warningSurfaceColor: NSColor {
+        isLiquidGlass
+            ? NSColor.systemOrange.withAlphaComponent(0.12)
+            : color(palette.warningSurface)
+    }
+    static var warningBorderColor: NSColor {
+        isLiquidGlass
+            ? NSColor.systemOrange.withAlphaComponent(0.45)
+            : color(palette.warningBorder)
+    }
+    static var dangerTextColor: NSColor { isLiquidGlass ? .systemRed : color(palette.dangerText) }
+    static var dangerFillColor: NSColor {
+        isLiquidGlass
+            ? NSColor.systemRed.withAlphaComponent(0.18)
+            : color(palette.dangerFill)
+    }
+    static var dangerForegroundColor: NSColor { isLiquidGlass ? .white : color(palette.dangerForeground) }
+    static var dangerBorderColor: NSColor {
+        isLiquidGlass
+            ? NSColor.systemRed.withAlphaComponent(0.55)
+            : color(palette.dangerBorder)
+    }
 
     static func color(_ hex: UInt32, alpha: CGFloat = 1) -> NSColor {
         NSColor(
@@ -492,6 +603,178 @@ enum RimeUI {
         let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
         return NSImage(systemSymbolName: name, accessibilityDescription: name)?
             .withSymbolConfiguration(config)
+    }
+}
+
+/// A small AppKit surface that switches between an ordinary themed fill and
+/// Apple's native, untinted Liquid Glass. On systems before macOS 26 it uses
+/// the standard vibrancy material as a compatible fallback.
+final class RimeCandidateSurfaceView: NSView {
+    let contentHost = NSView()
+
+    private let fallbackVibrancy = NSVisualEffectView()
+    private let glassEdgeOverlay = RimeGlassEdgeOverlayView()
+    private var nativeGlass: NSView?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = false
+
+        fallbackVibrancy.material = .popover
+        fallbackVibrancy.blendingMode = .behindWindow
+        fallbackVibrancy.state = .active
+        fallbackVibrancy.isHidden = true
+        fallbackVibrancy.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(fallbackVibrancy)
+
+        glassEdgeOverlay.isHidden = true
+        glassEdgeOverlay.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(glassEdgeOverlay)
+
+        contentHost.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(contentHost)
+
+        NSLayoutConstraint.activate([
+            fallbackVibrancy.leadingAnchor.constraint(equalTo: leadingAnchor),
+            fallbackVibrancy.trailingAnchor.constraint(equalTo: trailingAnchor),
+            fallbackVibrancy.topAnchor.constraint(equalTo: topAnchor),
+            fallbackVibrancy.bottomAnchor.constraint(equalTo: bottomAnchor),
+            contentHost.leadingAnchor.constraint(equalTo: leadingAnchor),
+            contentHost.trailingAnchor.constraint(equalTo: trailingAnchor),
+            contentHost.topAnchor.constraint(equalTo: topAnchor),
+            contentHost.bottomAnchor.constraint(equalTo: bottomAnchor),
+            glassEdgeOverlay.leadingAnchor.constraint(equalTo: leadingAnchor),
+            glassEdgeOverlay.trailingAnchor.constraint(equalTo: trailingAnchor),
+            glassEdgeOverlay.topAnchor.constraint(equalTo: topAnchor),
+            glassEdgeOverlay.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView(frame: .zero)
+            glass.style = .regular
+            glass.isHidden = true
+            glass.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(glass)
+            NSLayoutConstraint.activate([
+                glass.leadingAnchor.constraint(equalTo: leadingAnchor),
+                glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+                glass.topAnchor.constraint(equalTo: topAnchor),
+                glass.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
+            nativeGlass = glass
+        }
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func applyStyle(cornerRadius: CGFloat,
+                    backgroundColor: NSColor,
+                    borderColor: NSColor,
+                    borderWidth: CGFloat = 1,
+                    usesLiquidGlass: Bool,
+                    interactiveGlass: Bool = false) {
+        layer?.cornerRadius = cornerRadius
+        layer?.borderWidth = usesLiquidGlass ? 0 : borderWidth
+        layer?.borderColor = usesLiquidGlass ? NSColor.clear.cgColor : borderColor.cgColor
+        layer?.masksToBounds = !usesLiquidGlass
+        glassEdgeOverlay.cornerRadius = cornerRadius
+        glassEdgeOverlay.isHidden = !usesLiquidGlass
+
+        if usesLiquidGlass {
+            layer?.backgroundColor = RimeGlassPalette.panelFill.cgColor
+            if #available(macOS 26.0, *),
+               let glass = nativeGlass as? NSGlassEffectView {
+                if glass.contentView !== contentHost {
+                    glass.contentView = contentHost
+                }
+                glass.style = .regular
+                glass.cornerRadius = cornerRadius
+                glass.tintColor = RimeGlassPalette.panelTint
+                Self.setInteractiveEffect(interactiveGlass, on: glass)
+                glass.isHidden = false
+                fallbackVibrancy.isHidden = true
+            } else {
+                if contentHost.superview !== self {
+                    addSubview(contentHost, positioned: .above, relativeTo: fallbackVibrancy)
+                }
+                fallbackVibrancy.isHidden = false
+            }
+            return
+        }
+
+        if #available(macOS 26.0, *),
+           let glass = nativeGlass as? NSGlassEffectView {
+            Self.setInteractiveEffect(false, on: glass)
+            if glass.contentView === contentHost {
+                glass.contentView = nil
+            }
+            glass.isHidden = true
+        }
+        fallbackVibrancy.isHidden = true
+        if contentHost.superview !== self {
+            addSubview(contentHost, positioned: .above, relativeTo: fallbackVibrancy)
+        }
+        layer?.backgroundColor = backgroundColor.cgColor
+    }
+
+    /// macOS 27 adds this public AppKit property. Resolve the setter at runtime
+    /// so the macOS 26 SDK build remains deployable to older systems too.
+    static func setInteractiveEffect(_ enabled: Bool, on view: NSView) {
+        let setter = NSSelectorFromString("setEffectIsInteractive:")
+        guard view.responds(to: setter) else { return }
+        view.setValue(NSNumber(value: enabled), forKey: "effectIsInteractive")
+    }
+}
+
+/// Adds the fine highlight and inner edge visible on RIMES's MailGlass panels.
+private final class RimeGlassEdgeOverlayView: NSView {
+    var cornerRadius: CGFloat = 0 {
+        didSet { needsDisplay = true }
+    }
+
+    override var isOpaque: Bool { false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let lineWidth = RimeGlassPalette.edgeLineWidth
+        guard bounds.width > lineWidth * 2,
+              bounds.height > lineWidth * 2 else { return }
+
+        let outerRect = bounds.insetBy(dx: lineWidth / 2, dy: lineWidth / 2)
+        let innerInset = lineWidth + 0.8
+        let innerRect = bounds.insetBy(dx: innerInset, dy: innerInset)
+        let outer = NSBezierPath(
+            roundedRect: outerRect,
+            xRadius: max(0, cornerRadius - lineWidth / 2),
+            yRadius: max(0, cornerRadius - lineWidth / 2)
+        )
+        let inner = NSBezierPath(
+            roundedRect: innerRect,
+            xRadius: max(0, cornerRadius - innerInset),
+            yRadius: max(0, cornerRadius - innerInset)
+        )
+        let edgeBand = NSBezierPath()
+        edgeBand.windingRule = .evenOdd
+        edgeBand.append(outer)
+        edgeBand.append(inner)
+
+        NSGraphicsContext.saveGraphicsState()
+        edgeBand.addClip()
+        NSGradient(colors: [
+            .white.withAlphaComponent(RimeGlassPalette.edgeHighlightOpacity),
+            .white.withAlphaComponent(0.08),
+            .black.withAlphaComponent(RimeGlassPalette.edgeShadowOpacity),
+            .white.withAlphaComponent(0.16),
+        ])?.draw(in: bounds, angle: -45)
+        NSGraphicsContext.restoreGraphicsState()
+
+        inner.lineWidth = 0.8
+        NSColor.white.withAlphaComponent(RimeGlassPalette.edgeGlowOpacity).setStroke()
+        inner.stroke()
     }
 }
 

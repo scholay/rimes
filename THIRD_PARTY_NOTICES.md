@@ -44,6 +44,11 @@ The GPL text and a detailed source notice are included as
 `rime-data/licenses/GPL-3.0.txt` and
 `rime-data/licenses/rime-ice-SOURCE.md`.
 
+The Chinese and English dictionary data was refreshed from upstream revision
+`3aea6d3694fb3d94ec663641f021f788822897ad` (2026-09-25), with RIMES-specific
+configuration, schema changes, and local trigger entries preserved. The
+dictionary source version is `2026-01-26`.
+
 The Xiaohe double-pinyin mapping and its mixed Chinese/English static table
 are additionally pinned to upstream Rime Ice revision
 `c398c0d4526b012cb3b306f792089abed13e0413`. The schema header and Rime Ice

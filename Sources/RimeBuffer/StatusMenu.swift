@@ -6,7 +6,6 @@ struct InputSourceMenuState {
     let healthy: Bool
     let bufferTitle: String
     let clipboardTitle: String
-    let mailboxTitle: String
 }
 
 /// Builds ETInput's commands for the system input-source menu. The menu items
@@ -41,8 +40,7 @@ final class StatusMenu {
         return Self.makeInputSourceMenu(target: target, state: InputSourceMenuState(
             healthy: healthy,
             bufferTitle: bufferTitle,
-            clipboardTitle: "Capsule…（\(clipboardShortcut)）",
-            mailboxTitle: mailboxTitle
+            clipboardTitle: "Capsule…（\(clipboardShortcut)）"
         ))
     }
 
@@ -79,13 +77,6 @@ final class StatusMenu {
             keyEquivalent: "")
         clipboard.target = target
         menu.addItem(clipboard)
-
-        let mailbox = NSMenuItem(
-            title: state.mailboxTitle,
-            action: #selector(RIMESController.openMailboxFromInputMenu(_:)),
-            keyEquivalent: "")
-        mailbox.target = target
-        menu.addItem(mailbox)
 
         let codexSession = NSMenuItem(
             title: "Codex 会话…",
@@ -175,16 +166,6 @@ final class StatusMenu {
         return "Buffer…（\(shortcut)）"
     }
 
-    private var mailboxTitle: String {
-        let unreadCount = MailboxStore.shared.snapshot.unreadCount
-        let shortcut = RimeShortcutPreferences
-            .shortcut(for: .openMailbox)
-            .displayTitle
-        return unreadCount > 0
-            ? "Mailbox…（\(unreadCount) 条未读 · \(shortcut)）"
-            : "Mailbox…（\(shortcut)）"
-    }
-
     func openSettings() {
         SettingsWindowController.shared.show()
     }
@@ -195,11 +176,6 @@ final class StatusMenu {
 
     func toggleClipboardHistory() {
         ClipboardHistoryWindowController.shared.toggleVisibility()
-    }
-
-    func openMailbox() {
-        let threadID = MailboxStore.shared.selectLatestUnreadOrMostRecent()
-        MailboxWindowController.shared.show(selecting: threadID)
     }
 
     /// Opens the split session pane on the frontmost Finder-visible working

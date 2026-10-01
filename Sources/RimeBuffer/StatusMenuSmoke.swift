@@ -23,9 +23,6 @@ private final class StatusMenuActionSpy: NSObject {
     @objc func toggleClipboardHistoryFromInputMenu(_ sender: Any?) {
         record("toggleClipboardHistoryFromInputMenu:", sender: sender)
     }
-    @objc func openMailboxFromInputMenu(_ sender: Any?) {
-        record("openMailboxFromInputMenu:", sender: sender)
-    }
     @objc func openCodexSessionFromInputMenu(_ sender: Any?) {
         record("openCodexSessionFromInputMenu:", sender: sender)
     }
@@ -66,19 +63,18 @@ func runStatusMenuSmokeTest() -> Bool {
     let state = InputSourceMenuState(
         healthy: true,
         bufferTitle: "Buffer…（⌃⌥B）",
-        clipboardTitle: "Capsule…（⌃⌥P）",
-        mailboxTitle: "Mailbox…（3 条未读 · ⌃⌥M）"
+        clipboardTitle: "Capsule…（⌃⌥P）"
     )
     let sourceMenu = StatusMenu.makeInputSourceMenu(target: spy, state: state)
     let sourceTitles = [
         "设置…", state.bufferTitle, state.clipboardTitle,
-        state.mailboxTitle, "Codex 会话…", "", "维护…"
+        "Codex 会话…", "", "维护…"
     ]
     guard sourceMenu.items.map(\.title) == sourceTitles,
           sourceMenu.items.filter(\.isSeparatorItem).count == 1,
-          sourceMenu.items[5].isSeparatorItem,
+          sourceMenu.items[4].isSeparatorItem,
           sourceMenu.items.allSatisfy({ $0.submenu == nil }) else {
-        return fail("main menu must contain five modules and one maintenance entry, without remote submenus")
+        return fail("main menu must contain four modules and one maintenance entry, without remote submenus")
     }
     let removedTitles = ["常显于所有桌面与全屏空间", "把缓冲工作台移到当前屏幕"]
     guard sourceMenu.items.allSatisfy({ !removedTitles.contains($0.title) }) else {
@@ -88,8 +84,7 @@ func runStatusMenuSmokeTest() -> Bool {
     let unhealthyMenu = StatusMenu.makeInputSourceMenu(target: spy, state: InputSourceMenuState(
         healthy: false,
         bufferTitle: state.bufferTitle,
-        clipboardTitle: state.clipboardTitle,
-        mailboxTitle: state.mailboxTitle
+        clipboardTitle: state.clipboardTitle
     ))
     guard unhealthyMenu.items.count == sourceTitles.count + 2,
           unhealthyMenu.items[0].title == "⚠️ 输入引擎异常 — 已退化为英文直通",
@@ -103,14 +98,12 @@ func runStatusMenuSmokeTest() -> Bool {
     let refreshedState = InputSourceMenuState(
         healthy: true,
         bufferTitle: "Buffer…（⇧⌘B）",
-        clipboardTitle: "Capsule…（⇧⌘V）",
-        mailboxTitle: "Mailbox…（⇧⌘M）"
+        clipboardTitle: "Capsule…（⇧⌘V）"
     )
     let refreshedMenu = StatusMenu.makeInputSourceMenu(target: spy, state: refreshedState)
     guard refreshedMenu.items.count == sourceTitles.count,
-          refreshedMenu.items[1...3].map(\.title) == [
-        refreshedState.bufferTitle, refreshedState.clipboardTitle,
-        refreshedState.mailboxTitle
+          refreshedMenu.items[1...2].map(\.title) == [
+        refreshedState.bufferTitle, refreshedState.clipboardTitle
     ], sourceMenu.items.map(\.title) == sourceTitles else {
         return fail("fresh menu snapshots must preserve current shortcut and unread-count titles")
     }
@@ -161,20 +154,19 @@ func runStatusMenuSmokeTest() -> Bool {
 
     guard verifyDispatch(sourceMenu, selectors: [
         "openSettingsFromInputMenu:", "toggleBufferWindowFromInputMenu:",
-        "toggleClipboardHistoryFromInputMenu:", "openMailboxFromInputMenu:",
-        "openCodexSessionFromInputMenu:",
+        "toggleClipboardHistoryFromInputMenu:", "openCodexSessionFromInputMenu:",
         "openMaintenanceFromInputMenu:"
     ]), verifyDispatch(maintenanceMenu, selectors: [
         "checkUpdateFromInputMenu:", "openLogFromInputMenu:",
         "deployAndRestartFromInputMenu:", "reinstallFromInputMenu:",
         "restartFromInputMenu:"
-    ]), spy.invocations.count == 11 else { return false }
+    ]), spy.invocations.count == 10 else { return false }
     let completedCount = spy.invocations.count
     maintenanceMenu.cancelTracking()
     sourceMenu.cancelTracking()
     guard spy.invocations.count == completedCount else { return fail("cancellation replayed a prior command") }
 
-    print("status-menu-smoke: PASS compact main menu, health and dynamic titles, five maintenance commands, 11 isolated AppKit actions, inert construction/cancellation")
+    print("status-menu-smoke: PASS compact main menu, health and dynamic titles, five maintenance commands, 10 isolated AppKit actions, inert construction/cancellation")
     return true
 }
 

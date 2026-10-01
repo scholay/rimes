@@ -1058,6 +1058,9 @@ if CommandLine.arguments.contains("candidate-commit-smoke") {
     _ = NSApplication.shared
     exit(runCandidateCommitSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("candidate-bilingual-smoke") {
+    exit(runCandidateBilingualSmokeTest() ? 0 : 1)
+}
 if CommandLine.arguments.contains("activation-cache-smoke") {
     exit(runRimeActivationMetadataCacheSmokeTest() ? 0 : 1)
 }
@@ -1405,7 +1408,13 @@ if ChordExtensionStore.shared.isEnabled,
 // shared window must never bind to one specific controller.
 candidateWindow.onSelect = { owner, selection in
     InputFocusCoordinator.shared.controller(for: owner)?
-        .selectCandidate(selection, owner: owner)
+        .selectCandidateFromPanel(selection, owner: owner)
+}
+candidateWindow.onTranslationsChanged = { owner, generation, isFinal in
+    InputFocusCoordinator.shared.controller(for: owner)?
+        .candidateTranslationsDidUpdate(owner: owner,
+                                        generation: generation,
+                                        isFinal: isFinal)
 }
 // Buffer presentation is independent from the caret-owned candidate panel.
 var lastBufferControlsActive = BufferModel.shared.active
@@ -1443,16 +1452,6 @@ ActionPluginHost.shared.onChange = {
 }
 BufferWindowController.shared.showOnLaunchIfNeeded()
 ClipboardHistoryWindowController.shared.start()
-
-// Local gateway: accept MCP / HTTP pushes from local agents into the inbound
-// bus (loopback-only, token-gated). Off is a one-line setting.
-MailboxInteractionBridge.shared.aiReplyCoordinator =
-    AITextMailboxGenerationCoordinator.shared
-_ = InboundToast.shared
-InboundBus.shared.onChange = {
-    MailboxWindowController.refreshIfOpen()
-}
-LocalGateway.shared.startIfEnabled()
 
 // No standalone NSStatusItem: ETInput's commands are supplied by
 // RIMESController.menu() under the system input-source icon.
@@ -3226,6 +3225,65 @@ func runStatsSmokeTest() -> Bool {
 /// text the host already showed. A commit must remove the panel before the
 /// host insertion, and only that keystroke's own follow-up composition may
 /// skip the entrance.
+func runCandidateBilingualSmokeTest() -> Bool {
+    let routeToToggle = CandidateKeyboardRoutingRules.togglesOutputLanguage(
+        keycode: RimeKey.up, isExpanded: false, translationAvailable: true
+    )
+    let expandedRetainsNavigation = !CandidateKeyboardRoutingRules.togglesOutputLanguage(
+        keycode: RimeKey.up, isExpanded: true, translationAvailable: true
+    )
+    let unsupportedRetainsPaging = !CandidateKeyboardRoutingRules.togglesOutputLanguage(
+        keycode: RimeKey.up, isExpanded: false, translationAvailable: false
+    )
+    let englishNumberKeysAreLocal = CandidateKeyboardRoutingRules.ownsLocally(
+        keycode: 0x33, isExpanded: false, translationOutputActive: true
+    )
+    let chineseNumberKeysRemainEngineOwned = !CandidateKeyboardRoutingRules.ownsLocally(
+        keycode: 0x33, isExpanded: false, translationOutputActive: false
+    )
+    let wordCommitAddsSpace = CandidateTranslationCommitFormatter.format(
+        translation: "time", sourceCandidate: "时间"
+    ) == "time "
+    let sentenceCommitPreservesPunctuation = CandidateTranslationCommitFormatter.format(
+        translation: "That's all.", sourceCandidate: "结束。"
+    ) == "That's all. "
+    let validPendingCommit = CandidateTranslationCommitRules.mayCommit(
+        ownerMatches: true, focusIsCurrent: true, candidateMatches: true,
+        generationMatches: true, translationModeActive: true,
+        candidatesInteractable: true
+    )
+    let staleOwnerRejected = !CandidateTranslationCommitRules.mayCommit(
+        ownerMatches: false, focusIsCurrent: false, candidateMatches: true,
+        generationMatches: true, translationModeActive: true,
+        candidatesInteractable: true
+    )
+    let changedCandidateRejected = !CandidateTranslationCommitRules.mayCommit(
+        ownerMatches: true, focusIsCurrent: true, candidateMatches: false,
+        generationMatches: true, translationModeActive: true,
+        candidatesInteractable: true
+    )
+    let staleGenerationRejected = !CandidateTranslationCommitRules.mayCommit(
+        ownerMatches: true, focusIsCurrent: true, candidateMatches: true,
+        generationMatches: false, translationModeActive: true,
+        candidatesInteractable: true
+    )
+    let hiddenPanelRejected = !CandidateTranslationCommitRules.mayCommit(
+        ownerMatches: true, focusIsCurrent: true, candidateMatches: true,
+        generationMatches: true, translationModeActive: true,
+        candidatesInteractable: false
+    )
+    guard routeToToggle, expandedRetainsNavigation, unsupportedRetainsPaging,
+          englishNumberKeysAreLocal, chineseNumberKeysRemainEngineOwned,
+          wordCommitAddsSpace, sentenceCommitPreservesPunctuation,
+          validPendingCommit, staleOwnerRejected, changedCandidateRejected,
+          staleGenerationRejected, hiddenPanelRejected else {
+        print("candidate-bilingual-smoke: FAILED")
+        return false
+    }
+    print("candidate-bilingual-smoke: OK (toggle, English digits, spacing, matrix navigation, stale translation guards)")
+    return true
+}
+
 func runCandidateCommitSmokeTest() -> Bool {
     print("== \(ProductIdentity.displayName) candidate commit smoke test ==")
     guard let snapshot = CandidateWindow.commitRetirementSnapshotForSmoke() else {
@@ -7164,10 +7222,13 @@ func runBufferWindowSmokeTest() -> Bool {
     guard externalUtilityActions == [
             .toggleWorkbench,
             .toggleClipboardHistory,
-            .openMailbox,
           ],
           !externalUtilityActions.contains(.openSettings),
-          rimeUtilityActions == Set(GlobalHotKeyAction.allCases) else {
+          rimeUtilityActions == Set(
+            GlobalHotKeyAction.allCases.filter { $0 != .openMailbox }
+          ),
+          GlobalHotKeyRouting.definitions(defaults: hotKeyDefaults)
+            .allSatisfy({ $0.action != .openMailbox }) else {
         print("FAILED: global utility registration scope")
         return false
     }
@@ -7394,7 +7455,7 @@ func runBufferWindowSmokeTest() -> Bool {
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed),
             identifier: mailboxHotKeyID
-          ) == .openMailbox,
+          ) == .ignore,
           GlobalHotKeyRouting.route(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyReleased),
@@ -7405,7 +7466,7 @@ func runBufferWindowSmokeTest() -> Bool {
             eventKind: UInt32(kEventHotKeyPressed),
             identifier: unrelatedHotKeyID
           ) == .ignore else {
-        print("FAILED: global workbench/Capsule/Mailbox/settings hotkey routing")
+        print("FAILED: global workbench/Capsule/settings hotkey routing")
         return false
     }
 
@@ -11396,6 +11457,10 @@ func runCandidateMetricsSmokeTest() -> Bool {
           "candidate glyph should be bounded by button height")
     check(CandidateWindowMetric.labelFontSize.containerMetric?.metric == .candidateFontSize,
           "index label should be bounded by candidate glyph")
+    check(CandidateWindowMetric.selectedCandidateCornerRadius.range == 0...16,
+          "selected-candidate corner radius should be adjustable from square to rounded")
+    check(CandidateWindowMetric.selectedCandidateCornerRadius.defaultValue == 15,
+          "selected-candidate corner radius should use the shipped appearance default")
     for m in [CandidateWindowMetric.baseWidth, .compactStripHeight, .preeditHeight] {
         check(m.containerMetric == nil, "\(m.rawValue) should be a free container metric")
     }
@@ -11403,7 +11468,8 @@ func runCandidateMetricsSmokeTest() -> Bool {
     func vals(strip: Double, button: Double, glyph: Double, label: Double) -> [CandidateWindowMetric: Double] {
         [.baseWidth: 460, .preeditHeight: 20,
          .compactStripHeight: strip, .compactCandidateHeight: button,
-         .candidateFontSize: glyph, .labelFontSize: label]
+         .candidateFontSize: glyph, .labelFontSize: label,
+         .selectedCandidateCornerRadius: 8]
     }
 
     // Button ceiling tracks the strip (strip − 2), capped at its own max 44.
@@ -11432,6 +11498,8 @@ func runCandidateMetricsSmokeTest() -> Bool {
           "the full resolver should clamp candidate glyphs to their button")
     check(resolvedChain[.labelFontSize] == 16,
           "the full resolver should then clamp labels to the candidate glyph")
+    check(resolvedChain[.selectedCandidateCornerRadius] == 8,
+          "corner radius should be resolved independently of text sizing")
     check(CandidateLayout.candidateSeparatorRunWidth == 14,
           "preview and live candidate separators should occupy the same width")
 
@@ -11523,7 +11591,8 @@ func runCandidateMetricsSmokeTest() -> Bool {
     // The layout absorbs an over-tall button — the very reason the control forbids it.
     let over = CandidateWindowMetrics(baseWidth: 460, compactStripHeight: 32,
                                       compactCandidateHeight: 44, preeditHeight: 20,
-                                      candidateFontSize: 16, labelFontSize: 10)
+                                      candidateFontSize: 16, labelFontSize: 10,
+                                      selectedCandidateCornerRadius: 12)
     check(CandidateLayout.candidateButtonHeight(over) <= 30,
           "an over-tall button must be clamped by the strip during layout")
 
@@ -11565,13 +11634,14 @@ func runThemeSmokeTest() -> Bool {
           "quiet's visible theme name should be 静谧")
     check(RimeAppearanceMode.rasta.title == "拉斯塔",
           "rasta's visible theme name should be 拉斯塔")
-    check(RimeAppearanceMode.allCases == [.night, .day, .quiet, .rasta],
-          "theme order should keep Classic colorways before Rasta")
+    check(RimeAppearanceMode.allCases == [.night, .day, .quiet, .rasta, .liquidGlass],
+          "theme order should keep Classic colorways, Rasta, then Apple Liquid Glass")
     check(RimeAppearanceMode.night.family == .classic
             && RimeAppearanceMode.day.family == .classic
             && RimeAppearanceMode.quiet.family == .classic
-            && RimeAppearanceMode.rasta.family == .rasta,
-          "three legacy palettes must be Classic colorways while Rasta is independent")
+            && RimeAppearanceMode.rasta.family == .rasta
+            && RimeAppearanceMode.liquidGlass.family == .apple,
+          "legacy palettes, Rasta, and Apple Liquid Glass must remain separate families")
 
     let day = RimeThemePalettes.day
     let night = RimeThemePalettes.night

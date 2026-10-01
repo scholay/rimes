@@ -1,5 +1,7 @@
 import Cocoa
 import CRimeBridge
+import SwiftUI
+import Translation
 import UniformTypeIdentifiers
 
 /// Native counterparts of the React SettingsSurface tokens. The Settings
@@ -8,15 +10,21 @@ import UniformTypeIdentifiers
 /// quieter macOS-like chrome defined by the design system.
 private enum SettingsVisualStyle {
     static var background: NSColor {
-        RimeUI.color(RimeUI.appearance == .day ? 0xECECEC : 0x323232)
+        if RimeUI.usesLiquidGlassTransparency { return .clear }
+        if RimeUI.isLiquidGlass { return .windowBackgroundColor }
+        return RimeUI.color(RimeUI.appearance == .day ? 0xECECEC : 0x323232)
     }
 
     static var separator: NSColor {
-        RimeUI.color(RimeUI.appearance == .day ? 0xD5D5D5 : 0x464646)
+        if RimeUI.isLiquidGlass { return .separatorColor.withAlphaComponent(0.55) }
+        return RimeUI.color(RimeUI.appearance == .day ? 0xD5D5D5 : 0x464646)
     }
 
     static var selectedNavigation: NSColor {
-        SettingsVisualStyle.background.blended(
+        if RimeUI.isLiquidGlass {
+            return NSColor.controlAccentColor.withAlphaComponent(0.82)
+        }
+        return SettingsVisualStyle.background.blended(
             withFraction: 0.16,
             of: RimeUI.accentGreen
         ) ?? RimeUI.accentGreen.withAlphaComponent(0.16)
@@ -99,12 +107,13 @@ private final class SettingsPageDocumentView: NSView {
 }
 
 private final class SettingsBackgroundView: NSView {
-    override var isOpaque: Bool { true }
+    override var isOpaque: Bool { !RimeUI.usesLiquidGlassTransparency }
 
     override func draw(_ dirtyRect: NSRect) {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         NSBezierPath(rect: bounds).addClip()
+        guard !RimeUI.usesLiquidGlassTransparency else { return }
         SettingsVisualStyle.background.setFill()
         bounds.fill()
     }
@@ -112,6 +121,94 @@ private final class SettingsBackgroundView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         needsDisplay = true
+    }
+}
+
+/// The settings sidebar is a navigation surface, so it uses Liquid Glass.
+/// Its scroll view stays transparent above the material. Reduce Transparency
+/// switches to an opaque system background for accessibility.
+private final class SettingsSidebarMaterialView: NSView {
+    private let fallbackMaterial = NSVisualEffectView()
+    private let contentHost = NSView()
+    private let scrollView: NSScrollView
+    private var nativeGlass: NSView?
+
+    init(scrollView: NSScrollView) {
+        self.scrollView = scrollView
+        super.init(frame: .zero)
+
+        fallbackMaterial.material = .sidebar
+        fallbackMaterial.blendingMode = .withinWindow
+        fallbackMaterial.state = .followsWindowActiveState
+        fallbackMaterial.isHidden = true
+        fallbackMaterial.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(fallbackMaterial)
+
+        contentHost.translatesAutoresizingMaskIntoConstraints = false
+        contentHost.addSubview(scrollView)
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            scrollView.leadingAnchor.constraint(equalTo: contentHost.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: contentHost.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: contentHost.bottomAnchor),
+        ])
+        addSubview(contentHost)
+
+        NSLayoutConstraint.activate([
+            fallbackMaterial.leadingAnchor.constraint(equalTo: leadingAnchor),
+            fallbackMaterial.trailingAnchor.constraint(equalTo: trailingAnchor),
+            fallbackMaterial.topAnchor.constraint(equalTo: topAnchor),
+            fallbackMaterial.bottomAnchor.constraint(equalTo: bottomAnchor),
+            contentHost.leadingAnchor.constraint(equalTo: leadingAnchor),
+            contentHost.trailingAnchor.constraint(equalTo: trailingAnchor),
+            contentHost.topAnchor.constraint(equalTo: topAnchor),
+            contentHost.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView(frame: .zero)
+            glass.style = .regular
+            glass.cornerRadius = 0
+            let glassContent = NSView(frame: .zero)
+            glassContent.autoresizingMask = [.width, .height]
+            glass.contentView = glassContent
+            glass.translatesAutoresizingMaskIntoConstraints = false
+            // Keep the glass as a background sibling. Assigning contentView
+            // reparents the settings scroll view into NSGlassEffectView, which
+            // makes AppKit derive the page's size from the glass host and can
+            // collapse the whole settings window to its title-bar height.
+            addSubview(glass, positioned: .below, relativeTo: contentHost)
+            NSLayoutConstraint.activate([
+                glass.leadingAnchor.constraint(equalTo: leadingAnchor),
+                glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+                glass.topAnchor.constraint(equalTo: topAnchor),
+                glass.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
+            nativeGlass = glass
+        }
+        applyTheme()
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    var hasLiquidGlassMaterial: Bool {
+        if #available(macOS 26.0, *) {
+            return nativeGlass is NSGlassEffectView
+        }
+        return fallbackMaterial.material == .sidebar
+    }
+
+    var isLiquidGlassMaterialVisible: Bool {
+        !RimeUI.usesLiquidGlassTransparency || (nativeGlass?.isHidden == false)
+    }
+
+    func applyTheme() {
+        let usesGlass = RimeUI.usesLiquidGlassTransparency
+        scrollView.drawsBackground = !usesGlass
+        scrollView.backgroundColor = SettingsVisualStyle.background
+        fallbackMaterial.isHidden = !usesGlass || nativeGlass != nil
+        nativeGlass?.isHidden = !usesGlass
     }
 }
 
@@ -129,16 +226,80 @@ private final class SettingsChromeView: NSView {
 
     private let fill: Fill
     private let border: Border
+    private let usesLiquidGlassSurface: Bool
+    let contentHost = NSView()
+    private let fallbackMaterial = NSVisualEffectView()
+    private var nativeGlass: NSView?
 
-    init(fill: Fill, border: Border) {
+    init(fill: Fill, border: Border, usesLiquidGlassSurface: Bool = false) {
         self.fill = fill
         self.border = border
+        self.usesLiquidGlassSurface = usesLiquidGlassSurface
         super.init(frame: .zero)
+
+        fallbackMaterial.material = .titlebar
+        fallbackMaterial.blendingMode = .withinWindow
+        fallbackMaterial.state = .followsWindowActiveState
+        fallbackMaterial.isHidden = true
+        fallbackMaterial.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(fallbackMaterial)
+
+        contentHost.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(contentHost)
+
+        NSLayoutConstraint.activate([
+            fallbackMaterial.leadingAnchor.constraint(equalTo: leadingAnchor),
+            fallbackMaterial.trailingAnchor.constraint(equalTo: trailingAnchor),
+            fallbackMaterial.topAnchor.constraint(equalTo: topAnchor),
+            fallbackMaterial.bottomAnchor.constraint(equalTo: bottomAnchor),
+            contentHost.leadingAnchor.constraint(equalTo: leadingAnchor),
+            contentHost.trailingAnchor.constraint(equalTo: trailingAnchor),
+            contentHost.topAnchor.constraint(equalTo: topAnchor),
+            contentHost.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        if usesLiquidGlassSurface {
+            if #available(macOS 26.0, *) {
+                let glass = NSGlassEffectView(frame: .zero)
+                glass.style = .regular
+                glass.cornerRadius = 0
+                let glassContent = NSView(frame: .zero)
+                glassContent.autoresizingMask = [.width, .height]
+                glass.contentView = glassContent
+                glass.translatesAutoresizingMaskIntoConstraints = false
+                // Glass is only the visual backing; contentHost remains in
+                // this view's normal layout tree so the page can size itself.
+                addSubview(glass, positioned: .below, relativeTo: contentHost)
+                NSLayoutConstraint.activate([
+                    glass.leadingAnchor.constraint(equalTo: leadingAnchor),
+                    glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+                    glass.topAnchor.constraint(equalTo: topAnchor),
+                    glass.bottomAnchor.constraint(equalTo: bottomAnchor),
+                ])
+                nativeGlass = glass
+            }
+        }
+        updateMaterialVisibility()
     }
 
     required init?(coder: NSCoder) { nil }
 
-    override var isOpaque: Bool { true }
+    var isLiquidGlassSurface: Bool {
+        usesLiquidGlassSurface
+            && (nativeGlass is NSGlassEffectView || fallbackMaterial.material == .titlebar)
+    }
+
+    var isLiquidGlassMaterialVisible: Bool {
+        guard usesLiquidGlassSurface, RimeUI.usesLiquidGlassTransparency else {
+            return true
+        }
+        if let nativeGlass { return !nativeGlass.isHidden }
+        return !fallbackMaterial.isHidden
+    }
+
+    override var isOpaque: Bool {
+        !(usesLiquidGlassSurface && RimeUI.usesLiquidGlassTransparency)
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         // `dirtyRect` is not guaranteed to be clipped to this arranged
@@ -150,9 +311,12 @@ private final class SettingsChromeView: NSView {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         NSBezierPath(rect: bounds).addClip()
-        let fillColor = fill == .settings ? SettingsVisualStyle.background : RimeUI.surface2
-        fillColor.setFill()
-        bounds.fill()
+        let isGlassSurface = usesLiquidGlassSurface && RimeUI.usesLiquidGlassTransparency
+        if !isGlassSurface {
+            let fillColor = fill == .settings ? SettingsVisualStyle.background : RimeUI.surface2
+            fillColor.setFill()
+            bounds.fill()
+        }
         guard border != .none else { return }
         (fill == .settings ? SettingsVisualStyle.separator : RimeUI.border).setStroke()
         let y = border == .top
@@ -167,7 +331,14 @@ private final class SettingsChromeView: NSView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        updateMaterialVisibility()
         needsDisplay = true
+    }
+
+    private func updateMaterialVisibility() {
+        let shouldShowMaterial = usesLiquidGlassSurface && RimeUI.usesLiquidGlassTransparency
+        fallbackMaterial.isHidden = !shouldShowMaterial || nativeGlass != nil
+        nativeGlass?.isHidden = !shouldShowMaterial
     }
 }
 
@@ -193,12 +364,9 @@ private final class SettingsSeparatorView: NSView {
 
 private final class SettingsIconTileView: NSView {
     private let imageView = NSImageView()
-    private let explicitPalette: RimeThemePalette?
 
     init(symbolName: String,
-         accessibilityDescription: String,
-         palette: RimeThemePalette? = nil) {
-        explicitPalette = palette
+         accessibilityDescription: String) {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 8
@@ -230,11 +398,10 @@ private final class SettingsIconTileView: NSView {
     }
 
     private func updateThemeColors() {
-        let palette = explicitPalette ?? RimeUI.palette
-        layer?.backgroundColor = RimeUI.color(palette.surfaceTertiary).cgColor
-        layer?.borderColor = RimeUI.color(palette.border).cgColor
+        layer?.backgroundColor = RimeUI.surface3.cgColor
+        layer?.borderColor = RimeUI.border.cgColor
         layer?.borderWidth = SettingsVisualStyle.hairline(backingScale: window?.backingScaleFactor)
-        imageView.contentTintColor = RimeUI.color(palette.textSecondary)
+        imageView.contentTintColor = RimeUI.textSecondary
     }
 }
 
@@ -410,84 +577,11 @@ private final class SettingsChoiceCardView: NSView {
     }
 }
 
-private final class SettingsThemeCardButton: SettingsPointingButton {
-    let mode: RimeAppearanceMode
-
-    init(mode: RimeAppearanceMode, selected: Bool, target: AnyObject, action: Selector) {
-        self.mode = mode
-        super.init(frame: .zero)
-        self.target = target
-        self.action = action
-        title = ""
-        isBordered = false
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        translatesAutoresizingMaskIntoConstraints = false
-        widthAnchor.constraint(equalToConstant: 650).isActive = true
-        heightAnchor.constraint(equalToConstant: 64).isActive = true
-
-        let palette = mode.palette
-        let detailText = mode.detailText
-        let icon = SettingsIconTileView(
-            symbolName: "paintpalette",
-            accessibilityDescription: mode.title,
-            palette: palette
-        )
-        let name = NSTextField(labelWithString: mode.title)
-        name.font = .systemFont(ofSize: 11, weight: .semibold)
-        name.textColor = RimeUI.color(palette.textPrimary)
-        name.toolTip = detailText
-        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        let status = NSTextField(labelWithString: selected ? "正在使用" : "可用")
-        status.font = .systemFont(ofSize: 9, weight: .semibold)
-        status.textColor = selected
-            ? RimeUI.color(palette.accentText)
-            : RimeUI.color(palette.textMuted)
-        status.setContentHuggingPriority(.required, for: .horizontal)
-
-        let row = NSStackView(views: [icon, name, NSView(), status])
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 11
-        row.edgeInsets = NSEdgeInsets(top: 9, left: 11, bottom: 9, right: 11)
-        row.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(row)
-        NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(equalTo: leadingAnchor),
-            row.trailingAnchor.constraint(equalTo: trailingAnchor),
-            row.topAnchor.constraint(equalTo: topAnchor),
-            row.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
-        layer?.backgroundColor = RimeUI.color(palette.surfaceSecondary).cgColor
-        layer?.borderColor = RimeUI.color(
-            selected ? palette.selectedCandidateBackground : palette.border
-        ).cgColor
-        layer?.borderWidth = 1
-        setAccessibilityLabel("\(mode.title)主题，\(selected ? "正在使用" : "可用")")
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        // `point` belongs to the vertical stack's coordinate system, not this
-        // button's local bounds. Matching it against `frame` keeps the bottom
-        // theme card from claiming clicks intended for either sibling.
-        guard !isHidden, alphaValue > 0, frame.contains(point) else { return nil }
-        return self
-    }
-}
-
 private final class SettingsCardActionSmokeProbe: NSObject {
     private(set) var choiceTags: [Int] = []
-    private(set) var appearanceModes: [RimeAppearanceMode] = []
 
     @objc func choose(_ sender: RimeFixedAccentChoiceButton) {
         choiceTags.append(sender.tag)
-    }
-
-    @objc func chooseAppearance(_ sender: SettingsThemeCardButton) {
-        appearanceModes.append(sender.mode)
     }
 }
 
@@ -567,11 +661,17 @@ private enum GatewayClientConfiguration: Int, CaseIterable {
 final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     static let shared = SettingsWindowController()
     private static let previewContentSize = NSSize(width: 980, height: 680)
+    private static let minimumWindowSize = NSSize(width: 860, height: 600)
 
     private var window: NSWindow?
     private let sidebarScrollView = NSScrollView()
+    private lazy var sidebarMaterialView = SettingsSidebarMaterialView(
+        scrollView: sidebarScrollView
+    )
     private let sidebarDocumentView = SettingsPageDocumentView()
     private let sidebar = NSStackView()
+    private let glassBackdrop = NSVisualEffectView()
+    private var nativeGlassBackdrop: NSView?
     private let contentHost = NSView()
     private var routeCatalog = try! SettingsRouteCatalog()
     private lazy var navigation = SettingsNavigationState(catalog: routeCatalog)
@@ -587,6 +687,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private var appearanceObserver: NSObjectProtocol?
     private var permissionRefreshObserver: NSObjectProtocol?
     private var capsuleSyncSettingsObserver: NSObjectProtocol?
+    private var displayOptionsObserver: NSObjectProtocol?
     private var mailboxSettingsObservation: MailboxStoreObservation?
     private weak var mailboxSettingsStatusBadge: NSTextField?
     private weak var mailboxSettingsSummaryLabel: NSTextField?
@@ -597,9 +698,10 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private weak var capsuleSyncSettingsChooseButton: NSButton?
     private weak var capsuleSyncSettingsDisableButton: NSButton?
 
+    private var candidateTranslationSetupModel: AnyObject?
+
     private var encodingRadios: [InputEncoding: RimeFixedAccentChoiceButton] = [:]
     private var chordSchemaStatusRow: NSView?
-    private let appearancePopUp = RimeFixedAccentPopUpButton()
     private let alignToInputBoxCheck = RimeFixedAccentSwitch(frame: .zero)
     private let alignToInputBoxStatusLabel = NSTextField(wrappingLabelWithString: "")
     private let clipboardHistoryCheck = RimeFixedAccentSwitch(frame: .zero)
@@ -727,6 +829,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         RimeUI.accentTextColor
     }
 
+    private var settingsAppearance: NSAppearance? { RimeUI.appKitAppearance }
+
     @discardableResult
     func show() -> Bool {
         let isStandaloneShowCommand = SettingsWindowPresentationRules
@@ -745,26 +849,45 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             NSApp.finishLaunching()
         }
         if window == nil { build() }
-        if window?.isVisible == true {
-            if let window {
-                StandaloneWindowFocusCoordinator.shared.windowWillPresent(window)
-            }
+        guard let window else { return false }
+        repairCollapsedWindowIfNeeded(window)
+        if window.isVisible {
+            StandaloneWindowFocusCoordinator.shared.windowWillPresent(window)
             NSApp.activate(ignoringOtherApps: true)
-            window?.makeKeyAndOrderFront(nil)
+            window.makeKeyAndOrderFront(nil)
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.contentView?.display()
             return true
         }
         rebuildRouteCatalog()
         reload()
         showCurrentRoute()
-        if let window {
-            StandaloneWindowFocusCoordinator.shared.windowWillPresent(window)
-        }
+        StandaloneWindowFocusCoordinator.shared.windowWillPresent(window)
         NSApp.activate(ignoringOtherApps: true)
-        window?.center()
-        window?.makeKeyAndOrderFront(nil)
-        window?.contentView?.layoutSubtreeIfNeeded()
-        window?.contentView?.display()
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.contentView?.display()
         return true
+    }
+
+    /// A settings window can retain a transient, title-bar-only frame after
+    /// AppKit updates its backing hierarchy (notably while native glass views
+    /// are being installed). Repair that state before the visible-window fast
+    /// path returns, so reopening Settings always restores a usable page.
+    private func repairCollapsedWindowIfNeeded(_ window: NSWindow) {
+        window.minSize = Self.minimumWindowSize
+        let contentSize = window.contentView?.bounds.size ?? .zero
+        let hasUsableHeight = window.frame.height >= Self.minimumWindowSize.height
+            && contentSize.height >= 500
+        let hasUsableWidth = window.frame.width >= Self.minimumWindowSize.width
+            && contentSize.width >= 800
+        guard !hasUsableHeight || !hasUsableWidth else { return }
+
+        window.setContentSize(Self.previewContentSize)
+        window.center()
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.contentView?.display()
     }
 
     func showBufferSettings() {
@@ -927,44 +1050,14 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
         selectPreviewTarget(
             routeID: SettingsCoreRoute.appearance.id,
-            subpageID: SettingsSubpageID(rawValue: "theme")
+            subpageID: SettingsSubpageID(rawValue: "size")
         )
         window.contentView?.layoutSubtreeIfNeeded()
-        let themeCards = descendants(of: SettingsThemeCardButton.self, in: contentHost)
-        pointerPolicyOK = pointerPolicyOK
-            && descendants(of: NSButton.self, in: contentHost).allSatisfy {
-                $0 is SettingsPointingButton
-            }
-            && descendants(of: NSSegmentedControl.self, in: contentHost)
-                .allSatisfy { $0 is SettingsPointingSegmentedControl }
-        var themeOK = exactCenterHits(
-            themeCards,
-            expectedCount: RimeAppearanceMode.allCases.count,
-            label: "theme card"
-        )
-
+        let appearanceSubpages = CoreSettingsSubpages
+            .descriptors(for: .appearance)
+            .map(\.id.rawValue)
+        let themeOK = appearanceSubpages == ["size"]
         let actionProbe = SettingsCardActionSmokeProbe()
-        for mode in RimeAppearanceMode.allCases {
-            guard let button = themeCards.first(where: { $0.mode == mode }) else {
-                print("settings card hit-test smoke: missing theme action \(mode.rawValue)")
-                themeOK = false
-                continue
-            }
-            let previousTarget = button.target
-            let previousAction = button.action
-            button.target = actionProbe
-            button.action = #selector(SettingsCardActionSmokeProbe.chooseAppearance(_:))
-            button.performClick(nil)
-            button.target = previousTarget
-            button.action = previousAction
-            guard actionProbe.appearanceModes.last == mode else {
-                print("settings card hit-test smoke: wrong theme action for \(mode.rawValue)")
-                themeOK = false
-                continue
-            }
-        }
-        themeOK = themeOK
-            && actionProbe.appearanceModes == RimeAppearanceMode.allCases
 
         selectPreviewTarget(
             routeID: SettingsCoreRoute.inputMethod.id,
@@ -1139,6 +1232,45 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             && pointerPolicyOK
     }
 
+    /// Walk every visible route in the real AppKit hierarchy and ensure its
+    /// sidebar, root backdrop, page bands, and page body are backed by the
+    /// active Liquid Glass material. This checks runtime view composition
+    /// without relying on off-screen bitmap rendering, which cannot capture
+    /// NSGlassEffectView's system-composited material.
+    func validateLiquidGlassPagesForSmoke() -> Bool {
+        guard window != nil else { build(); return validateLiquidGlassPagesForSmoke() }
+        guard let window, let content = window.contentView else {
+            print("settings glass smoke: missing live settings window")
+            return false
+        }
+
+        let previousRouteID = navigation.currentRouteID
+        let previousSubpageID = navigation.selectedSubpage()
+        defer {
+            _ = navigation.selectRoute(previousRouteID, catalog: routeCatalog)
+            if let previousSubpageID {
+                _ = navigation.selectSubpage(previousSubpageID, catalog: routeCatalog)
+            }
+            showCurrentRoute()
+        }
+
+        window.setContentSize(Self.previewContentSize)
+        var allRoutesUseGlass = true
+        for target in previewTargets() {
+            selectPreviewTarget(routeID: target.0, subpageID: target.1)
+            content.layoutSubtreeIfNeeded()
+            guard validatePreviewStructure(in: content) else {
+                print("settings glass smoke: Liquid Glass validation failed for \(target.0.rawValue)/\(target.1.rawValue)")
+                allRoutesUseGlass = false
+                continue
+            }
+        }
+        if allRoutesUseGlass {
+            print("settings glass smoke: all \(previewTargets().count) settings pages use visible Liquid Glass")
+        }
+        return allRoutesUseGlass
+    }
+
     @discardableResult
     private func renderCurrentView(to path: String) -> Bool {
         guard let window, let content = window.contentView else { return false }
@@ -1175,6 +1307,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             ("settings.subpage-bar", 46),
             ("settings.page-heading", 84),
             ("settings.page-scroll", nil),
+            ("settings.page-material", nil),
             ("settings.status-bar", 30),
         ]
         for (identifier, expectedHeight) in required {
@@ -1190,6 +1323,15 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 print("settings render \(identifier) height drifted to \(view.frame.height)")
                 return false
             }
+            if ["settings.subpage-bar", "settings.page-heading",
+                "settings.page-material", "settings.status-bar"].contains(identifier) {
+                guard let surface = view as? SettingsChromeView,
+                      surface.isLiquidGlassSurface,
+                      surface.isLiquidGlassMaterialVisible else {
+                    print("settings render surface is not Liquid Glass: \(identifier)")
+                    return false
+                }
+            }
         }
         guard let sidebarView = descendant(
             identifiedBy: NSUserInterfaceItemIdentifier("settings.sidebar"),
@@ -1197,6 +1339,27 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         ), abs(sidebarView.frame.width - 160) < 0.5 else {
             print("settings render sidebar content width drifted")
             return false
+        }
+        guard let sidebarMaterial = sidebarView.superview?.superview
+                as? SettingsSidebarMaterialView,
+              sidebarMaterial.hasLiquidGlassMaterial,
+              sidebarMaterial.isLiquidGlassMaterialVisible else {
+            print("settings render sidebar is missing Liquid Glass material")
+            return false
+        }
+        if RimeUI.usesLiquidGlassTransparency {
+            if #available(macOS 26.0, *) {
+                guard nativeGlassBackdrop is NSGlassEffectView,
+                      nativeGlassBackdrop?.isHidden == false else {
+                    print("settings render root Liquid Glass material is not visible")
+                    return false
+                }
+            } else {
+                guard !glassBackdrop.isHidden else {
+                    print("settings render fallback glass material is not visible")
+                    return false
+                }
+            }
         }
         if selectedCoreRoute == .mailbox || selectedCoreRoute == .capsule {
             let routeName = selectedCoreRoute == .mailbox ? "mailbox" : "capsule"
@@ -1396,13 +1559,14 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
     private func build() {
         let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 980, height: 680),
-                           styleMask: [.titled, .closable, .resizable],
+                           styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
                            backing: .buffered, defer: false)
         win.title = "\(ProductIdentity.displayName) 设置"
         win.isReleasedWhenClosed = false
         win.delegate = self
-        win.minSize = NSSize(width: 860, height: 600)
-        win.appearance = RimeUI.appKitAppearance
+        win.minSize = Self.minimumWindowSize
+        win.appearance = settingsAppearance
+        win.isOpaque = !RimeUI.usesLiquidGlassTransparency
         win.backgroundColor = SettingsVisualStyle.background
         win.titlebarAppearsTransparent = true
 
@@ -1416,7 +1580,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         sidebar.identifier = NSUserInterfaceItemIdentifier("settings.sidebar-content")
         rebuildSidebar()
 
-        sidebarScrollView.drawsBackground = true
+        sidebarScrollView.drawsBackground = !RimeUI.usesLiquidGlassTransparency
         sidebarScrollView.backgroundColor = SettingsVisualStyle.background
         sidebarScrollView.borderType = .noBorder
         sidebarScrollView.hasVerticalScroller = true
@@ -1437,16 +1601,45 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
         let background = SettingsBackgroundView()
         win.contentView = background
-        background.addSubview(sidebarScrollView)
+        glassBackdrop.material = .underWindowBackground
+        glassBackdrop.blendingMode = .behindWindow
+        glassBackdrop.state = .active
+        glassBackdrop.isHidden = true
+        glassBackdrop.translatesAutoresizingMaskIntoConstraints = false
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView(frame: .zero)
+            glass.style = .regular
+            glass.cornerRadius = 0
+            let glassContent = NSView(frame: .zero)
+            glassContent.autoresizingMask = [.width, .height]
+            glass.contentView = glassContent
+            glass.translatesAutoresizingMaskIntoConstraints = false
+            background.addSubview(glass)
+            nativeGlassBackdrop = glass
+        }
+        glassBackdrop.isHidden = !RimeUI.usesLiquidGlassTransparency
+            || nativeGlassBackdrop != nil
+        background.addSubview(glassBackdrop)
+        // This view is constrained to both the top and bottom of the window.
+        // Its default autoresizing mask adds a zero-height constraint, which
+        // collapses the entire settings window when AppKit first displays it.
+        sidebarMaterialView.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(sidebarMaterialView)
         background.addSubview(divider)
         background.addSubview(contentHost)
         contentHost.setContentHuggingPriority(.defaultLow, for: .horizontal)
         contentHost.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let unobscuredTop = (win.contentLayoutGuide as? NSLayoutGuide)?.topAnchor
+            ?? background.topAnchor
         NSLayoutConstraint.activate([
-            sidebarScrollView.leadingAnchor.constraint(equalTo: background.leadingAnchor),
-            sidebarScrollView.topAnchor.constraint(equalTo: background.topAnchor),
-            sidebarScrollView.bottomAnchor.constraint(equalTo: background.bottomAnchor),
-            sidebarScrollView.widthAnchor.constraint(equalToConstant: 160),
+            glassBackdrop.leadingAnchor.constraint(equalTo: background.leadingAnchor),
+            glassBackdrop.trailingAnchor.constraint(equalTo: background.trailingAnchor),
+            glassBackdrop.topAnchor.constraint(equalTo: background.topAnchor),
+            glassBackdrop.bottomAnchor.constraint(equalTo: background.bottomAnchor),
+            sidebarMaterialView.leadingAnchor.constraint(equalTo: background.leadingAnchor),
+            sidebarMaterialView.topAnchor.constraint(equalTo: unobscuredTop),
+            sidebarMaterialView.bottomAnchor.constraint(equalTo: background.bottomAnchor),
+            sidebarMaterialView.widthAnchor.constraint(equalToConstant: 160),
             sidebarDocumentView.leadingAnchor.constraint(equalTo: sidebarScrollView.contentView.leadingAnchor),
             sidebarDocumentView.trailingAnchor.constraint(equalTo: sidebarScrollView.contentView.trailingAnchor),
             sidebarDocumentView.topAnchor.constraint(equalTo: sidebarScrollView.contentView.topAnchor),
@@ -1456,15 +1649,24 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             sidebar.trailingAnchor.constraint(equalTo: sidebarDocumentView.trailingAnchor),
             sidebar.topAnchor.constraint(equalTo: sidebarDocumentView.topAnchor),
             sidebar.bottomAnchor.constraint(equalTo: sidebarDocumentView.bottomAnchor),
-            divider.leadingAnchor.constraint(equalTo: sidebarScrollView.trailingAnchor),
-            divider.topAnchor.constraint(equalTo: background.topAnchor),
+            divider.leadingAnchor.constraint(equalTo: sidebarMaterialView.trailingAnchor),
+            divider.topAnchor.constraint(equalTo: unobscuredTop),
             divider.bottomAnchor.constraint(equalTo: background.bottomAnchor),
             divider.widthAnchor.constraint(equalToConstant: 1),
             contentHost.leadingAnchor.constraint(equalTo: divider.trailingAnchor),
             contentHost.trailingAnchor.constraint(equalTo: background.trailingAnchor),
-            contentHost.topAnchor.constraint(equalTo: background.topAnchor),
+            contentHost.topAnchor.constraint(equalTo: unobscuredTop),
             contentHost.bottomAnchor.constraint(equalTo: background.bottomAnchor),
         ])
+        if let nativeGlassBackdrop {
+            NSLayoutConstraint.activate([
+                nativeGlassBackdrop.leadingAnchor.constraint(equalTo: background.leadingAnchor),
+                nativeGlassBackdrop.trailingAnchor.constraint(equalTo: background.trailingAnchor),
+                nativeGlassBackdrop.topAnchor.constraint(equalTo: background.topAnchor),
+                nativeGlassBackdrop.bottomAnchor.constraint(equalTo: background.bottomAnchor),
+            ])
+            nativeGlassBackdrop.isHidden = !RimeUI.usesLiquidGlassTransparency
+        }
 
         permissionRefreshObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
@@ -1579,6 +1781,17 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             }
         }
 
+        displayOptionsObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: NSWorkspace.shared,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            DispatchQueue.main.async { [weak self] in
+                self?.applySelectedAppearance(rebuildVisibleRoute: true)
+            }
+        }
+
         capsuleSyncSettingsObserver = NotificationCenter.default.addObserver(
             forName: .capsuleCloudSyncStatusDidChange,
             object: CapsuleCloudSyncController.shared,
@@ -1604,10 +1817,21 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
     private func applySelectedAppearance(rebuildVisibleRoute: Bool) {
         guard let window else { return }
-        window.appearance = RimeUI.appKitAppearance
+        window.appearance = settingsAppearance
+        window.isOpaque = !RimeUI.usesLiquidGlassTransparency
         window.backgroundColor = SettingsVisualStyle.background
+        glassBackdrop.isHidden = !RimeUI.usesLiquidGlassTransparency
+            || nativeGlassBackdrop != nil
+        nativeGlassBackdrop?.isHidden = !RimeUI.usesLiquidGlassTransparency
+        sidebarMaterialView.applyTheme()
         sidebarScrollView.backgroundColor = SettingsVisualStyle.background
+        sidebarScrollView.drawsBackground = !RimeUI.usesLiquidGlassTransparency
         pluginConfigurationSheet?.appearance = RimeUI.appKitAppearance
+        if let pluginConfigurationSheet {
+            PluginConfigurationSheetFactory.applyAppearance(
+                to: pluginConfigurationSheet
+            )
+        }
         settingsStatusLabel.textColor = RimeUI.textMuted
         settingsRouteLabel.textColor = RimeUI.textMuted
         installStatus.textColor = RimeUI.textMuted
@@ -1800,13 +2024,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         aiConfigurationStatus.translatesAutoresizingMaskIntoConstraints = false
         aiConfigurationStatus.widthAnchor.constraint(equalToConstant: 626).isActive = true
 
-        appearancePopUp.removeAllItems()
-        for mode in RimeAppearanceMode.allCases {
-            appearancePopUp.addItem(withTitle: mode.selectionTitle)
-            appearancePopUp.lastItem?.representedObject = mode.rawValue
-        }
-        appearancePopUp.target = self
-        appearancePopUp.action = #selector(appearanceChosen)
         configureCandidateMetricControls()
 
         statsDatePicker.datePickerElements = [.yearMonthDay]
@@ -1936,9 +2153,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
 
     private func rebuildRouteCatalog() {
         do {
-            let next = try SettingsRouteCatalog(
-                pluginContributions: PluginRegistry.shared.enabledSettingsContributions()
-            )
+            let next = try SettingsRouteCatalog()
             routeCatalog = next
             navigation.reconcile(with: next)
             if window != nil { rebuildSidebar() }
@@ -2058,7 +2273,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                               subpageID: String?) -> NSView {
         switch route {
         case .inputMethod: return inputPage(subpageID: subpageID ?? "encoding")
-        case .appearance: return appearancePage(subpageID: subpageID ?? "theme")
+        case .appearance: return appearancePage(subpageID: subpageID ?? "size")
         case .buffer: return bufferPage(subpageID: subpageID ?? "buffer")
         case .mailbox: return mailboxPage()
         case .capsule: return capsulePage()
@@ -2088,16 +2303,20 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             tabs.selectedSegment = index
         }
 
-        let tabsBar = SettingsChromeView(fill: .settings, border: .bottom)
+        let tabsBar = SettingsChromeView(
+            fill: .settings,
+            border: .bottom,
+            usesLiquidGlassSurface: true
+        )
         tabsBar.identifier = NSUserInterfaceItemIdentifier("settings.subpage-bar")
         tabsBar.translatesAutoresizingMaskIntoConstraints = false
         tabs.translatesAutoresizingMaskIntoConstraints = false
-        tabsBar.addSubview(tabs)
+        tabsBar.contentHost.addSubview(tabs)
         NSLayoutConstraint.activate([
             tabsBar.heightAnchor.constraint(equalToConstant: 46),
-            tabs.leadingAnchor.constraint(equalTo: tabsBar.leadingAnchor, constant: 24),
-            tabs.centerYAnchor.constraint(equalTo: tabsBar.centerYAnchor),
-            tabs.trailingAnchor.constraint(lessThanOrEqualTo: tabsBar.trailingAnchor,
+            tabs.leadingAnchor.constraint(equalTo: tabsBar.contentHost.leadingAnchor, constant: 24),
+            tabs.centerYAnchor.constraint(equalTo: tabsBar.contentHost.centerYAnchor),
+            tabs.trailingAnchor.constraint(lessThanOrEqualTo: tabsBar.contentHost.trailingAnchor,
                                            constant: -24),
         ])
 
@@ -2116,15 +2335,19 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         headingRow.alignment = .centerY
         headingRow.spacing = 16
         headingRow.translatesAutoresizingMaskIntoConstraints = false
-        let headingBar = SettingsChromeView(fill: .settings, border: .none)
+        let headingBar = SettingsChromeView(
+            fill: .settings,
+            border: .none,
+            usesLiquidGlassSurface: true
+        )
         headingBar.identifier = NSUserInterfaceItemIdentifier("settings.page-heading")
         headingBar.translatesAutoresizingMaskIntoConstraints = false
-        headingBar.addSubview(headingRow)
+        headingBar.contentHost.addSubview(headingRow)
         NSLayoutConstraint.activate([
             headingBar.heightAnchor.constraint(equalToConstant: 84),
-            headingRow.leadingAnchor.constraint(equalTo: headingBar.leadingAnchor, constant: 24),
-            headingRow.trailingAnchor.constraint(equalTo: headingBar.trailingAnchor, constant: -24),
-            headingRow.centerYAnchor.constraint(equalTo: headingBar.centerYAnchor),
+            headingRow.leadingAnchor.constraint(equalTo: headingBar.contentHost.leadingAnchor, constant: 24),
+            headingRow.trailingAnchor.constraint(equalTo: headingBar.contentHost.trailingAnchor, constant: -24),
+            headingRow.centerYAnchor.constraint(equalTo: headingBar.contentHost.centerYAnchor),
             headingTitle.widthAnchor.constraint(lessThanOrEqualToConstant: 650),
         ])
 
@@ -2157,6 +2380,21 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         }
 
         bodyHost.identifier = NSUserInterfaceItemIdentifier("settings.page-scroll")
+        bodyHost.translatesAutoresizingMaskIntoConstraints = false
+        let bodySurface = SettingsChromeView(
+            fill: .settings,
+            border: .none,
+            usesLiquidGlassSurface: true
+        )
+        bodySurface.identifier = NSUserInterfaceItemIdentifier("settings.page-material")
+        bodySurface.translatesAutoresizingMaskIntoConstraints = false
+        bodySurface.contentHost.addSubview(bodyHost)
+        NSLayoutConstraint.activate([
+            bodyHost.leadingAnchor.constraint(equalTo: bodySurface.contentHost.leadingAnchor),
+            bodyHost.trailingAnchor.constraint(equalTo: bodySurface.contentHost.trailingAnchor),
+            bodyHost.topAnchor.constraint(equalTo: bodySurface.contentHost.topAnchor),
+            bodyHost.bottomAnchor.constraint(equalTo: bodySurface.contentHost.bottomAnchor),
+        ])
 
         settingsStatusLabel.removeFromSuperview()
         settingsRouteLabel.removeFromSuperview()
@@ -2168,26 +2406,33 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         statusRow.alignment = .centerY
         statusRow.spacing = 7
         statusRow.translatesAutoresizingMaskIntoConstraints = false
-        let statusBar = SettingsChromeView(fill: .surface, border: .top)
+        let statusBar = SettingsChromeView(
+            fill: .surface,
+            border: .top,
+            usesLiquidGlassSurface: true
+        )
         statusBar.identifier = NSUserInterfaceItemIdentifier("settings.status-bar")
         statusBar.translatesAutoresizingMaskIntoConstraints = false
-        statusBar.addSubview(statusRow)
+        statusBar.contentHost.addSubview(statusRow)
         NSLayoutConstraint.activate([
             statusBar.heightAnchor.constraint(equalToConstant: 30),
-            statusRow.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor, constant: 12),
-            statusRow.trailingAnchor.constraint(equalTo: statusBar.trailingAnchor, constant: -12),
-            statusRow.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
+            statusRow.leadingAnchor.constraint(equalTo: statusBar.contentHost.leadingAnchor, constant: 12),
+            statusRow.trailingAnchor.constraint(equalTo: statusBar.contentHost.trailingAnchor, constant: -12),
+            statusRow.centerYAnchor.constraint(equalTo: statusBar.contentHost.centerYAnchor),
         ])
 
-        let root = NSStackView(views: [tabsBar, headingBar, bodyHost, statusBar])
+        let root = NSStackView(views: [tabsBar, headingBar, bodySurface, statusBar])
         root.orientation = .vertical
         root.alignment = .leading
+        root.distribution = .fill
         root.spacing = 0
         root.identifier = NSUserInterfaceItemIdentifier("settings.page-shell")
         tabsBar.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         headingBar.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
-        bodyHost.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        bodySurface.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         statusBar.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        bodySurface.setContentHuggingPriority(.defaultLow, for: .vertical)
+        bodySurface.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         bodyHost.setContentHuggingPriority(.defaultLow, for: .vertical)
         bodyHost.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         return root
@@ -2237,6 +2482,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         openDirBtn.toolTip = "配置目录是 ~/Library/\(RimesPaths.directoryName)。未显示的方案文件仅作为词典或反查依赖保留，不会出现在 F4。"
 
         switch subpageID {
+        case "candidate-translation":
+            return candidateTranslationSettingsPage()
         case "dictionaries":
             return contentColumn([
                 sectionLabel("已安装词库"),
@@ -2263,6 +2510,110 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 recovery,
                 inputEncodingSelectionView(),
             ])
+        }
+    }
+
+    private func candidateTranslationSettingsPage() -> NSView {
+        let languagePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        languagePopup.target = self
+        languagePopup.action = #selector(candidateTranslationLanguageChanged(_:))
+        languagePopup.setAccessibilityLabel("候选译文语言")
+        languagePopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        languagePopup.translatesAutoresizingMaskIntoConstraints = false
+
+        let selectedLanguage = NSTextField(labelWithString: "译文语言")
+        selectedLanguage.font = .systemFont(ofSize: 11, weight: .semibold)
+        selectedLanguage.textColor = RimeUI.textPrimary
+        let row = NSStackView(views: [selectedLanguage, languagePopup, flexSpacer()])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 14
+
+        let explanation = NSTextField(wrappingLabelWithString:
+            "控制输入候选框上方显示的译文语言。首次使用某个语言时，Apple 可能要求下载语言模型；请在此设置页完成授权。")
+        explanation.font = .systemFont(ofSize: 10)
+        explanation.textColor = RimeUI.isLiquidGlass
+            ? NSColor.white.withAlphaComponent(0.78)
+            : RimeUI.textMuted
+        explanation.maximumNumberOfLines = 3
+
+        let currentLanguage = CandidateTranslationLanguagePreferences.targetLanguageID
+        let initialOptions = CandidateTranslationLanguagePreferences.fallbackOptions()
+        refreshCandidateTranslationLanguagePopup(
+            languagePopup,
+            options: initialOptions,
+            selectedIdentifier: currentLanguage
+        )
+
+        var setupHost: NSView?
+        if #available(macOS 15.0, *) {
+            let setupModel = CandidateTranslationLanguageSetupModel(
+                targetLanguageID: currentLanguage
+            )
+            candidateTranslationSetupModel = setupModel
+            setupModel.refreshCurrentLanguage()
+            let host = NSHostingView(
+                rootView: CandidateTranslationLanguageSetupView(model: setupModel)
+            )
+            host.translatesAutoresizingMaskIntoConstraints = false
+            host.heightAnchor.constraint(equalToConstant: 30).isActive = true
+            setupHost = host
+
+            Task { @MainActor [weak self, weak languagePopup] in
+                let options = await CandidateTranslationLanguagePreferences.supportedOptions()
+                guard let self, let languagePopup else { return }
+                self.refreshCandidateTranslationLanguagePopup(
+                    languagePopup,
+                    options: options,
+                    selectedIdentifier: CandidateTranslationLanguagePreferences.targetLanguageID
+                )
+            }
+        } else {
+            languagePopup.isEnabled = false
+            explanation.stringValue += "（候选翻译需要 macOS 15 或更高版本）"
+        }
+
+        var pageViews: [NSView] = [
+            sectionLabel("候选译文"),
+            row,
+            explanation,
+        ]
+        if let setupHost { pageViews.append(setupHost) }
+        return contentColumn(pageViews)
+    }
+
+    private func refreshCandidateTranslationLanguagePopup(
+        _ popup: NSPopUpButton,
+        options: [TranslationLanguageOption],
+        selectedIdentifier: String
+    ) {
+        var available = options
+        if !available.contains(where: { $0.identifier == selectedIdentifier }) {
+            available.append(TranslationLanguageOption(
+                identifier: selectedIdentifier,
+                title: CandidateTranslationLanguagePreferences.languageName(
+                    for: selectedIdentifier
+                ) + "（当前不可用）"
+            ))
+        }
+        popup.removeAllItems()
+        for option in available {
+            popup.addItem(withTitle: option.title)
+            popup.lastItem?.representedObject = option.identifier
+        }
+        if let index = popup.itemArray.firstIndex(where: {
+            ($0.representedObject as? String) == selectedIdentifier
+        }) {
+            popup.selectItem(at: index)
+        }
+    }
+
+    @objc private func candidateTranslationLanguageChanged(_ sender: NSPopUpButton) {
+        guard let identifier = sender.selectedItem?.representedObject as? String else { return }
+        guard CandidateTranslationLanguagePreferences.setTargetLanguageID(identifier) else { return }
+        if #available(macOS 15.0, *) {
+            (candidateTranslationSetupModel as? CandidateTranslationLanguageSetupModel)?
+                .targetLanguageDidChange(identifier)
         }
     }
 
@@ -2536,15 +2887,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         capsuleSyncSettingsDisableButton?.isEnabled = status.isConfigured && !status.isBusy
     }
 
-    private func themePreviewCard(_ mode: RimeAppearanceMode) -> NSView {
-        SettingsThemeCardButton(
-            mode: mode,
-            selected: RimeUI.appearance == mode,
-            target: self,
-            action: #selector(appearanceCardChosen(_:))
-        )
-    }
-
     private func dictionaryCard(title: String, detail: String) -> NSView {
         inputModeCard(title: title, detail: detail, active: true)
     }
@@ -2702,18 +3044,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     private func appearancePage(subpageID: String) -> NSView {
-        if subpageID == "theme" {
-            appearancePopUp.removeFromSuperview()
-            return contentColumn([
-                sectionLabel("经典 · 配色"),
-                themePreviewCard(.night),
-                themePreviewCard(.day),
-                themePreviewCard(.quiet),
-                spacer(16),
-                sectionLabel("拉斯塔 · 主题"),
-                themePreviewCard(.rasta),
-            ])
-        }
+        _ = subpageID
         let preview = CandidatePreviewView(maxWidth: 620)
         candidatePreview = preview
         refreshBufferWidthControls()
@@ -4389,7 +4720,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         shortcutFeedbackLabel.stringValue = ""
         shortcutFeedbackLabel.isHidden = true
 
-        let rows = RimeShortcutAction.allCases.map { action -> NSView in
+        let rows = RimeShortcutAction.settingsVisibleCases.map { action -> NSView in
             let titleLabel = NSTextField(labelWithString: action.title)
             titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
             titleLabel.textColor = RimeUI.textPrimary
@@ -4489,11 +4820,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         refreshGatewayClientConfigurationPreview()
         refreshAIConnectorSelection()
         _ = refreshAIProviderProfileConfiguration()
-        if let idx = (0..<appearancePopUp.numberOfItems).first(where: {
-            appearancePopUp.item(at: $0)?.representedObject as? String == RimeUI.appearance.rawValue
-        }) {
-            appearancePopUp.selectItem(at: idx)
-        }
         refreshCandidateMetricControls()
         refreshBufferWidthControls()
         refreshStats()
@@ -4743,7 +5069,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             compactCandidateHeight: get(.compactCandidateHeight),
             preeditHeight: get(.preeditHeight),
             candidateFontSize: get(.candidateFontSize),
-            labelFontSize: get(.labelFontSize)
+            englishCandidateFontSize: get(.englishCandidateFontSize),
+            englishCandidateCornerRadius: get(.englishCandidateCornerRadius),
+            labelFontSize: get(.labelFontSize),
+            selectedCandidateCornerRadius: get(.selectedCandidateCornerRadius),
+            candidateStripCornerRadius: get(.candidateStripCornerRadius),
+            preeditCornerRadius: get(.preeditCornerRadius)
         )
     }
 
@@ -5708,20 +6039,6 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         BufferWindowController.shared.show()
         BufferWindowController.shared.moveToCurrentScreen()
         reload()
-    }
-
-    @objc private func appearanceChosen() {
-        guard let raw = appearancePopUp.selectedItem?.representedObject as? String,
-              let mode = RimeAppearanceMode(rawValue: raw) else { return }
-        RimeUI.appearance = mode
-        IMELog.write("appearance -> \(mode.rawValue)")
-    }
-
-    @objc private func appearanceCardChosen(_ sender: SettingsThemeCardButton) {
-        RimeUI.appearance = sender.mode
-        settingsStatusLabel.stringValue = "已切换到\(sender.mode.title)主题"
-        settingsStatusLabel.textColor = RimeUI.textMuted
-        IMELog.write("appearance -> \(sender.mode.rawValue)")
     }
 
     @objc private func candidateMetricSliderChanged(_ sender: NSSlider) {

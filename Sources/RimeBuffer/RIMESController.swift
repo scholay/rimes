@@ -27,16 +27,24 @@ enum CandidateKeyboardRoutingRules {
     /// expanded matrix maps those digits onto its visible columns. Zero has no
     /// candidate-window action and must continue to librime like any other
     /// schema binding or printable input.
-    static func ownsLocally(keycode: Int32, isExpanded: Bool) -> Bool {
+    static func ownsLocally(keycode: Int32,
+                            isExpanded: Bool,
+                            translationOutputActive: Bool = false) -> Bool {
         switch keycode {
         case RimeKey.left, RimeKey.right, RimeKey.down, RimeKey.up,
              RimeKey.return, RimeKey.space:
             return true
         case 0x31...0x39:
-            return isExpanded
+            return isExpanded || translationOutputActive
         default:
             return false
         }
+    }
+
+    static func togglesOutputLanguage(keycode: Int32,
+                                      isExpanded: Bool,
+                                      translationAvailable: Bool) -> Bool {
+        keycode == RimeKey.up && !isExpanded && translationAvailable
     }
 }
 
@@ -1195,6 +1203,9 @@ final class RIMESController: IMKInputController {
     private var forcedBufferCaptureDepth = 0
     private var candidateOptionSelecting = false
     private var candidateOptionClient: IMKTextInput?
+    private var pendingCandidateTranslationCommit: (owner: FocusToken,
+                                                selection: CandidateSelection,
+                                                generation: UInt64)?
     private let chordClientRoutingGate = ChordClientRoutingGate()
     private let composition = CompositionSession()
     private let chord = ChordController()
@@ -6486,7 +6497,8 @@ final class RIMESController: IMKInputController {
         }
         let isLocalCandidateAction = CandidateKeyboardRoutingRules.ownsLocally(
             keycode: keycode,
-            isExpanded: candidateWindow.isExpanded
+            isExpanded: candidateWindow.isExpanded,
+            translationOutputActive: candidateWindow.selectedOutputLanguage == .translated
         )
         if isLocalCandidateAction {
             if chord.hasPending {
@@ -6495,6 +6507,9 @@ final class RIMESController: IMKInputController {
                 guard candidateWindow.hasInteractableCandidates else { return false }
             }
             mutualPairingState.reset()
+        }
+        if keycode != RimeKey.space {
+            pendingCandidateTranslationCommit = nil
         }
         switch keycode {
         case RimeKey.left:
@@ -6516,24 +6531,152 @@ final class RIMESController: IMKInputController {
             if candidateWindow.isExpanded {
                 return candidateWindow.moveExpandedSelection(rowDelta: -1)
             }
-            return pageCandidates(delta: -1, client: client)
+            guard CandidateKeyboardRoutingRules.togglesOutputLanguage(
+                keycode: keycode,
+                isExpanded: candidateWindow.isExpanded,
+                translationAvailable: candidateWindow.supportsCandidateTranslation
+            ) else {
+                return pageCandidates(delta: -1, client: client)
+            }
+            candidateWindow.toggleOutputLanguage()
+            return true
         case RimeKey.return:
             return commitRawInput(client: client)
         case RimeKey.space:
             guard let selection = candidateWindow.selectedCandidateSelection else { return false }
+            if candidateWindow.selectedOutputLanguage == .translated {
+                guard let owner = focusToken else { return false }
+                if let translated = candidateWindow.selectedCandidateTranslationText {
+                    return commitTranslatedCandidate(translated,
+                                                  selection: selection,
+                                                  owner: owner,
+                                                  client: client)
+                }
+                pendingCandidateTranslationCommit = (
+                    owner,
+                    selection,
+                    candidateWindow.currentTranslationGeneration
+                )
+                return true
+            }
             selectCandidate(selection)
             return true
+        case 0x31...0x39 where candidateWindow.selectedOutputLanguage == .translated:
+            let visibleIndex = Int(keycode - 0x31)
+            guard let selection = candidateWindow.selectVisibleCandidateForKeyboard(visibleIndex) else {
+                IMELog.write("translated candidate digit \(visibleIndex + 1) ignored; candidate is hidden")
+                return true
+            }
+            guard let owner = focusToken else { return false }
+            return selectCandidateFromPanel(selection, owner: owner)
         case 0x31...0x39 where candidateWindow.isExpanded:
             let visibleIndex = Int(keycode - 0x31)
             guard let selection = candidateWindow.expandedSelection(atVisibleIndex: visibleIndex) else {
                 IMELog.write("candidate matrix digit \(visibleIndex + 1) ignored; candidate is hidden")
                 return true
             }
+            guard let owner = focusToken else { return false }
+            if candidateWindow.selectedOutputLanguage == .translated {
+                _ = candidateWindow.selectVisibleCandidateForKeyboard(visibleIndex)
+                return selectCandidateFromPanel(selection, owner: owner)
+            }
             selectCandidate(selection)
             return true
         default:
             return false
         }
+    }
+
+    func candidateTranslationsDidUpdate(owner: FocusToken,
+                                        generation: UInt64,
+                                        isFinal: Bool) {
+        guard let pending = pendingCandidateTranslationCommit,
+              pending.owner == owner,
+              pending.generation == generation,
+              candidateWindow.currentTranslationGeneration == generation else { return }
+        guard CandidateTranslationCommitRules.mayCommit(
+                ownerMatches: pending.owner == owner,
+                focusIsCurrent: focusToken == owner,
+                candidateMatches: candidateWindow.selectedCandidateSelection == pending.selection,
+                generationMatches: true,
+                translationModeActive: candidateWindow.selectedOutputLanguage == .translated,
+                candidatesInteractable: candidateWindow.hasInteractableCandidates
+              ) else {
+            pendingCandidateTranslationCommit = nil
+            return
+        }
+        guard let lease = InputFocusCoordinator.shared.interactionTarget(expected: owner),
+              lease.controller === self,
+              let client = lease.client else { return }
+        guard let text = candidateWindow.selectedCandidateTranslationText else {
+            if isFinal { pendingCandidateTranslationCommit = nil }
+            return
+        }
+        pendingCandidateTranslationCommit = nil
+        _ = commitTranslatedCandidate(text,
+                                   selection: pending.selection,
+                                   owner: owner,
+                                   client: client)
+    }
+
+    private func commitTranslatedCandidate(_ text: String,
+                                        selection: CandidateSelection,
+                                        owner: FocusToken,
+                                        client: IMKTextInput) -> Bool {
+        guard !text.isEmpty,
+              focusToken == owner,
+              candidateWindow.hasInteractableCandidates,
+              candidateWindow.selectedCandidateSelection == selection,
+              candidateWindow.selectedOutputLanguage == .translated,
+              let lease = InputFocusCoordinator.shared.interactionTarget(expected: owner),
+              lease.controller === self,
+              lease.client === client else { return false }
+        pendingCandidateTranslationCommit = nil
+        let sourceCandidate = candidateWindow.selectedCandidateText ?? ""
+        let committedTranslation = CandidateTranslationCommitFormatter.format(
+            translation: text,
+            sourceCandidate: sourceCandidate,
+            targetLanguageID: CandidateTranslationLanguagePreferences.targetLanguageID
+        )
+        guard !committedTranslation.isEmpty else { return false }
+        rimeEngine.clearComposition(session: session)
+        composition.markCleared()
+        let inserted: Bool
+        if shouldCaptureClipboardSearchCommit(from: client) {
+            inserted = appendClipboardSearchCommit(committedTranslation, client: client)
+        } else if shouldCaptureCommit(from: client) {
+            if let focusToken,
+               deliverToStreamRawIfSelected(committedTranslation, owner: focusToken) {
+                clearCompositionPresentation(client: client)
+                publishAuthoredCommitTelemetry(characterCount: text.count,
+                                               source: .buffer,
+                                               client: client)
+                inserted = true
+            } else {
+                if let focusToken {
+                    BufferWindowController.shared.clearInlineComposition(owner: focusToken)
+                    candidateWindow.retireForCommit(owner: focusToken)
+                }
+                BufferModel.shared.append(committedTranslation)
+                clearCompositionPresentation(client: client)
+                publishAuthoredCommitTelemetry(characterCount: text.count,
+                                               source: .buffer,
+                                               client: client)
+                inserted = true
+            }
+        } else {
+            inserted = deliverDirectText(committedTranslation, client: client)
+            if inserted {
+                publishAuthoredCommitTelemetry(characterCount: text.count,
+                                               source: .direct,
+                                               client: client)
+            }
+        }
+        if inserted {
+            candidateWindow.recordCommittedOutputLanguage(.translated)
+            updateUI(client: client)
+        }
+        return inserted
     }
 
     @discardableResult
@@ -6581,10 +6724,37 @@ final class RIMESController: IMKInputController {
             IMELog.write("candidate select failed stage=select pageOffset=\(selection.pageOffset) index=\(selection.index)")
             return false
         }
-        if drainCommit(client) == nil {
+        let committedText = drainCommit(client)
+        if committedText == nil {
             IMELog.write("candidate selected without commit pageOffset=\(selection.pageOffset) index=\(selection.index)")
+        } else {
+            candidateWindow.recordCommittedOutputLanguage(.chinese)
         }
         updateUI(client: client)
+        return true
+    }
+
+    @discardableResult
+    func selectCandidateFromPanel(_ selection: CandidateSelection,
+                                  owner: FocusToken) -> Bool {
+        guard focusToken == owner,
+              let lease = InputFocusCoordinator.shared.interactionTarget(expected: owner),
+              lease.controller === self,
+              let client = lease.client else { return false }
+        guard candidateWindow.selectedOutputLanguage == .translated else {
+            return selectCandidate(selection, owner: owner)
+        }
+        if let translated = candidateWindow.selectedCandidateTranslationText {
+            return commitTranslatedCandidate(translated,
+                                          selection: selection,
+                                          owner: owner,
+                                          client: client)
+        }
+        pendingCandidateTranslationCommit = (
+            owner,
+            selection,
+            candidateWindow.currentTranslationGeneration
+        )
         return true
     }
 
@@ -7481,10 +7651,6 @@ final class RIMESController: IMKInputController {
     @objc func openMaintenanceFromInputMenu(_ sender: Any?) {
         StatusMenu.shared.showMaintenanceMenu(target: self)
     }
-    @objc func openMailboxFromInputMenu(_ sender: Any?) {
-        StatusMenu.shared.openMailbox()
-    }
-
     @objc func openCodexSessionFromInputMenu(_ sender: Any?) {
         StatusMenu.shared.openCodexSession()
     }

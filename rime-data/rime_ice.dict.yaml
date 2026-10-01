@@ -3,7 +3,7 @@
 
 ---
 name: rime_ice
-version: "2024-11-27"
+version: "2026-01-26"
 import_tables:
   - cn_dicts/8105     # 字表
   # - cn_dicts/41448  # 大字表（按需启用）（启用时和 8105 同时启用并放在 8105 下面）
