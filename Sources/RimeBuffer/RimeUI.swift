@@ -418,33 +418,32 @@ enum RimeUI {
 
     static var appearance: RimeAppearanceMode {
         get {
-            // Development renderers can exercise every theme without
-            // mutating the user's persisted preference domain.
+            // Native preview and visual-smoke commands may force a legacy
+            // colorway without changing the user's persisted Glass default.
             if let raw = ProcessInfo.processInfo.environment["RIMEBUFFER_APPEARANCE_MODE"],
                let mode = RimeAppearanceMode(rawValue: raw) {
                 return mode
             }
-            if let raw = UserDefaults.standard.string(forKey: appearanceKey),
-               let mode = RimeAppearanceMode(rawValue: raw) {
-                return mode
-            }
-            return .night
-        }
-        set {
-            // Compare against persisted state, not the development-only
-            // environment override. A preview process may force one palette,
-            // but must not make a real preference write appear successful
-            // when the stored value is different.
-            let stored = UserDefaults.standard.string(forKey: appearanceKey)
-                .flatMap(RimeAppearanceMode.init(rawValue:)) ?? .night
-            guard newValue != stored else { return }
-            UserDefaults.standard.set(newValue.rawValue, forKey: appearanceKey)
-            if newValue.family == .classic {
+            // Liquid Glass is the only supported product appearance. Rewrite
+            // the former user preference on first access so upgrades converge
+            // on the same default as a fresh install.
+            if UserDefaults.standard.string(forKey: appearanceKey)
+                != RimeAppearanceMode.liquidGlass.rawValue {
                 UserDefaults.standard.set(
-                    newValue.rawValue,
-                    forKey: lastClassicAppearanceKey
+                    RimeAppearanceMode.liquidGlass.rawValue,
+                    forKey: appearanceKey
                 )
             }
+            return .liquidGlass
+        }
+        set {
+            guard newValue == .liquidGlass,
+                  UserDefaults.standard.string(forKey: appearanceKey)
+                    != RimeAppearanceMode.liquidGlass.rawValue else { return }
+            UserDefaults.standard.set(
+                RimeAppearanceMode.liquidGlass.rawValue,
+                forKey: appearanceKey
+            )
             NotificationCenter.default.post(name: .rimeAppearanceDidChange, object: nil)
         }
     }
@@ -471,6 +470,9 @@ enum RimeUI {
     static var themeFamily: RimeThemeFamily { appearance.family }
     static var isRasta: Bool { themeFamily == .rasta }
     static var isLiquidGlass: Bool { appearance == .liquidGlass }
+    static var usesLiquidGlassTransparency: Bool {
+        isLiquidGlass && !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+    }
 
     static var palette: RimeThemePalette {
         appearance.palette
@@ -493,12 +495,30 @@ enum RimeUI {
     static var brandGreen: NSColor { color(palette.brandGreen) }
     static var accentForegroundColor: NSColor { isLiquidGlass ? .labelColor : color(palette.accentForeground) }
     static var accentTextColor: NSColor { isLiquidGlass ? .controlAccentColor : color(palette.accentText) }
-    static var bufferBg: NSColor { isLiquidGlass ? .windowBackgroundColor : color(palette.bufferBackground) }
-    static var bufferBg2: NSColor { isLiquidGlass ? .underPageBackgroundColor : color(palette.bufferBackgroundSecondary) }
+    static var bufferBg: NSColor {
+        guard isLiquidGlass else { return color(palette.bufferBackground) }
+        return usesLiquidGlassTransparency
+            ? NSColor.windowBackgroundColor.withAlphaComponent(0.08)
+            : .windowBackgroundColor
+    }
+    static var bufferBg2: NSColor {
+        guard isLiquidGlass else { return color(palette.bufferBackgroundSecondary) }
+        return usesLiquidGlassTransparency
+            ? NSColor.underPageBackgroundColor.withAlphaComponent(0.14)
+            : .underPageBackgroundColor
+    }
     static var bufferBorder: NSColor { isLiquidGlass ? .separatorColor : color(palette.bufferBorder) }
     static var bufferDivider: NSColor { isLiquidGlass ? .separatorColor : color(palette.bufferDivider) }
-    static var bufferSourceRail: NSColor { isLiquidGlass ? .controlBackgroundColor : color(palette.bufferSourceRail) }
-    static var bufferTargetRail: NSColor { isLiquidGlass ? .controlBackgroundColor : color(palette.bufferTargetRail) }
+    static var bufferSourceRail: NSColor {
+        usesLiquidGlassTransparency
+            ? NSColor.controlBackgroundColor.withAlphaComponent(0.20)
+            : color(palette.bufferSourceRail)
+    }
+    static var bufferTargetRail: NSColor {
+        usesLiquidGlassTransparency
+            ? NSColor.controlBackgroundColor.withAlphaComponent(0.20)
+            : color(palette.bufferTargetRail)
+    }
     static var bufferChip: NSColor { isLiquidGlass ? .quaternaryLabelColor : color(palette.bufferChip) }
     static var bufferChipSelected: NSColor { isLiquidGlass ? .controlAccentColor.withAlphaComponent(0.24) : color(palette.bufferChipSelected) }
     static var bufferPreedit: NSColor { isLiquidGlass ? .controlAccentColor.withAlphaComponent(0.20) : color(palette.bufferPreedit) }
@@ -506,10 +526,30 @@ enum RimeUI {
     static var clipboardSelectedBackground: NSColor {
         isLiquidGlass ? NSColor.controlAccentColor.withAlphaComponent(0.22) : color(palette.clipboardSelected)
     }
-    static var surface: NSColor { isLiquidGlass ? .windowBackgroundColor : color(palette.surface) }
-    static var surface2: NSColor { isLiquidGlass ? .controlBackgroundColor : color(palette.surfaceSecondary) }
-    static var surface3: NSColor { isLiquidGlass ? .underPageBackgroundColor : color(palette.surfaceTertiary) }
-    static var workbenchChrome: NSColor { color(palette.bufferBackground) }
+    static var surface: NSColor {
+        guard isLiquidGlass else { return color(palette.surface) }
+        return usesLiquidGlassTransparency
+            ? NSColor.windowBackgroundColor.withAlphaComponent(0.08)
+            : .windowBackgroundColor
+    }
+    static var surface2: NSColor {
+        guard isLiquidGlass else { return color(palette.surfaceSecondary) }
+        return usesLiquidGlassTransparency
+            ? NSColor.controlBackgroundColor.withAlphaComponent(0.20)
+            : .controlBackgroundColor
+    }
+    static var surface3: NSColor {
+        guard isLiquidGlass else { return color(palette.surfaceTertiary) }
+        return usesLiquidGlassTransparency
+            ? NSColor.underPageBackgroundColor.withAlphaComponent(0.16)
+            : .underPageBackgroundColor
+    }
+    static var workbenchChrome: NSColor {
+        guard isLiquidGlass else { return color(palette.bufferBackground) }
+        return usesLiquidGlassTransparency
+            ? NSColor.windowBackgroundColor.withAlphaComponent(0.10)
+            : .windowBackgroundColor
+    }
     static var border: NSColor { isLiquidGlass ? .separatorColor.withAlphaComponent(0.48) : color(palette.border) }
     static var borderStrong: NSColor { isLiquidGlass ? .separatorColor : color(palette.borderStrong) }
     static var textPrimary: NSColor { isLiquidGlass ? .labelColor : color(palette.textPrimary) }
@@ -526,13 +566,29 @@ enum RimeUI {
     static var candidateSelectionBackgroundColor: NSColor { .controlAccentColor }
     static var candidateSelectionTextColor: NSColor { .white }
     static var candidateBackgroundColor: NSColor { isLiquidGlass ? .clear : color(palette.candidateBackground) }
-    static var warningTextColor: NSColor { color(palette.warningText) }
-    static var warningSurfaceColor: NSColor { color(palette.warningSurface) }
-    static var warningBorderColor: NSColor { color(palette.warningBorder) }
-    static var dangerTextColor: NSColor { color(palette.dangerText) }
-    static var dangerFillColor: NSColor { color(palette.dangerFill) }
-    static var dangerForegroundColor: NSColor { color(palette.dangerForeground) }
-    static var dangerBorderColor: NSColor { color(palette.dangerBorder) }
+    static var warningTextColor: NSColor { isLiquidGlass ? .systemOrange : color(palette.warningText) }
+    static var warningSurfaceColor: NSColor {
+        isLiquidGlass
+            ? NSColor.systemOrange.withAlphaComponent(0.12)
+            : color(palette.warningSurface)
+    }
+    static var warningBorderColor: NSColor {
+        isLiquidGlass
+            ? NSColor.systemOrange.withAlphaComponent(0.45)
+            : color(palette.warningBorder)
+    }
+    static var dangerTextColor: NSColor { isLiquidGlass ? .systemRed : color(palette.dangerText) }
+    static var dangerFillColor: NSColor {
+        isLiquidGlass
+            ? NSColor.systemRed.withAlphaComponent(0.18)
+            : color(palette.dangerFill)
+    }
+    static var dangerForegroundColor: NSColor { isLiquidGlass ? .white : color(palette.dangerForeground) }
+    static var dangerBorderColor: NSColor {
+        isLiquidGlass
+            ? NSColor.systemRed.withAlphaComponent(0.55)
+            : color(palette.dangerBorder)
+    }
 
     static func color(_ hex: UInt32, alpha: CGFloat = 1) -> NSColor {
         NSColor(

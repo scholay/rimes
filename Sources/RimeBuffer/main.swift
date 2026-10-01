@@ -3236,40 +3236,40 @@ func runCandidateBilingualSmokeTest() -> Bool {
         keycode: RimeKey.up, isExpanded: false, translationAvailable: false
     )
     let englishNumberKeysAreLocal = CandidateKeyboardRoutingRules.ownsLocally(
-        keycode: 0x33, isExpanded: false, englishOutputActive: true
+        keycode: 0x33, isExpanded: false, translationOutputActive: true
     )
     let chineseNumberKeysRemainEngineOwned = !CandidateKeyboardRoutingRules.ownsLocally(
-        keycode: 0x33, isExpanded: false, englishOutputActive: false
+        keycode: 0x33, isExpanded: false, translationOutputActive: false
     )
-    let wordCommitAddsSpace = EnglishCandidateCommitFormatter.format(
+    let wordCommitAddsSpace = CandidateTranslationCommitFormatter.format(
         translation: "time", sourceCandidate: "时间"
     ) == "time "
-    let sentenceCommitPreservesPunctuation = EnglishCandidateCommitFormatter.format(
+    let sentenceCommitPreservesPunctuation = CandidateTranslationCommitFormatter.format(
         translation: "That's all.", sourceCandidate: "结束。"
     ) == "That's all. "
     let validPendingCommit = CandidateTranslationCommitRules.mayCommit(
         ownerMatches: true, focusIsCurrent: true, candidateMatches: true,
-        generationMatches: true, englishModeActive: true,
+        generationMatches: true, translationModeActive: true,
         candidatesInteractable: true
     )
     let staleOwnerRejected = !CandidateTranslationCommitRules.mayCommit(
         ownerMatches: false, focusIsCurrent: false, candidateMatches: true,
-        generationMatches: true, englishModeActive: true,
+        generationMatches: true, translationModeActive: true,
         candidatesInteractable: true
     )
     let changedCandidateRejected = !CandidateTranslationCommitRules.mayCommit(
         ownerMatches: true, focusIsCurrent: true, candidateMatches: false,
-        generationMatches: true, englishModeActive: true,
+        generationMatches: true, translationModeActive: true,
         candidatesInteractable: true
     )
     let staleGenerationRejected = !CandidateTranslationCommitRules.mayCommit(
         ownerMatches: true, focusIsCurrent: true, candidateMatches: true,
-        generationMatches: false, englishModeActive: true,
+        generationMatches: false, translationModeActive: true,
         candidatesInteractable: true
     )
     let hiddenPanelRejected = !CandidateTranslationCommitRules.mayCommit(
         ownerMatches: true, focusIsCurrent: true, candidateMatches: true,
-        generationMatches: true, englishModeActive: true,
+        generationMatches: true, translationModeActive: true,
         candidatesInteractable: false
     )
     guard routeToToggle, expandedRetainsNavigation, unsupportedRetainsPaging,

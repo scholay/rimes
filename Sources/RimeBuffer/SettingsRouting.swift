@@ -93,9 +93,10 @@ enum CoreSettingsSubpages {
             values = [
                 ("encoding", "输入方案"),
                 ("dictionaries", "词库"),
+                ("candidate-translation", "候选翻译"),
             ]
         case .appearance:
-            values = [("theme", "主题"), ("size", "尺寸")]
+            values = [("size", "尺寸")]
         case .buffer:
             values = [("buffer", "Buffer")]
         case .mailbox:
@@ -535,6 +536,7 @@ func runSettingsRoutingSmokeTest() -> Bool {
                 == [
                     SettingsSubpageID(rawValue: "encoding"),
                     SettingsSubpageID(rawValue: "dictionaries"),
+                    SettingsSubpageID(rawValue: "candidate-translation"),
                 ],
               catalog.route(
                 for: SettingsRouteID(rawValue: "extension.feiyao-learning")
@@ -546,7 +548,6 @@ func runSettingsRoutingSmokeTest() -> Bool {
                 ],
               catalog.route(for: SettingsCoreRoute.appearance.id)?.subpages.map(\.id)
                 == [
-                    SettingsSubpageID(rawValue: "theme"),
                     SettingsSubpageID(rawValue: "size"),
                 ],
               catalog.route(for: SettingsCoreRoute.buffer.id)?.subpages.map(\.id)

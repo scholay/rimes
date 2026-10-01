@@ -4,7 +4,7 @@ import CoreText
 
 enum CandidateOutputLanguage: String {
     case chinese
-    case english
+    case translated = "english"
 
     private static let defaultsKey = "candidateWindow.outputLanguage"
     static var defaultForNextComposition: CandidateOutputLanguage {
@@ -18,17 +18,36 @@ enum CandidateTranslationCommitRules {
                           focusIsCurrent: Bool,
                           candidateMatches: Bool,
                           generationMatches: Bool,
-                          englishModeActive: Bool,
+                          translationModeActive: Bool,
                           candidatesInteractable: Bool) -> Bool {
         ownerMatches && focusIsCurrent && candidateMatches
-            && generationMatches && englishModeActive && candidatesInteractable
+            && generationMatches && translationModeActive && candidatesInteractable
     }
 }
 
-enum EnglishCandidateCommitFormatter {
-    static func format(translation: String, sourceCandidate: String) -> String {
+enum CandidateTranslationCommitFormatter {
+    static func format(translation: String,
+                       sourceCandidate: String,
+                       targetLanguageID: String = "en") -> String {
         let text = translation.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return "" }
+        let languageCode = Locale.Language(identifier: targetLanguageID)
+            .languageCode?.identifier ?? targetLanguageID
+        if languageCode != "en" {
+            let noWordSpaces = ["zh", "ja", "th", "lo", "km", "my"]
+                .contains(languageCode)
+            let hasTerminal = [".", "。", "!", "！", "?", "？", "…"]
+                .contains(String(text.last ?? " "))
+            var result = text
+            if !hasTerminal, let sourceTerminal = sourceCandidate.last,
+               let translatedTerminal = localizedTerminal(
+                    sourceTerminal,
+                    targetLanguageCode: languageCode
+               ) {
+                result.append(translatedTerminal)
+            }
+            return result + (noWordSpaces ? "" : " ")
+        }
         let translatedEnd = text.last
         let translatedTerminal: String? = {
             switch translatedEnd {
@@ -54,6 +73,19 @@ enum EnglishCandidateCommitFormatter {
         }()
         if let sourceTerminal { return text + String(sourceTerminal) + " " }
         return text + " "
+    }
+
+    private static func localizedTerminal(
+        _ sourceTerminal: Character,
+        targetLanguageCode: String
+    ) -> Character? {
+        switch sourceTerminal {
+        case ".", "。": return ["zh", "ja"].contains(targetLanguageCode) ? "。" : "."
+        case "!", "！": return targetLanguageCode == "ja" ? "！" : "!"
+        case "?", "？": return targetLanguageCode == "ja" ? "？" : "?"
+        case "…": return "…"
+        default: return nil
+        }
     }
 }
 
@@ -189,8 +221,8 @@ enum CandidateWindowMetric: String, CaseIterable {
         case .compactCandidateHeight: return "候选按钮高度"
         case .preeditHeight: return "预编辑高度"
         case .candidateFontSize: return "候选字大小"
-        case .englishCandidateFontSize: return "英文预选框字号"
-        case .englishCandidateCornerRadius: return "英文预选框圆角"
+        case .englishCandidateFontSize: return "译文预选框字号"
+        case .englishCandidateCornerRadius: return "译文预选框圆角"
         case .labelFontSize: return "序号大小"
         case .selectedCandidateCornerRadius: return "选中框圆角"
         case .candidateStripCornerRadius: return "候选栏圆角"
@@ -700,7 +732,7 @@ final class CandidateWindow {
     private var commitContinuationGeneration: UInt64 = 0
     private var outputLanguage = CandidateOutputLanguage.defaultForNextComposition
     private var outputLanguagePinnedForComposition = false
-    private var englishTranslations: [String: String] = [:]
+    private var candidateTranslations: [String: String] = [:]
     private var translationController: AnyObject?
     private var translationGeneration: UInt64 = 0
 
@@ -767,13 +799,13 @@ final class CandidateWindow {
         guard !currentContext.candidates.isEmpty else { return nil }
         return currentContext.candidates[clamp(selectedIndex, count: currentContext.candidates.count)].text
     }
-    var selectedCandidateEnglishText: String? {
+    var selectedCandidateTranslationText: String? {
         guard let text = selectedCandidateText else { return nil }
-        return englishTranslations[text]
+        return candidateTranslations[text]
     }
-    var supportsEnglishCandidateTranslation: Bool {
+    var supportsCandidateTranslation: Bool {
         if #available(macOS 15.0, *) {
-            return translationController is CandidateEnglishTranslationController
+            return translationController is CandidateTranslationController
         }
         return false
     }
@@ -781,7 +813,7 @@ final class CandidateWindow {
     var currentTranslationGeneration: UInt64 { translationGeneration }
     @discardableResult
     func toggleOutputLanguage() -> CandidateOutputLanguage {
-        outputLanguage = outputLanguage == .chinese ? .english : .chinese
+        outputLanguage = outputLanguage == .chinese ? .translated : .chinese
         outputLanguagePinnedForComposition = true
         renderCandidates()
         candidateStack.alphaValue = 0.78
@@ -973,7 +1005,7 @@ final class CandidateWindow {
             insets: NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
         )
         if #available(macOS 15.0, *) {
-            let translator = CandidateEnglishTranslationController()
+            let translator = CandidateTranslationController()
             let host = translator.makeHostView()
             content.addSubview(host)
             NSLayoutConstraint.activate([
@@ -990,7 +1022,7 @@ final class CandidateWindow {
                     self.cancelCandidateTranslations()
                     return
                 }
-                self.englishTranslations.merge(translations) { _, newValue in newValue }
+                self.candidateTranslations.merge(translations) { _, newValue in newValue }
                 self.renderCandidates()
                 self.layoutAndShowAccordingToPresentation()
                 self.onTranslationsChanged?(owner, generation, isFinal)
@@ -1007,6 +1039,13 @@ final class CandidateWindow {
             self?.applyAppearance()
             self?.renderCandidates()
             self?.layoutAndShowAccordingToPresentation()
+        }
+        NotificationCenter.default.addObserver(
+            forName: .candidateTranslationLanguageDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.candidateTranslationLanguageDidChange()
         }
         NotificationCenter.default.addObserver(
             forName: .candidateWindowMetricsDidChange,
@@ -1101,7 +1140,7 @@ final class CandidateWindow {
             } else if !outputLanguagePinnedForComposition {
                 outputLanguage = CandidateOutputLanguage.defaultForNextComposition
             }
-            englishTranslations.removeAll()
+            candidateTranslations.removeAll()
             requestCandidateTranslations(ctx.candidates.map(\.text))
         }
 
@@ -1194,7 +1233,7 @@ final class CandidateWindow {
         resetCharacterSelectionState()
         currentContext = RimeContextModel()
         cancelCandidateTranslations()
-        englishTranslations.removeAll()
+        candidateTranslations.removeAll()
         outputLanguage = CandidateOutputLanguage.defaultForNextComposition
         outputLanguagePinnedForComposition = false
         currentSignature = ""
@@ -1878,12 +1917,12 @@ final class CandidateWindow {
                 compact: true,
                 width: nil,
                 maxWidth: candidateMaxWidth(panelWidth: panelWidth),
-                accessibilityTranslation: englishTranslations[c.text]
+                accessibilityTranslation: candidateTranslations[c.text]
             )
-            if supportsEnglishCandidateTranslation {
+            if supportsCandidateTranslation {
                 candidateStack.addArrangedSubview(compactCandidateCell(
                     candidate: c,
-                    highlighted: i == selectedIndex && outputLanguage == .english,
+                    highlighted: i == selectedIndex && outputLanguage == .translated,
                     button: button
                 ))
             } else {
@@ -1930,7 +1969,7 @@ final class CandidateWindow {
             row.translatesAutoresizingMaskIntoConstraints = false
             let metrics = CandidateWindowMetrics.current
             let candidateHeight = compactCandidateButtonHeight(for: metrics)
-                + (supportsEnglishCandidateTranslation
+                + (supportsCandidateTranslation
                     ? CandidateLayout.englishCandidatePillHeight(metrics)
                     : 0)
             row.heightAnchor.constraint(equalToConstant: candidateHeight).isActive = true
@@ -1949,12 +1988,12 @@ final class CandidateWindow {
                     compact: true,
                     width: min(naturalWidths[index], available),
                     showsLabel: isActiveRow,
-                    accessibilityTranslation: englishTranslations[candidate.text]
+                    accessibilityTranslation: candidateTranslations[candidate.text]
                 )
-                if supportsEnglishCandidateTranslation {
+                if supportsCandidateTranslation {
                     row.addArrangedSubview(compactCandidateCell(
                         candidate: candidate,
-                        highlighted: isActiveRow && index == selectedIndex && outputLanguage == .english,
+                        highlighted: isActiveRow && index == selectedIndex && outputLanguage == .translated,
                         button: button
                     ))
                 } else {
@@ -2130,7 +2169,7 @@ final class CandidateWindow {
                            highlighted: highlighted,
                            showsLabel: showsLabel),
             accessibilityLabel: accessibilityTranslation.map {
-                "\(baseAccessibilityLabel), English: \($0)"
+                "\(baseAccessibilityLabel), \(CandidateTranslationLanguagePreferences.languageName(for: CandidateTranslationLanguagePreferences.targetLanguageID)): \($0)"
             } ?? baseAccessibilityLabel
         )
         if !candidate.comment.isEmpty {
@@ -2419,7 +2458,7 @@ final class CandidateWindow {
     private func candidateAreaHeight(for metrics: CandidateWindowMetrics) -> CGFloat {
         let rowHeight = compactCandidateButtonHeight(for: metrics)
         if isSingleCharacterSelectionActive { return rowHeight }
-        let translationHeight = supportsEnglishCandidateTranslation
+        let translationHeight = supportsCandidateTranslation
             ? CandidateLayout.englishCandidatePillHeight(metrics)
             : 0
         if isExpanded {
@@ -2437,7 +2476,7 @@ final class CandidateWindow {
         cell.orientation = .vertical
         cell.alignment = .centerX
         cell.spacing = 0
-        let translated = englishTranslations[candidate.text] ?? ""
+        let translated = candidateTranslations[candidate.text] ?? ""
         let metrics = CandidateWindowMetrics.current
         let meaning = NSTextField(labelWithString: translated)
         meaning.font = .systemFont(ofSize: metrics.englishCandidateFontSize,
@@ -2480,15 +2519,36 @@ final class CandidateWindow {
     private func requestCandidateTranslations(_ texts: [String]) {
         guard #available(macOS 15.0, *),
               !IsSecureEventInputEnabled(),
-              let translator = translationController as? CandidateEnglishTranslationController else {
+              let translator = translationController as? CandidateTranslationController else {
             return
         }
         translationGeneration = translator.translate(texts)
     }
 
+    private func candidateTranslationLanguageDidChange() {
+        candidateTranslations.removeAll()
+        guard #available(macOS 15.0, *),
+              let ownerToken,
+              InputFocusCoordinator.shared.interactionTarget(expected: ownerToken) != nil,
+              !currentContext.candidates.isEmpty,
+              !IsSecureEventInputEnabled() else {
+            cancelCandidateTranslations()
+            renderCandidates()
+            layoutAndShowAccordingToPresentation()
+            return
+        }
+        let texts = isExpanded && !expandedPages.isEmpty
+            ? expandedPages.flatMap { $0.candidates.map(\.text) }
+            : currentContext.candidates.map(\.text)
+        cancelCandidateTranslations()
+        requestCandidateTranslations(texts)
+        renderCandidates()
+        layoutAndShowAccordingToPresentation()
+    }
+
     private func cancelCandidateTranslations() {
         guard #available(macOS 15.0, *),
-              let translator = translationController as? CandidateEnglishTranslationController else {
+              let translator = translationController as? CandidateTranslationController else {
             translationGeneration &+= 1
             return
         }
@@ -2537,7 +2597,7 @@ final class CandidateWindow {
 
         let metrics = CandidateWindowMetrics.current
         let expectedRowHeight = candidateWindow.compactCandidateButtonHeight(for: metrics)
-            + (candidateWindow.supportsEnglishCandidateTranslation
+            + (candidateWindow.supportsCandidateTranslation
                 ? CandidateLayout.englishCandidatePillHeight(metrics)
                 : 0)
         let expectedDocumentHeight = matrixViewportHeight(rowHeight: expectedRowHeight,

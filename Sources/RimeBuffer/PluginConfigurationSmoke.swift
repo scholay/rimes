@@ -446,6 +446,11 @@ private func pluginConfigurationLayoutIsSafe(
         controller.view.layoutSubtreeIfNeeded()
         defer { sheet.close() }
 
+        guard PluginConfigurationSheetFactory.hasLiquidGlassMaterial(in: sheet),
+              sheet.isOpaque == !RimeUI.usesLiquidGlassTransparency else {
+            return rejectLayout("sheet is missing its Liquid Glass surface")
+        }
+
         guard approximatelyEqual(sheet.contentLayoutRect.size, expected),
               approximatelyEqual(controller.view.bounds.size, expected) else {
             return rejectLayout(

@@ -244,7 +244,7 @@ final class AppleTranslationStringService {
 /// a neighbour's meaning. A newer composition, hide, or focus transition
 /// cancels the whole generation.
 @available(macOS 15.0, *)
-final class CandidateEnglishTranslationController {
+final class CandidateTranslationController {
     private let bridge = AppleTranslationSessionBridge()
     private var generation: UInt64 = 0
     var onUpdate: ((UInt64, [String: String], Bool) -> Void)?
@@ -263,7 +263,35 @@ final class CandidateEnglishTranslationController {
             onUpdate?(current, [:], true)
             return current
         }
-        bridge.submit(sourceLanguageID: "zh-Hans", targetLanguageID: "en") { [weak self] session in
+        let targetLanguageID = CandidateTranslationLanguagePreferences.targetLanguageID
+        Task { @MainActor [weak self] in
+            let availability = await LanguageAvailability().status(
+                from: Locale.Language(identifier: "zh-Hans"),
+                to: Locale.Language(identifier: targetLanguageID)
+            )
+            guard let self, self.generation == current else { return }
+            guard availability == .installed else {
+                // Candidate UI is an ephemeral, nearly invisible IMK panel.
+                // Never ask Apple to present a model-download permission sheet
+                // from that host; Settings owns that explicit interaction.
+                self.bridge.cancel()
+                self.onUpdate?(current, [:], true)
+                return
+            }
+            self.performTranslation(
+                uniqueTexts,
+                targetLanguageID: targetLanguageID,
+                generation: current
+            )
+        }
+        return current
+    }
+
+    private func performTranslation(_ uniqueTexts: [String],
+                                   targetLanguageID: String,
+                                   generation current: UInt64) {
+        bridge.submit(sourceLanguageID: "zh-Hans",
+                      targetLanguageID: targetLanguageID) { [weak self] session in
             guard let self else { return }
             let work = await MainActor.run { self.bridge.work }
             guard let work else { return }
@@ -276,7 +304,6 @@ final class CandidateEnglishTranslationController {
             }
             var translated: [String: String] = [:]
             do {
-                try await session.prepareTranslation()
                 for text in uniqueTexts {
                     try Task.checkCancellation()
                     let result = try await session.translate(text)
@@ -295,8 +322,10 @@ final class CandidateEnglishTranslationController {
                     self.onUpdate?(current, completed, true)
                 }
             } catch {
-                // Translation failure is intentionally silent in the candidate
-                // surface; callers keep the Chinese candidate selectable.
+                let nsError = error as NSError
+                IMELog.write(
+                    "candidate translation failed target=\(targetLanguageID) domain=\(nsError.domain) code=\(nsError.code)"
+                )
                 guard await self.bridge.isCurrent(work.id) else { return }
                 let partial = translated
                 await MainActor.run { [weak self] in
@@ -305,7 +334,6 @@ final class CandidateEnglishTranslationController {
                 }
             }
         }
-        return current
     }
 
     @discardableResult

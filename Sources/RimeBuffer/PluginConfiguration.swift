@@ -1094,6 +1094,13 @@ extension PluginConfigurationProviding {
 /// rect with the controller view's fitting size, so the final size must be
 /// applied after that assignment.
 enum PluginConfigurationSheetFactory {
+    private static let glassIdentifier = NSUserInterfaceItemIdentifier(
+        "settings.plugin-configuration.glass"
+    )
+    private static let fallbackIdentifier = NSUserInterfaceItemIdentifier(
+        "settings.plugin-configuration.glass-fallback"
+    )
+
     static func make(
         contentViewController controller: NSViewController,
         title: String
@@ -1124,7 +1131,69 @@ enum PluginConfigurationSheetFactory {
         sheet.appearance = RimeUI.appKitAppearance
         sheet.contentViewController = controller
         sheet.setContentSize(preferredSize)
+        applyAppearance(to: sheet)
         return sheet
+    }
+
+    static func applyAppearance(to panel: NSPanel) {
+        guard let root = panel.contentViewController?.view else { return }
+        let usesTransparency = RimeUI.usesLiquidGlassTransparency
+        panel.isOpaque = !usesTransparency
+        panel.backgroundColor = usesTransparency ? .clear : .windowBackgroundColor
+        panel.titlebarAppearsTransparent = true
+
+        let glass: NSView
+        if let existing = root.subviews.first(where: {
+            $0.identifier == glassIdentifier || $0.identifier == fallbackIdentifier
+        }) {
+            glass = existing
+        } else if #available(macOS 26.0, *) {
+            let native = NSGlassEffectView(frame: .zero)
+            native.style = .regular
+            native.cornerRadius = 0
+            let glassContent = NSView(frame: .zero)
+            glassContent.autoresizingMask = [.width, .height]
+            native.contentView = glassContent
+            native.identifier = glassIdentifier
+            native.translatesAutoresizingMaskIntoConstraints = false
+            root.addSubview(native, positioned: .below, relativeTo: root.subviews.first)
+            NSLayoutConstraint.activate([
+                native.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+                native.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+                native.topAnchor.constraint(equalTo: root.topAnchor),
+                native.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            ])
+            glass = native
+        } else {
+            let fallback = NSVisualEffectView(frame: .zero)
+            fallback.material = .popover
+            fallback.blendingMode = .behindWindow
+            fallback.state = .active
+            fallback.identifier = fallbackIdentifier
+            fallback.translatesAutoresizingMaskIntoConstraints = false
+            root.addSubview(fallback, positioned: .below, relativeTo: root.subviews.first)
+            NSLayoutConstraint.activate([
+                fallback.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+                fallback.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+                fallback.topAnchor.constraint(equalTo: root.topAnchor),
+                fallback.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            ])
+            glass = fallback
+        }
+        glass.isHidden = !usesTransparency
+
+        if let fallback = root.subviews.first(where: {
+            $0.identifier == fallbackIdentifier
+        }) {
+            fallback.isHidden = !usesTransparency || glass !== fallback
+        }
+    }
+
+    static func hasLiquidGlassMaterial(in panel: NSPanel) -> Bool {
+        guard let root = panel.contentViewController?.view else { return false }
+        return root.subviews.contains { view in
+            view.identifier == glassIdentifier || view.identifier == fallbackIdentifier
+        }
     }
 }
 

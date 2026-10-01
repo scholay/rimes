@@ -29,13 +29,13 @@ enum CandidateKeyboardRoutingRules {
     /// schema binding or printable input.
     static func ownsLocally(keycode: Int32,
                             isExpanded: Bool,
-                            englishOutputActive: Bool = false) -> Bool {
+                            translationOutputActive: Bool = false) -> Bool {
         switch keycode {
         case RimeKey.left, RimeKey.right, RimeKey.down, RimeKey.up,
              RimeKey.return, RimeKey.space:
             return true
         case 0x31...0x39:
-            return isExpanded || englishOutputActive
+            return isExpanded || translationOutputActive
         default:
             return false
         }
@@ -1203,7 +1203,7 @@ final class RIMESController: IMKInputController {
     private var forcedBufferCaptureDepth = 0
     private var candidateOptionSelecting = false
     private var candidateOptionClient: IMKTextInput?
-    private var pendingEnglishCandidateCommit: (owner: FocusToken,
+    private var pendingCandidateTranslationCommit: (owner: FocusToken,
                                                 selection: CandidateSelection,
                                                 generation: UInt64)?
     private let chordClientRoutingGate = ChordClientRoutingGate()
@@ -6498,7 +6498,7 @@ final class RIMESController: IMKInputController {
         let isLocalCandidateAction = CandidateKeyboardRoutingRules.ownsLocally(
             keycode: keycode,
             isExpanded: candidateWindow.isExpanded,
-            englishOutputActive: candidateWindow.selectedOutputLanguage == .english
+            translationOutputActive: candidateWindow.selectedOutputLanguage == .translated
         )
         if isLocalCandidateAction {
             if chord.hasPending {
@@ -6509,7 +6509,7 @@ final class RIMESController: IMKInputController {
             mutualPairingState.reset()
         }
         if keycode != RimeKey.space {
-            pendingEnglishCandidateCommit = nil
+            pendingCandidateTranslationCommit = nil
         }
         switch keycode {
         case RimeKey.left:
@@ -6534,7 +6534,7 @@ final class RIMESController: IMKInputController {
             guard CandidateKeyboardRoutingRules.togglesOutputLanguage(
                 keycode: keycode,
                 isExpanded: candidateWindow.isExpanded,
-                translationAvailable: candidateWindow.supportsEnglishCandidateTranslation
+                translationAvailable: candidateWindow.supportsCandidateTranslation
             ) else {
                 return pageCandidates(delta: -1, client: client)
             }
@@ -6544,15 +6544,15 @@ final class RIMESController: IMKInputController {
             return commitRawInput(client: client)
         case RimeKey.space:
             guard let selection = candidateWindow.selectedCandidateSelection else { return false }
-            if candidateWindow.selectedOutputLanguage == .english {
+            if candidateWindow.selectedOutputLanguage == .translated {
                 guard let owner = focusToken else { return false }
-                if let english = candidateWindow.selectedCandidateEnglishText {
-                    return commitEnglishCandidate(english,
+                if let translated = candidateWindow.selectedCandidateTranslationText {
+                    return commitTranslatedCandidate(translated,
                                                   selection: selection,
                                                   owner: owner,
                                                   client: client)
                 }
-                pendingEnglishCandidateCommit = (
+                pendingCandidateTranslationCommit = (
                     owner,
                     selection,
                     candidateWindow.currentTranslationGeneration
@@ -6561,10 +6561,10 @@ final class RIMESController: IMKInputController {
             }
             selectCandidate(selection)
             return true
-        case 0x31...0x39 where candidateWindow.selectedOutputLanguage == .english:
+        case 0x31...0x39 where candidateWindow.selectedOutputLanguage == .translated:
             let visibleIndex = Int(keycode - 0x31)
             guard let selection = candidateWindow.selectVisibleCandidateForKeyboard(visibleIndex) else {
-                IMELog.write("English candidate digit \(visibleIndex + 1) ignored; candidate is hidden")
+                IMELog.write("translated candidate digit \(visibleIndex + 1) ignored; candidate is hidden")
                 return true
             }
             guard let owner = focusToken else { return false }
@@ -6576,7 +6576,7 @@ final class RIMESController: IMKInputController {
                 return true
             }
             guard let owner = focusToken else { return false }
-            if candidateWindow.selectedOutputLanguage == .english {
+            if candidateWindow.selectedOutputLanguage == .translated {
                 _ = candidateWindow.selectVisibleCandidateForKeyboard(visibleIndex)
                 return selectCandidateFromPanel(selection, owner: owner)
             }
@@ -6590,7 +6590,7 @@ final class RIMESController: IMKInputController {
     func candidateTranslationsDidUpdate(owner: FocusToken,
                                         generation: UInt64,
                                         isFinal: Bool) {
-        guard let pending = pendingEnglishCandidateCommit,
+        guard let pending = pendingCandidateTranslationCommit,
               pending.owner == owner,
               pending.generation == generation,
               candidateWindow.currentTranslationGeneration == generation else { return }
@@ -6599,27 +6599,27 @@ final class RIMESController: IMKInputController {
                 focusIsCurrent: focusToken == owner,
                 candidateMatches: candidateWindow.selectedCandidateSelection == pending.selection,
                 generationMatches: true,
-                englishModeActive: candidateWindow.selectedOutputLanguage == .english,
+                translationModeActive: candidateWindow.selectedOutputLanguage == .translated,
                 candidatesInteractable: candidateWindow.hasInteractableCandidates
               ) else {
-            pendingEnglishCandidateCommit = nil
+            pendingCandidateTranslationCommit = nil
             return
         }
         guard let lease = InputFocusCoordinator.shared.interactionTarget(expected: owner),
               lease.controller === self,
               let client = lease.client else { return }
-        guard let text = candidateWindow.selectedCandidateEnglishText else {
-            if isFinal { pendingEnglishCandidateCommit = nil }
+        guard let text = candidateWindow.selectedCandidateTranslationText else {
+            if isFinal { pendingCandidateTranslationCommit = nil }
             return
         }
-        pendingEnglishCandidateCommit = nil
-        _ = commitEnglishCandidate(text,
+        pendingCandidateTranslationCommit = nil
+        _ = commitTranslatedCandidate(text,
                                    selection: pending.selection,
                                    owner: owner,
                                    client: client)
     }
 
-    private func commitEnglishCandidate(_ text: String,
+    private func commitTranslatedCandidate(_ text: String,
                                         selection: CandidateSelection,
                                         owner: FocusToken,
                                         client: IMKTextInput) -> Bool {
@@ -6627,25 +6627,26 @@ final class RIMESController: IMKInputController {
               focusToken == owner,
               candidateWindow.hasInteractableCandidates,
               candidateWindow.selectedCandidateSelection == selection,
-              candidateWindow.selectedOutputLanguage == .english,
+              candidateWindow.selectedOutputLanguage == .translated,
               let lease = InputFocusCoordinator.shared.interactionTarget(expected: owner),
               lease.controller === self,
               lease.client === client else { return false }
-        pendingEnglishCandidateCommit = nil
+        pendingCandidateTranslationCommit = nil
         let sourceCandidate = candidateWindow.selectedCandidateText ?? ""
-        let committedEnglishText = EnglishCandidateCommitFormatter.format(
+        let committedTranslation = CandidateTranslationCommitFormatter.format(
             translation: text,
-            sourceCandidate: sourceCandidate
+            sourceCandidate: sourceCandidate,
+            targetLanguageID: CandidateTranslationLanguagePreferences.targetLanguageID
         )
-        guard !committedEnglishText.isEmpty else { return false }
+        guard !committedTranslation.isEmpty else { return false }
         rimeEngine.clearComposition(session: session)
         composition.markCleared()
         let inserted: Bool
         if shouldCaptureClipboardSearchCommit(from: client) {
-            inserted = appendClipboardSearchCommit(committedEnglishText, client: client)
+            inserted = appendClipboardSearchCommit(committedTranslation, client: client)
         } else if shouldCaptureCommit(from: client) {
             if let focusToken,
-               deliverToStreamRawIfSelected(committedEnglishText, owner: focusToken) {
+               deliverToStreamRawIfSelected(committedTranslation, owner: focusToken) {
                 clearCompositionPresentation(client: client)
                 publishAuthoredCommitTelemetry(characterCount: text.count,
                                                source: .buffer,
@@ -6656,7 +6657,7 @@ final class RIMESController: IMKInputController {
                     BufferWindowController.shared.clearInlineComposition(owner: focusToken)
                     candidateWindow.retireForCommit(owner: focusToken)
                 }
-                BufferModel.shared.append(committedEnglishText)
+                BufferModel.shared.append(committedTranslation)
                 clearCompositionPresentation(client: client)
                 publishAuthoredCommitTelemetry(characterCount: text.count,
                                                source: .buffer,
@@ -6664,7 +6665,7 @@ final class RIMESController: IMKInputController {
                 inserted = true
             }
         } else {
-            inserted = deliverDirectText(committedEnglishText, client: client)
+            inserted = deliverDirectText(committedTranslation, client: client)
             if inserted {
                 publishAuthoredCommitTelemetry(characterCount: text.count,
                                                source: .direct,
@@ -6672,7 +6673,7 @@ final class RIMESController: IMKInputController {
             }
         }
         if inserted {
-            candidateWindow.recordCommittedOutputLanguage(.english)
+            candidateWindow.recordCommittedOutputLanguage(.translated)
             updateUI(client: client)
         }
         return inserted
@@ -6740,16 +6741,16 @@ final class RIMESController: IMKInputController {
               let lease = InputFocusCoordinator.shared.interactionTarget(expected: owner),
               lease.controller === self,
               let client = lease.client else { return false }
-        guard candidateWindow.selectedOutputLanguage == .english else {
+        guard candidateWindow.selectedOutputLanguage == .translated else {
             return selectCandidate(selection, owner: owner)
         }
-        if let english = candidateWindow.selectedCandidateEnglishText {
-            return commitEnglishCandidate(english,
+        if let translated = candidateWindow.selectedCandidateTranslationText {
+            return commitTranslatedCandidate(translated,
                                           selection: selection,
                                           owner: owner,
                                           client: client)
         }
-        pendingEnglishCandidateCommit = (
+        pendingCandidateTranslationCommit = (
             owner,
             selection,
             candidateWindow.currentTranslationGeneration
