@@ -1,43 +1,54 @@
 # RIMES
 
-**[中文](README.md)** · **[English](README.en.md)**
+[![中文](.github/readme/labels/zh.svg)](README.md) [![English](.github/readme/labels/en.svg)](README.en.md) [![日本語](.github/readme/labels/ja.svg)](README.ja.md) [![한국어](.github/readme/labels/ko.svg)](README.ko.md) [![Español](.github/readme/labels/es.svg)](README.es.md)
 
-从零做的现代 macOS 输入法：**librime** 引擎 + 自绘候选窗 + 常驻缓冲区（buffer）。内置雾凇全拼、自然码双拼、小鹤双拼、五笔 86 与英文核心方案；默认关闭的“并击”扩展提供飞耀预设和自定义键位，统一支持同拍组合与左右分开击键。**自包含**打包 librime 与词库，装一个就能用，无需单独安装 Squirrel。
+致敬伟大的开源精神，本项目中文编码逻辑基于 [RIME 输入法引擎](https://rime.im/)。
+这是一个支持多操作系统的输入法项目，用三个首创的插槽式平台来承接用户的个性化需求: 1. 输入法显式缓冲区（buffer） 2. 管理剪切板历史、截屏、个人知识库的记忆胶囊(capsule) 3. 接收外部信息的对话窗口(mailbox)。
 
-> 仓库/内部代号仍是 **RimeBuffer**（SPM target、`Sources/RimeBuffer/`）；安装后的应用是 `RIMES.app`（输入法 id `com.scholay.inputmethod.isaac`，数据目录 `~/Library/RIMES`）；早期版本留下的 `ETInput.app` 会在安装新 pkg 时自动移除，设置与词库一次性复制到新目录。对外产品名统一为 **RIMES**（rime-scholay）。
+支持全拼、双拼、声笔、五笔、英文方案；支持速录行业的并击式键入方案、支持自定义导入。面向新手用户，本项目安装包**自包含** librime 与词库，开箱即用。
+
+> 对外产品名统一为 **RIMES**（rime-scholay）。
 
 ## 演示视频
 
 - [哔哩哔哩 · 完整介绍](https://www.bilibili.com/video/BV17XuH6SEDg/)
 - [抖音 · 产品演示](https://www.douyin.com/video/7671078195197742355)
 
-另有分集快剪：实时翻译、AI 生成、意识流等，见 B 站合集。
-
 ## 它解决什么问题
 
-普通输入法打完就直接上屏；RIMES 在中间加了一层**上屏前的文本工作台**：
+让你通过一个输入法，实现智能时代的翻译、生成、润色等日常需求，且无需离开当前操作的应用程序，全程由输入法及插件来解决:
 
-1. 中文 / 英文先进入缓冲
-2. 可实时翻译，或使用选定的 AI 连接器生成和改写
-3. 你确认后，才用纸飞机或 Return **显式投递**到当前输入框
+- **Buffer**（`⌘⇧B`）：上屏前的文本工作台。中文 / 英文先进入缓冲，可实时翻译，或使用选定的 AI 连接器生成和改写；你确认后， **显式投递**到当前输入框。
+- **Capsule**（`⌘⇧V`）：屏幕底部的底栏。刚复制的文本、链接、图片、文件和颜色先出现在「最近」；要长期留下的，收进笔记、图片、PDF、技能或密码。
+- **Mailbox**（`⌘⇧M`）：AI 会话、备注和待审核的外部推送都留在这个窗口里。可以新建对话并选择已配置的连接器。
 
-结果不会自动发帖、不会静默改网页。适合写作、评论、双语与 AI 工作流。
+## 主要能力须知
 
-## 主要能力
+> 安装完成并进入图形登录会话后，一次性后台任务会用 `open -g` 启动同一个 RIMES 进程，因此 Buffer、Clipboard History、Mailbox 与 Capsule 的全局快捷键可跨输入法使用。
+>
+> 发布包在替换系统 payload 前会审计全部本机普通账户，除可由 postinstall 退休的当前 GUI 用户开发版外，发现同 ID 开发版 App/任务或无法安全核验的 home 就直接失败。postinstall 退休开发版、再次审计后，才以可回滚事务更新系统任务；登录 guard 对后来出现的开发版痕迹只作防御性短路。两种任务都不设 `KeepAlive`，也不会启动第二个 UI/IME 服务。
+>
+> Mailbox 与 Capsule 是正常取得键盘焦点的管理窗口。在其他输入法下用快捷键（或 Mailbox 通知）唤出时，RIMES 会先把自己切换为当前输入法再打开它，保证功能完整；关闭时不会切回，你之后自行切到其他输入法也不会被撤销，此时按下文描述降级。
+>
+> 这些功能不会访问其他输入法的 IMK 客户端，也不会读取、提交或取消外部输入法的组字。唯一的按键注入是 Capsule 激活时可选的一次 `⌘V`（见下方 Capsule 底栏）。设置的快捷键同样跨输入法可用，其中 Mailbox 与 Capsule 页面只展示配置和状态，实际会话与内容管理留在各自独立窗口。
 
-安装完成并进入图形登录会话后，一次性后台任务会用 `open -g` 启动同一个 RIMES 进程，因此 Buffer、Clipboard History、Mailbox 与 Capsule 的全局快捷键可跨输入法使用。开发安装原子发布当前用户任务；发布包在替换系统 payload 前会审计全部本机普通账户，除可由 postinstall 退休的当前 GUI 用户开发版外，发现同 ID 开发版 App/任务或无法安全核验的 home 就直接失败。postinstall 退休开发版、再次审计后，才以可回滚事务更新系统任务；登录 guard 对后来出现的开发版痕迹只作防御性短路。两种任务都不设 `KeepAlive`，也不会启动第二个 UI/IME 服务。Mailbox 与 Capsule 是正常取得键盘焦点的管理窗口；这些周边功能在其他输入法下不会访问 IMK 客户端、主动切换输入源，也不会读取、提交或取消外部输入法的组字；唯一的按键注入是 Capsule 激活时可选的一次 `⌘V`（见下方 Capsule 底栏）。设置窗口仍只在当前输入源为 RIMES 时打开，其中 Mailbox 与 Capsule 页面只展示配置和状态，实际会话与内容管理留在各自独立窗口。
+| 能力 | 快捷键 | 内容 | 操作 | 存放 | 边界 |
+|---|---|---|---|---|---|
+| 输入方案 | — | 雾凇全拼、自然码、小鹤、五笔 86、英文 | — | — | — |
+| 缓冲工作台 | `⌘⇧B` | 上屏前的文本 | 先切到 RIMES，再捕获、分块投递 | — | 切走后只走系统剪贴板，不走 IMK |
+| Capsule 底栏 | `⌘⇧V` | 最近复制；笔记、图片、PDF、技能、密码 | 单击选择，双击或 Return 粘贴。`⌘S` 收录 | 只在本机 | 粘贴需辅助功能；未授权则只进剪贴板 |
+| Mailbox | `⌘⇧M` | AI 会话、备注、待审核推送 | 新建对话；首次 Return 才生成 | 模型只绑定该会话 | CLI 用默认模型 |
+| Capsule 管理 | 齿轮或画笔 | 五类条目，可预览和复制 | 四组并击后查看密码，最多 15 秒 | 可选 iCloud；密码与密钥留本机 | 口令只存本机摘要 |
+| 设置 | `⌘⇧S` | 快捷键、状态、同步与安全 | 仅 RIMES 为当前输入法时打开 | — | 不嵌入 Mailbox / Capsule 窗口 |
 
-| 能力 | 说明 |
-|---|---|
-| 输入方案 | 雾凇全拼、自然码双拼、小鹤双拼、五笔 86、英文；可选并击扩展 |
-| 缓冲工作台 | `⌘⇧B` 开关；RIMES 输入源下可捕获并分块投递，其他输入源下只允许显式从系统剪贴板导入或把结果复制到剪贴板，不访问 IMK 投递通道 |
-| Capsule 底栏 | 原 Clipboard History，与 Buffer 同级；`⌘⇧V` 跨输入法打开屏幕底部独立窗口。头部标签在「最近」（剪贴板历史）与只读的笔记、图片、PDF、技能、密码之间切换，`⌘S` 把「最近」中所选卡片收入 Capsule，齿轮与卡片悬停画笔打开 Capsule 管理。收录开启且无安全保护时在后台保存文本、链接、图片、文件与颜色，原始表示只落本机私有数据库。单击只选择，双击、Return 或 `⌘1`–`⌘9` 激活；没有精确目标或使用其他输入法时，内容先无损恢复到系统剪贴板、提升到历史首位并静默关闭，再由 RIMES 合成一次 `⌘V` 粘贴到目标 App。这一步需要你在「设置 › 权限」中授予辅助功能：未授权时只恢复到剪贴板，由你自行按 `⌘V`；也可以在设置中改为「只放入剪贴板」。粘贴路径本身从不弹出授权对话框，也不会右键或注入其他按键；`⌘C` 仍只复制所选内容 |
-| Mailbox | 与 Buffer 同级；`⌘⇧M` 跨输入法打开/关闭正常 key window，独立保存 AI 会话、备注与待审核外部推送。窗口内可“新建对话”并选择已配置的连接器/模型；CLI 只使用各自默认模型，OpenAI 使用本机配置模型，选择只绑定新会话且不改全局设置。草稿不创建空会话，首次 Return 才创建会话并发起生成 |
-| Capsule 管理 | 从底栏齿轮或卡片画笔打开，外观是底栏向上长高，齿轮或 Esc 返回底栏；逐条维护五类内容并预览、复制图片/PDF/文件。查看 Password 明文前须按顺序完成四组原生物理键并击；默认 `RH / WO / CVN / QU`，四个槽位显示进度，成功后最多展示 15 秒。更换或恢复口令都先验证当前口令；自定义原码不落盘、不进 iCloud，只保存单个本机加盐摘要凭据。可选择 iCloud Drive 文件夹自动双向同步六类普通条目与媒体资产，Password、Skill 路径、查看口令及主密钥保持本机 |
-| 设置 | `⌘⇧S` 仅在当前输入源属于 RIMES 时打开；Mailbox/Capsule 页面只提供快捷键、本机状态、同步与安全配置，不嵌入实际操作窗口 |
-| 实时翻译 | 默认 Apple 本地翻译（macOS 15+），也可走 AI 渠道 |
-| AI 生成 | Codex CLI / Claude Code CLI / OpenAI 兼容 API；结果只留在 Buffer 内，可选 Plain / Markdown / JSON，再由用户上屏 |
-| 意识流输入 | 拼音/并击由所选 AI 连接器生成最多 5 个互斥猜测；选定后才投递 |
+实时翻译、AI 生成、意识流输入是缓冲插件，并击是内置扩展。版本与 ID 见下方清单。
+
+| 名称 | 种类 | 说明 | 默认 |
+|---|---|---|---|
+| 实时翻译 | 缓冲插件 | Apple 本地翻译，也可走 AI | 启用，macOS 15+ |
+| AI 生成 | 缓冲插件 | Codex、Claude Code 或 OpenAI 兼容 API。Plain / Markdown / JSON，结果留在 Buffer，由你上屏 | 启用 |
+| 意识流输入 | 缓冲插件 | 拼音或并击交给所选 AI，最多 5 个互斥猜测 | 启用，选定后才投递 |
+| 并击 | 内置扩展 | 同拍组合与左右分开击键，也可自定义键位 | 关闭 |
 
 <!-- BEGIN PRESET BUFFER PLUGINS -->
 ## 预置缓冲插件
@@ -62,109 +73,22 @@
 | 打字测速 | `builtin.typing-speed` | 2.0 | 启用 |
 | 并击 | `builtin.fly-chord-learning` | 2.0 | 关闭 |
 
-“并击”保留旧 ID 与学习进度，只提供一种支持同拍组合及左右分开击键的输入行为，不再区分模式。扩展管理键位方案、组键间隔、课程、练习与进度，飞耀是可复制修改的内置预设；关闭后普通输入退回普通方案，意识流输入自动回到逐字连续全拼。自定义方案可把输出编码设为自然码双拼：映射表仍按全拼填写，应用时每个完整音节编成两个键，音节边界由位置决定，不再依赖隔音符；输入区照常显示全拼。另内置麓鸣「呦呦音形」的折梅、寒梅两种原生并击方案，按键全部松开时由 Rime 结算。详见[键位方案与迁移说明](CHORD-KEYMAPS.md)。
-
 ## 安装
 
-### 未签名公开预览版（`vX.Y.Z-preview.N`）
-
-目前公开的 macOS 渠道仍只有社区测试用的未签名 **Pre-release**。在首个正式版成功发布前，请从官方仓库
-[GitHub Releases](https://github.com/scholay/rimes/releases) 中最新的 Pre-release 下载
-`RIMES-X.Y.Z-preview.N.pkg`。这个包**没有 Developer ID 签名、没有经过 Apple 公证，Apple
-无法验证它**；它不是正式版。只从 `scholay/rimes` 下载，并在安装前把本机计算的 SHA-256
-与该 Release 公布的值逐字核对。
-
-先双击 `.pkg` 触发 macOS 的拦截，再到“系统设置 → 隐私与安全性”点“仍要打开”，确认后继续
-Installer；输入源没有立即显示时请注销并重新登录。不要全局关闭 Gatekeeper，也不要用 `xattr`
-移除隔离属性。若系统提示“已损坏”或“将损坏你的电脑”，立即停止，不要绕过。公司/学校管理的
-Mac 可能由 MDM 禁止这个例外。完整步骤与风险边界见
-[《未签名预览版安装说明》](UNSIGNED-PREVIEW.md)，以及
-[Apple 官方说明](https://support.apple.com/zh-cn/102445)。
-
-预览版不进入应用内自动更新通道：新预览版需要手动下载安装，每个 Release 页面都列出了变更。
-首个 Developer ID 签名并经 Apple 公证的正式版发布后，预览版用户需要从官方 Release 手动安装一次。
-
-### 正式版
-
-首个 `vX.Y.Z` 正式版只有在完整的受保护发布链路成功后才会出现在
-[GitHub Releases](https://github.com/scholay/rimes/releases)。它提供经 Developer ID 签名和 Apple
-公证的 `RIMES-版本号.pkg`。正式发布不是“已加入 Developer Program”或“某台开发机能看到一个证书”
-即可完成；发布前必须同时具备：
-
-- 含私钥且属于同一 Team 的 **Developer ID Application** 与 **Developer ID Installer** 证书；前者签名 app
-  及其 bundled Mach-O，后者签名 `.pkg`；
-- 两个受保护的 GitHub Environment：两者都必须有至少一位 reviewer、禁止 administrator
-  bypass，并用 selected branch/tag policy 只允许 `v*`；`macos-release` 只负责签名/公证，`macos-publish`
-  只负责第二次发布审批、**不存任何密钥**。当前由 `scholay` 发起并分别批准两个阶段，允许 self-review，
-  但仍须在公开前完成同一签名安装包的真机验收；
-- 仅放在 `macos-release` 的两份 P12、其密码、Team ID，以及 App Store Connect 公证 API 的 P8、Key ID
-  和 Issuer ID。
-
-缺少任何一项，正式 workflow 都会 fail-closed，公开渠道仍只能发布未签名预览版。完整的凭据清单与
-发布门禁见 [RELEASE.md](RELEASE.md) 和 [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md)。正式安装器会把
-`RIMES.app` 固定放进 `/Library/Input Methods`（同时移除早期版本的 `ETInput.app`），并在当前 GUI 用户会话中按 parent → child
-的顺序注册、启用和尝试切换。若新版 macOS 的输入法菜单未立即刷新，安装本身仍会正常完成；
-注销并重新登录后再在系统设置中确认「RIMES」即可。不要手动结束 `TextInputMenuAgent` 或
-`imklaunchagent`。
-
-#### 两条互斥的安装通道
-
-同一位用户或正式包测试机一次只能使用一条通道；不要让本地开发安装覆盖正式包，也不要用本地构建代替
-正式包的验收。
-
-- **开发维护通道**：只面向 checkout 中的开发者，使用 `build_install.sh` 安装当前源码构建到当前用户。
-  它是会随 Git 状态变化的开发版，不是待发布的正式资产；需要保留本机用户数据时使用：
-
-  ```bash
-  RB_KEEP_USERDB=1 RIMES_SIGN_IDENTITY='Apple Development: <Name> (<TEAM_ID>)' ./build_install.sh
-  ```
-
-- **正式包通道**：普通用户只从 GitHub 正式 Release 下载精确 `RIMES-X.Y.Z.pkg` 与
-  `SHA256SUMS`，由系统安装到 `/Library/Input Methods`。维护者在公开前可下载签名 workflow 在
-  清除全部签名材料后生成的 immutable signed-stage，运行同一个精确 pkg 的验收；通过后才批准
-  `macos-publish`，它会核验 artifact ID/digest/哈希并发布完全相同的字节。signed-stage 是发布门，
-  不是面向用户的下载渠道；公开 Release 才是用户和安装器的权威来源。
-  正式通道不发布可直接解压的 App ZIP，避免绕过 Installer 的输入法注册与迁移流程。
-
-  ```bash
-  scripts/rehearse-release-pkg.sh --pkg /绝对路径/RIMES-X.Y.Z.pkg
-  scripts/rehearse-release-pkg.sh --pkg /绝对路径/RIMES-X.Y.Z.pkg --install-gui
-  ```
-
-  第一个命令不安装，第二个才打开与用户相同的 macOS Installer；它会退休当前 GUI 用户的开发版，因此应在
-  测试账号或可恢复的测试 Mac 上执行。公开后 workflow 还会把正式 Release 下载回来逐字节复核。
-
-正式安装器会在可安全核验时退休当前 GUI 用户的开发版，因此这不是两条可以并存、互相覆盖的路径。
-
-开发维护通道的日常快捷命令：
+macOS、iOS、Windows、Android、Linux 都已开工，完成度不同。各平台安装包的下载地址即将提供。在此之前，请拉取源码后在本机构建：
 
 ```bash
-./build_install.sh                # 构建 + 安装到当前用户 + 注册
-.build/release/RimeBuffer smoke   # 免安装引擎自检
-tail -f ~/rimebuffer.log          # 行为日志
+git clone https://github.com/scholay/rimes.git
+cd rimes
 ```
 
-更多 smoke 命令与发布流程见 [RELEASE.md](RELEASE.md)。
-
-### Windows / Linux 输入方案预览
-
-Windows 与 Linux 目前提供独立的 **Data / Input-Schemes Preview**，作为手动/每周的维护兼容性检查；
-它不再阻断 main 合并、macOS 预览或正式 macOS Release。该通道复用 RIMES 的五套
-核心 Rime 方案、词库、Lua，以及随包保留的可选并击方案数据，但需要用户先安装 Windows
-[小狼毫 Weasel](https://github.com/rime/weasel)、Linux
-[Fcitx5 Rime](https://github.com/fcitx/fcitx5-rime) 或
-[IBus Rime](https://github.com/rime/ibus-rime)。
-
-仓库内另有一套正在开发的 [Windows 原生基础层](platforms/windows/native/README.md)
-和一套 [Linux Fcitx5 输入法](platforms/linux/ime/README.md)：后者是 C++ addon，
-链接 librime，用 Fcitx5 UI 做 preedit/候选/上屏，并部署审核后的 RIMES 数据。
-它还不是 macOS 对等产品（没有 Buffer/Capsule/Mailbox），也不阻断 macOS 发布。
-
-公开的数据预览包不包含 macOS 版的缓冲工作台、AI/翻译/OCR、原生设置窗口。
-并击中的跨批分离击键配对是当前 macOS 前端能力，不能由数据包单独提供。请从 Releases
-中标记为 **Pre-release** 的 `RIMES-Windows-Data-Preview-*` /
-`RIMES-Linux-Data-Preview-*` 资产安装；完整边界、安全策略和验证方式见
-[CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)。
+| 平台 | 进度 | 构建 |
+|---|---|---|
+| macOS | 输入法，以及 Buffer、Capsule、Mailbox | `./build_install.sh` |
+| iOS | 键盘与主 App（iOS 17+）：离线拼音、自然码、五笔、英文，以及 Buffer | 用 Xcode 打开 [`platforms/ios/RIMES.xcodeproj`](platforms/ios/README.md) |
+| Windows | 原生 TSF 输入法：预编辑、候选、上屏。还没有 Buffer、Capsule、Mailbox，也没有签名安装包 | 见 [`platforms/windows/native/README.md`](platforms/windows/native/README.md) |
+| Android | 开发中 | 源码尚未进入本仓库 |
+| Linux | Fcitx5 输入法、Buffer、Capsule。还没有 Mailbox | 见 [`platforms/linux/ime/README.md`](platforms/linux/ime/README.md) |
 
 ## 文档
 
@@ -175,7 +99,9 @@ Windows 与 Linux 目前提供独立的 **Data / Input-Schemes Preview**，作�
 | [PLUGIN-CONFIGURATION.md](PLUGIN-CONFIGURATION.md) | 插件声明式配置 |
 | [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) | 未签名预览版的下载、校验与安全安装步骤 |
 | [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) | Windows / Linux 输入方案预览边界与验证 |
-| [platforms/linux/ime/README.md](platforms/linux/ime/README.md) | Linux Fcitx5 RIMES 输入法（第一步，仅 IME） |
+| [platforms/ios/README.md](platforms/ios/README.md) | iOS 键盘与主 App |
+| [platforms/windows/native/README.md](platforms/windows/native/README.md) | Windows 原生 TSF 输入法 |
+| [platforms/linux/ime/README.md](platforms/linux/ime/README.md) | Linux Fcitx5 输入法、Buffer 与 Capsule |
 | [RELEASE.md](RELEASE.md) | 发布流程：渠道、一条命令发布、节奏与版本号规则 |
 | [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md) | 发布技术参考：签名、安装器、应用内更新、CI |
 | [RELEASE-HISTORY.md](RELEASE-HISTORY.md) | 已关闭的发布通道、旧仓库迁移与改名记录 |
@@ -200,31 +126,25 @@ Pre-release，不进入自动更新。Windows/Linux `platform-preview-vX.Y.Z` �
 
 ## 友链
 
-- [本项目已在L站发布开源推广](https://linux.do/u/leowangling/preferences/account)
-- [iRime](https://github.com/jimmy54/iRime) — 感谢 iRime 项目及其作者对 RIMES 的指导与宣传支持。
+- [RIME 输入法引擎](https://rime.im/) — 本项目的中文编码基于 RIME。
+- [Linux.do](https://linux.do/u/leowangling/preferences/account) - 感谢真诚、友善、团结、专业之社区L站及一众佬友。
+- [iRime](https://github.com/jimmy54/iRime) — 感谢 iRime 作者对 RIMES 的指导与宣传支持。
 
 ## 贡献者
 
 完整名单见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
 
-**AI 编程助手**：Claude、Cursor、Codex、Grok 参与了设计、实现与审阅；合并与发布仍由人工负责。
+本项目核心维护者为C端产品经理，非专业程序员出身，感恩伟大的vibe coding时代。
+
+**AI 编程助手**：Claude、Cursor、Codex、Grok 参与了设计、实现与审阅。
 
 ## 已知问题
 
-- **macOS 26 上，在微信窗口聚焦时切换输入法可能导致微信崩溃**（崩在 Apple `TextInputUIMacHelper`）。这是上游问题，同样影响原生 Rime/Squirrel（[rime/squirrel#951](https://github.com/rime/squirrel/issues/951)）。**规避**：先在别处切好输入法，再进入微信打字。
+- **Linux：部署还没结束就退出 Fcitx5，进程可能要几分钟才退出。** 首次或后台的 librime 部署无法中途取消，词库较大时更明显。见 [#43](https://github.com/scholay/rimes/issues/43)。
+- **Linux：拖完 Buffer 工具条后立刻点另一个输入框，捕获可能还开着。** 目前只在 X11 的 Firefox 里复现，松开后约 10 毫秒内点到同一窗口的另一个输入框就会碰上。再点一次或按 Esc 即可恢复。见 [#44](https://github.com/scholay/rimes/issues/44)。
 
 ## 许可证与第三方
 
 RIMES 自有代码采用 [MIT License](LICENSE)。随包 Rime 方案、词库和 Lua/OpenCC 数据
 保留各自的 GPL/LGPL/CC 许可与署名；完整边界见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 `rime-data/licenses/`。
-
-## 赞助
-
-如果 RIMES 对你有帮助，欢迎微信扫码赞助（催更）：
-
-<p align="center">
-  <img src="images/sponsor-wechat.png" alt="微信赞助二维码" width="280">
-</p>
-
-Capsule 捕获、图像编辑和录屏的使用说明、存储约定与验收状态见 [CAPTURE.md](CAPTURE.md)。

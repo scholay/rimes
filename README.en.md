@@ -1,43 +1,54 @@
 # RIMES
 
-**[中文](README.md)** · **[English](README.en.md)**
+[![中文](.github/readme/labels/zh.svg)](README.md) [![English](.github/readme/labels/en.svg)](README.en.md) [![日本語](.github/readme/labels/ja.svg)](README.ja.md) [![한국어](.github/readme/labels/ko.svg)](README.ko.md) [![Español](.github/readme/labels/es.svg)](README.es.md)
 
-A modern macOS input method built from scratch: **librime** engine + custom candidate UI + a persistent **buffer workbench**. Its core schemes are Rime Ice full Pinyin, Natural Code double Pinyin, Xiaohe double Pinyin, Wubi 86, and English; the disabled-by-default Chording extension supplies the Feiyao preset and custom keymaps, with one behavior supporting both combined and left-then-right split strokes. **Self-contained** — librime and Rime data are bundled; no separate Squirrel install required.
+With respect for open source, the Chinese input logic of this project is based on the [RIME input method engine](https://rime.im/).
+RIMES is an input method for more than one operating system. Three original slot-like surfaces carry what you want to do: 1. an explicit buffer before text is committed 2. Capsule, for clipboard history, screenshots, and a personal knowledge base 3. Mailbox, a conversation window for information that arrives from outside.
 
-> Internal codename remains **RimeBuffer** (SPM target, `Sources/RimeBuffer/`). The installed app is `RIMES.app` (input-method id `com.scholay.inputmethod.isaac`, data in `~/Library/RIMES`); an `ETInput.app` left by an earlier version is removed when the new pkg installs, and its settings and dictionaries are copied once into the new directory. The public product name is **RIMES** (rime-scholay).
+Schemes include full Pinyin, double Pinyin, Shengbi, Wubi, and English, plus the chorded input used in stenography and custom imports. For new users, the package **bundles** librime and the dictionaries and is ready to use.
+
+> The public product name is **RIMES** (rime-scholay).
 
 ## Demo videos
 
 - [Bilibili — full walkthrough](https://www.bilibili.com/video/BV17XuH6SEDg/)
 - [Douyin — product demo](https://www.douyin.com/video/7671078195197742355)
 
-Shorter feature clips for live translation, AI generation, stream input, and more are in the same Bilibili collection.
-
 ## What problem it solves
 
-Most IMEs commit straight into the focused field. RIMES inserts a **pre-commit text workbench**:
+One input method covers everyday translation, generation, and polishing, without leaving the app you are in. The input method and its plug-ins do the work:
 
-1. Chinese / English land in the buffer first
-2. You can translate in real time or generate and rewrite with the selected AI connector
-3. Only after you confirm — paper-plane or Return — does text get **explicitly delivered** into the live input field
+- **Buffer** (`⌘⇧B`): a text workbench before commit. Chinese or English enters the buffer first, where you can translate it live or generate and rewrite it with the selected AI connector. After you confirm, it is **explicitly delivered** into the current field.
+- **Capsule** (`⌘⇧V`): a bar at the bottom of the screen. Text, links, images, files, and colors you just copied appear in Recent. What you want to keep goes into notes, images, PDFs, skills, or passwords.
+- **Mailbox** (`⌘⇧M`): AI conversations, notes, and external items waiting for review stay in this window. You can start a conversation and choose a connector you have already configured.
 
-Nothing auto-posts, and nothing silently edits the web page. Built for writing, commenting, bilingual work, and AI-assisted flows.
+## Notes on the main capabilities
 
-## Highlights
+> After installation and a graphical login, a one-shot background job uses `open -g` to start the same RIMES process, so the global shortcuts for Buffer, Clipboard History, Mailbox, and Capsule work across input methods.
+>
+> Before a release package replaces the system payload, it audits every ordinary local account. It fails immediately if it finds a same-ID development app or job other than the current GUI user's development install, which postinstall can retire, or if a home cannot be checked safely. Postinstall retires that development install, audits again, and only then updates the system job as a transaction that can be rolled back. The login guard only stops later if development traces appear. Neither job sets `KeepAlive`, and neither starts a second UI/IME service.
+>
+> Mailbox and Capsule are ordinary windows that take keyboard focus. Opening either from another input method, by shortcut or by a Mailbox notification, switches to RIMES first so the feature is complete. Closing it does not switch back, and a later switch you make yourself is left as you set it. The feature then falls back as described below.
+>
+> These features do not touch another input method's IMK client, and they do not read, commit, or cancel its composition. The only injected key is the optional single `⌘V` when Capsule activates (see the Capsule bar below). The Settings shortcut also works across input methods. Its Mailbox and Capsule pages show configuration and status only. Conversations and records stay in their own windows.
 
-After installation and an Aqua login, a one-shot background job uses `open -g` to start the same RIMES process. Buffer, Clipboard History, Mailbox, and Capsule shortcuts therefore work regardless of the active input source. A development install atomically publishes a per-user job. Before replacing the system payload, the package audits every ordinary local account and fails closed on any same-ID development app/job except a verified current-GUI-user install that postinstall can retire, or when a home cannot be checked safely. Postinstall retires that development install, audits again, and only then updates the system job as a rollback-capable transaction; the login guard's check for development artifacts is only a later defensive stop. Neither job has a `KeepAlive` policy or starts a second UI/IME service. Mailbox and Capsule are ordinary key windows. Under another IME, these companion features never access an IMK client, switch the input source, or read, commit, or cancel that IME's composition. The one keystroke they can inject is the optional single `⌘V` that Capsule activation sends (see the Capsule rail below). Settings remains available only while a RIMES input source is active; its Mailbox and Capsule pages show configuration and status only, while actual conversations and records stay in their standalone windows.
+| Capability | Shortcut | Contents | Action | Storage | Limit |
+|---|---|---|---|---|---|
+| Input schemes | — | Rime Ice full Pinyin, Natural Code, Xiaohe, Wubi 86, English | — | — | — |
+| Buffer | `⌘⇧B` | Text before it is committed | Switch to RIMES, then capture and deliver in chunks | — | After you switch away, only the system clipboard is used, not IMK |
+| Capsule bar | `⌘⇧V` | Recent copies; notes, images, PDFs, skills, passwords | Click to select, double-click or Return to paste. `⌘S` saves | This Mac only | Paste needs Accessibility; otherwise it only reaches the clipboard |
+| Mailbox | `⌘⇧M` | AI conversations, notes, items waiting for review | New conversation; the first Return starts generation | The model is bound to that conversation | CLIs use their default model |
+| Capsule manager | Gear or brush | Five kinds of items, with preview and copy | Four chords reveal a password, for at most 15 seconds | Optional iCloud; passwords and keys stay on this Mac | The passphrase is stored only as a local digest |
+| Settings | `⌘⇧S` | Shortcuts, status, sync, and security | Opens only while RIMES is the current input method | — | Does not embed the Mailbox or Capsule windows |
 
-| Capability | Notes |
-|---|---|
-| Input schemes | Rime Ice full Pinyin, Natural Code and Xiaohe double Pinyin, Wubi 86, English; optional Chording extension |
-| Buffer workbench | Toggle with `⌘⇧B`; with a RIMES input source it can capture text and deliver it in chunks, while under another input source it only allows explicit system-pasteboard import and result copying and never accesses IMK delivery |
-| Capsule rail | Formerly Clipboard History, a peer of Buffer; `⌘⇧V` opens its standalone bottom window across input sources. Header tabs switch between Recent (the clipboard history) and read-only Notes, Images, PDFs, Skills and Passwords; `⌘S` saves the selected Recent cards into Capsule, and the gear and a card's hover brush open the Capsule manager. While capture is enabled and unprotected, it records text, links, images, files, colors, and their lossless representations in a private local database. A single click only selects; double-click, Return, or `⌘1`–`⌘9` activates. Without a precise target, or with another input source active, a record first restores its original system-pasteboard payload, moves to the front of history, and closes silently; RIMES then synthesizes one `⌘V` into the target app. That step needs Accessibility, granted under Settings › Permissions: without it the content only reaches the pasteboard and you press `⌘V` yourself, and Settings can switch activation to pasteboard-only. The paste path itself never raises a permission dialog, opens a context menu, or injects any other keystroke. `⌘C` still only copies the selection |
-| Mailbox | A peer of Buffer; `⌘⇧M` toggles its ordinary key window across input sources and retains conversations and reviews independently. “New Conversation” selects from configured connectors/models: each CLI exposes only its default model, while OpenAI uses the locally configured model. The selection is frozen per conversation without changing the global setting; the process-local draft creates no empty thread, and the first Return creates the conversation and starts generation |
-| Capsule manager | Opened from the rail's gear or a card's brush and drawn as the rail grown upward; the gear or Esc returns to the rail. It manages five local record kinds, and previews or copies images/PDFs/files. Revealing a Password requires four ordered native physical-key chords; the default is `RH / WO / CVN / QU`, four slots show progress, and plaintext is concealed after at most 15 seconds. Changing or resetting the code first requires the current credential; raw custom chords are never stored or synced, only one local salted-digest credential. An optional chosen iCloud Drive folder syncs six portable kinds and media assets while Passwords, Skill paths, the reveal credential, and the master key stay local |
-| Settings | Open Settings with `⌘⇧S` only while the active input source belongs to RIMES; the Mailbox and Capsule pages contain shortcut, local-status, sync, and security configuration rather than their operational panes |
-| Live translation | Apple on-device translation by default (macOS 15+); AI connector optional |
-| AI generate | Codex CLI / Claude Code CLI / OpenAI-compatible API; results stay in Buffer with Plain / Markdown / JSON output and are delivered only by the user |
-| Stream input | Pinyin/chords are resolved by the selected AI connector into up to 5 mutually exclusive guesses; only the chosen result is delivered |
+Live translation, AI generation, and stream input are buffer plug-ins. Chording is a built-in extension. Versions and IDs are in the lists below.
+
+| Name | Kind | Notes | Default |
+|---|---|---|---|
+| Live translation | Buffer plug-in | Apple on-device translation, or AI | Enabled, macOS 15+ |
+| AI generation | Buffer plug-in | Codex, Claude Code, or an OpenAI-compatible API. Plain / Markdown / JSON stays in Buffer until you commit it | Enabled |
+| Stream input | Buffer plug-in | Pinyin or chords go to the selected AI, which returns at most 5 mutually exclusive guesses | Enabled; delivered only after you choose one |
+| Chording | Built-in extension | Combined chords and left-then-right split strokes, plus custom keymaps | Disabled |
 
 <!-- BEGIN PRESET BUFFER PLUGINS -->
 ## Preset buffer plug-ins
@@ -62,189 +73,74 @@ Every plug-in in the table is bundled with RIMES and enabled on a clean first ru
 | Typing Speed | `builtin.typing-speed` | 2.0 | Enabled |
 | Chording | `builtin.fly-chord-learning` | 2.0 | Disabled |
 
-Chording preserves the legacy ID and learning progress, with a single behavior supporting combined and left-then-right split strokes instead of separate modes. It manages editable keymaps, the chord window, lessons, practice, and progress; Feiyao is a built-in preset that can be copied and customized. When disabled, ordinary input returns to an ordinary scheme and Stream Input returns to sequential full Pinyin. A custom keymap can set its output encoding to Natural Code (自然码) double Pinyin: mappings are still written in full Pinyin, and applying the keymap encodes every complete syllable as two keys, so syllable boundaries follow from position rather than apostrophes, while the preedit still shows full Pinyin. The extension also bundles 麓鸣's 呦呦音形 as two native chord schemes (折梅 and 寒梅 fingering), which Rime settles when every key of a chord is released. See the [keymap and migration guide](CHORD-KEYMAPS.md).
-
 ## Install
 
-### Unsigned public preview (`vX.Y.Z-preview.N`)
-
-The public macOS channel currently contains only unsigned community-test **Pre-releases**. Until
-the first formal release has been successfully published, download `RIMES-X.Y.Z-preview.N.pkg`
-from the newest Pre-release on the official [GitHub Releases](https://github.com/scholay/rimes/releases) page.
-This package is **unsigned, not notarized, and not verified by Apple**; it is not a formal
-release. Download only from `scholay/rimes`, then compare the package's locally calculated
-SHA-256 with the value published on that Release page.
-
-Double-click the package once to trigger the macOS warning, then choose **Open Anyway** under
-**System Settings → Privacy & Security** and continue in Installer. If RIMES does not appear as
-an input source, log out and back in. Never disable Gatekeeper globally or remove quarantine
-attributes with `xattr`. Stop if macOS says the package is “damaged” or “will damage your
-computer”. An organization-managed Mac may block this exception through MDM. See
-[the detailed preview guide](UNSIGNED-PREVIEW.md) and
-[Apple's official guidance](https://support.apple.com/zh-cn/102445).
-
-Previews cannot use in-app updates: install each new preview manually; every Release page lists
-its changes. When the first Developer ID-signed and Apple-notarized formal release is published, preview
-users must download and install it manually once from the official Release page.
-
-### Formal releases
-
-The first formal `vX.Y.Z` release appears on [GitHub Releases](https://github.com/scholay/rimes/releases)
-only after the protected release chain succeeds. It provides a Developer ID-signed and
-Apple-notarized `RIMES-<version>.pkg`. Formal release readiness is not established merely by Apple
-Developer Program membership or by seeing one certificate on a developer Mac. It requires all of:
-
-- **Developer ID Application** and **Developer ID Installer** certificates with their private keys
-  from the same Team: the former signs the app and bundled Mach-O, and the latter signs the `.pkg`;
-- two protected GitHub Environments: both must have at least one reviewer, disallow
-  administrator bypass, and use selected branch/tag policy allowing only `v*`; `macos-release` is
-  signing/notarization only, while `macos-publish` is the second publish approval with **no secrets**.
-  Currently, `scholay` starts and separately approves both stages with self-review allowed. The same
-  signed installer must still pass real-Mac acceptance before the publish approval;
-- the two P12 files and passwords, Team ID, and App Store Connect notarization API P8, Key ID, and
-  Issuer ID stored only in `macos-release`.
-
-If any prerequisite is absent, the formal workflow fails closed and the public channel remains an
-unsigned preview channel. [RELEASE.md](RELEASE.md) and [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md)
-describe the full credential set and release gates. The installer fixes
-`RIMES.app` at `/Library/Input Methods` (removing an earlier `ETInput.app`), then registers and enables the
-parent/child input sources in order and makes one best-effort switch to “RIMES”. If a recent
-macOS release does not refresh the input menu immediately, installation still succeeds; log
-out and back in, then confirm RIMES in System Settings. Do not terminate
-`TextInputMenuAgent` or `imklaunchagent`.
-
-#### Two mutually exclusive install lanes
-
-Use only one lane for a user or a formal-package test Mac. Do not overwrite a formal package with a
-local developer install, and do not treat a local build as formal-package acceptance.
-
-- **Developer-maintenance lane:** for a checkout only, `build_install.sh` builds and installs the
-  current source for the current user. It changes with Git state and is not a release candidate. To
-  preserve local user data, use:
-
-  ```bash
-  RB_KEEP_USERDB=1 RIMES_SIGN_IDENTITY='Apple Development: <Name> (<TEAM_ID>)' ./build_install.sh
-  ```
-
-- **Formal-package lane:** ordinary users download only the exact `RIMES-X.Y.Z.pkg` and
-  `SHA256SUMS` from the formal GitHub Release, which macOS installs under `/Library/Input Methods`.
-  Before publication, a maintainer may download the immutable signed stage made by the signing workflow
-  only after it has removed all signing material, and rehearse that exact pkg. Once it passes,
-  `macos-publish` verifies the artifact ID/digest/hashes and publishes the identical bytes. The
-  signed stage is a release gate, not a user download channel; the public GitHub Release remains the
-  authority for users and the updater.
-  This lane does not publish a directly extractable App ZIP, which would bypass Installer registration
-  and migration.
-
-  ```bash
-  scripts/rehearse-release-pkg.sh --pkg /absolute/path/RIMES-X.Y.Z.pkg
-  scripts/rehearse-release-pkg.sh --pkg /absolute/path/RIMES-X.Y.Z.pkg --install-gui
-  ```
-
-  The first command does not install; the second opens the same macOS Installer users receive. It retires
-  the current GUI user's developer copy, so use a test account or a recoverable test Mac. After publication
-  the workflow downloads the official Release again and verifies the exact bytes.
-
-The formal installer can retire the current GUI user's safely verified developer install, so the two
-lanes are not concurrent or interchangeable.
-
-Everyday developer-maintenance shortcuts:
+Work on macOS, iOS, Windows, Android, and Linux is underway, at different stages. Download links for each platform are coming. Until then, clone the source and build it locally:
 
 ```bash
-./build_install.sh                # build + install for current user + register
-.build/release/RimeBuffer smoke   # engine self-check without install
-tail -f ~/rimebuffer.log          # behavior log
+git clone https://github.com/scholay/rimes.git
+cd rimes
 ```
 
-More smoke targets and the release pipeline are documented in [RELEASE.md](RELEASE.md).
+| Platform | Status | Build |
+|---|---|---|
+| macOS | Input method, plus Buffer, Capsule, and Mailbox | `./build_install.sh` |
+| iOS | Keyboard and main app (iOS 17+): offline Pinyin, Natural Code, Wubi, English, and Buffer | Open [`platforms/ios/RIMES.xcodeproj`](platforms/ios/README.md) in Xcode |
+| Windows | Native TSF input method: preedit, candidates, and commit. No Buffer, Capsule, or Mailbox yet, and no signed installer | See [`platforms/windows/native/README.md`](platforms/windows/native/README.md) |
+| Android | In development | Source is not in this repository yet |
+| Linux | Fcitx5 input method, Buffer, and Capsule. No Mailbox yet | See [`platforms/linux/ime/README.md`](platforms/linux/ime/README.md) |
 
-### Windows / Linux input-schemes preview
+## Documentation
 
-Windows and Linux currently receive a separate **Data / Input-Schemes Preview** as a
-manual/weekly maintenance compatibility check; it no longer blocks main merges, macOS previews,
-or formal macOS Releases. It reuses
-RIMES's five core Rime schemas, dictionaries, Lua modules, plus the packaged optional Chording
-schema data, but
-requires an existing installation of [Weasel](https://github.com/rime/weasel) on Windows or
-[Fcitx5 Rime](https://github.com/fcitx/fcitx5-rime) / [IBus Rime](https://github.com/rime/ibus-rime)
-on Linux.
-
-The repository also contains an in-development
-[native Windows foundation](platforms/windows/native/README.md) and a
-[Linux Fcitx5 input method](platforms/linux/ime/README.md). The Linux addon
-links librime, shows preedit/candidates through Fcitx5, and deploys the reviewed
-RIMES data set. It is IME-only (no Buffer/Capsule/Mailbox) and is not a macOS
-release gate.
-
-The public data preview does not include the macOS buffer workbench, AI/translation/OCR, or native
-settings. Cross-batch split-stroke pairing is a current macOS frontend feature and cannot be supplied
-by a data package alone. Use the
-**Pre-release** assets named `RIMES-Windows-Data-Preview-*` or
-`RIMES-Linux-Data-Preview-*`; see [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md)
-for the exact boundary, safety model, and validation commands.
-
-## Docs
-
-| Doc | Contents |
+| Document | Contents |
 |---|---|
-| [SYSTEM-ARCHITECTURE.md](SYSTEM-ARCHITECTURE.md) | Authoritative system architecture (start here if hacking) |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | P1/P2 historical contracts and footguns |
-| [PLUGIN-CONFIGURATION.md](PLUGIN-CONFIGURATION.md) | Declarative plugin configuration |
-| [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) | Download, verification, and safe-install steps for unsigned previews |
-| [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) | Windows / Linux input-schemes preview boundary and validation |
-| [platforms/linux/ime/README.md](platforms/linux/ime/README.md) | Linux Fcitx5 RIMES input method (step 1, IME only) |
-| [RELEASE.md](RELEASE.md) | Release process: channels, one-command releases, cadence, version rules |
+| [SYSTEM-ARCHITECTURE.md](SYSTEM-ARCHITECTURE.md) | Current authoritative architecture. Read this first when taking over development |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Historical P1/P2 contracts and pitfalls |
+| [PLUGIN-CONFIGURATION.md](PLUGIN-CONFIGURATION.md) | Declarative plug-in configuration |
+| [UNSIGNED-PREVIEW.md](UNSIGNED-PREVIEW.md) | Download, checksum, and safe install steps for the unsigned preview |
+| [CROSS-PLATFORM-PREVIEW.md](CROSS-PLATFORM-PREVIEW.md) | Scope and checks for the Windows / Linux scheme preview |
+| [platforms/ios/README.md](platforms/ios/README.md) | iOS keyboard and main app |
+| [platforms/windows/native/README.md](platforms/windows/native/README.md) | Native Windows TSF input method |
+| [platforms/linux/ime/README.md](platforms/linux/ime/README.md) | Linux Fcitx5 input method, Buffer, and Capsule |
+| [RELEASE.md](RELEASE.md) | Release process: channels, one-command release, cadence, and version rules |
 | [RELEASE-REFERENCE.md](RELEASE-REFERENCE.md) | Release reference: signing, installer, in-app updates, CI |
-| [RELEASE-HISTORY.md](RELEASE-HISTORY.md) | Retired release channels, repository migration, and the rename |
+| [RELEASE-HISTORY.md](RELEASE-HISTORY.md) | Closed release channels, the old repository move, and the rename |
 | [CHANGELOG.md](CHANGELOG.md) | Per-version changes generated from public GitHub Releases and commit messages |
 
-## Auto-update
+## Automatic updates
 
-Formally signed builds check GitHub Releases on
-[`scholay/rimes`](https://github.com/scholay/rimes); unsigned `vX.Y.Z-preview.N` builds are excluded
-from that channel.
+An installed, formally signed copy of RIMES checks GitHub Releases for [`scholay/rimes`](https://github.com/scholay/rimes). Unsigned `vX.Y.Z-preview.N` builds are not on that channel.
 
-There is one release entry point, and versions come only from tags (process in
-[RELEASE.md](RELEASE.md), changes in [CHANGELOG.md](CHANGELOG.md)):
+There is one release entry point, and the version comes only from the tag. The process is in [RELEASE.md](RELEASE.md), and the changes are in [CHANGELOG.md](CHANGELOG.md):
 
 ```bash
-./scripts/release.sh --dry-run preview  # show the plan, CI gates, and release notes
+./scripts/release.sh --dry-run preview  # preview the plan, CI gates, and release notes
 ./scripts/release.sh preview            # unsigned macOS preview vX.Y.Z-preview.N
-./scripts/release.sh stable             # promote the preview line to vX.Y.Z (needs Developer ID)
-./scripts/release.sh platform minor     # explicit maintenance Windows/Linux preview; never blocks macOS
+./scripts/release.sh stable             # promote the preview line to vX.Y.Z (requires Developer ID)
+./scripts/release.sh platform minor     # explicit Windows/Linux data preview for maintenance (does not block macOS)
 ```
 
-All release channels are published in `scholay/rimes`: macOS `vX.Y.Z` is formal;
-`vX.Y.Z-preview.N` is an unsigned pre-release excluded from auto-update. Windows/Linux
-`platform-preview-vX.Y.Z` is always a pre-release.
+Every release is published on `scholay/rimes`. macOS `vX.Y.Z` is a stable release. `vX.Y.Z-preview.N` is an unsigned pre-release and is not updated automatically. Windows/Linux `platform-preview-vX.Y.Z` is always a pre-release.
 
-## Community
+## Links
 
-- [RIMES on Linux.do](https://linux.do/u/leowangling/preferences/account)
-- [iRime](https://github.com/jimmy54/iRime) — Thanks to the iRime project and its authors for their guidance and help promoting RIMES.
+- [RIME input method engine](https://rime.im/) — Chinese input in this project is based on RIME.
+- [Linux.do](https://linux.do/u/leowangling/preferences/account) — Thanks to Linux.do, a sincere, friendly, united, and professional community, and to its members.
+- [iRime](https://github.com/jimmy54/iRime) — Thanks to the iRime author for guidance and for helping introduce RIMES.
 
 ## Contributors
 
-See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list.
+The full list is in [CONTRIBUTORS.md](CONTRIBUTORS.md).
 
-**AI coding assistants**: Claude, Cursor, Codex, and Grok helped with design, implementation, and review; humans remain responsible for merges and releases.
+The core maintainer is a consumer-product manager, not a programmer by training, and is grateful for the era of vibe coding.
+
+**AI programming assistants**: Claude, Cursor, Codex, and Grok took part in design, implementation, and review.
 
 ## Known issues
 
-- **On macOS 26, switching input methods while WeChat is focused may crash WeChat** (inside Apple’s `TextInputUIMacHelper`). Upstream issue; also affects stock Rime/Squirrel ([rime/squirrel#951](https://github.com/rime/squirrel/issues/951)). **Workaround**: switch IME elsewhere first, then focus WeChat.
+- **Linux: quitting Fcitx5 before a deploy finishes can leave the process running for minutes.** A first-run or background librime deploy cannot be cancelled, and a larger dictionary makes the wait longer. See [#43](https://github.com/scholay/rimes/issues/43).
+- **Linux: clicking another field immediately after dragging the Buffer toolbar can leave capture on.** Reproduced only in Firefox on X11, when the click lands in the same window within about 10 ms of release. Click again or press Esc to recover. See [#44](https://github.com/scholay/rimes/issues/44).
 
-## License & third parties
+## License and third parties
 
-RIMES-authored code is released under the [MIT License](LICENSE). Bundled Rime
-schemas, dictionaries, and Lua/OpenCC data retain their GPL/LGPL/CC licenses
-and attribution; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and
-`rime-data/licenses/` for the exact boundary.
-
-## Support
-
-If RIMES is useful to you, WeChat users can scan the code below to sponsor its
-continued development:
-
-<p align="center">
-  <img src="images/sponsor-wechat.png" alt="WeChat sponsorship QR code" width="280">
-</p>
+RIMES's own code is under the [MIT License](LICENSE). Bundled Rime schemes, dictionaries, and Lua/OpenCC data keep their own GPL/LGPL/CC licenses and credits. The full boundary is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and `rime-data/licenses/`.

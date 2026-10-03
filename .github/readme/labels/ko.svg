@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="24" viewBox="0 0 64 24" role="img" aria-labelledby="label">
+  <title id="label">한국어</title>
+  <style>
+    rect { fill: #f4efe8; stroke: #e8ded1; }
+    text { fill: #75634b; }
+    @media (prefers-color-scheme: dark) {
+      rect { fill: #362f27; stroke: #504638; }
+      text { fill: #d0c1a9; }
+    }
+  </style>
+  <rect x=".5" y=".5" width="63" height="23" rx="6"/>
+  <text x="32" y="16" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="500">한국어</text>
+</svg>

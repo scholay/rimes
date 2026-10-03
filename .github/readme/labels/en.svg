@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="76" height="24" viewBox="0 0 76 24" role="img" aria-labelledby="label">
+  <title id="label">English</title>
+  <style>
+    rect { fill: #edf2ee; stroke: #dce6de; }
+    text { fill: #4c6654; }
+    @media (prefers-color-scheme: dark) {
+      rect { fill: #28322d; stroke: #3d4b42; }
+      text { fill: #b6cabc; }
+    }
+  </style>
+  <rect x=".5" y=".5" width="75" height="23" rx="6"/>
+  <text x="38" y="16" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="500">English</text>
+</svg>
