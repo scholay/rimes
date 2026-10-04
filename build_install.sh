@@ -18,6 +18,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 source scripts/lib/rime-user-state.sh
+python3 scripts/prepare-official-plugins.py
 
 CONFIG="${1:-release}"
 APP="RIMES.app"                     # One name everywhere: bundle, executable, display.

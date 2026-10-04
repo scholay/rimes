@@ -33,19 +33,22 @@ public final class EngineInstrumentation extends Instrumentation {
                 }
                 result.putString("stream",diagnostic.toString()); finish(-1,result); return;
             }
+            if(arguments!=null && "official-plugins".equals(arguments.getString("mode"))) {
+                result.putString("stream","PASS official plugin checks="+OfficialPluginContract.run(this)+"\n"); finish(-1,result); return;
+            }
             if(arguments!=null && "ai-network".equals(arguments.getString("mode"))) {
                 result.putString("stream","PASS AI network checks="+NetworkAiContract.run(this)+"\n"); finish(-1,result); return;
             }
-            if(arguments!=null && "comet-prepare".equals(arguments.getString("mode"))) {
+            if(arguments!=null && ("ai-prepare".equals(arguments.getString("mode")) || "comet-prepare".equals(arguments.getString("mode")))) {
                 result.putString("stream",NetworkAiContract.prepareLive(this)); finish(-1,result); return;
             }
-            if(arguments!=null && "comet-configure".equals(arguments.getString("mode"))) {
+            if(arguments!=null && ("ai-configure".equals(arguments.getString("mode")) || "comet-configure".equals(arguments.getString("mode")))) {
                 NetworkAiContract.configureLive(this);
                 result.putString("stream","PASS temporary encrypted profile configured; no API request\n"); finish(-1,result); return;
             }
-            if(arguments!=null && "comet-clear".equals(arguments.getString("mode"))) {
-                new CometAiSettings(getTargetContext()).clear();
-                result.putString("stream","PASS temporary CometAPI key removed; online AI disabled\n"); finish(-1,result); return;
+            if(arguments!=null && ("ai-clear".equals(arguments.getString("mode")) || "comet-clear".equals(arguments.getString("mode")))) {
+                NetworkAiContract.restoreLive(this);
+                result.putString("stream","PASS prior AI profile and plugin state restored\n"); finish(-1,result); return;
             }
             if(arguments!=null && "appsettings".equals(arguments.getString("mode"))) {
                 result.putString("stream","PASS grouped app settings checks="+AppSettingsContract.run(this)+"\n"); finish(-1,result); return;

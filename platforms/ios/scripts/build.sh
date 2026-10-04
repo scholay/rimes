@@ -3,6 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 cd "$ROOT"
+python3 scripts/prepare-official-plugins.py
 python3 platforms/ios/scripts/bootstrap.py
 python3 platforms/ios/scripts/build-engine.py
 python3 platforms/ios/scripts/prepare-data.py

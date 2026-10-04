@@ -41,8 +41,8 @@ public final class RimesInputMethodService extends InputMethodService {
     private InputConnection target;
     private SharedPreferences preferences;
     private KeyboardSettings settings;
-    private CometAiSettings cometSettings;
-    private CometAiSettings.Snapshot cometProfile=CometAiSettings.disabled();
+    private OpenAiSettings cometSettings;
+    private OpenAiSettings.Snapshot cometProfile=OpenAiSettings.disabled();
     private String translationDirection="auto";
     private boolean aiMockEnabled=true,learningEnabled=true,changingSettingsPair;
     private KeyboardSettings.Snapshot deferredSettingsPair;
@@ -52,6 +52,14 @@ public final class RimesInputMethodService extends InputMethodService {
     private BufferRail bufferRail,pluginOutput;
     private final PluginSession pluginSession=new PluginSession();
     private BufferPluginExecutor pluginExecutor;
+    private OfficialPluginStore officialPlugins;
+    private SharedPreferences officialPluginPreferences;
+    private final SharedPreferences.OnSharedPreferenceChangeListener officialPluginListener=(prefs,key) -> main.post(() -> {
+        if(this.destroyed) return;
+        cancelChord(); invalidatePlugin();
+        if(this.activePlugin!=null && !officialPlugins.enabled(this.activePlugin)) { this.activePlugin=null; pluginSession.clear(); this.pluginSettingsOpen=false; }
+        resetEngine(); render();
+    });
     private BufferPluginExecutor.Job pluginJob;
     private ChordSurface chords;
     private TextView metrics;
@@ -63,6 +71,7 @@ public final class RimesInputMethodService extends InputMethodService {
     private PluginShortcutBar pluginShortcuts;
     private BufferPluginPanel pluginPanel;
     private String activePlugin;
+    private String pluginResultAuthorization;
     private boolean pluginSettingsOpen, renderedPluginMode;
     private LinearLayout bufferTop,bufferBottom;
     private KeyButton bufferSettings,pluginButton,pluginRunButton;
@@ -99,9 +108,12 @@ public final class RimesInputMethodService extends InputMethodService {
 
     @Override public void onCreate() {
         super.onCreate();
+        officialPlugins=new OfficialPluginStore(this);
+        officialPluginPreferences=getSharedPreferences(OfficialPluginStore.PREFERENCES,MODE_PRIVATE);
+        officialPluginPreferences.registerOnSharedPreferenceChangeListener(officialPluginListener);
         preferences=getSharedPreferences(KeyboardSettings.PREFERENCES_NAME,MODE_PRIVATE);
         settings=new KeyboardSettings(preferences);
-        cometSettings=new CometAiSettings(this);
+        cometSettings=new OpenAiSettings(this);
         preferences.registerOnSharedPreferenceChangeListener(preferenceListener);
         restoreSettings();
         pluginExecutor=new BufferPluginExecutor(getApplicationContext());
@@ -166,6 +178,7 @@ public final class RimesInputMethodService extends InputMethodService {
     @Override public void onUnbindInput() { endTarget(); super.onUnbindInput(); }
     @Override public void onDestroy() {
         preferences.unregisterOnSharedPreferenceChangeListener(preferenceListener);
+        officialPluginPreferences.unregisterOnSharedPreferenceChangeListener(officialPluginListener);
         endTarget(); destroyed=true; pluginExecutor.close(); super.onDestroy();
     }
     private void restoreSettings() {
@@ -191,7 +204,7 @@ public final class RimesInputMethodService extends InputMethodService {
         };
         if(ownsTarget()) settleAndSwitch(change); else { cancelChord(); change.run(); render(); }
     }
-    private boolean chordLayout() { return layout.equals("orthogonal") || layout.equals("splitOrthogonal"); }
+    private boolean chordLayout() { return officialPlugins!=null && officialPlugins.enabled("chord") && (layout.equals("orthogonal") || layout.equals("splitOrthogonal")); }
     private boolean chordVisible() { return ready && chordLayout() && !directOnly && !numeric && !emoji; }
     private void cancelChord() {
         if(keyboard!=null) keyboard.cancelPendingInputEvents();
@@ -205,7 +218,7 @@ public final class RimesInputMethodService extends InputMethodService {
     private void preferenceChanged(SharedPreferences changed,String key) {
         if(destroyed || changingSettingsPair) return;
         KeyboardSettings.Snapshot saved=settings.snapshot();
-        if(CometAiSettings.KEY.equals(key)) {
+        if(OpenAiSettings.KEY.equals(key)) {
             cometProfile=cometSettings.snapshot(); invalidatePlugin(); render(); return;
         }
         if(KeyboardSettings.KEY_THEME.equals(key)) { theme=KeyboardTheme.named(saved.theme); render(); return; }
@@ -704,7 +717,7 @@ public final class RimesInputMethodService extends InputMethodService {
     }
     private void selectPlugin(String id) {
         pluginName(id);
-        if(!canSelectPlugin()) return;
+        if(!canSelectPlugin() || !officialPlugins.enabled(id)) return;
         cancelChord(); cancelPlugin(); if(!buffer.isEnabled()) buffer.setEnabled(true); activePlugin=id.equals(activePlugin)?null:id;
         pluginSession.select(activePlugin);
         punctuationOpen=false; appearanceOpen=false; pluginSettingsOpen=false; render();
@@ -735,24 +748,30 @@ public final class RimesInputMethodService extends InputMethodService {
     }
     private void runPlugin() {
         if(activePlugin==null || !canSelectPlugin() || !buffer.isEnabled() || !pluginAllowed()) return;
+        final String authorization=officialPlugins.grant(activePlugin);
+        if(authorization==null) return;
+        pluginResultAuthorization=authorization;
         PluginSession.Request request=pluginSession.start(buffer);
         if(request==null) return;
         InputEpoch.Ticket ticket=epoch.issue(); InputConnection connection=target;
         pluginSettingsOpen=false; render();
         pluginJob=pluginExecutor.run(request.plugin,request.source.text,translationDirection,cometProfile,new BufferPluginExecutor.Listener() {
             public void onUpdate(String text,boolean complete) { main.post(() -> {
-                if(!epoch.current(ticket) || connection!=target || !ownsTarget() || privateField || !pluginAllowed()) return;
+                if(!epoch.current(ticket) || connection!=target || !ownsTarget() || privateField || !pluginAllowed()
+                        || !authorization.equals(officialPlugins.grant(request.plugin))) return;
                 if(pluginSession.update(request,buffer,text,complete)) { if(pluginSession.snapshot(buffer).status==PluginSession.Status.ERROR) cancelPlugin(); else if(complete) pluginJob=null; render(); }
             }); }
             public void onFailure(String message) { main.post(() -> {
-                if(!epoch.current(ticket) || connection!=target || !ownsTarget() || privateField || !pluginAllowed()) return;
+                if(!epoch.current(ticket) || connection!=target || !ownsTarget() || privateField || !pluginAllowed()
+                        || !authorization.equals(officialPlugins.grant(request.plugin))) return;
                 if(pluginSession.fail(request,buffer,message)) { pluginJob=null; render(); }
             }); }
         });
     }
-    private boolean pluginAllowed() { return "translate".equals(activePlugin) || cometProfile.enabled || aiMockEnabled; }
+    private boolean pluginAllowed() { return officialPlugins.enabled(activePlugin) && ("translate".equals(activePlugin) || cometProfile.enabled || aiMockEnabled); }
     private void insertPluginResult() {
-        if(!canSelectPlugin() || !buffer.isEnabled() || !pluginAllowed()) return;
+        if(!canSelectPlugin() || !buffer.isEnabled() || !pluginAllowed()
+                || pluginResultAuthorization==null || !pluginResultAuthorization.equals(officialPlugins.grant(activePlugin))) return;
         PluginSession.Delivery delivery=pluginSession.prepare(buffer); InputConnection connection=target;
         if(!ownsTarget() || !pluginSession.isCurrent(delivery,buffer)) return;
         int end=selection<0?-1:Math.min(selectionStart,selection)+delivery.text.length();
@@ -796,7 +815,7 @@ public final class RimesInputMethodService extends InputMethodService {
         candidateRow.setVisibility(View.VISIBLE);
         boolean idle=!snapshot.composing() && snapshot.candidates.isEmpty() && heldPreview==null && chordPreview.isEmpty() && !chords.isChordActive() && !punctuationOpen;
         pluginShortcuts.setVisibility(idle && !privateField && !directOnly?View.VISIBLE:View.GONE);
-        pluginShortcuts.render(theme,buffer.isEnabled()?activePlugin:null,canSelectPlugin());
+        pluginShortcuts.render(theme,buffer.isEnabled()?activePlugin:null,canSelectPlugin(),officialPlugins::enabled);
         candidateScroll.setVisibility(heldPreview==null && !idle?View.VISIBLE:View.GONE); chordReadout.setVisibility(heldPreview==null?View.GONE:View.VISIBLE);
         chordReadout.render(heldPreview,theme,landscape());
         boolean marks=punctuationOpen;

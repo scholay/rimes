@@ -113,6 +113,13 @@ function Find-SingleRimesBuildArtifact {
     return $matches[0].FullName
 }
 
+if (-not $DryRun) {
+    $rimesRepository = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+    $rimesRepository = Split-Path $rimesRepository -Parent
+    & python (Join-Path $rimesRepository 'scripts/prepare-official-plugins.py')
+    if ($LASTEXITCODE -ne 0) { throw 'Official plugin source preparation failed.' }
+}
+
 if (-not $SkipPlatformCheck -and -not (Test-RimesWindowsPlatform)) {
     throw 'The native Windows build must run on Windows. Use -SkipPlatformCheck only to inspect a -DryRun plan.'
 }

@@ -421,7 +421,7 @@ public final class InputContractInstrumentation extends Instrumentation {
         SystemClock.sleep(2500); expect(host.first,"","old target unchanged"); expect(host.second,"","new target unchanged after network completion window");
         focus(host.privateInput); check(find("Buffer 插件：快问",false)==null,"private field denies online AI");
         onlinePasswordGuard(); touchHostField(); focus(host.first);
-        report("PASS live CometAPI quick question, polish, translation, manual Send, cancellation, target loss and private/password guards");
+        report("PASS live configured-provider quick question, polish, translation, manual Send, cancellation, target loss and private/password guards");
     }
     private void touchHostField() {
         android.graphics.Rect rect=new android.graphics.Rect();

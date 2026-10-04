@@ -3,10 +3,10 @@ name: Android checks
 on:
   pull_request:
     branches: [main]
-    paths: ['LICENSE', 'platforms/android/**', 'platforms/ios/dependencies.lock.json', 'platforms/ios/Resources/EngineData/**', 'platforms/ios/Licenses/**', '.github/workflows/android.yml']
+    paths: ['OfficialPlugins', 'plugins.lock.json', 'scripts/prepare-official-plugins.py', 'LICENSE', 'platforms/android/**', 'platforms/ios/dependencies.lock.json', 'platforms/ios/Resources/EngineData/**', 'platforms/ios/Licenses/**', '.github/workflows/android.yml']
   push:
     branches: [main]
-    paths: ['LICENSE', 'platforms/android/**', 'platforms/ios/dependencies.lock.json', 'platforms/ios/Resources/EngineData/**', 'platforms/ios/Licenses/**', '.github/workflows/android.yml']
+    paths: ['OfficialPlugins', 'plugins.lock.json', 'scripts/prepare-official-plugins.py', 'LICENSE', 'platforms/android/**', 'platforms/ios/dependencies.lock.json', 'platforms/ios/Resources/EngineData/**', 'platforms/ios/Licenses/**', '.github/workflows/android.yml']
   workflow_dispatch:
 
 permissions:
@@ -26,7 +26,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          submodules: true
           persist-credentials: false
+      - name: Prepare pinned official plugin sources
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/prepare-official-plugins.py
+
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin

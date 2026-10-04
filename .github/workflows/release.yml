@@ -15,6 +15,10 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'OfficialPlugins'
+      - 'plugins.lock.json'
+      - 'scripts/prepare-official-plugins.py'
+      - 'Shared/**'
       - 'Package.swift'
       - 'Package.resolved'
       - 'Info.plist'
@@ -68,7 +72,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          submodules: true
           persist-credentials: false
+
+      - name: Prepare pinned official plugin sources
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/prepare-official-plugins.py
 
       - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
@@ -664,10 +673,15 @@ jobs:
       - name: Checkout exact preview source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          submodules: true
           persist-credentials: false
           # Full history and tags: release notes list the commits since the
           # previous release tag.
           fetch-depth: 0
+
+      - name: Prepare pinned official plugin sources
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/prepare-official-plugins.py
 
       - name: Authorize the preview tag and reject an occupied version
         env:
@@ -1257,10 +1271,15 @@ jobs:
       - name: Checkout exact release source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          submodules: true
           persist-credentials: false
           # Full history and tags for the release notes. The notes script is
           # source from this same tagged commit; the handoff app is never run.
           fetch-depth: 0
+
+      - name: Prepare pinned official plugin sources
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/prepare-official-plugins.py
 
       - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1

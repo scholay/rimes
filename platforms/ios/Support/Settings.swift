@@ -39,6 +39,8 @@ final class ConfigurationStore: ConfigurationStorage {
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     }
     private var file: URL { root.appendingPathComponent("configuration-v1.json") }
+    var pluginRoot: URL { root.appendingPathComponent("official-plugins-v1", isDirectory: true) }
+    var hasPersistedConfiguration: Bool { FileManager.default.fileExists(atPath: file.path) }
     func load() -> AppConfiguration {
         guard let data = try? Data(contentsOf: file), data.count < 8 * 1024 * 1024,
               var value = try? JSONDecoder().decode(AppConfiguration.self, from: data),

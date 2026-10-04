@@ -15,7 +15,7 @@ The home follows the iOS grouped navigation: welcome, getting started, typing,
 and data/privacy. Try typing has its own page; trial text is never restored.
 Settings include the default Chinese scheme, standard and chord layouts, an
 actual geometry preview, 18 themes, all 427 built-in chord mappings, local
-translation direction, CometAPI configuration, the AI Mock switch, word learning and bundled licenses.
+translation direction, OpenAI-compatible provider configuration, the AI Mock switch, word learning and bundled licenses.
 The keyboard and main app share validated preferences. Nine-key selects Pinyin;
 another Chinese scheme returns it to QWERTY. Selecting a regular scheme exits
 chord mode. Turning Mock off cancels existing AI work and revokes its output while
@@ -122,7 +122,7 @@ independent of their hit areas. Nine-key Return spans two visible rows (98 / 69 
   Tap enables Buffer and selects the plugin; tapping it again returns to ordinary
   Buffer. Long-press opens its settings; switching keeps source blocks intact.
   Translation defaults to the bundled local Chinese–English dictionary. Configure
-  CometAPI in the main app for real AI and optional contextual AI translation;
+  an OpenAI-compatible provider in the main app for real AI and optional contextual AI translation;
   otherwise AI entries use a clearly labelled OpenAI-format local Mock. Run executes, Cancel stops work,
   and Send/Return insert only a completed result. Private/password fields have no entries.
   Punctuation remains on the numeric/symbol page and nine-key punctuation control.
@@ -174,17 +174,21 @@ zero matches fail without consuming source. This is lexical lookup, not contextu
 sentence translation. [Source, license and conversion](resources/dictionary/README.md)
 include CC BY-SA 4.0 attribution for both original and derived dictionary data.
 
-**Online AI is opt-in.** In **AI services → CometAPI**, enter a key and model,
-enable CometAPI, optionally enable AI translation, and save. The verified model
-is `deepseek-v4-flash`; the fixed endpoint is
-`https://api.cometapi.com/v1/chat/completions` ([official documentation](https://apidoc.cometapi.com/)).
+**Online AI is opt-in.** In **AI services → Connection settings**, enter an HTTPS API
+URL, model and key, enable online AI, optionally enable AI translation, and save.
+A base URL or full `/chat/completions` URL is accepted. DeepSeek defaults to
+`https://api.deepseek.com` with `deepseek-flash`
+([official documentation](https://api-docs.deepseek.com/api/create-chat-completion/));
+other OpenAI-compatible providers can use their own URL and model. Legacy profiles
+without a URL retain their original CometAPI recipient and encrypted key.
+Changing to another host or port requires entering that provider's key.
 Only an explicit Run sends the current Buffer source. Ordinary typing, local
 lookup, password and private fields do not call the service. Ask, polish and poem
-produce real text; art still produces text prompts, not images. CometAPI-enabled
+produce real text; art still produces text prompts, not images. Online AI
 translation translates sentences rather than performing dictionary lookup.
 
 The key is encrypted with AES-GCM using a non-exportable Android Keystore key.
-Settings show only a blank masked input; blank on Save preserves the existing key.
+Settings show only a blank masked input; blank on Save preserves the existing key for the same service.
 Remove key disables the online route. Configuration changes revoke in-flight and
 completed results. There are no embedded credentials, key/prompt/response logs,
 request history, automatic retries, or redirects. Network errors preserve source
@@ -222,7 +226,8 @@ UTF-16 units. Ordinary Buffer retains its existing next/all block delivery behav
 “Learn words on this device” in Setup is on by default. Rime candidate selections,
 including Buffer selections, update local user dictionaries. There is no complete
 input-history log, clipboard access or cloud synchronization. The INTERNET
-permission serves only explicitly configured and invoked online AI.
+permission serves explicitly configured and invoked online AI and user-requested
+official plugin downloads.
 Turning learning off preserves existing data and uses precompiled schema variants
 with `enable_user_dict: false`. A live setting change settles unfinished raw code
 through the current route, preserves confirmed Buffer blocks, and switches the
@@ -235,7 +240,8 @@ User dictionaries live separately in `no_backup/rime-user`; upgrades do not repl
 this directory. Preferences stay in `shared_prefs/keyboard.xml`. User dictionaries
 are excluded from backup; cloud/device-transfer rules also exclude app data.
 Only validated, precompiled resources are extracted on-device. There is no runtime
-maintenance/deployment, dictionary compiler invocation or resource download.
+maintenance/deployment or dictionary compiler invocation. Official plugin packages
+are separately verified against the bundled catalog before installation.
 
 CometAPI may reject an endpoint with `403 / region_restricted` for a network
 location it does not serve. RIMES shows a region-specific error and preserves the

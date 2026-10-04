@@ -14,6 +14,10 @@ struct RimesApp: App {
 @MainActor final class SettingsModel: ObservableObject {
     @Published var value = ConfigurationStore().load()
     @Published var error: String?
+    init() {
+        do { try MobileOfficialPlugins.makeStore().bootstrap() }
+        catch { self.error = error.localizedDescription }
+    }
     func save() { do { try ConfigurationStore().save(value) } catch { self.error = error.localizedDescription } }
 }
 struct HomeView: View {
@@ -39,6 +43,7 @@ struct HomeView: View {
                     NavigationLink { KeyboardAppearanceView() } label: { Label(L("键盘布局与换肤", "Keyboard layout & skins"), systemImage: "keyboard") }
                     NavigationLink { RimeSchemesView() } label: { Label(L("Rime 方案包与导入", "Rime schemes & import"), systemImage: "shippingbox") }
                     NavigationLink { TranslationSetupView() } label: { Label(L("苹果翻译语言包", "Apple translation languages"), systemImage: "translate") }
+                    NavigationLink { OfficialPluginsView() } label: { Label(L("官方插件", "Official plugins"), systemImage: "puzzlepiece.extension") }
                     NavigationLink { ProvidersView() } label: { Label(L("AI 服务", "AI services"), systemImage: "sparkles") }
                     NavigationLink { PoemLibraryView() } label: { Label(L("AI 作诗：句式与词卡", "AI Poem: patterns & word cards"), systemImage: "text.book.closed") }
                     NavigationLink { StatusSkinsView() } label: { Label(L("宠物轮换", "Pet rotation"), systemImage: "pawprint") }

@@ -46,8 +46,12 @@ final class PluginShortcutBar extends HorizontalScrollView {
 
     /** Keeps entries and scroll position stable while updating selection, availability and colors. */
     void render(KeyboardTheme theme,String selectedID,boolean enabled) {
+        render(theme,selectedID,enabled,id -> true);
+    }
+    void render(KeyboardTheme theme,String selectedID,boolean available,java.util.function.Predicate<String> installed) {
         for(int i=0;i<buttons.length;i++) {
             KeyButton button=buttons[i];
+            boolean enabled=available && installed.test(IDS[i]);
             button.theme(theme);
             boolean selected=IDS[i].equals(selectedID);
             if(button.isSelected()!=selected) button.setSelected(selected);

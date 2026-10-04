@@ -63,7 +63,7 @@ void TypeVirtualKey(rimes::windows::tsf::TextService* service,
     return;
   }
   if (require_eaten && eaten == FALSE) {
-    Fail("expected the key down to be consumed");
+    Fail("expected key down to be consumed: vk=" + std::to_string(virtual_key));
   }
   if (dump_after_key_down && document != nullptr) {
     DumpDocument("after keydown vk=" + std::to_string(virtual_key), *document);

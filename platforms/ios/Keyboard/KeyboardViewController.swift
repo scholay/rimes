@@ -11,6 +11,8 @@ final class KeyboardViewController: UIInputViewController {
     var layoutProxy = LayoutTestDocumentProxy()
     var layoutNeedsInputModeSwitchKey: Bool?
     private var developmentPreferencesAreIsolated = false
+    private var developmentPluginRoot: URL?
+    deinit { if let root = developmentPluginRoot { try? FileManager.default.removeItem(at: root) } }
     override var needsInputModeSwitchKey: Bool { layoutNeedsInputModeSwitchKey ?? super.needsInputModeSwitchKey }
     override var textDocumentProxy: any UITextDocumentProxy { layoutProxy }
     #endif
@@ -19,6 +21,8 @@ final class KeyboardViewController: UIInputViewController {
     private let engine = MobileEngine()
     private lazy var delivery = ProxyTextDelivery(controller: self) { [weak self] in self?.onscreen ?? false }
     private let store = ConfigurationStore(), secrets = KeychainStore()
+    private var resultPluginAuthorization: String?
+    private var officialPlugins = try? MobileOfficialPlugins.makeStore()
     private var config = AppConfiguration()
     private var scheme: InputScheme = .pinyin
     private var importedSchemeStore = RimeSchemeStore()
@@ -190,7 +194,7 @@ final class KeyboardViewController: UIInputViewController {
     }
     private var consentThisSession = Set<String>()
     private struct InsertionContext: Equatable {
-        var target: UUID?, revision: UUID, plugin: KeyboardPlugin?, blocks: [String]
+        var target: UUID?, revision: UUID, plugin: KeyboardPlugin?, authorization: String?, blocks: [String]
     }
     private var pressedInsertion: InsertionContext?
     /// Smooths streamed output: text arrives in bursts, the line shows it at an even pace.
@@ -200,7 +204,7 @@ final class KeyboardViewController: UIInputViewController {
     private lazy var caption = ThinkingCaption(line: result)
     private var insertionContext: InsertionContext {
         InsertionContext(target: currentDocument, revision: buffer.sourceRevision, plugin: selectedPlugin,
-                         blocks: needsPluginResult ? buffer.pluginPending : buffer.pending)
+                         authorization: selectedPlugin.flatMap { pluginAuthorization($0.rawValue) }, blocks: needsPluginResult ? buffer.pluginPending : buffer.pending)
     }
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -535,7 +539,8 @@ final class KeyboardViewController: UIInputViewController {
     private func button(_ title: String, action: @escaping () -> Void) -> KeycapButton {
         let button = KeycapButton(); configure(button, title, action: action); return button
     }
-    private func choose(_ value: InputScheme) {
+    private func choose(_ requested: InputScheme) {
+        let value: InputScheme = requested == .chord && officialPlugins?.isEnabled(legacyID: "chord") != true ? .pinyin : requested
         cancelDeletes()
         spellingChoicesOpen = false; symbolPage = false
         engine.clear(); snapshot = .init(); chordPreview = ""; surface.cancel()
@@ -870,6 +875,7 @@ final class KeyboardViewController: UIInputViewController {
         // The empty strip stays in place underneath, so the row keeps its reserved slot.
         shortcuts.isHidden = !empty
         shortcuts.selected = bufferEnabled ? selectedPlugin : nil
+        for (plugin, button) in shortcuts.buttons { button.isEnabled = pluginAuthorization(plugin.rawValue) != nil }
     }
     private func renderBuffer() {
         bufferPanel.isHidden = !bufferEnabled; bufferButton.isSelected = bufferEnabled
@@ -1234,6 +1240,9 @@ final class KeyboardViewController: UIInputViewController {
         moreButton.menu = UIMenu(children: items)
     }
     @discardableResult private func deliver(all: Bool) -> Bool {
+        if let selectedPlugin, pluginAuthorization(selectedPlugin.rawValue) == nil || pluginAuthorization(selectedPlugin.rawValue) != resultPluginAuthorization {
+            cancelRequest(); buffer.invalidateResult(); return false
+        }
         surface.cancel(); if !snapshot.preedit.isEmpty { settle(); return false }
         guard onscreen, !buffer.generating, currentDocument == DocumentIdentity.read(textDocumentProxy) else { return false }
         let blocks = needsPluginResult ? buffer.pluginPending : buffer.pending
@@ -1378,6 +1387,9 @@ final class KeyboardViewController: UIInputViewController {
         if developmentPreferencesAreIsolated { return }
         #endif
         config = store.load(); preferences = preferencesStore.load()
+        if let plugin = selectedPlugin, pluginAuthorization(plugin.rawValue) == nil {
+            cancelRequest(); buffer.invalidateResult(); selectedPlugin = nil
+        }
         applyAssociationReset(config.associationResetRevision)
         let appearance = KeyboardAppearanceStore().load()
         if let revision = appearance.revision, revision != preferences.appliedKeyboardAppearanceRevision {
@@ -1423,7 +1435,7 @@ final class KeyboardViewController: UIInputViewController {
         let original = UIAction(title: "Buffer", image: UIImage(systemName: "square.stack.3d.up"), state: selectedPlugin == nil ? .on : .off) { [weak self] _ in self?.selectPlugin(nil) }
         // Each plugin stands alone; choosing one only opens it.
         let plugins = KeyboardPlugin.allCases.map { plugin in
-            UIAction(title: plugin.title, image: UIImage(systemName: plugin.symbol), state: selectedPlugin == plugin ? .on : .off) { [weak self] _ in
+            UIAction(title: plugin.title, image: UIImage(systemName: plugin.symbol), attributes: pluginAuthorization(plugin.rawValue) == nil ? [.disabled] : [], state: selectedPlugin == plugin ? .on : .off) { [weak self] _ in
                 guard let self else { return }; self.surface.cancel(); self.settle(); self.selectPlugin(plugin)
             }
         }
@@ -1443,6 +1455,10 @@ final class KeyboardViewController: UIInputViewController {
         selectPlugin(plugin)
     }
     private func selectPlugin(_ plugin: KeyboardPlugin?) {
+        if let plugin, pluginAuthorization(plugin.rawValue) == nil {
+            status.text = L("请在 RIMES App 的“官方插件”中安装并启用", "Install and enable this plugin in RIMES → Official plugins")
+            return
+        }
         cancelRequest(); buffer.invalidateResult(); selectedPlugin = plugin
         if plugin != .translate { speaker.stop() }
         status.text = plugin?.isAI == true ? aiReadinessHint() ?? "" : ""
@@ -1592,8 +1608,14 @@ final class KeyboardViewController: UIInputViewController {
         guard realtime, bufferEnabled, onscreen, snapshot.preedit.isEmpty, !buffer.source.isEmpty else { return }
         run(appleTranslation, delay: 400_000_000)
     }
+    private func pluginAuthorization(_ legacyID: String) -> String? {
+        guard let store = officialPlugins, store.isEnabled(legacyID: legacyID),
+              let entry = store.entry(legacyID: legacyID) else { return nil }
+        return store.state(entry.id)?.installationID
+    }
     private func run(_ plugin: any BufferPlugin, delay: UInt64) {
-        cancelRequest(); status.text = ""
+        guard let authorization = pluginAuthorization(plugin.descriptor.id) else { return }
+        cancelRequest(); resultPluginAuthorization = authorization; status.text = ""
         let revision = buffer.sourceRevision, id = buffer.begin()
         let networkPlugin = plugin.descriptor.id.hasPrefix("ai.")
         var options = ["source": preferences.sourceLanguage, "target": preferences.targetLanguage]
@@ -1601,9 +1623,12 @@ final class KeyboardViewController: UIInputViewController {
         if plugin === appleTranslation { options["blocks"] = DefaultBlockSegmenter.segments(from: buffer.source).joined(separator: AppleTranslationPlugin.blockSeparator) }
         let request = BufferPluginRequest(source: buffer.source, revision: revision, options: options)
         runner.submit(plugin: plugin, request: request, delayNanoseconds: delay, preview: { [weak self] text in
-            guard let self, self.onscreen else { return }; if networkPlugin && !self.hasFullAccess { self.cancelRequest(); self.render(); return }; self.buffer.receive(text, id: id); self.renderBuffer(); self.resize()
+            guard let self, self.onscreen else { return }
+            guard self.pluginAuthorization(plugin.descriptor.id) == authorization else { self.cancelRequest(); self.render(); return }
+            if networkPlugin && !self.hasFullAccess { self.cancelRequest(); self.render(); return }; self.buffer.receive(text, id: id); self.renderBuffer(); self.resize()
         }, completion: { [weak self] result in
             guard let self, self.onscreen, self.buffer.sourceRevision == revision, self.buffer.generation == id else { return }
+            guard self.pluginAuthorization(plugin.descriptor.id) == authorization else { self.cancelRequest(); self.render(); return }
             if networkPlugin && !self.hasFullAccess { self.cancelRequest(); self.render(); return }
             switch result {
             case .success(let output):
@@ -1630,11 +1655,12 @@ final class KeyboardViewController: UIInputViewController {
         }
         let instruction: String
         do {
+            guard let store = officialPlugins, let entry = store.entry(legacyID: plugin.rawValue) else { throw OfficialPluginStateError.unavailable }
+            let content = try store.package(entry.id).instruction()
             switch plugin {
-            case .poem: instruction = try PoemPrompt.instruction(source: buffer.source, options: preferences.poem, library: config.poemLibrary)
-            case .art: instruction = TextArt.instruction(options: preferences.art)
-            case .ask: instruction = AIPrompt.ask
-            default: instruction = AIPrompt.polish
+            case .poem: instruction = content + "\n" + (try PoemPrompt.instruction(source: buffer.source, options: preferences.poem, library: config.poemLibrary))
+            case .art: instruction = content + "\n" + TextArt.instruction(options: preferences.art)
+            default: instruction = content
             }
         } catch let error as PoemError { status.text = error.message; return }
         catch { status.text = error.localizedDescription; return }
@@ -1665,6 +1691,14 @@ final class KeyboardViewController: UIInputViewController {
     func developmentType(_ text: String) { type(text) }
     func developmentResetPreferences() {
         developmentPreferencesAreIsolated = true
+        if developmentPluginRoot == nil {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("Keyboard-Plugins-\(UUID())")
+            developmentPluginRoot = root
+            if let catalog = try? OfficialPluginCatalog.bundled() {
+                officialPlugins = OfficialPluginStore(root: root, platform: "ios", hostVersion: "1.1.0", catalog: catalog, legacyProfile: true)
+                try? officialPlugins?.bootstrap()
+            }
+        }
         config = .init(); preferences = .init(); engine.traditional = false
         importedSchemeSelection = nil; importedSchemeEnglish = false; importedSchemeLibrary = .init(); customLayoutSnapshot = nil
         choose(.pinyin); render()
@@ -1691,6 +1725,7 @@ final class KeyboardViewController: UIInputViewController {
     func developmentPreview(_ text: String) { if let id = buffer.generation { buffer.receive(text, id: id); render() } }
     /// Opens a plugin with sample text, optionally a finished output or a running request.
     func developmentPlugin(_ plugin: KeyboardPlugin?, source: String, output: String? = nil, blocks: [String]? = nil, generating: Bool = false) {
+        resultPluginAuthorization = plugin.flatMap { pluginAuthorization($0.rawValue) }
         cancelRequest(); buffer = .init(); bufferEnabled = true; selectedPlugin = plugin; panelOpen = false; breakAssociationChain()
         buffer.edit(source)
         if let output { let id = buffer.begin(); buffer.finish(output, id: id, blocks: blocks) }
@@ -1742,7 +1777,13 @@ final class KeyboardViewController: UIInputViewController {
     func developmentContent(preedit: String = "", candidates: [String] = []) {
         snapshot = .init(preedit: preedit, candidates: candidates); render()
     }
+    func developmentRevokePlugin(_ plugin: KeyboardPlugin) throws {
+        guard let store = officialPlugins, let entry = store.entry(legacyID: plugin.rawValue) else { throw OfficialPluginStateError.unavailable }
+        try store.setEnabled(false, id: entry.id)
+        try store.setEnabled(true, id: entry.id)
+    }
     func developmentBuffer(_ text: String?, plugin: Bool = false, output: String? = nil, generating: Bool = false) {
+        resultPluginAuthorization = plugin ? pluginAuthorization(KeyboardPlugin.translate.rawValue) : nil
         buffer = .init(); bufferEnabled = text != nil; selectedPlugin = plugin ? .translate : nil
         if let text { buffer.edit(text) }
         if let output { let id = buffer.begin(); buffer.finish(output, id: id) }

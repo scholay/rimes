@@ -40,7 +40,11 @@ constexpr ULONGLONG kLaunchConnectBudgetMillis = 15000;
 // exceed a 20 ms budget even when the engine is healthy. Keep this short
 // enough that a hung Broker still fail-opens.
 constexpr ULONGLONG kKeyBudgetMillis = 80;
-constexpr ULONGLONG kCloseBudgetMillis = 10;
+// Closing an input session is acknowledged by the Broker worker. A 10 ms
+// deadline is shorter than a normal Windows scheduling quantum and spuriously
+// disconnects during host composition termination. Keep the same bounded
+// allowance as an ordinary key request; never replay a timed-out key.
+constexpr ULONGLONG kCloseBudgetMillis = kKeyBudgetMillis;
 constexpr DWORD kConnectRetryMillis = 50;
 constexpr DWORD kBusyPipeWaitMillis = 200;
 

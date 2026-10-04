@@ -129,7 +129,9 @@ def prepare_data():
     # Runtime only needs compiled data. Source dictionaries remain pinned build inputs.
     licenses = ANDROID/'app/build/generated/rime/assets/licenses'
     shutil.copytree(ROOT/'platforms/ios/Licenses', licenses, dirs_exist_ok=True)
-    shutil.copy2(ROOT/'LICENSE',licenses/'RIMES-MIT.txt')
+    shutil.copy2(ROOT/'LICENSE',licenses/'RIMES-Apache-2.0.txt')
+    shutil.copy2(ROOT/'NOTICE',licenses/'RIMES-NOTICE.txt')
+    shutil.copy2(ROOT/'OfficialPlugins/NOTICE',licenses/'RIMES-Plugins-NOTICE.txt')
     entries = {str(p.relative_to(dest)):sha(p) for p in sorted(dest.rglob('*')) if p.is_file()}
     manifest = {'format':1,'librime':LOCK['librime']['commit'],'files':entries}
     (dest/'manifest.json').write_text(json.dumps(manifest,sort_keys=True,indent=2)+'\n')
@@ -147,7 +149,7 @@ if __name__ == '__main__':
     prepare_data()
     for abi in args.abis: build(source,abi,sdk)
     # Keep Gradle from accidentally packaging libraries built from older native inputs.
-    inputs = [pathlib.Path(__file__).resolve(), ROOT/'LICENSE', ROOT/'platforms/ios/dependencies.lock.json']
+    inputs = [pathlib.Path(__file__).resolve(), ROOT/'LICENSE', ROOT/'NOTICE', ROOT/'OfficialPlugins/NOTICE', ROOT/'platforms/ios/dependencies.lock.json']
     inputs += list((ANDROID/'native').glob('*'))
     inputs += [schema_source(name) for name in SCHEMAS]
     inputs += [ANDROID/'resources/nine-key-syllables.json',ANDROID/'resources/chord-profile.json',

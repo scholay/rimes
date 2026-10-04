@@ -20,8 +20,13 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          submodules: true
           persist-credentials: false
           fetch-depth: 0
+      - name: Prepare pinned official plugin sources
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/prepare-official-plugins.py
+
       - name: Require a mainline source commit
         run: git merge-base --is-ancestor HEAD origin/main
       - name: Validate tag, release notes and build counter

@@ -20,8 +20,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          submodules: true
           persist-credentials: false
           fetch-depth: 0
+
+      - name: Prepare pinned official plugin sources
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/prepare-official-plugins.py
+
+      - name: Pinned plugin import tests
+        run: python3 scripts/test-official-plugin-import.py
 
       - name: Release tool tests
         run: python3 -m unittest discover -s scripts/release -p "test*.py" -v
@@ -37,7 +45,7 @@ jobs:
       - name: Info.plist matches the product version anchor
         run: |
           python3 scripts/release/release_tool.py check-plist
-          python3 scripts/release/check-product-versions.py
+          python3 scripts/release/check-product-versions.py --android-root . --windows-root . --require-all
 
       - name: Conventional commit messages
         if: github.event_name == 'pull_request'
@@ -62,7 +70,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          submodules: true
           persist-credentials: false
+
+      - name: Prepare pinned official plugin sources
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/prepare-official-plugins.py
 
       - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
@@ -617,6 +630,7 @@ jobs:
             plugin-stream-smoke
             plugin-platform-smoke
             plugin-distribution-smoke
+            scholay-academic-smoke
             plugin-configuration-smoke
             translation-smoke
             ai-text-smoke

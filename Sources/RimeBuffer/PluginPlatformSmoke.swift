@@ -128,7 +128,7 @@ func runPluginPlatformSmokeTest() -> Bool {
     }
     guard streamInputPlugins.count == 1,
           streamInputPlugins[0].descriptor.capabilities == [.bufferAction],
-          streamInputPlugins[0].descriptor.canUninstall == false else {
+          streamInputPlugins[0].descriptor.canUninstall == true else {
         return fail("built-in stream input plugin")
     }
     let retiredBufferPluginIDs = Set([

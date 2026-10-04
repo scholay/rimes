@@ -1,10 +1,17 @@
 // swift-tools-version: 5.9
 import PackageDescription
+import Foundation
+
+let sourceRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+precondition(FileManager.default.fileExists(atPath: sourceRoot.appendingPathComponent(
+    "Sources/RimeBuffer/ScholayAcademicPlugins.swift"
+).path), "Run git submodule update --init OfficialPlugins, then python3 scripts/prepare-official-plugins.py before building RIMES.")
 
 let package = Package(
     name: "RimeBuffer",
     platforms: [.macOS("13.0")],
     dependencies: [
+        .package(path: "Shared"),
         .package(
             url: "https://github.com/AudioKit/AudioKit.git",
             exact: "5.7.2"
@@ -31,6 +38,7 @@ let package = Package(
             name: "RimeBuffer",
             dependencies: [
                 "CRimeBridge",
+                .product(name: "RimesCore", package: "Shared"),
                 .product(name: "AudioKit", package: "AudioKit"),
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
@@ -40,6 +48,7 @@ let package = Package(
                 .copy("Resources/Music"),
                 .copy("Resources/PluginIcons"),
                 .copy("Resources/Skills"),
+                .copy("Resources/OfficialPlugins"),
             ],
             linkerSettings: [
                 .linkedFramework("InputMethodKit"),

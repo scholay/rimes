@@ -4115,7 +4115,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         let isActive = mode == .bufferEnablement
             && BufferPluginSelectionStore.shared.activeKey == plugin.descriptor.key
         let status = NSTextField(labelWithString: !plugin.isInstalled
-            ? "未下载" : isActive ? "正在使用" : plugin.isEnabled ? "已启用" : "已停用")
+            ? "未安装" : isActive ? "正在使用" : plugin.isEnabled ? "已启用" : "已停用")
         status.font = .systemFont(ofSize: 9, weight: .medium)
         status.textColor = isActive ? themeStatusColor : RimeUI.textMuted
         status.setContentHuggingPriority(.required, for: .horizontal)
@@ -4153,7 +4153,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             download.pluginKey = plugin.descriptor.key
             download.isEnabled = !pluginDownloadInProgress
             configureCardIconButton(download, symbol: "arrow.down.circle",
-                                    label: "下载并安装\(plugin.descriptor.name)")
+                                    label: "安装\(plugin.descriptor.name)")
             bottomViews.append(download)
         }
         let bottom = NSStackView(views: bottomViews)
@@ -5156,7 +5156,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     @objc private func showPluginUninstallDialog() {
         guard let window else { return }
         let plugins = PluginRegistry.shared.plugins(capability: .bufferAction)
-            .filter(\.descriptor.canUninstall)
+            .filter { $0.isInstalled && $0.descriptor.canUninstall }
         guard !plugins.isEmpty else {
             info("当前没有可以卸载的插件。内置插件随应用提供，不能单独卸载。")
             return
@@ -5167,12 +5167,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         popup.widthAnchor.constraint(equalToConstant: 360).isActive = true
         for plugin in plugins {
             popup.addItem(withTitle: "\(plugin.descriptor.name)  ·  v\(plugin.descriptor.version)")
-            popup.lastItem?.representedObject = plugin.descriptor.key.rawID
+            popup.lastItem?.representedObject = plugin.descriptor.key
         }
 
         let alert = NSAlert()
         alert.messageText = "卸载插件"
-        alert.informativeText = "选择要从本机插件目录移除的插件。插件服务及其数据不会被启动或修改。"
+        alert.informativeText = "卸载会停止插件并移除安装内容，保留已有配置和用户数据。"
         alert.alertStyle = .warning
         alert.accessoryView = popup
         alert.addButton(withTitle: "卸载")
@@ -5180,15 +5180,15 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self,
                   response == .alertFirstButtonReturn,
-                  let pluginID = popup.selectedItem?.representedObject as? String else { return }
-            self.uninstallPlugin(id: pluginID)
+                  let key = popup.selectedItem?.representedObject as? PluginKey else { return }
+            self.uninstallPlugin(key: key)
         }
     }
 
     @objc private func showPluginManagementDialog() {
         guard let window else { return }
         let bufferPlugins = PluginRegistry.shared.plugins(capability: .bufferAction)
-        let externalCount = bufferPlugins.filter { $0.descriptor.canUninstall }.count
+        let externalCount = bufferPlugins.filter { $0.descriptor.source == .external }.count
         let details = NSTextField(wrappingLabelWithString:
             "缓冲插件：\(bufferPlugins.count)\n外部插件：\(externalCount)\n目录：\(ActionPluginManager.shared.rootURL.path)")
         details.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
@@ -5273,7 +5273,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             .first(where: { $0.descriptor.key == sender.pluginKey })?
             .descriptor.name ?? sender.pluginKey.rawID
         setPluginDownloadInProgress(true)
-        refreshPluginList(statusMessage: "正在从 GitHub 下载并校验 \(pluginName)…")
+        refreshPluginList(statusMessage: "正在安装并校验 \(pluginName)…")
         PresetBufferPluginInstallationStore.shared.install(
             id: sender.pluginKey.rawID
         ) { [weak self] result in
@@ -5566,9 +5566,19 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         }
     }
 
-    private func uninstallPlugin(id pluginID: String) {
+    private func uninstallPlugin(key: PluginKey) {
+        if key.domain == .builtIn {
+            do {
+                try PluginRegistry.shared.uninstallInternalPlugin(key)
+                refreshPluginList(statusMessage: "插件已卸载，配置和用户数据已保留")
+            } catch {
+                setPluginStatus("卸载失败：\(error.localizedDescription)", isError: true)
+                refreshPluginList()
+            }
+            return
+        }
         guard let plugin = ActionPluginManager.shared.listInstalledPlugins()
-            .first(where: { $0.id == pluginID }) else {
+            .first(where: { $0.id == key.rawID }) else {
             setPluginStatus("插件列表已经变化，请刷新后重试", isError: true)
             refreshPluginList()
             return

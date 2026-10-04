@@ -603,6 +603,12 @@ final class PluginRegistry {
                 if let rawID = notification.userInfo?[
                     PresetBufferPluginInstallationStore.changedPluginIDUserInfoKey
                 ] as? String {
+                    if !self.disabledInternalIDs.contains(rawID) {
+                        self.internalPlugins[rawID]?.stop()
+                    }
+                    self.bufferPluginSelection.clearIfSelected(
+                        PluginKey(domain: .builtIn, rawID: rawID)
+                    )
                     self.disabledInternalIDs.insert(rawID)
                     self.persistInternalEnablement()
                 }
@@ -702,6 +708,18 @@ final class PluginRegistry {
         case .externalActionV1:
             return externalManager.isEnabled(pluginID: key.rawID)
         }
+    }
+
+    func uninstallInternalPlugin(_ key: PluginKey) throws {
+        guard key.domain == .builtIn,
+              internalPlugins[key.rawID]?.descriptor.canUninstall == true,
+              let presetInstallationStore else {
+            throw BufferPluginActivationError.unavailable(key)
+        }
+        try setEnabled(false, for: key)
+        bufferPluginSelection.clearIfSelected(key)
+        try presetInstallationStore.uninstall(id: key.rawID)
+        notifyChange()
     }
 
     func setEnabled(_ enabled: Bool, for key: PluginKey) throws {

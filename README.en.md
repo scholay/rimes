@@ -51,24 +51,35 @@ Live translation, AI generation, and stream input are buffer plug-ins. Chording 
 | Chording | Built-in extension | Combined chords and left-then-right split strokes, plus custom keymaps | Disabled |
 
 <!-- BEGIN PRESET BUFFER PLUGINS -->
-## Preset buffer plug-ins
+## Official macOS plug-ins
 
 This table is generated from [`Catalog/buffer-plugins.json`](Catalog/buffer-plugins.json). Every plug-in update must also update its catalog version and pass `python3 scripts/sync-buffer-plugin-catalog.py --check`.
 
 | Plug-in | ID | Version | Default installation | Default state |
 |---|---|---:|---|---|
-| ChatGPT | `builtin.codex-cli` | 1.1 | Bundled with RIMES | Enabled |
-| Claude | `builtin.claude-code-cli` | 1.1 | Bundled with RIMES | Enabled |
-| AI API | `builtin.openai-compatible` | 1.0 | Bundled with RIMES | Enabled |
-| Reference | `builtin.scholay` | 0.1 | Bundled with RIMES | Enabled |
-| Polisher | `builtin.polisher` | 0.1 | Bundled with RIMES | Enabled |
-| LaTeX | `builtin.latex` | 0.1 | Bundled with RIMES | Enabled |
-| Real-time Translation | `builtin.apple-translation` | 2.2 | Bundled with RIMES | Enabled |
-| Stream of Consciousness Input | `builtin.stream-input` | 1.4 | Bundled with RIMES | Enabled |
-| Electronic Music | `builtin.music` | 0.2.3 | Bundled with RIMES | Enabled |
-| Morse Code | `builtin.morse` | 0.1.0 | Bundled with RIMES | Enabled |
+| Translation | `builtin.apple-translation` | 2.2.0 | Bundled with RIMES | Enabled |
+| Capture | `builtin.capsule.capture` | 1.1.0 | Bundled with RIMES | Enabled |
+| Notes | `builtin.capsule.notes` | 1.1.0 | Bundled with RIMES | Enabled |
+| Passwords | `builtin.capsule.passwords` | 1.1.0 | Bundled with RIMES | Enabled |
+| Resources | `builtin.capsule.resources` | 1.1.0 | Bundled with RIMES | Enabled |
+| Temporary | `builtin.capsule.temporary` | 1.1.0 | Bundled with RIMES | Enabled |
+| Claude | `builtin.claude-code-cli` | 1.1.0 | On demand in Settings | Disabled |
+| ChatGPT | `builtin.codex-cli` | 1.1.0 | On demand in Settings | Disabled |
+| Chord input | `builtin.fly-chord-learning` | 2.0.0 | Bundled with RIMES | Disabled |
+| LaTeX | `builtin.latex` | 1.1.0 | On demand in Settings | Disabled |
+| Chat | `builtin.mailbox.chat` | 1.1.0 | Bundled with RIMES | Enabled |
+| Inbox | `builtin.mailbox.inbox` | 1.1.0 | Bundled with RIMES | Enabled |
+| Terminal | `builtin.mailbox.terminal` | 1.1.0 | Bundled with RIMES | Enabled |
+| Morse Code | `builtin.morse` | 0.1.0 | On demand in Settings | Disabled |
+| Electronic Music | `builtin.music` | 0.2.3 | On demand in Settings | Disabled |
+| AI API | `builtin.openai-compatible` | 1.0.0 | On demand in Settings | Disabled |
+| Polisher | `builtin.polisher` | 1.1.0 | On demand in Settings | Disabled |
+| Reference | `builtin.scholay` | 0.1.0 | On demand in Settings | Disabled |
+| Statistics | `builtin.statistics` | 2.0.0 | Bundled with RIMES | Enabled |
+| Stream of Consciousness Input | `builtin.stream-input` | 1.4.0 | Bundled with RIMES | Enabled |
+| Typing practice | `builtin.typing-speed` | 2.0.0 | Bundled with RIMES | Enabled |
 
-Every plug-in in the table is bundled with RIMES and enabled on a clean first run.
+Bundled plug-ins use the defaults above. Optional plug-ins require installation and explicit enablement. Upgrades preserve existing plugin state.
 <!-- END PRESET BUFFER PLUGINS -->
 
 ## Built-in extensions

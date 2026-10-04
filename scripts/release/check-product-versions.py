@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the four 1.0 product anchors without modifying, building or publishing."""
+"""Check the four product anchors without modifying, building or publishing."""
 import argparse
 import json
 import plistlib

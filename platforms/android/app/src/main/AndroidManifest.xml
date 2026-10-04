@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Network is used only by the explicitly enabled AI service and explicit Run action. -->
+    <!-- Network is used by explicit official plugin downloads and the explicitly enabled AI service. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <application android:label="@string/app_name" android:theme="@style/RimesTheme" android:icon="@mipmap/ic_launcher"
         android:dataExtractionRules="@xml/data_extraction_rules" android:allowBackup="false" android:usesCleartextTraffic="false"

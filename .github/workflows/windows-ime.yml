@@ -8,6 +8,9 @@ on:
     branches: [main]
     paths:
       - 'platforms/windows/**'
+      - 'OfficialPlugins'
+      - 'plugins.lock.json'
+      - 'scripts/prepare-official-plugins.py'
       - '.github/workflows/windows-ime.yml'
       - '.github/workflows/windows-native.yml'
       - 'rime-data/**'
@@ -16,6 +19,9 @@ on:
     branches: [main]
     paths:
       - 'platforms/windows/**'
+      - 'OfficialPlugins'
+      - 'plugins.lock.json'
+      - 'scripts/prepare-official-plugins.py'
       - '.github/workflows/windows-ime.yml'
       - '.github/workflows/windows-native.yml'
       - 'rime-data/**'
@@ -43,7 +49,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          submodules: true
           persist-credentials: false
+
+      - name: Prepare pinned official plugin sources
+        working-directory: ${{ github.workspace }}
+        run: python scripts/prepare-official-plugins.py
 
       - name: Test native shared-data staging
         shell: pwsh
@@ -88,7 +99,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          submodules: true
           persist-credentials: false
+
+      - name: Prepare pinned official plugin sources
+        working-directory: ${{ github.workspace }}
+        run: python scripts/prepare-official-plugins.py
 
       - name: Download unsigned foundation binaries
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8

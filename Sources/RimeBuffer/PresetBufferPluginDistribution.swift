@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Darwin
+import RimesCore
 
 struct PresetBufferPluginCatalogEntry: Equatable {
     let id: String
@@ -33,7 +34,7 @@ struct PresetBufferPluginCatalogEntry: Equatable {
     }
 
     var isDownloadable: Bool {
-        !defaultInstalled && downloadAssetName != nil && sha256 != nil
+        defaultInstalled || (downloadAssetName != nil && sha256 != nil)
     }
 }
 
@@ -61,6 +62,7 @@ enum PresetBufferPluginInstallationError: LocalizedError, Equatable {
     case unknownPlugin(String)
     case alreadyBundled(String)
     case notDownloadable(String)
+    case notEnabled(String)
     case downloadInProgress(String)
     case staleDownload
     case invalidDownloadURL
@@ -77,6 +79,8 @@ enum PresetBufferPluginInstallationError: LocalizedError, Equatable {
             return "插件已经随 RIMES 预装：\(id)"
         case let .notDownloadable(id):
             return "插件没有可用的 GitHub 下载包：\(id)"
+        case let .notEnabled(id):
+            return "请先安装并启用插件：\(id)"
         case let .downloadInProgress(id):
             return "插件正在下载：\(id)"
         case .staleDownload:
@@ -109,7 +113,9 @@ final class PresetBufferPluginInstallationStore {
     static let changedPluginIDUserInfoKey = "pluginID"
 
     private enum DefaultsKey {
+        static let removedBundled = "plugins.internal.removedBundled.v1"
         static let migrated = "plugins.internal.presetDistribution.migrated.v1"
+        static let migratedPackagesV2 = "plugins.internal.presetDistribution.migrated.packages.v2"
         static let grandfathered = "plugins.internal.presetDistribution.grandfathered.v1"
         // This legacy ID-only set is authoritative only for grandfathered
         // profiles, whose optional plug-ins predate downloadable receipts.
@@ -126,6 +132,8 @@ final class PresetBufferPluginInstallationStore {
     private let downloader: ActionPluginManifestDownloading
     private let completionQueue: DispatchQueue
     private let hostVersion: String
+    private let catalogReleaseVersion: String
+    private let bundledPackageDataProvider: (String) -> Data?
     private let willCommitInstallation: (() -> Void)?
     private let workQueue = DispatchQueue(
         label: "com.isaac.rimebuffer.preset-plugin-install",
@@ -143,21 +151,33 @@ final class PresetBufferPluginInstallationStore {
          downloader: ActionPluginManifestDownloading = ActionPluginHTTPSManifestDownloader(),
          completionQueue: DispatchQueue = .main,
          hostVersion: String = PresetBufferPluginInstallationStore.currentHostVersion(),
+         catalogReleaseVersion: String = PresetBufferPluginCatalog.releaseVersion,
+         bundledPackageDataProvider: @escaping (String) -> Data? = PresetBufferPluginInstallationStore.bundledPackageData,
          willCommitInstallation: (() -> Void)? = nil,
          catalogEntries: [PresetBufferPluginCatalogEntry] = PresetBufferPluginCatalog.entries) {
         self.defaults = defaults
-        self.rootURL = rootURL.standardizedFileURL
+        self.rootURL = rootURL.isFileURL
+            ? URL(fileURLWithPath: rootURL.standardizedFileURL.path, isDirectory: true)
+            : rootURL.standardizedFileURL
         self.fileManager = fileManager
         self.downloader = downloader
         self.completionQueue = completionQueue
         self.hostVersion = hostVersion
+        self.catalogReleaseVersion = catalogReleaseVersion
+        self.bundledPackageDataProvider = bundledPackageDataProvider
         self.willCommitInstallation = willCommitInstallation
         self.catalogEntries = catalogEntries
     }
 
     static func currentHostVersion(bundle: Bundle = .main) -> String {
         bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString")
-            as? String ?? ""
+            as? String ?? PresetBufferPluginCatalog.releaseVersion
+    }
+
+    static func bundledPackageData(id: String) -> Data? {
+        guard let url = Bundle.module.url(forResource: id, withExtension: "json",
+                                          subdirectory: "OfficialPlugins") else { return nil }
+        return try? Data(contentsOf: url)
     }
 
     static func defaultRootURL() -> URL {
@@ -198,7 +218,7 @@ final class PresetBufferPluginInstallationStore {
         stateLock.lock()
         defer { stateLock.unlock() }
         let knownOptional = optionalIDs
-        if !defaults.bool(forKey: DefaultsKey.migrated) {
+        if !defaults.bool(forKey: DefaultsKey.migratedPackagesV2) {
             let grandfathered = hadLegacyEnablement ? knownOptional : []
             let enabled = hadLegacyEnablement
                 ? knownOptional.subtracting(legacyDisabledIDs)
@@ -206,6 +226,7 @@ final class PresetBufferPluginInstallationStore {
             defaults.set(grandfathered.sorted(), forKey: DefaultsKey.grandfathered)
             defaults.set(enabled.sorted(), forKey: DefaultsKey.enabledOptional)
             defaults.set(true, forKey: DefaultsKey.migrated)
+            defaults.set(true, forKey: DefaultsKey.migratedPackagesV2)
             return
         }
 
@@ -244,7 +265,9 @@ final class PresetBufferPluginInstallationStore {
 
     private func isInstalledLocked(id: String) -> Bool {
         guard let entry = catalogEntry(id: id) else { return true }
-        if entry.defaultInstalled { return true }
+        if entry.defaultInstalled {
+            return !Set(defaults.stringArray(forKey: DefaultsKey.removedBundled) ?? []).contains(id)
+        }
         let grandfathered = Set(
             defaults.stringArray(forKey: DefaultsKey.grandfathered) ?? []
         )
@@ -327,10 +350,25 @@ final class PresetBufferPluginInstallationStore {
             ))
             return
         }
-        guard !entry.defaultInstalled else {
-            finish(completion, with: .failure(
-                PresetBufferPluginInstallationError.alreadyBundled(id)
-            ))
+        if entry.defaultInstalled {
+            do {
+                guard let data = bundledPackageDataProvider(id) else {
+                    throw PresetBufferPluginInstallationError.invalidManifest
+                }
+                try validateDownloadedPackage(data, for: entry)
+                stateLock.lock()
+                var removed = Set(defaults.stringArray(forKey: DefaultsKey.removedBundled) ?? [])
+                removed.remove(id)
+                defaults.set(removed.sorted(), forKey: DefaultsKey.removedBundled)
+                mutationGeneration &+= 1
+                stateLock.unlock()
+                completionQueue.async {
+                    NotificationCenter.default.post(name: Self.didChangeNotification, object: self,
+                        userInfo: [Self.rootPathUserInfoKey: self.rootURL.path,
+                                   Self.changedPluginIDUserInfoKey: id])
+                }
+                finish(completion, with: .success(entry))
+            } catch { finish(completion, with: .failure(error)) }
             return
         }
         if isInstalled(id: id) {
@@ -339,12 +377,12 @@ final class PresetBufferPluginInstallationStore {
         }
         guard let url = Self.catalogDownloadURL(
                 for: entry,
-                hostVersion: hostVersion
+                hostVersion: catalogReleaseVersion
               ),
               Self.isAllowedCatalogURL(
                 url,
                 entry: entry,
-                hostVersion: hostVersion
+                hostVersion: catalogReleaseVersion
               ),
               entry.sha256?.count == 64 else {
             finish(completion, with: .failure(
@@ -411,13 +449,77 @@ final class PresetBufferPluginInstallationStore {
         }
     }
 
-    /// Invalidates delayed downloads when a newer catalog or state mutation
-    /// wins. Production currently has no uninstall surface, but the seam keeps
-    /// future update/disable flows from resurrecting stale receipts.
+    /// Invalidates delayed downloads when a newer catalog or state mutation wins.
     func invalidatePendingInstalls() {
         stateLock.lock()
         mutationGeneration &+= 1
         stateLock.unlock()
+    }
+
+    /// Return functional content only after both installation and enablement
+    /// checks. Legacy profiles may use the exact pinned compatibility package
+    /// shipped with the host, keeping existing plugins usable offline.
+    func instruction(id: String, mode: String = "default") throws -> String {
+        try package(id: id).instruction(mode: mode)
+    }
+
+    func package(id: String, requireEnabled: Bool = true) throws -> OfficialPluginPackage {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard let entry = catalogEntry(id: id), isInstalledLocked(id: id),
+              !requireEnabled || entry.defaultInstalled || isOptionalEnabledLocked(id: id) else {
+            throw PresetBufferPluginInstallationError.notEnabled(id)
+        }
+        let grandfathered = Set(defaults.stringArray(forKey: DefaultsKey.grandfathered) ?? [])
+        let data: Data
+        if let installed = readValidatedPackageData(for: entry) {
+            data = installed
+        } else if entry.defaultInstalled || grandfathered.contains(id),
+                  let compatibility = bundledPackageDataProvider(id) {
+            data = compatibility
+        } else {
+            throw PresetBufferPluginInstallationError.invalidManifest
+        }
+        try validateDownloadedPackage(data, for: entry)
+        let package = try OfficialPluginPackage.validated(
+            data, expectedID: entry.id, expectedVersion: entry.version,
+            platform: "macos", hostVersion: hostVersion
+        )
+        return package
+    }
+
+    /// Remove package content and its authorization, retaining user settings,
+    /// documents and credentials. The registry stops the runtime first.
+    func uninstall(id: String) throws {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard let entry = catalogEntry(id: id) else {
+            throw PresetBufferPluginInstallationError.unknownPlugin(id)
+        }
+        if entry.defaultInstalled {
+            var removed = Set(defaults.stringArray(forKey: DefaultsKey.removedBundled) ?? [])
+            removed.insert(id)
+            defaults.set(removed.sorted(), forKey: DefaultsKey.removedBundled)
+        }
+        let directory = rootURL.appendingPathComponent(id, isDirectory: true)
+        guard directory.deletingLastPathComponent().standardizedFileURL == rootURL,
+              Self.pathHasNoUntrustedSymlink(directory) else {
+            throw PresetBufferPluginInstallationError.unsafeInstallPath(directory.path)
+        }
+        mutationGeneration &+= 1
+        if fileManager.fileExists(atPath: directory.path) {
+            do { try fileManager.removeItem(at: directory) }
+            catch { throw PresetBufferPluginInstallationError.fileOperation(error.localizedDescription) }
+        }
+        for key in [DefaultsKey.grandfathered, DefaultsKey.enabledOptional] {
+            let retained = Set(defaults.stringArray(forKey: key) ?? []).subtracting([id])
+            defaults.set(retained.sorted(), forKey: key)
+        }
+        completionQueue.async {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: self,
+                userInfo: [Self.rootPathUserInfoKey: self.rootURL.path,
+                           Self.changedPluginIDUserInfoKey: id])
+        }
     }
 
     private func finish(
@@ -443,7 +545,7 @@ final class PresetBufferPluginInstallationStore {
         guard let manifest = try? JSONDecoder().decode(
             PresetBufferPluginPackageManifest.self,
             from: data
-        ), manifest.schemaVersion == 1,
+        ), [1, 2].contains(manifest.schemaVersion),
            manifest.id == entry.id,
            manifest.version == entry.version,
            manifest.nameZH == entry.nameZH,
@@ -451,6 +553,12 @@ final class PresetBufferPluginInstallationStore {
            manifest.summaryZH == entry.summaryZH,
            manifest.summaryEN == entry.summaryEN else {
             throw PresetBufferPluginInstallationError.invalidManifest
+        }
+        if manifest.schemaVersion == 2 {
+            do {
+                _ = try OfficialPluginPackage.validated(data, expectedID: entry.id,
+                    expectedVersion: entry.version, platform: "macos", hostVersion: hostVersion)
+            } catch { throw PresetBufferPluginInstallationError.invalidManifest }
         }
     }
 
@@ -542,6 +650,11 @@ final class PresetBufferPluginInstallationStore {
     private func validatedInstalledManifest(
         for entry: PresetBufferPluginCatalogEntry
     ) -> PresetBufferPluginPackageManifest? {
+        guard let data = readValidatedPackageData(for: entry) else { return nil }
+        return try? JSONDecoder().decode(PresetBufferPluginPackageManifest.self, from: data)
+    }
+
+    private func readValidatedPackageData(for entry: PresetBufferPluginCatalogEntry) -> Data? {
         guard validatedInstalledReceipt(for: entry) != nil else { return nil }
         let directory = rootURL.appendingPathComponent(entry.id, isDirectory: true)
         let manifestURL = directory.appendingPathComponent("manifest.json")
@@ -560,10 +673,7 @@ final class PresetBufferPluginInstallationStore {
               (try? validateDownloadedPackage(data, for: entry)) != nil else {
             return nil
         }
-        return try? JSONDecoder().decode(
-            PresetBufferPluginPackageManifest.self,
-            from: data
-        )
+        return data
     }
 
     private func validatedInstalledReceipt(
@@ -633,7 +743,7 @@ final class PresetBufferPluginInstallationStore {
             return nil
         }
         return URL(
-            string: "https://github.com/scholay/rimes/releases/download/"
+            string: "https://github.com/scholay/rimes-plugins/releases/download/"
                 + "v\(hostVersion)/\(assetName)"
         )
     }
@@ -645,7 +755,7 @@ final class PresetBufferPluginInstallationStore {
     ) -> Bool {
         guard let assetName = entry.downloadAssetName,
               isReleaseVersion(hostVersion) else { return false }
-        let expectedPath = "/scholay/rimes/releases/download/v\(hostVersion)/"
+        let expectedPath = "/scholay/rimes-plugins/releases/download/v\(hostVersion)/"
             + assetName
         return ActionPluginHTTPSManifestDownloader.isAllowedDownloadURL(url)
             && url.host?.lowercased() == "github.com"

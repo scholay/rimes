@@ -77,6 +77,21 @@ import RimesCore
         }
     }
 
+    func testCompletedPluginResultCannotSurviveDisableAndReenable() throws {
+        let (window, keyboard) = host(.qwerty); defer { window.isHidden = true }
+        keyboard.developmentPlugin(.polish, source: "保留原文", output: "Old result")
+        let key = try returnKey(keyboard)
+        key.sendActions(for: .touchDown)
+        try keyboard.developmentRevokePlugin(.polish)
+        key.sendActions(for: .touchUpInside)
+        keyboard.developmentEnter()
+        XCTAssertTrue(keyboard.layoutProxy.insertions.isEmpty)
+        XCTAssertEqual(keyboard.developmentBufferSource.text, "保留原文")
+        keyboard.developmentPlugin(.polish, source: "新请求", output: "Fresh result")
+        tap(key)
+        XCTAssertEqual(keyboard.layoutProxy.insertions, ["Fresh result"])
+    }
+
     func testHeldReturnCannotTurnIntoSendAfterAnotherActionDrainsBuffer() throws {
         let (window, keyboard) = host(.orthogonal); defer { window.isHidden = true }
         keyboard.layoutProxy.returnKeyType = .send

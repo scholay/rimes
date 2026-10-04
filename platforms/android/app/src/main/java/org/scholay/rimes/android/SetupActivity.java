@@ -32,6 +32,8 @@ import org.scholay.rimes.core.ChordProfile;
 /** The launcher and Android's IME settings entry share the same native settings home. */
 public final class SetupActivity extends Activity {
     private KeyboardSettings settings;
+    private OfficialPluginStore officialPlugins;
+    private String installingPlugin;
     private LinearLayout content;
     private String page="home", license;
     private String renderedPage;
@@ -45,6 +47,7 @@ public final class SetupActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        officialPlugins=new OfficialPluginStore(this);
         settings=new KeyboardSettings(this);
         if(state!=null) { page=state.getString("settings.page","home"); license=state.getString("settings.license");
             java.util.ArrayList<String> saved=state.getStringArrayList("settings.navigation"); if(saved!=null) navigation.addAll(saved); }
@@ -123,7 +126,7 @@ public final class SetupActivity extends Activity {
             case "home":home();break;case "setup":setup();break;case "playground":playground();break;
             case "schema":schemas();break;case "chords":chords();break;case "appearance":appearance();break;
             case "resources":resources();break;case "translation":translation();break;case "ai":ai();break;
-            case "mappings":mappings();break;
+            case "mappings":mappings();break;case "plugins":plugins();break;
             case "data":data();break;case "privacy":privacy();break;case "licenses":licenses();break;
             case "license":document();break;case "differences":differences();break;
             default:page="home";render();return;
@@ -148,6 +151,7 @@ public final class SetupActivity extends Activity {
         switch(destination) {
             case "setup":return t("启用 RIMES 键盘","Enable RIMES");case "playground":return t("输入体验","Try typing");
             case "schema":return t("默认方案","Default scheme");case "chords":return t("滑动并击与键位","Slide chords & mappings");
+            case "plugins":return t("官方插件","Official plugins");
             case "mappings":return t("内置并击映射","Built-in chord mappings");
             case "appearance":return t("键盘布局与换肤","Keyboard layout & skins");case "resources":return t("Rime 方案与词典","Rime schemes & dictionaries");
             case "translation":return t("本机翻译词典","Local translation dictionary");case "ai":return t("AI 服务","AI services");
@@ -222,7 +226,8 @@ public final class SetupActivity extends Activity {
         row(typing,KeyboardIcon.KEYBOARD,t("键盘布局与换肤","Keyboard layout & skins"),null,null,"settings.home.appearance",() -> navigate("appearance"));
         row(typing,KeyboardIcon.STACK_LAYERS,t("Rime 方案与词典","Rime schemes & dictionaries"),null,null,"settings.home.resources",() -> navigate("resources"));
         row(typing,KeyboardIcon.TRANSLATE,t("本机翻译词典","Local translation dictionary"),null,null,"settings.home.translation",() -> navigate("translation"));
-        row(typing,KeyboardIcon.MAGIC_WAND,t("AI 服务","AI services"),null,new CometAiSettings(this).snapshot().enabled?"CometAPI":"Mock","settings.home.ai",() -> navigate("ai"));
+        row(typing,KeyboardIcon.MAGIC_WAND,t("AI 服务","AI services"),null,new OpenAiSettings(this).snapshot().enabled?t("联网 AI","Online AI"):"Mock","settings.home.ai",() -> navigate("ai"));
+        row(typing,KeyboardIcon.GRID_9,t("官方插件","Official plugins"),null,null,"settings.home.plugins",() -> navigate("plugins"));
         LinearLayout more=group(t("数据与隐私","Data & privacy"));
         row(more,KeyboardIcon.STACK_LAYERS,t("数据管理","Data management"),null,null,"settings.home.data",() -> navigate("data"));
         row(more,KeyboardIcon.BOOK,t("隐私与第三方许可","Privacy & third-party licenses"),null,null,"settings.home.privacy",() -> navigate("privacy"));
@@ -309,6 +314,39 @@ public final class SetupActivity extends Activity {
         }
         note(t("点击键盘的配色图标，在面板中选择配色。Android 当前使用静态宠物图示。","Tap the keyboard’s appearance icon to choose colors in its panel. Android currently uses static pet symbols."));
     }
+    private void plugins() {
+        if(officialPlugins.entries().isEmpty()) { note(t("插件目录不可用，请重新安装应用。","Plugin catalog unavailable. Please reinstall the app.")); return; }
+        for(OfficialPluginStore.Entry entry:officialPlugins.entries()) {
+            LinearLayout group=group(entry.name+" · "+entry.version);
+            OfficialPluginStore.State state=officialPlugins.state(entry);
+            if(state.installed) {
+                toggle(group,t("启用","Enabled"),"settings.plugin."+entry.legacyID+".enabled",state.enabled,enabled -> {
+                    try { officialPlugins.setEnabled(entry,enabled); } catch(Exception error) { pluginError(error); }
+                    render();
+                });
+                row(group,null,t("卸载","Uninstall"),null,null,"settings.plugin."+entry.legacyID+".uninstall",() -> {
+                    try { officialPlugins.uninstall(entry); } catch(Exception error) { pluginError(error); }
+                    render();
+                });
+            } else {
+                row(group,KeyboardIcon.STACK_LAYERS,entry.id.equals(installingPlugin)?t("正在安装…","Installing…"):
+                    entry.bundled?t("恢复安装","Restore"):t("下载安装","Download"),null,null,"settings.plugin."+entry.legacyID+".install",() -> {
+                    if(installingPlugin!=null) return;
+                    installingPlugin=entry.id; render();
+                    documents.execute(() -> {
+                        Exception failure=null;
+                        try { officialPlugins.install(entry); } catch(Exception error) { failure=error; }
+                        final Exception result=failure;
+                        runOnUiThread(() -> { if(destroyed) return; installingPlugin=null; if(result!=null) pluginError(result); render(); });
+                    });
+                });
+            }
+        }
+        note(t("下载后默认停用。启用不会自动选择插件或发送原文；卸载保留配置、词库和用户文档。","Downloads start disabled. Enabling does not select a plugin or send text. Uninstalling keeps settings, dictionaries and user documents."));
+    }
+    private void pluginError(Exception error) {
+        android.widget.Toast.makeText(this,error.getMessage()==null?t("插件操作未完成","Plugin operation failed"):error.getMessage(),android.widget.Toast.LENGTH_LONG).show();
+    }
     private void chords() {
         LinearLayout instructions=group(t("双手滑动并击","Two-thumb slide chords"));
         paragraph(instructions,t("每手：起点＋终点。途中经过键不计入；双手全部松开时提交。划回起点恢复单键。","Each hand uses its start and end key. Keys crossed along the way do not count. Release both hands to commit; slide back to the start to restore a single key."));
@@ -351,21 +389,23 @@ public final class SetupActivity extends Activity {
         toggle.setOnCheckedChangeListener((button,value) -> save.accept(value)); group.addView(toggle,new LinearLayout.LayoutParams(-1,-2));
     }
     private void ai() {
-        CometAiSettings comet=new CometAiSettings(this); CometAiSettings.Snapshot profile=comet.snapshot();
-        LinearLayout remote=group("CometAPI");
-        row(remote,KeyboardIcon.MAGIC_WAND,t("联网 AI","Online AI"),"https://api.cometapi.com/v1",profile.enabled?t("已启用","Enabled"):t("未启用","Off"),"settings.ai.comet",null);
-        note(t("启用并点执行后，仅将本次 Buffer 原文发送给 CometAPI。普通打字不联网；密码和隐私输入框禁用 AI。结果须手动发送。","After enabling, Run sends only the current Buffer source to CometAPI. Ordinary typing stays offline; AI is disabled in password and private fields. Insert results manually."));
+        OpenAiSettings comet=new OpenAiSettings(this); OpenAiSettings.Snapshot profile=comet.snapshot();
+        LinearLayout remote=group(t("联网 AI","Online AI"));
+        row(remote,KeyboardIcon.MAGIC_WAND,t("联网 AI","Online AI"),profile.baseURL,profile.enabled?t("已启用","Enabled"):t("未启用","Off"),"settings.ai.comet",null);
+        note(t("启用并点执行后，仅将本次 Buffer 原文发送给你配置的 AI 服务。普通打字不联网；密码和隐私输入框禁用 AI。结果须手动发送。","After enabling, Run sends only the current Buffer source to your configured AI service. Ordinary typing stays offline; AI is disabled in password and private fields. Insert results manually."));
         LinearLayout configuration=group(t("连接设置","Connection settings"));
+        EditText address=aiField(configuration,t("API 地址","API URL"),profile.baseURL,"settings.ai.base_url",false);
         EditText model=aiField(configuration,t("模型","Model"),profile.model,"settings.ai.comet.model",false);
+        note(t("可填写服务根地址或完整的 /chat/completions 地址。例如 DeepSeek：https://api.deepseek.com。更换服务时请同时填写对应密钥。","Use a base URL or a full /chat/completions URL. For DeepSeek: https://api.deepseek.com. Enter that provider’s key when switching services."));
         EditText key=aiField(configuration,"API Key","","settings.ai.comet.key",true);
         key.setHint(profile.hasKey()?t("已安全保存；留空保留现有密钥","Saved securely; leave blank to keep"):t("输入 API Key","Enter API key"));
         boolean[] enabled={profile.enabled},translation={profile.translation};
-        toggle(configuration,t("启用 CometAPI","Enable CometAPI"),"settings.ai.comet.enabled",enabled[0],value -> enabled[0]=value);
+        toggle(configuration,t("启用联网 AI","Enable online AI"),"settings.ai.comet.enabled",enabled[0],value -> enabled[0]=value);
         toggle(configuration,t("翻译也使用 AI","Use AI for translation"),"settings.ai.comet.translation",translation[0],value -> translation[0]=value);
         TextView status=text("",14,secondary,false); status.setPadding(dp(16),dp(8),dp(16),dp(8)); status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); configuration.addView(status);
         row(configuration,KeyboardIcon.CHECK,t("保存设置","Save settings"),null,null,"settings.ai.comet.save",() -> {
             try {
-                comet.save(model.getText().toString(),key.getText().toString(),enabled[0],translation[0]);
+                comet.save(address.getText().toString(),model.getText().toString(),key.getText().toString(),enabled[0],translation[0]);
                 key.setText(""); show("ai");
                 android.widget.Toast.makeText(this,t("AI 设置已保存","AI settings saved"),android.widget.Toast.LENGTH_SHORT).show();
             } catch(OpenAiChatCodec.Failure error) { status.setText(error.getMessage()); }
@@ -382,7 +422,7 @@ public final class SetupActivity extends Activity {
         row(service,null,t("回复方式","Reply format"),null,t("流式 SSE","Streaming SSE"),"settings.ai.stream",null);
         note(t("快问、润色、作诗和画画提示词使用本机模拟回复。无需 API Key，也不会向外发送输入。","Quick questions, polish, poems and art prompts use simulated local replies. No API key is needed and input is not sent off-device."));
         LinearLayout flow=group(t("在键盘中使用","Use from the keyboard")); paragraph(flow,t("候选栏没有候选字时显示 Buffer 插件快捷入口。选择插件，在 Buffer 确认原文后点执行；检查结果，再点发送。","When there are no candidates, the candidate bar shows Buffer plugin shortcuts. Choose a plugin, confirm text in Buffer, then run; review the result and insert it."));
-        note(t("CometAPI 启用时优先使用联网 AI。联网失败会保留原文，不切换到模拟回复。画画目前只生成文字提示词。","CometAPI takes priority when enabled. Network failures preserve the source without falling back to mock replies. Art currently produces text prompts only."));
+        note(t("启用时优先使用联网 AI。联网失败会保留原文，不切换到模拟回复。画画目前只生成文字提示词。","Online AI takes priority when enabled. Network failures preserve the source without falling back to mock replies. Art currently produces text prompts only."));
     }
     private EditText aiField(LinearLayout group,String label,String value,String tag,boolean secret) {
         TextView title=text(label,14,secondary,false); title.setPadding(dp(16),dp(12),dp(16),0); group.addView(title);
@@ -399,14 +439,14 @@ public final class SetupActivity extends Activity {
     }
     private void privacy() {
         LinearLayout input=group(t("输入与学习","Typing & learning")); paragraph(input,getString(R.string.privacy)+"\n\n"+getString(R.string.learning_detail));
-        LinearLayout plugins=group(t("翻译与 AI","Translation & AI")); paragraph(plugins,t("翻译默认查阅本机 CC-CEDICT 词典。联网 AI 需在 AI 服务中配置并启用，点执行后仅发送本次 Buffer 原文给 CometAPI。未启用时可用本机 Mock。不读取剪贴板、联系人或完整输入历史。结果只有点发送后进入当前输入框。","Translation defaults to bundled CC-CEDICT lookup. Online AI requires explicit configuration and enabling; Run sends only the current Buffer source to CometAPI. A local mock is available when online AI is off. There is no clipboard, contacts or full typing-history access. Results enter the current field only after you insert them."));
+        LinearLayout plugins=group(t("翻译与 AI","Translation & AI")); paragraph(plugins,t("翻译默认查阅本机 CC-CEDICT 词典。联网 AI 需在 AI 服务中配置并启用，点执行后仅发送本次 Buffer 原文给 CometAPI。未启用时可用本机 Mock。不读取剪贴板、联系人或完整输入历史。结果只有点发送后进入当前输入框。","Translation defaults to bundled CC-CEDICT lookup. Online AI requires explicit configuration and enabling; Run sends only the current Buffer source to your configured AI service. A local mock is available when online AI is off. There is no clipboard, contacts or full typing-history access. Results enter the current field only after you insert them."));
         LinearLayout legal=group(t("开源软件与资源","Open-source software & resources")); row(legal,KeyboardIcon.BOOK,t("第三方许可","Third-party licenses"),null,null,"settings.privacy.licenses",() -> navigate("licenses"));
     }
     private void differences() {
-        LinearLayout available=group(t("已可配置","Available settings")); paragraph(available,t("全拼、自然码、五笔；26 键、九键、两种并击布局；18 套配色；本机中英查译方向；CometAPI 密钥、模型、AI 翻译与 Mock 开关；本机词库学习。","Pinyin, Natural Code and Wubi; QWERTY, 9-key and two chord layouts; 18 colors; local Chinese–English lookup direction; CometAPI key, model, AI translation and mock toggles; local word learning."));
+        LinearLayout available=group(t("已可配置","Available settings")); paragraph(available,t("全拼、自然码、五笔；26 键、九键、两种并击布局；18 套配色；本机中英查译方向；AI 地址、密钥、模型、AI 翻译与 Mock 开关；本机词库学习。","Pinyin, Natural Code and Wubi; QWERTY, 9-key and two chord layouts; 18 colors; local Chinese–English lookup direction; AI URL, key, model, AI translation and mock toggles; local word learning."));
         LinearLayout later=group(t("与 iOS 的功能差异","Features still different from iOS"));
         String[][] entries={
-            {t("更多 AI 服务","More AI providers"),t("已接通 CometAPI 文字模型；其他提供商和图像生成尚未接通。","CometAPI text models are connected; other providers and image generation are not connected yet.")},
+            {t("更多 AI 服务","More AI providers"),t("支持 DeepSeek 与兼容 OpenAI 的文字服务，可自行填写地址、模型和密钥；图像生成尚未接通。","DeepSeek and OpenAI-compatible text services accept a custom URL, model and key. Image generation is not connected yet.")},
             {t("翻译语言包","Translation language packs"),t("Android 使用本机中英词典，不使用苹果翻译语言包。","Android uses a local Chinese–English dictionary rather than Apple Translation packs.")},
             {t("并击与 Rime 方案导入","Chord & Rime profile import"),t("当前仅内置方案，尚未接通自定义导入与编辑。","Built-in profiles only; custom import and editing are not connected.")},
             {t("宠物轮换与动画","Pet rotation & animation"),t("配色可切换，当前是静态图示，无自选轮换池。","Colors can be selected; symbols are static, with no custom rotation pool.")},

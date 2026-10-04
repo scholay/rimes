@@ -61,7 +61,7 @@ private final class PluginDistributionSmokeInternalPlugin: InternalPlugin {
             source: .builtIn,
             capabilities: [.bufferAction],
             settings: nil,
-            canUninstall: false
+            canUninstall: true
         )
     }
 
@@ -90,20 +90,15 @@ private enum PluginDistributionSmokeHarnessError: Error {
 /// isolated defaults suite and filesystem root, and downloads are local fakes.
 func runPluginDistributionSmokeTest() -> Bool {
     let fileManager = FileManager.default
-    let expectedDefaultIDs: Set<String> = [
-        BuiltInPluginID.codexCLI,
-        BuiltInPluginID.claudeCodeCLI,
-        BuiltInPluginID.openAICompatible,
-        BuiltInPluginID.scholay,
-        BuiltInPluginID.polisher,
-        BuiltInPluginID.latex,
-        BuiltInPluginID.appleTranslation,
-        BuiltInPluginID.streamInput,
-        BuiltInPluginID.music,
-        BuiltInPluginID.morse,
-    ]
+    let expectedDefaultIDs = Set([BuiltInPluginID.appleTranslation, BuiltInPluginID.streamInput,
+        BuiltInPluginID.statistics, BuiltInPluginID.typingSpeed, BuiltInPluginID.flyChordLearning])
+        .union(CapsuleModuleID.allCases.map(BuiltInPluginID.capsule))
+        .union(MailboxModuleID.allCases.map { $0.pluginKey.rawID })
+    let expectedEnabledIDs = expectedDefaultIDs.subtracting([BuiltInPluginID.flyChordLearning])
     let legacyCapsuleBufferPluginID = "builtin.capsule"
-    let expectedOptionalIDs: Set<String> = []
+    let expectedOptionalIDs: Set<String> = [BuiltInPluginID.codexCLI, BuiltInPluginID.claudeCodeCLI,
+        BuiltInPluginID.openAICompatible, BuiltInPluginID.scholay, BuiltInPluginID.polisher,
+        BuiltInPluginID.latex, BuiltInPluginID.music, BuiltInPluginID.morse]
     let retiredProductIDs: Set<String> = [
         BuiltInPluginID.myPrompt,
         BuiltInPluginID.remarkable,
@@ -113,17 +108,16 @@ func runPluginDistributionSmokeTest() -> Bool {
         BuiltInPluginID.aiText,
     ]
     let expectedVersions = [
-        BuiltInPluginID.codexCLI: "1.1",
-        BuiltInPluginID.claudeCodeCLI: "1.1",
-        BuiltInPluginID.openAICompatible: "1.0",
-        BuiltInPluginID.scholay: "0.1",
-        BuiltInPluginID.polisher: "0.1",
-        BuiltInPluginID.latex: "0.1",
-        BuiltInPluginID.appleTranslation: "2.2",
-        BuiltInPluginID.streamInput: "1.4",
-        BuiltInPluginID.music: "0.2.3",
-        BuiltInPluginID.morse: "0.1.0",
-    ]
+        BuiltInPluginID.codexCLI: "1.1.0", BuiltInPluginID.claudeCodeCLI: "1.1.0",
+        BuiltInPluginID.openAICompatible: "1.0.0", BuiltInPluginID.scholay: "0.1.0",
+        BuiltInPluginID.polisher: "1.1.0", BuiltInPluginID.latex: "1.1.0",
+        BuiltInPluginID.appleTranslation: "2.2.0", BuiltInPluginID.streamInput: "1.4.0",
+        BuiltInPluginID.music: "0.2.3", BuiltInPluginID.morse: "0.1.0",
+        BuiltInPluginID.statistics: "2.0.0", BuiltInPluginID.typingSpeed: "2.0.0",
+        BuiltInPluginID.flyChordLearning: "2.0.0",
+    ].merging(Dictionary(uniqueKeysWithValues: CapsuleModuleID.allCases.map { (BuiltInPluginID.capsule($0), "1.1.0") }), uniquingKeysWith: { first, _ in first })
+     .merging(Dictionary(uniqueKeysWithValues: MailboxModuleID.allCases.map { ($0.pluginKey.rawID, "1.1.0") }), uniquingKeysWith: { first, _ in first })
+
 
     func fail(_ message: String) -> Bool {
         print("FAILED: plugin distribution \(message)")
@@ -184,10 +178,12 @@ func runPluginDistributionSmokeTest() -> Bool {
             completedResult = result
             semaphore.signal()
         }
-        guard semaphore.wait(timeout: .now() + 3) == .success,
-              let completedResult else {
-            throw PluginDistributionSmokeHarnessError.completionTimedOut
+        let deadline = Date().addingTimeInterval(3)
+        while semaphore.wait(timeout: .now()) != .success {
+            guard Date() < deadline else { throw PluginDistributionSmokeHarnessError.completionTimedOut }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
         }
+        guard let completedResult else { throw PluginDistributionSmokeHarnessError.completionTimedOut }
         return completedResult
     }
 
@@ -289,17 +285,17 @@ func runPluginDistributionSmokeTest() -> Bool {
     guard Set(catalogIDs).count == catalogIDs.count else {
         return fail("catalog contains duplicate IDs")
     }
-    guard Set(catalogIDs) == expectedDefaultIDs,
+    guard Set(catalogIDs) == expectedDefaultIDs.union(expectedOptionalIDs),
           Dictionary(uniqueKeysWithValues: PresetBufferPluginCatalog.entries.map {
               ($0.id, $0.version)
           }) == expectedVersions,
           Set(PresetBufferPluginCatalog.entries.filter(\.defaultInstalled).map(\.id))
             == expectedDefaultIDs,
           Set(PresetBufferPluginCatalog.entries.filter(\.defaultEnabled).map(\.id))
-            == expectedDefaultIDs,
+            == expectedEnabledIDs,
           Set(PresetBufferPluginCatalog.entries.filter { !$0.defaultInstalled }.map(\.id))
             == expectedOptionalIDs else {
-        return fail("fresh catalog must contain exactly the bundled/enabled presets")
+        return fail("fresh catalog must match bundled and optional preset policy")
     }
     let registeredIDs = Set(BuiltInPlugins.makeAll().map {
         $0.descriptor.key.rawID
@@ -313,7 +309,7 @@ func runPluginDistributionSmokeTest() -> Bool {
     }
 
     do {
-        // Fresh profile: only the exact three defaults are installed and
+        // Fresh profile: only the exact bundled defaults are installed and
         // running. Disabling one must survive a full registry/store rebuild.
         let sandbox = fileManager.temporaryDirectory.appendingPathComponent(
             "rimebuffer-plugin-distribution-fresh-\(UUID().uuidString)",
@@ -350,18 +346,18 @@ func runPluginDistributionSmokeTest() -> Bool {
             guard Set(snapshot.filter(\.isInstalled).map { $0.id.rawID })
                     == expectedDefaultIDs,
                   Set(snapshot.filter(\.isEnabled).map { $0.id.rawID })
-                    == expectedDefaultIDs,
+                    == expectedEnabledIDs,
                   Set(fixtures.filter { $0.startCount == 1 }
-                    .map { $0.descriptor.key.rawID }) == expectedDefaultIDs,
+                    .map { $0.descriptor.key.rawID }) == expectedEnabledIDs,
                   optionalFixturesDidNotStart else {
                 return fail("fresh registry install/enable policy")
             }
             try registry.setEnabled(
                 false,
-                for: PluginKey(domain: .builtIn, rawID: BuiltInPluginID.codexCLI)
+                for: PluginKey(domain: .builtIn, rawID: BuiltInPluginID.appleTranslation)
             )
             guard !registry.isEnabled(
-                PluginKey(domain: .builtIn, rawID: BuiltInPluginID.codexCLI)
+                PluginKey(domain: .builtIn, rawID: BuiltInPluginID.appleTranslation)
             ) else {
                 return fail("explicit default-plugin disable")
             }
@@ -386,9 +382,9 @@ func runPluginDistributionSmokeTest() -> Bool {
         let restartedEnabled = Set(
             restartedRegistry.allPlugins().filter(\.isEnabled).map { $0.id.rawID }
         )
-        guard restartedEnabled == expectedDefaultIDs.subtracting([BuiltInPluginID.codexCLI]),
+        guard restartedEnabled == expectedEnabledIDs.subtracting([BuiltInPluginID.appleTranslation]),
               restartedFixtures.first(where: {
-                $0.descriptor.key.rawID == BuiltInPluginID.codexCLI
+                $0.descriptor.key.rawID == BuiltInPluginID.appleTranslation
               })?.startCount == 0 else {
             return fail("restart reopened a user-disabled default plugin")
         }
@@ -435,7 +431,7 @@ func runPluginDistributionSmokeTest() -> Bool {
               store.isInstalled(id: id),
               !store.isOptionalEnabled(id: id),
               downloader.requestedURLs.map(\.absoluteString) == [
-                "https://github.com/scholay/rimes/releases/download/v0.4.2/"
+                "https://github.com/scholay/rimes-plugins/releases/download/v1.1.0/"
                     + entry.downloadAssetName!
               ],
               try Data(contentsOf: root
@@ -892,6 +888,32 @@ func runPluginDistributionSmokeTest() -> Bool {
     } catch {
         return fail("invalid package fixtures: \(error)")
     }
+
+    do {
+        let sandbox = fileManager.temporaryDirectory.appendingPathComponent("RIMES-Bundled-Lifecycle-\(UUID())", isDirectory: true)
+        let suite = "RIMES.BundledLifecycle.\(UUID())"
+        guard let defaults = UserDefaults(suiteName: suite) else { return false }
+        defer { defaults.removePersistentDomain(forName: suite); try? fileManager.removeItem(at: sandbox) }
+        let entry = PresetBufferPluginCatalog.entry(id: BuiltInPluginID.appleTranslation)!
+        let store = PresetBufferPluginInstallationStore(defaults: defaults, rootURL: sandbox.appendingPathComponent("packages"),
+            completionQueue: DispatchQueue(label: "RIMES.BundledLifecycle"), hostVersion: "1.1.0", catalogEntries: [entry])
+        let fixture = PluginDistributionSmokeInternalPlugin(entry: entry)
+        let registry = makeRegistry(defaults: defaults, sandbox: sandbox, store: store, fixtures: [fixture])
+        defaults.set("preserved", forKey: "translation.user-setting")
+        try registry.uninstallInternalPlugin(fixture.descriptor.key)
+        guard !store.isInstalled(id: entry.id), !registry.isEnabled(fixture.descriptor.key), fixture.stopCount == 1 else {
+            return fail("bundled uninstall did not revoke runtime")
+        }
+        _ = try installSynchronously(entry.id, using: store).get()
+        guard store.isInstalled(id: entry.id), !registry.isEnabled(fixture.descriptor.key),
+              defaults.string(forKey: "translation.user-setting") == "preserved" else {
+            return fail("bundled reinstall re-enabled itself or removed preferences")
+        }
+        try registry.setEnabled(true, for: fixture.descriptor.key)
+        guard registry.isEnabled(fixture.descriptor.key), fixture.startCount == 2 else {
+            return fail("bundled explicit re-enable failed")
+        }
+    } catch { return fail("bundled lifecycle: \(error)") }
 
     print("PASSED: plugin distribution smoke test")
     return true

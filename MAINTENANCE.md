@@ -4,7 +4,7 @@
 
 - 一个仓库、一条应用集成主线 `main`；macOS、iOS、Android、Windows、Linux 不维持长期分叉的产品主线。
 - 新工作从最新主线开短分支，一件事一个可审查提交/PR；合入后不再沿旧分支叠加功能。
-- 每个平台独立构建、验收和发布。2026-10-03 起 macOS、iOS、Android、Windows 的下一产品版本统一锚定 **1.0.0**，构建编号独立递增；Linux 保留现状。合入主线不等于可用或已发布。
+- 每个平台独立构建、验收和发布。2026-10-04 起 macOS、iOS、Android、Windows 的下一产品版本统一锚定 **1.1.0**，构建编号独立递增；Linux 保留现状。合入主线不等于可用或已发布。
 - 本地维护可以领先 `origin/main`。未获授权时，不 push、不创建发布 tag、不触发远端 workflow，
   不安装输入法、不提交 App Store、不修改远端 PR 或保护规则。
 - 获准同步远端时，从已验证的本地主线提交创建交付分支，经 PR 回到 `origin/main`；不 force-push
@@ -30,6 +30,19 @@ iOS，Linux 收敛到现有功能维护。构建与实机验收分别记录。
 Windows/Linux 的 C++ 与 Android 的 Java 适配层不直接共享 Swift 实现；用行为规范、数据格式和测试样例对齐。
 平台安全边界仍由各自宿主负责；macOS 的 `Delivery.insert`、用户词库隔离等约束不因整合改变。
 
+## 官方插件依赖
+
+官方实现逐步迁入 `scholay/rimes-plugins`。本体的 `OfficialPlugins` 子模块与 `plugins.lock.json` 固定同一个已审查提交；原生源码随本体编译和签名。下载包只提供宿主支持的声明、提示词和资源。
+
+首次检出以及切换依赖提交后运行：
+
+```bash
+git submodule update --init OfficialPlugins
+python3 scripts/prepare-official-plugins.py
+```
+
+生成文件不在本体重复维护。修改插件源码须在插件仓提交，再更新本体子模块及锁文件；导入器会拒绝覆盖本地改动。完整的迁移与验收顺序见 [1.1.0 发布计划](docs/releases/1.1.0-plan.md)。
+
 ## 版本与构建
 
 | 平台/渠道 | 版本来源 | 构建/发布入口 | 当前边界 |
@@ -41,7 +54,7 @@ Windows/Linux 的 C++ 与 Android 的 Java 适配层不直接共享 Swift 实现
 | Linux 原生 | `ime/VERSION` 的包版本及 CMake 项目版本；Artifact 加 commit SHA | `Linux IME` / `ime/scripts/package-deb.sh` | 实验性 Artifact / `.deb`，需真实桌面验证 |
 | 旧 Windows/Linux 数据预览 | `platform-preview-vX.Y.Z` | `platform-preview-release.yml` | 词库与脚本数据包，不是原生 IME 产品版本 |
 
-本轮四个目标平台统一使用 1.0.0，后续修复的构建编号独立递增。Linux 不跟随此次版本锚定。当前 Windows/Linux 原生通道未接入 tag 自动
+本轮四个目标平台统一使用 1.1.0，后续修复的构建编号独立递增。Linux 不跟随此次版本锚定。当前 Windows/Linux 原生通道未接入 tag 自动
 公开发布；不要创建一个看似正式的 tag 来冒充分发能力。未来接通时使用各自的 `windows-v*` /
 `linux-v*` 命名空间，并先补打包、验收和发布授权门禁，不复用 macOS 的 `v*` 或数据预览标签。
 

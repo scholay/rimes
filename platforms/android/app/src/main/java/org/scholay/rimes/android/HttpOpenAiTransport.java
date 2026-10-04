@@ -23,7 +23,7 @@ final class HttpOpenAiTransport {
     HttpOpenAiTransport() { this(url -> (HttpsURLConnection)url.openConnection()); }
     HttpOpenAiTransport(Connections connections) { this.connections=connections; }
 
-    void stream(byte[] request,String key,PluginCancellation cancellation,MockOpenAiTransport.Receiver receiver)
+    void stream(String endpoint,byte[] request,String key,PluginCancellation cancellation,MockOpenAiTransport.Receiver receiver)
             throws OpenAiChatCodec.Failure {
         cancellation.check();
         HttpsURLConnection connection=null;
@@ -31,7 +31,8 @@ final class HttpOpenAiTransport {
         AtomicBoolean expired=new AtomicBoolean();
         Runnable abort=null;
         try {
-            connection=connections.open(new URL(CometAiSettings.ENDPOINT));
+            String recipient=OpenAiSettings.normalizeBaseURL(endpoint)+"/chat/completions";
+            connection=connections.open(new URL(recipient));
             HttpsURLConnection active=connection;
             abort=() -> CONTROL.execute(active::disconnect);
             cancellation.onCancel(abort);

@@ -20,7 +20,7 @@ android {
         targetSdk = 37
         testInstrumentationRunner = "org.scholay.rimes.android.EngineInstrumentation"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
-        versionCode = 9
+        versionCode = 10
         versionName = rimesVersion
     }
     ndkVersion = "29.0.14206865"
@@ -53,6 +53,8 @@ android {
     }
 }
 dependencies { implementation(project(":core")) }
+
+tasks.named("preBuild") { dependsOn(rootProject.tasks.named("prepareOfficialPlugins")) }
 
 // Generate with scripts/build-engine.py before Gradle; missing resources must fail closed.
 tasks.register("verifyEngineResources", Exec::class) {

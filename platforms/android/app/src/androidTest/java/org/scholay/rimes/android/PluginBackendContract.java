@@ -158,8 +158,8 @@ final class PluginBackendContract {
     }
     private void await(CountDownLatch latch,String label) throws InterruptedException { check(latch.await(15,TimeUnit.SECONDS),label+" within15s"); }
     private void executor() throws Exception {
-        BufferPluginExecutor executor=new BufferPluginExecutor(instrumentation.getTargetContext());
-        try {
+        try(PluginTestContext context=new PluginTestContext(instrumentation.getTargetContext(),true);
+                BufferPluginExecutor executor=new BufferPluginExecutor(context)) {
             Capture complete=new Capture(); executor.run("ask","你好𠮷😀","auto",complete); await(complete.finished,"mock completion");
             check(!complete.onMain && complete.text.contains("Mock") && complete.completions.get()==1 && complete.failures.get()==0,"executor completes exactly once off-main");
             Capture cancelled=new Capture(); BufferPluginExecutor.Job job=executor.run("ask","取消验证","auto",cancelled);
@@ -183,6 +183,6 @@ final class PluginBackendContract {
             check(closing.updates.get()==closingCount && closing.completions.get()==0 && closing.failures.get()==0,"close retires worker and listener");
             try { executor.run("ask","x","auto",new Capture()); throw new AssertionError("closed worker accepted job"); }
             catch(IllegalStateException expected) { check(true,"closed executor cannot enqueue"); }
-        } finally { executor.close(); }
+        }
     }
 }

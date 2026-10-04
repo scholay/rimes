@@ -34,7 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /** Attached native settings UI and actual preference writes; synthetic text never leaves this test. */
 final class AppSettingsContract {
     private static final String SENTINEL="RIMES_APP_UI_SYNTHETIC_NEVER_SAVE_927";
-    private static final String[] KEYS={"schema","layout","theme","translation_direction","learning","ai_mock_enabled",CometAiSettings.KEY};
+    private static final String[] KEYS={"schema","layout","theme","translation_direction","learning","ai_mock_enabled",OpenAiSettings.KEY};
     private final Instrumentation instrumentation;
     private final Context context;
     private final SharedPreferences preferences;
@@ -185,15 +185,17 @@ final class AppSettingsContract {
         return count;
     }
     private void cometConfiguration() {
-        main(() -> { new CometAiSettings(context).clear(); return null; });
+        main(() -> { new OpenAiSettings(context).clear(); return null; });
         open("ai"); EditText key=(EditText)waitView("settings.ai.comet.key");
         check(main(() -> !key.isSaveEnabled() && key.getTransformationMethod() instanceof android.text.method.PasswordTransformationMethod),"API key masked and excluded from saved view state");
         check(main(() -> key.getImportantForAutofill()==View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS),"key has no autofill export");
-        main(() -> { key.setText("synthetic-ui-test-key"); return null; });
+        EditText address=(EditText)waitView("settings.ai.base_url");
+        main(() -> { address.setText("https://compatible.example.test/v1"); key.setText("synthetic-ui-test-key"); return null; });
         tap("settings.ai.comet.enabled"); tap("settings.ai.comet.translation"); tap("settings.ai.comet.save");
-        CometAiSettings comet=new CometAiSettings(context);
+        OpenAiSettings comet=new OpenAiSettings(context);
+        check("https://compatible.example.test/v1/chat/completions".equals(comet.snapshot().endpoint()),"custom API URL saved by native settings");
         check(comet.snapshot().enabled && comet.snapshot().translation && comet.snapshot().hasKey(),"native settings save encrypted online profile");
-        check(!preferences.getString(CometAiSettings.KEY,"").contains("synthetic-ui-test-key"),"UI key not stored in plaintext");
+        check(!preferences.getString(OpenAiSettings.KEY,"").contains("synthetic-ui-test-key"),"UI key not stored in plaintext");
         EditText saved=(EditText)waitView("settings.ai.comet.key");
         check(main(() -> saved.getText().length())==0,"saved key never rendered back into field");
         tap("settings.ai.comet.clear"); check(!comet.snapshot().enabled && !comet.snapshot().hasKey(),"native remove-key action disables service"); home();
@@ -238,8 +240,8 @@ final class AppSettingsContract {
         recreate("mappings"); back("chords"); home();
 
         open("privacy"); tap("settings.privacy.licenses"); page("licenses");
-        tap("settings.license.RIMES-MIT.txt"); page("license"); licenseText("RIMES-MIT.txt");
-        recreate("license"); licenseText("RIMES-MIT.txt"); back("licenses"); back("privacy"); home();
+        tap("settings.license.RIMES-Apache-2.0.txt"); page("license"); licenseText("RIMES-Apache-2.0.txt");
+        recreate("license"); licenseText("RIMES-Apache-2.0.txt"); back("licenses"); back("privacy"); home();
 
         open("resources"); tap("settings.resources.licenses"); page("licenses"); back("resources"); home();
         open("translation"); tap("settings.translation.license"); page("license");

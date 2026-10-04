@@ -2,10 +2,10 @@ name: iOS checks
 on:
   pull_request:
     branches: [main]
-    paths: ['Shared/**', 'platforms/ios/**', 'Sources/RimeBuffer/ChordOutputEncoding.swift', 'chord-keymaps/**', 'rime-data/**', '.github/workflows/ios*.yml']
+    paths: ['OfficialPlugins', 'plugins.lock.json', 'scripts/prepare-official-plugins.py', 'Shared/**', 'platforms/ios/**', 'Sources/RimeBuffer/ChordOutputEncoding.swift', 'chord-keymaps/**', 'rime-data/**', '.github/workflows/ios*.yml']
   push:
     branches: [main]
-    paths: ["Shared/**", "platforms/ios/**", "Sources/RimeBuffer/ChordOutputEncoding.swift", "chord-keymaps/**", "rime-data/**", ".github/workflows/ios*.yml"]
+    paths: ['OfficialPlugins', 'plugins.lock.json', 'scripts/prepare-official-plugins.py', "Shared/**", "platforms/ios/**", "Sources/RimeBuffer/ChordOutputEncoding.swift", "chord-keymaps/**", "rime-data/**", ".github/workflows/ios*.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,7 +19,12 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          submodules: true
           persist-credentials: false
+      - name: Prepare pinned official plugin sources
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/prepare-official-plugins.py
+
       - uses: ruby/setup-ruby@e8944e80fb94b20106697132f8c20c665fab29e9
         with:
           ruby-version: '3.3'
@@ -41,7 +46,12 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          submodules: true
           persist-credentials: false
+      - name: Prepare pinned official plugin sources
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/prepare-official-plugins.py
+
       - name: Build and test without device credentials
         run: platforms/ios/scripts/build.sh
       - name: Test release configuration and hosted iOS tests
