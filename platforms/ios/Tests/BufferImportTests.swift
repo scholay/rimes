@@ -20,10 +20,18 @@ import RimesCore
             XCTAssertGreaterThan(label.intrinsicContentSize.width, label.bounds.width)
             XCTAssertLessThanOrEqual(prompt.frame.maxX, paste.frame.minX + 1)
             XCTAssertLessThanOrEqual(paste.frame.maxX, controller.layoutViews.source.frame.maxX)
+            // An icon and the host text shown as hint text; no caption, no fill.
+            XCTAssertEqual(prompt.subviews.compactMap { $0 as? UILabel }.count, 1)
+            XCTAssertEqual(label.textColor, .placeholderText)
+            XCTAssertEqual(label.font, controller.layoutViews.source.font)
+            XCTAssertEqual(prompt.isBreathing, !UIAccessibility.isReduceMotionEnabled)
+            // The paste control's opaque background stays inside the input line's outline.
+            let line = controller.layoutViews.source.frame.insetBy(dx: BufferPasteButton.lineInset, dy: BufferPasteButton.lineInset)
+            XCTAssertTrue(line.insetBy(dx: -0.5, dy: -0.5).contains(paste.convert(paste.controlFrame, to: paste.superview)))
             let height = controller.view.bounds.height
             controller.developmentChoose(.english); controller.developmentType("x"); window.layoutIfNeeded()
             XCTAssertTrue(prompt.isHidden); XCTAssertFalse(paste.isHidden)
-            XCTAssertNil(prompt.layer.animation(forKey: "importHint"))
+            XCTAssertFalse(prompt.isBreathing)
             XCTAssertEqual(controller.layoutProxy.native.text, text)
             XCTAssertEqual(controller.view.bounds.height, height)
         }

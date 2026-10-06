@@ -1193,6 +1193,7 @@ final class KeyboardViewController: UIInputViewController {
         if isDefaultBuffer { source.frame = topLine; result.frame = bottomLine } else { result.frame = topLine; source.frame = bottomLine }
         pasteButton.frame = CGRect(x: source.frame.maxX - 44, y: source.frame.minY, width: 44, height: bufferRowHeight)
         importPrompt.frame = CGRect(x: source.frame.minX + 3, y: source.frame.minY + 2, width: max(0, source.frame.width - 50), height: max(0, bufferRowHeight - 4))
+        importPrompt.font = source.font
         typingStats.frame = CGRect(x: 8, y: 0, width: max(0, result.bounds.width - 16), height: bufferRowHeight)
         bufferButton.frame = CGRect(x: candidatePanel.bounds.width - 32, y: 0, width: 32, height: 32)
         candidateStrip.frame = candidatePanel.bounds
