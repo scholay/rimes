@@ -11,7 +11,22 @@ A matching version string alone does not establish that later fixes are in a pac
 | Windows | [1.1.1](https://github.com/scholay/rimes/releases/tag/windows-v1.1.1), 2026-10-07 07:19 UTC | Public package source `625616a`, frozen snapshot `a6908891…`; includes prior community fixes. This maintenance patch's Shift/Buffer repairs are newer and are absent from it. |
 | Linux | [Platform data preview](https://github.com/scholay/rimes/releases/tag/platform-preview-v0.1.0), 2026-08-09 | This is scheme data, not the native Fcitx5 application. No public native .deb was found; successful native CI does not constitute a released installer. |
 
-## Windows downloaded-artifact verification
+## Downloaded-artifact verification
+
+macOS package SHA256SUMS and the current GitHub asset digest match the actual
+PKG (`1fdc88d1725327aa29b0fe9ef1cc7c087fccdcb76ccf28d81564ddb0d671d415`).
+The packaged app declares 1.1.0 (84), includes arm64/x86_64 and passes strict
+codesign verification. The package signature, Gatekeeper notarization and
+stapled ticket checks passed. These checks do not install the package.
+
+Android APK and AAB match the actual downloaded files and SHA256SUMS. The APK
+SHA-256 is `419bc875155a78af699508b39285ba3796407b54784f69f5f068b243307e55e6`;
+its manifest declares version 1.1.0/code12. APK v2 signature verification passed
+and its certificate matches BUILD-INFO. The AAB SHA-256 is
+`08af73b3e99a0ea351ad3db01151918a2d36ca346ab2853118d8057de6b02855`.
+This audit does not establish new device-install or typing acceptance.
+
+### Windows
 
 The actual public EXE and ZIP, BUILD-INFO and release notes were downloaded and
 matched SHA256SUMS. ZIP integrity and all 109 PACKAGE.json file hashes/sizes passed.
@@ -23,6 +38,11 @@ the ZIP SHA-256 is
 This audit did not install or uninstall them. Their BUILD-INFO separately records
 the actual EXE upgrade and Settings acceptance, while sign-out, full host typing,
 and actual production uninstall remain pending.
+
+The actual Linux data TAR matches its published checksum
+(`48ecbbe57524988ab5173627a6a49fdf7538bfd371baf12069d922d523b7623e`).
+Its 66 archive members contain scheme data and preview scripts; there is no
+native .deb or .rpm. The archive was inspected without running its scripts.
 
 ## Issue disposition
 
