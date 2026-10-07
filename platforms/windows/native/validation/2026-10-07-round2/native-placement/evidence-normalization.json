@@ -1,33 +1,36 @@
 {
-  "normalization": "Public fixture reports omit local user-profile directory and machine name; raw reports remain local.",
+  "normalization": "Public fixture reports use LF line endings and omit local user-profile directory and machine name; raw reports remain local.",
   "reports": [
     {
       "file": "ctest-x64.xml",
       "rawSha256": "c80a8ab9c5ba4ce28c41c992852b759410122d67a4cde4683ff63b54c4b76e05",
-      "sharedSha256": "7552dfc308002ddb299706c03c97d7ea20231ee5158fe40a717d8116e50110e2",
+      "sharedSha256": "eaf0ff8d6db1f048cc2cd6b3a53dff20eee3620b066abcad5351947e4b04d487",
       "normalizedFields": [
         "user-profile path",
-        "native host attribute"
+        "native host attribute",
+        "LF line endings"
       ],
       "testCountsAndAssertionsUnchanged": true
     },
     {
       "file": "ctest-x86.xml",
       "rawSha256": "cfe8633d509055e347d692871f88d53f9bb56014ca4fa52eeca297ff2592db55",
-      "sharedSha256": "505948831c55767868967a19b235836cf42c4072a7e9bb2d5776a9a2fdf5ac3f",
+      "sharedSha256": "6b9288a1885fc6883cce4caa0b2403e17d6ea6dbcd2765fb002991c9ac30ce0b",
       "normalizedFields": [
         "user-profile path",
-        "native host attribute"
+        "native host attribute",
+        "LF line endings"
       ],
       "testCountsAndAssertionsUnchanged": true
     },
     {
       "file": "failed-ctest-x64.xml",
       "rawSha256": "bb93cf7e4df56556e8a0c7731c6fd2624c819c582ed4f5b90756b06f0dab877a",
-      "sharedSha256": "faf3e34900e1c3f09db37c29c65fe081bb3d84ce106eb43425602b49249dfd9c",
+      "sharedSha256": "3d1e5fcd2a48cc158f76041ad43d5c0538a3f956bf64f799aeea599dcbfdf8e9",
       "normalizedFields": [
         "user-profile path",
-        "native host attribute"
+        "native host attribute",
+        "LF line endings"
       ],
       "testCountsAndAssertionsUnchanged": true
     }
