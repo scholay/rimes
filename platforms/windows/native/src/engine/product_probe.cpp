@@ -6,6 +6,155 @@
 #include "../broker/key_translation.hpp"
 #include "../broker/broker_connection.hpp"
 using namespace rimes::windows::engine;
+
+namespace {
+// The Runtime owns production preferences/plugin state, so keep this probe's
+// state separate from both the caller's settings and its isolated Rime userdb.
+class RuntimePreferences {
+ public:
+  explicit RuntimePreferences(const std::filesystem::path& log_dir) {
+    wchar_t previous[32768]{};
+    const auto length = GetEnvironmentVariableW(L"LOCALAPPDATA", previous, 32768);
+    if (length >= 32768) return;
+    if (length) previous_ = previous;
+    const auto root = log_dir / (L"workbench-shift-probe-" +
+        std::to_wstring(GetCurrentProcessId()) + L"-" +
+        std::to_wstring(GetTickCount64()));
+    if (!std::filesystem::create_directory(root)) return;
+    active_ = SetEnvironmentVariableW(L"LOCALAPPDATA", root.c_str()) != 0;
+  }
+  ~RuntimePreferences() {
+    if (active_)
+      SetEnvironmentVariableW(L"LOCALAPPDATA",
+                              previous_.empty() ? nullptr : previous_.c_str());
+  }
+  bool active() const { return active_; }
+ private:
+  std::wstring previous_;
+  bool active_ = false;
+};
+
+bool TestPausedBufferShift(RimeEngine& engine,
+                          const std::filesystem::path& log_dir) {
+  using namespace rimes::windows;
+  RuntimePreferences preferences(log_dir);
+  if (!preferences.active()) {
+    std::cerr << "Could not isolate Buffer probe preferences";
+    return false;
+  }
+  constexpr auto down = static_cast<std::uint32_t>(core::KeyEventFlags::kKeyDown);
+  constexpr auto repeat = static_cast<std::uint32_t>(core::KeyEventFlags::kRepeat);
+  constexpr auto tap = static_cast<std::uint32_t>(core::KeyEventFlags::kShiftTap);
+  constexpr auto shift = static_cast<std::uint32_t>(core::KeyModifiers::kShift);
+  for (const auto capabilities : {0ULL, core::kModifierSnapshotsCapability}) {
+    for (const bool pending_result : {false, true}) {
+      workbench::Runtime runtime([](const workbench::Settings&, const workbench::Generation&,
+          const std::function<bool(const std::string&)>& chunk,
+          const std::function<bool()>&, std::string*) {
+        return chunk("Translated output.");  // Deterministic, no network/secret.
+      });
+      broker::BrokerConnection connection(0, &engine, &runtime);
+      // A direct-frame fixture supplies the same verified peer to Hello and
+      // Handle. Production pipe/SID authentication is not replaced or relaxed.
+      const auto peer = GetCurrentProcessId() + 1;
+      std::uint32_t request_id = 1;
+      core::Frame response;
+      std::vector<std::byte> payload;
+      auto exchange = [&](core::MessageType type, std::vector<std::byte> bytes) {
+        core::Frame request;
+        request.header.message_type = type;
+        request.header.request_id = request_id++;
+        request.payload = std::move(bytes);
+        return connection.Handle(request, peer, &response) == broker::ClientAction::kContinue;
+      };
+      auto fail = [&](const char* reason) {
+        std::cerr << "Paused Buffer Shift failed: " << reason << " capabilities="
+                  << capabilities << " pending_result=" << pending_result << '\n';
+        return false;
+      };
+      if (!core::EncodeClientHello({peer, 0, capabilities, "PausedBufferProbe"}, &payload) ||
+          !exchange(core::MessageType::kClientHello, std::move(payload))) return fail("Hello");
+      core::InputSessionOpened opened;
+      if (!core::EncodeOpenInputSession({1, {}}, &payload) ||
+          !exchange(core::MessageType::kOpenInputSession, std::move(payload)) ||
+          !core::DecodeInputSessionOpened(response.payload, &opened)) return fail("open session");
+      const workbench::Target target{peer, opened.session_id, 1};
+      runtime.Focus(target);
+      runtime.Bind(peer);
+      if (!runtime.Capturing(target)) return fail("capture binding");
+      std::uint64_t sequence = 1;
+      auto key = [&](std::uint32_t vk, std::uint32_t flags,
+                     std::uint32_t modifiers, core::InputState* state) {
+        core::KeyEvent event;
+        event.session_id = opened.session_id;
+        event.sequence_id = sequence++;
+        event.virtual_key = vk;
+        event.event_flags = flags;
+        event.modifiers = modifiers;
+        event.repeat_count = (flags & repeat) ? 2U : 1U;
+        return core::EncodeKeyEvent(event, &payload) &&
+               exchange(core::MessageType::kKeyEvent, std::move(payload)) &&
+               core::DecodeInputState(response.payload, state);
+      };
+      core::InputState state;
+      if (!key('N', down, 0, &state) || !key('I', down, 0, &state) ||
+          state.composition != "ni" || runtime.Snapshot()["preedit"] != "ni")
+        return fail("initial real Rime preedit");
+      const auto revision = state.revision;
+      runtime.Paste(pending_result ? "Original." : std::string(workbench::Model::kLimit, 'x'));
+      if (pending_result) {
+        runtime.Generate(true);
+        const auto deadline = GetTickCount64() + 3000;
+        while (runtime.Snapshot()["result"] != "Translated output." && GetTickCount64() < deadline)
+          Sleep(2);
+        if (runtime.Snapshot()["result"] != "Translated output.") return fail("result generation");
+        runtime.ReturnToInput();
+        runtime.Send(false);
+        if (runtime.Snapshot()["status"] != "Sending...") return fail("pending result delivery");
+      }
+      const auto before = runtime.Snapshot();
+      for (const auto vk : {VK_SHIFT, VK_LSHIFT, VK_RSHIFT}) {
+        for (const auto flags : {down, down | repeat, 0U, tap}) {
+          if (!key(vk, flags, (flags & down) ? shift : 0, &state) ||
+              state.state_flags != 0 || state.revision != revision ||
+              !state.commit_text.empty() || !state.composition.empty())
+            return fail("paused Shift acquired host ownership or emitted a snapshot");
+          const auto after = runtime.Snapshot();
+          for (const auto* field : {"source", "result", "preedit", "source_blocks",
+                                    "result_blocks", "capture", "target_pid"})
+            if (after[field] != before[field]) return fail("paused Shift changed retained input");
+        }
+      }
+      // Release either pause with the original delivery/ack contract. Do not
+      // rebind/reset the engine: the same preedit must still complete below.
+      if (!pending_result) runtime.Send(false);
+      auto delivery = runtime.Control({{"op", "wait"}, {"session", opened.session_id}}, peer);
+      if (delivery.value("kind", "") == "capture")
+        delivery = runtime.Control({{"op", "wait"}, {"session", opened.session_id}}, peer);
+      if (delivery.value("kind", "") != "deliver" ||
+          delivery["text"] != before[pending_result ? "result" : "source"])
+        return fail("original delivery changed");
+      const core::Json acknowledgement{{"op", "ack"}, {"session", opened.session_id},
+          {"request", delivery["request"]}, {"accepted", true}};
+      runtime.Control(acknowledgement, peer);
+      if (runtime.Snapshot()["source"] != "" || runtime.Snapshot()["result"] != "" ||
+          runtime.Snapshot()["preedit"] != "ni") return fail("ack lost original preedit");
+      const auto acknowledged = runtime.Snapshot();
+      runtime.Control(acknowledgement, peer);
+      if (runtime.Snapshot() != acknowledged) return fail("duplicate ack mutated retained input");
+      if (!key('H', down, 0, &state) || !key('A', down, 0, &state) ||
+          !key('O', down, 0, &state) || !key(VK_SPACE, down, 0, &state) ||
+          !state.commit_text.empty() || runtime.Snapshot()["source"] != "你好" ||
+          runtime.Snapshot()["preedit"] != "")
+        return fail("ordinary input did not resume the unchanged Chinese preedit");
+      std::cout << "Paused Buffer Shift passed: capabilities=" << capabilities
+                << " pending_result=" << pending_result << '\n';
+    }
+  }
+  return true;
+}
+}  // namespace
+
 int wmain(int argc, wchar_t** argv) {
   if (argc != 5) return 2;
   RimeEngineOptions options;
@@ -293,5 +442,6 @@ int wmain(int argc, wchar_t** argv) {
         !exchange(core::MessageType::kCloseInputSession, std::move(payload), &response)) return 1;
   }
   std::cout << "Real Broker legacy/new client capability negotiation passed\n";
+  if (!TestPausedBufferShift(engine, options.log_dir)) return 1;
   return 0;
 }

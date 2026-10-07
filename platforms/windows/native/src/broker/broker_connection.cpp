@@ -386,6 +386,12 @@ ClientAction BrokerConnection::HandleKeyEvent(const core::Frame& request,
 
   if (!test_only && runtime_ &&
       runtime_->BeforeKey(session.target, key, session.composing)) {
+    // Paused Buffer input must not run a Shift tap through librime: it could
+    // commit preedit into a full draft or an in-flight result. Physical Shift
+    // down belongs to the host, so its release must also remain unclaimed.
+    if (key.virtual_key == VK_SHIFT || key.virtual_key == VK_LSHIFT ||
+        key.virtual_key == VK_RSHIFT)
+      return RespondPassThrough(request, key, session, response);
     core::InputState state;
     state.session_id = key.session_id;
     state.sequence_id = key.sequence_id;

@@ -8,7 +8,8 @@ retain their previous registration until the new chord and settings both succeed
 ## Source and reproducibility
 
 The candidate integrates main `aa5916d` (Windows 1.1.1 metadata), the P0 typing,
-Runtime, and shortcut contributions. The compiled source base is `45a8080`;
+Runtime, and shortcut contributions. The final compiled source base is `57c2151`
+plus the three-file paused-Shift fix recorded in the overlay;
 its frozen snapshot and exact changed-file hashes are in
 [results.json](2026-10-07-typing-buffer/results.json) and
 [source-overlay.json](2026-10-07-typing-buffer/source-overlay.json).
@@ -33,6 +34,7 @@ those tracked copies.
 | TSF lifecycle | Real TextService/client/Broker with an in-process Fake TSF host in Session 0: ordinary editing, commit/candidates, host shortcuts, right-Shift noop, filtered Test callbacks, long/repeat/dual Shift, focus and disconnect retirement passed. |
 | Compatibility | Both clients passed with their current Broker and the pre-patch x64 Broker. New Broker negotiated capability-zero and new-capability clients. Unsupported Shift gestures remain host keys; no queued input is replayed. |
 | Buffer | Runtime tests cover host-modified Return/Backspace/Escape, owned Return repeat/release, stopped producers, stale chunks, no implicit new API request, retained reviewed results, edit invalidation and issued delivery acknowledgements. |
+| Paused Shift | On each architecture, real Rime/Runtime/Broker frames cover capability 0/2 × full draft/pending result, including all three Shift VKs and down/repeat/up/tap (48 responses). No host ownership, engine snapshot or revision change; original ACK consumes once, duplicate ACK is inert, and the same `ni` preedit resumes to `你好`. |
 | Settings | Invalid JSON leaves trusted/default settings and the original file intact. Unsupported chords never reserve a bare typing key. Existing Ctrl+Alt chords remain unchanged; new defaults are Ctrl+Shift+B. |
 | Repository checks | Catalog and privacy checks, nine product-version tests and diff whitespace checks passed. |
 
@@ -40,6 +42,14 @@ The old `e002116` product probe first passed the existing product/data tests,
 then failed the new raw-code Shift assertion. Its TSF fixture also reproduced
 the corresponding Shift failures. These are negative regression evidence,
 not results from the new candidate.
+
+Cursor Bugbot found that the paused Buffer branch could claim a Shift release
+after its down event had passed to the host. With the exact pre-fix `57c2151`
+Broker and the new product probe, this regression reproduced after all preceding
+product checks passed. The final fix leaves Runtime's engine pause intact and
+passes physical Shift through without processing or capturing its preedit.
+Both architectures passed the same probe after the fix, plus all native and
+current/legacy TSF suites. This negative result is also retained in results.json.
 
 The initial SSH Session 0 registration test failed with Win32 error 1459,
 `ERROR_REQUIRES_INTERACTIVE_WINDOWSTATION`. Independent message-only, hidden

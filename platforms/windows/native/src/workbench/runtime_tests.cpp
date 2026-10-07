@@ -160,6 +160,86 @@ void TestUnhandledModifierCommitIsCapturedWithoutChangingKeyOwnership() {
         "the cleared snapshot cannot append or deliver the same modifier commit twice");
   runtime.Stop();
 }
+void CheckPausedShiftDoesNotProcessOrChangeDraft(workbench::Runtime& runtime,
+                                               workbench::Target target) {
+  const auto before = runtime.Snapshot();
+  for (const auto virtual_key : {VK_SHIFT, VK_LSHIFT, VK_RSHIFT}) {
+    for (const bool composing : {false, true}) {
+      core::KeyEvent key;
+      key.virtual_key = static_cast<std::uint32_t>(virtual_key);
+      key.modifiers = static_cast<unsigned>(core::KeyModifiers::kShift);
+      for (const auto flags : {
+               static_cast<unsigned>(core::KeyEventFlags::kKeyDown),
+               static_cast<unsigned>(core::KeyEventFlags::kKeyDown) |
+                   static_cast<unsigned>(core::KeyEventFlags::kRepeat),
+               0U}) {
+        key.event_flags = flags;
+        key.modifiers = flags ? static_cast<unsigned>(core::KeyModifiers::kShift) : 0U;
+        // This result stops engine processing. The broker separately preserves
+        // physical Shift pass-through; forwarding it to librime could commit
+        // raw preedit into a full draft or an immutable pending result.
+        Check(runtime.BeforeKey(target, key, composing),
+              "paused Buffer must block Shift engine processing");
+        const auto after = runtime.Snapshot();
+        for (const auto* field : {"source", "result", "source_blocks", "result_blocks",
+                                  "preedit", "preview", "busy", "translate", "uncertain",
+                                  "capture", "visible", "target_pid"})
+          Check(after[field] == before[field],
+                "blocked Shift must retain source, results, preedit, and target");
+      }
+    }
+  }
+}
+void TestFullBufferBlocksShiftWithoutChangingDraft() {
+  workbench::Runtime runtime;
+  const auto peer = GetCurrentProcessId() + 1;
+  const auto target = runtime.Register(peer, 27, 27);
+  runtime.Focus(target); runtime.Bind(peer);
+  engine::EngineSnapshot preedit;
+  preedit.handled = true; preedit.composing = true; preedit.composition = "ni";
+  runtime.Capture(target, &preedit);
+  runtime.Paste(std::string(workbench::Model::kLimit, 'x'));
+  Check(runtime.Snapshot()["source"].get<std::string>().size() == workbench::Model::kLimit,
+        "the full-draft fixture reaches the production capacity");
+  CheckPausedShiftDoesNotProcessOrChangeDraft(runtime, target);
+  runtime.Stop();
+}
+void TestPendingResultBlocksShiftAndRetainsOriginalAcknowledgement() {
+  std::atomic<unsigned> calls{0};
+  workbench::Runtime runtime([&](const workbench::Settings&, const workbench::Generation&,
+      const std::function<bool(const std::string&)>& chunk,
+      const std::function<bool()>&, std::string*) {
+    ++calls;
+    return chunk("Translated output.");
+  });
+  const auto peer = GetCurrentProcessId() + 1;
+  const auto target = runtime.Register(peer, 28, 28);
+  runtime.Focus(target); runtime.Bind(peer); runtime.Paste("原文。");
+  runtime.Generate(true);
+  Wait([&] { return runtime.Snapshot()["result"] == "Translated output."; },
+       "the pending-result fixture receives a completed translation");
+  engine::EngineSnapshot preedit;
+  preedit.handled = true; preedit.composing = true; preedit.composition = "ni";
+  runtime.Capture(target, &preedit);
+  runtime.Send(false);
+  auto delivery = runtime.Control({{"op", "wait"}, {"session", 28}}, peer);
+  if (delivery.value("kind", "") == "capture")
+    delivery = runtime.Control({{"op", "wait"}, {"session", 28}}, peer);
+  Check(delivery["kind"] == "deliver" && delivery["text"] == "Translated output.",
+        "the pending-result fixture issues exactly the reviewed result");
+  CheckPausedShiftDoesNotProcessOrChangeDraft(runtime, target);
+  runtime.Control({{"op", "ack"}, {"session", 28}, {"request", delivery["request"]},
+                   {"accepted", true}}, peer);
+  const auto accepted = runtime.Snapshot();
+  Check(accepted["source"] == "" && accepted["result"] == "" &&
+        accepted["status"] == "Delivered" && calls == 1,
+        "blocked Shift retains the original result request and linked source for its ack");
+  runtime.Control({{"op", "ack"}, {"session", 28}, {"request", delivery["request"]},
+                   {"accepted", true}}, peer);
+  Check(runtime.Snapshot() == accepted,
+        "the original result ack still consumes exactly once after blocked Shift");
+  runtime.Stop();
+}
 void TestOwnedPlainReturnKeepsItsLifecycleAcrossModifierChanges() {
   workbench::Runtime runtime;
   const auto peer = GetCurrentProcessId() + 1;
@@ -386,6 +466,8 @@ int main() {
   TestTargets();
   TestCommandModifiersDoNotBecomeBufferCommands();
   TestUnhandledModifierCommitIsCapturedWithoutChangingKeyOwnership();
+  TestFullBufferBlocksShiftWithoutChangingDraft();
+  TestPendingResultBlocksShiftAndRetainsOriginalAcknowledgement();
   TestOwnedPlainReturnKeepsItsLifecycleAcrossModifierChanges();
   TestPluginAuthority();
   TestReturningToInputRejectsLateResultsAndDropsQueuedTranslation();
