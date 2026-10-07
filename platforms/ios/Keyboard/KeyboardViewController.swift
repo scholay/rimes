@@ -42,6 +42,8 @@ final class KeyboardViewController: UIInputViewController {
     private var autoTimer: Timer?
     private var autoTarget: UUID?
     private var autoSuspended = false
+    /// A dismissed clipboard browser may restore the policy only for later edits.
+    private var autoAwaitingOrdinaryEdit = false
     private var defaultDelay = UserDefaults.standard.double(forKey: "defaultBuffer.autoDelay")
     private let typingStats = UILabel()
     private var typingCardPreview: TypingCardPreview?
@@ -89,7 +91,13 @@ final class KeyboardViewController: UIInputViewController {
     private var clipboardStore = TextClipboardStore()
     private let clipboardView = TextClipboardPanel()
     private var clipboardEntries: [TextClipboardStore.Entry] = []
-    private struct ClipboardPresentation { let id = UUID(); let target: UUID; let plugin: KeyboardPlugin? }
+    private struct ClipboardPresentation {
+        let id = UUID(), target: UUID, revision: UUID
+        let plugin: KeyboardPlugin?
+        let wasAutoSuspended: Bool, fullAccess: Bool
+        let autoDelay: Double
+        var mayResumeAuto = true
+    }
     private var clipboardPresentation: ClipboardPresentation?
     private var clipboardMessage = ""
     private var offeredHostText: HostTextSnapshot?
@@ -647,7 +655,7 @@ final class KeyboardViewController: UIInputViewController {
               let added = Self.appendedText(before: old, after: now), !added.isEmpty, added.count <= 4000 else { snapshotHost(); return }
         for _ in 0..<added.count { guard delivery.deleteBackward(target: target) else { break } }
         hostSnapshot = nil
-        surface.cancel(); settle(); insert(added); render()
+        surface.cancel(); settle(); insert(added, ordinaryEdit: false); render()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
             guard let self, self.bufferEnabled, self.onscreen, self.hostSnapshot == nil else { return }
             self.snapshotHost()
@@ -798,9 +806,14 @@ final class KeyboardViewController: UIInputViewController {
         snapshot = engine.currentSnapshot
         render()
     }
-    private func insert(_ text: String) {
+    private func insert(_ text: String, ordinaryEdit: Bool = true) {
         guard onscreen else { return }
-        if bufferEnabled { if isDefaultBuffer { liveTyping.noteCommit(characterCount: text.count, at: uptime); session.noteCommit(characterCount: text.count, at: uptime, burst: liveTyping) }; cancelRequest(); buffer.insert(text); sourceChanged() } else if let target = currentDocument { _ = delivery.insert(text,target:target) }
+        if bufferEnabled {
+            if isDefaultBuffer { liveTyping.noteCommit(characterCount: text.count, at: uptime); session.noteCommit(characterCount: text.count, at: uptime, burst: liveTyping) }
+            let previousRevision = buffer.sourceRevision
+            cancelRequest(); buffer.insert(text)
+            sourceChanged(ordinaryEdit: ordinaryEdit && buffer.sourceRevision != previousRevision)
+        } else if let target = currentDocument { _ = delivery.insert(text,target:target) }
     }
     private func type(_ text: String, chord: Bool = false) {
         let start = ProcessInfo.processInfo.systemUptime; defer { metrics.processed(since: start) }
@@ -924,10 +937,14 @@ final class KeyboardViewController: UIInputViewController {
         else if !engine.rawInput.isEmpty { receive(engine.process(key: 0xff08)) }
         // Default shows its blocks, so Delete removes a whole block; plugin input
         // shows none and keeps character deletion.
-        else if bufferEnabled && !bufferIsEmpty { cancelRequest(); if isDefaultBuffer { buffer.deleteBlockBackward() } else { buffer.backspace() }; sourceChanged(); render() }
+        else if bufferEnabled && !bufferIsEmpty {
+            let previousRevision = buffer.sourceRevision
+            cancelRequest(); if isDefaultBuffer { buffer.deleteBlockBackward() } else { buffer.backspace() }
+            sourceChanged(ordinaryEdit: buffer.sourceRevision != previousRevision); render()
+        }
         else if let target = currentDocument { _ = delivery.deleteBackward(target:target) }
     }
-    private func toggleBuffer() { closeClipboard(); cancelBufferImport(); pendingPaste = nil; breakAssociationChain(); stopDefaultAutoSend(); autoSuspended = false; liveTyping.reset(); cancelDeletes(); surface.cancel(); settle(); bufferEnabled.toggle(); if !bufferEnabled { cancelRequest(); selectedPlugin = nil; panelOpen = false; refreshPluginMenu() }; bufferButton.isSelected = bufferEnabled; render() }
+    private func toggleBuffer() { closeClipboard(); cancelBufferImport(); pendingPaste = nil; breakAssociationChain(); stopDefaultAutoSend(); autoSuspended = false; autoAwaitingOrdinaryEdit = false; liveTyping.reset(); cancelDeletes(); surface.cancel(); settle(); bufferEnabled.toggle(); if !bufferEnabled { cancelRequest(); selectedPlugin = nil; panelOpen = false; refreshPluginMenu() }; bufferButton.isSelected = bufferEnabled; render() }
     private func render() {
         guard !preparingPresentation else { return }
         if let pending = pendingAIConsent, !isCurrentConsent(pending) { dismissAIConsent() }
@@ -1346,7 +1363,7 @@ final class KeyboardViewController: UIInputViewController {
         autoTimer?.invalidate(); autoTimer = nil; autoClock.reset(); autoTarget = nil
     }
     private func setDefaultDelay(_ delay: Double) {
-        stopDefaultAutoSend(); defaultDelay = delay; autoSuspended = false
+        stopDefaultAutoSend(); defaultDelay = delay; autoSuspended = false; autoAwaitingOrdinaryEdit = false
         UserDefaults.standard.set(delay, forKey: "defaultBuffer.autoDelay")
     }
     /// The Default readout: live speed (still falling while you pause), keys per character,
@@ -1376,6 +1393,7 @@ final class KeyboardViewController: UIInputViewController {
         let enabled = [1.0, 2, 3, 5].contains(defaultDelay) && !autoSuspended
         guard typingCardPreview == nil, enabled, !buffer.pending.isEmpty, buffer.retainedResults.isEmpty, buffer.result == nil, let target = currentDocument,
               target == DocumentIdentity.read(textDocumentProxy) else { stopDefaultAutoSend(); return }
+        guard !autoAwaitingOrdinaryEdit else { stopDefaultAutoSend(); return }
         if autoTarget != target { stopDefaultAutoSend(); autoTarget = target }
         autoClock.synchronize(buffer.pending)
         if hasComposition || buffer.generating { autoClock.pause() }
@@ -1384,7 +1402,8 @@ final class KeyboardViewController: UIInputViewController {
         autoTimer = timer; RunLoop.main.add(timer, forMode: .common)
     }
     private func tickDefaultBuffer() {
-        guard typingCardPreview == nil, onscreen, isDefaultBuffer, !autoSuspended, let target = autoTarget,
+        guard typingCardPreview == nil, onscreen, isDefaultBuffer, !autoSuspended,
+              !autoAwaitingOrdinaryEdit, let target = autoTarget,
               target == currentDocument, target == DocumentIdentity.read(textDocumentProxy) else { stopDefaultAutoSend(); return }
         autoClock.synchronize(buffer.pending)
         if autoClock.tick(at: uptime, lifetime: defaultDelay, canAge: !hasComposition && !buffer.generating && !insertButton.isHighlighted) {
@@ -1806,12 +1825,13 @@ final class KeyboardViewController: UIInputViewController {
             && DocumentIdentity.read(textDocumentProxy) == current.target && selectedPlugin == current.plugin
     }
     private func openClipboard() {
-        guard onscreen, !hasComposition, pendingPaste == nil, hostImportTask == nil,
+        guard onscreen, clipboardPresentation == nil, !hasComposition, pendingPaste == nil, hostImportTask == nil,
               let target = currentDocument, DocumentIdentity.read(textDocumentProxy) == target else { return }
         dismissAIConsent(); surface.cancel(); cancelDeletes(); insertButton.cancelPress(); cancelRequest()
+        let presentation = ClipboardPresentation(target: target, revision: buffer.sourceRevision, plugin: selectedPlugin,
+            wasAutoSuspended: autoSuspended, fullAccess: canReadClipboard, autoDelay: defaultDelay)
         collapseCandidates(); stopDefaultAutoSend(); autoSuspended = true
         if !bufferEnabled { liveTyping.reset(); bufferEnabled = true }
-        let presentation = ClipboardPresentation(target: target, plugin: selectedPlugin)
         clipboardPresentation = presentation; clipboardEntries = clipboardStore.load(); clipboardMessage = ""
         clipboardView.collect.onPaste = { [weak self] providers in
             guard let self, self.isCurrentClipboard(presentation.id) else { return }
@@ -1827,7 +1847,15 @@ final class KeyboardViewController: UIInputViewController {
         clipboardView.onClear = { [weak self] in self?.clearClipboard(presentation: presentation.id) }
         panelOpen = true; render()
     }
-    private func closeClipboard() {
+    private func closeClipboard(restoringAuto: Bool = false) {
+        // Only an unchanged, explicit dismissal may resume the previous mode.
+        // Existing text stays idle; a later ordinary edit may start a fresh clock.
+        if restoringAuto, let current = clipboardPresentation, current.mayResumeAuto,
+           isCurrentClipboard(current.id), buffer.sourceRevision == current.revision,
+           canReadClipboard == current.fullAccess, defaultDelay == current.autoDelay, autoSuspended {
+            stopDefaultAutoSend(); autoSuspended = current.wasAutoSuspended
+            autoAwaitingOrdinaryEdit = true
+        }
         clipboardPresentation = nil; clipboardEntries = []; clipboardMessage = ""; clipboardView.redact()
         if pendingPaste?.collectOnly == true { pendingPaste = nil }
     }
@@ -1862,19 +1890,20 @@ final class KeyboardViewController: UIInputViewController {
     private func openSettings(for plugin: KeyboardPlugin?) {
         guard onscreen else { return }
         dismissAIConsent()
-        closeClipboard()
+        closeClipboard(restoringAuto: plugin == selectedPlugin)
         surface.cancel(); settle(); cancelDeletes(); insertButton.cancelPress(); collapseCandidates()
         if !bufferEnabled { stopDefaultAutoSend(); autoSuspended = false; liveTyping.reset(); bufferEnabled = true }
         if plugin != selectedPlugin { selectPlugin(plugin) }
         panelOpen = true; render()
     }
-    private func closePanel() { closeClipboard(); dismissAIConsent(); panelOpen = false; render() }
+    private func closePanel() { closeClipboard(restoringAuto: true); dismissAIConsent(); panelOpen = false; render() }
     private func renderPanel() {
         panel.isHidden = !panelOpen
         guard panelOpen else { return }
         view.bringSubviewToFront(panel)
         if let clipboard = clipboardPresentation {
             guard isCurrentClipboard(clipboard.id) else { closeClipboard(); panelOpen = false; panel.isHidden = true; return }
+            if canReadClipboard != clipboard.fullAccess { clipboardPresentation?.mayResumeAuto = false }
             clipboardView.update(clipboardEntries, fullAccess: canReadClipboard, enabled: pendingPaste == nil)
             panel.show(title: L("本地剪贴板", "Local clipboard"), sections: [
                 PanelSection(title: L("文字历史", "Text history"),
@@ -2017,7 +2046,8 @@ final class KeyboardViewController: UIInputViewController {
     private func languageChanged() {
         preferencesStore.save(preferences); cancelRequest(); buffer.invalidateResult(); sourceChanged(); render()
     }
-    private func sourceChanged() {
+    private func sourceChanged(ordinaryEdit: Bool = false) {
+        if ordinaryEdit { autoAwaitingOrdinaryEdit = false }
         guard realtime, bufferEnabled, onscreen, snapshot.preedit.isEmpty, !buffer.source.isEmpty else { return }
         run(appleTranslation, delay: 400_000_000)
     }
