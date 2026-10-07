@@ -429,6 +429,104 @@ int RunTypingScenarios() {
   Expect(document.last_commit == L"你好",
          "a host that briefly hides its caret must not break composition");
 
+  // Same-thread document changes do not require a BOOL foreground-loss event.
+  // Exercise the actual DocumentMgr/GetTop -> BindContext -> RevokeContext path,
+  // and a key-context change arriving before a focus notification.
+  {
+    using rimes::windows::e2e::FakeDocumentMgr;
+    FakeDocument next_document;
+    next_document.caret_rect = {620, 430, 622, 454};
+    auto* next_context = new FakeContext(&next_document);
+    auto* first_manager = new FakeDocumentMgr(context);
+    auto* next_manager = new FakeDocumentMgr(next_context);
+    ITfDocumentMgr* owner = nullptr;
+    Expect(SUCCEEDED(context->GetDocumentMgr(&owner)) && owner == first_manager,
+           "caret focus fixture attaches the first context to its document stack");
+    if (owner) owner->Release();
+    thread_manager->SetFocus(first_manager);
+    service->OnSetFocus(first_manager, nullptr);
+    ResetDocument(&document);
+    TypeLatin(service, context, "ni");
+    CandidateWindow::GetLastSnapshot(&snapshot);
+    const RECT first_caret = snapshot.caret_rect;
+    Expect(snapshot.visible, "document A supplies a visible baseline caret");
+
+    document.refuse_caret = true;
+    service->OnSetFocus(first_manager, first_manager);
+    SelectionEditRecord ordinary_selection;
+    service->OnEndEdit(context, 0, &ordinary_selection);
+    TypeLatin(service, context, "hao");
+    CandidateWindow::GetLastSnapshot(&snapshot);
+    Expect(snapshot.visible && EqualRect(&snapshot.caret_rect, &first_caret),
+           "same-context focus and ordinary selection retain transient caret fallback");
+    document.refuse_caret = false;
+    TypeVirtualKey(service, context, VK_ESCAPE, true);
+    ResetDocument(&document);
+    TypeLatin(service, context, "ni");
+
+    next_document.refuse_caret = true;
+    thread_manager->SetFocus(next_manager);
+    service->OnSetFocus(next_manager, first_manager);
+    CandidateWindow::GetLastSnapshot(&snapshot);
+    Expect(!snapshot.visible && snapshot.caret_rect.bottom == 0,
+           "same-thread document focus change retires the prior cached caret immediately");
+    TypeLatin(service, next_context, "ni");
+    CandidateWindow::GetLastSnapshot(&snapshot);
+    Expect(!snapshot.visible,
+           "document B with an unresolved first caret cannot borrow document A placement");
+    service->OnLayoutChange(context, TF_LC_CHANGE, nullptr);
+    CandidateWindow::GetLastSnapshot(&snapshot);
+    Expect(!snapshot.visible,
+           "late layout callback from document A cannot republish its old caret in document B");
+    next_document.refuse_caret = false;
+    TypeLatin(service, next_context, "hao");
+    CandidateWindow::GetLastSnapshot(&snapshot);
+    Expect(snapshot.visible && EqualRect(&snapshot.caret_rect, &next_document.caret_rect),
+           "document B recovers using its own caret geometry");
+    TypeVirtualKey(service, next_context, VK_SPACE, true);
+    Expect(next_document.last_commit == L"你好", "document B composition commits independently");
+
+    thread_manager->SetFocus(first_manager);
+    ResetDocument(&document);
+    TypeLatin(service, context, "ni");  // Deliberately no OnSetFocus callback.
+    CandidateWindow::GetLastSnapshot(&snapshot);
+    Expect(snapshot.visible, "key-context switch binds a fresh visible document A");
+    thread_manager->SetFocus(next_manager);
+    ResetDocument(&next_document);
+    next_document.refuse_caret = true;
+    TypeLatin(service, next_context, "ni");  // BindContext is the safety boundary.
+    CandidateWindow::GetLastSnapshot(&snapshot);
+    Expect(!snapshot.visible,
+           "key-context change without focus notification still retires the prior caret");
+    next_document.refuse_caret = false;
+    TypeLatin(service, next_context, "hao");
+    CandidateWindow::GetLastSnapshot(&snapshot);
+    Expect(snapshot.visible, "context is visible before its document stack is popped");
+    next_manager->Pop(TF_POPF_ALL);
+    service->OnPopContext(next_context);
+    owner = nullptr;
+    Expect(next_context->GetDocumentMgr(&owner) == S_FALSE && owner == nullptr,
+           "popped context has no document-manager owner");
+    CandidateWindow::GetLastSnapshot(&snapshot);
+    Expect(!snapshot.visible && snapshot.caret_rect.bottom == 0,
+           "context pop retires cached caret even while the thread remains foreground");
+    next_manager->Push(next_context);
+    service->OnPushContext(next_context);
+    ResetDocument(&next_document);
+    next_document.refuse_caret = true;
+    TypeLatin(service, next_context, "ni");
+    CandidateWindow::GetLastSnapshot(&snapshot);
+    Expect(!snapshot.visible, "re-pushed context cannot reuse its popped caret");
+    next_document.refuse_caret = false;
+    TypeVirtualKey(service, next_context, VK_ESCAPE, true);
+    thread_manager->SetFocus(nullptr);
+    service->OnSetFocus(FALSE);
+    first_manager->Release();
+    next_manager->Release();
+    next_context->Release();
+    std::cout << "Same-thread document/key-context/pop caret isolation assertions passed\n";
+  }
+
   // Revoked focus must retire the previous caret. A new context whose first
   // query is unavailable must stay hidden, rather than reuse another field.
   service->OnSetFocus(FALSE);

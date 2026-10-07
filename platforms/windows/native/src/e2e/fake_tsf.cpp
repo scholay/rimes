@@ -80,6 +80,28 @@ HRESULT STDMETHODCALLTYPE FakeDocumentMgr::QueryInterface(REFIID iid,
   AddRef();
   return S_OK;
 }
+FakeDocumentMgr::FakeDocumentMgr(ITfContext* context) {
+  if (context) Push(context);
+}
+FakeDocumentMgr::~FakeDocumentMgr() { Pop(TF_POPF_ALL); }
+HRESULT STDMETHODCALLTYPE FakeDocumentMgr::Push(ITfContext* context) {
+  if (!context) return E_INVALIDARG;
+  if (context_) return TF_E_STACKFULL;
+  auto* fake = dynamic_cast<FakeContext*>(context);
+  if (fake && fake->document_manager_) return E_INVALIDARG;
+  context_ = context;
+  context_->AddRef();
+  if (fake) fake->document_manager_ = this;
+  return S_OK;
+}
+HRESULT STDMETHODCALLTYPE FakeDocumentMgr::Pop(DWORD) {
+  if (!context_) return S_FALSE;
+  if (auto* fake = dynamic_cast<FakeContext*>(context_))
+    fake->document_manager_ = nullptr;
+  context_->Release();
+  context_ = nullptr;
+  return S_OK;
+}
 HRESULT STDMETHODCALLTYPE FakeThreadMgr::AssociateFocus(HWND, ITfDocumentMgr*,
                                                         ITfDocumentMgr**) {
   return NotImpl();
@@ -285,8 +307,11 @@ HRESULT STDMETHODCALLTYPE FakeContext::GetActiveView(ITfContextView** view) {
 HRESULT STDMETHODCALLTYPE FakeContext::EnumViews(IEnumTfContextViews**) {
   return NotImpl();
 }
-HRESULT STDMETHODCALLTYPE FakeContext::GetDocumentMgr(ITfDocumentMgr**) {
-  return NotImpl();
+HRESULT STDMETHODCALLTYPE FakeContext::GetDocumentMgr(ITfDocumentMgr** manager) {
+  if (!manager) return E_POINTER;
+  *manager = document_manager_;
+  if (document_manager_) document_manager_->AddRef();
+  return document_manager_ ? S_OK : S_FALSE;
 }
 HRESULT STDMETHODCALLTYPE FakeContext::GetStatus(TS_STATUS* value) {
   if (!value) return E_POINTER;
