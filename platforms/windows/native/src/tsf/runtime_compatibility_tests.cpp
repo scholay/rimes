@@ -206,6 +206,56 @@ bool CheckComBoundary(IUnknown* service) {
 using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, void**);
 using CanUnload = HRESULT(STDAPICALLTYPE*)();
 
+bool EscapedEnumeratorLifecycles(GetClassObject get_class, CanUnload can_unload) {
+  const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  if (FAILED(initialized)) return false;
+  bool passed = false;
+  {
+    ComPointer<IEnumTfDisplayAttributeInfo> enumerator;
+    ComPointer<IEnumTfDisplayAttributeInfo> clone;
+    {
+      ComPointer<IClassFactory> factory;
+      ComPointer<IUnknown> service;
+      ComPointer<ITfDisplayAttributeProvider> provider;
+      passed = SUCCEEDED(get_class(rimes::windows::tsf::kTextServiceClsid,
+          IID_IClassFactory, reinterpret_cast<void**>(&factory.value))) &&
+          factory.value && SUCCEEDED(factory.value->CreateInstance(nullptr,
+          IID_IUnknown, reinterpret_cast<void**>(&service.value))) && service.value &&
+          SUCCEEDED(service.value->QueryInterface(IID_ITfDisplayAttributeProvider,
+          reinterpret_cast<void**>(&provider.value))) && provider.value &&
+          SUCCEEDED(provider.value->EnumDisplayAttributeInfo(&enumerator.value)) &&
+          enumerator.value && SUCCEEDED(enumerator.value->Clone(&clone.value)) &&
+          clone.value;
+    }
+    // No factory, service, provider or display-attribute object remains here.
+    // The host's two enumerators must independently keep the DLL loaded.
+    if (passed && can_unload() != S_FALSE) {
+      std::fprintf(stderr, "DLL can unload while escaped enumerators are alive.\n");
+      passed = false;
+    }
+    if (enumerator.value) {
+      const ULONG remaining = enumerator.value->Release();
+      enumerator.value = nullptr;
+      passed = remaining == 0 && passed;
+    }
+    if (passed && can_unload() != S_FALSE) {
+      std::fprintf(stderr, "DLL can unload while an escaped Clone is alive.\n");
+      passed = false;
+    }
+    if (clone.value) {
+      const ULONG remaining = clone.value->Release();
+      clone.value = nullptr;
+      passed = remaining == 0 && passed;
+    }
+    if (can_unload() != S_OK) {
+      std::fprintf(stderr, "DLL retains objects after both enumerators are released.\n");
+      passed = false;
+    }
+  }
+  CoUninitialize();
+  return passed;
+}
+
 bool RunLifecycles(GetClassObject get_class, const int iterations) {
   const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   if (FAILED(initialized)) return false;
@@ -265,13 +315,15 @@ int wmain(int argc, wchar_t** argv) {
   if (argc < 2 || argc > 3) {
     std::fprintf(stderr, "Usage: RimesTsfRuntimeTests TSF_DLL [HOST_MSVCP140_DLL]\n"
         "       RimesTsfRuntimeTests --check-static-crt DLL\n"
+        "       RimesTsfRuntimeTests --check-com-unload DLL\n"
         "       RimesTsfRuntimeTests --expect-shared-crt DLL\n");
     return 2;
   }
   SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
   const bool check_only = argc == 3 && _wcsicmp(argv[1], L"--check-static-crt") == 0;
+  const bool unload_only = argc == 3 && _wcsicmp(argv[1], L"--check-com-unload") == 0;
   const bool negative = argc == 3 && _wcsicmp(argv[1], L"--expect-shared-crt") == 0;
-  const auto dll = AbsolutePath(check_only || negative ? argv[2] : argv[1]);
+  const auto dll = AbsolutePath(check_only || unload_only || negative ? argv[2] : argv[1]);
   // Inspect the actual PE before resolving imports or executing DllMain. The
   // negative control must not run its /MD mutex code under a poisoned runtime.
   HMODULE image = LoadLibraryExW(dll.c_str(), nullptr, DONT_RESOLVE_DLL_REFERENCES);
@@ -287,15 +339,18 @@ int wmain(int argc, wchar_t** argv) {
     return 1;
   }
 #ifdef _MSC_VER
-  if (imports != Imports::kStatic ||
+  // The narrow unload check can also diagnose the original /MD DLL without
+  // letting its CRT-import failure mask the escaped COM lifetime regression.
+  if ((!unload_only && imports != Imports::kStatic) ||
       CheckImports(GetModuleHandleW(nullptr)) != Imports::kStatic) {
     std::fprintf(stderr, "TSF and its test host must not import a shared MSVC CRT.\n");
     return 1;
   }
 #endif
   if (check_only) return imports == Imports::kStatic ? 0 : 1;
-  HMODULE runtime = argc == 3 ? PreloadRuntime(argv[2]) : nullptr;
-  if (argc == 3 && !runtime) return 1;
+  const bool preload = argc == 3 && !unload_only;
+  HMODULE runtime = preload ? PreloadRuntime(argv[2]) : nullptr;
+  if (preload && !runtime) return 1;
   HMODULE module = LoadLibraryExW(dll.c_str(), nullptr,
       LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
   if (!module) {
@@ -306,7 +361,10 @@ int wmain(int argc, wchar_t** argv) {
   const auto get_class = ResolveProcedure<GetClassObject>(module, "DllGetClassObject");
   const auto can_unload = ResolveProcedure<CanUnload>(module, "DllCanUnloadNow");
   const bool passed = get_class && can_unload && can_unload() == S_OK &&
-      RunLifecycles(get_class, 100) && ConcurrentLifecycles(get_class) &&
+      (unload_only ? EscapedEnumeratorLifecycles(get_class, can_unload) :
+       RunLifecycles(get_class, 100) &&
+       EscapedEnumeratorLifecycles(get_class, can_unload) &&
+       ConcurrentLifecycles(get_class)) &&
       can_unload() == S_OK;
   FreeLibrary(module);
   if (runtime) FreeLibrary(runtime);
@@ -314,7 +372,12 @@ int wmain(int argc, wchar_t** argv) {
     std::fprintf(stderr, "TSF COM lifecycle or allocation ownership check failed.\n");
     return 1;
   }
-  std::puts("TSF runtime isolation: 100 main-thread + 100 concurrent-thread "
-            "COM lifecycles passed; COM-owned strings freed by host.");
+  if (unload_only) {
+    std::puts("Escaped enumerator and Clone keep TSF loaded until their final Release.");
+  } else {
+    std::puts("TSF runtime isolation: 100 main-thread + 100 concurrent-thread "
+              "COM lifecycles passed; COM-owned strings freed by host; "
+              "escaped enumerator and Clone lifetimes passed.");
+  }
   return 0;
 }
