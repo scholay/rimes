@@ -1,0 +1,52 @@
+﻿{
+    "status":  "passed",
+    "startedAt":  "2026-10-07T20:30:28.6379060+08:00",
+    "architectures":  [
+                          {
+                              "architecture":  "x64",
+                              "buildExitCode":  0,
+                              "artifacts":  [
+                                                {
+                                                    "name":  "RimesTsf.dll",
+                                                    "sha256":  "319e60b6a8ca3636cc6c002b3f004d82e36a58353a1b1f6ba4a75b8a2a0fa38b"
+                                                },
+                                                {
+                                                    "name":  "RimesBroker.exe",
+                                                    "sha256":  "519325c0c74c2c88654f3d83aac6d31737282588508f09f909a704e58f3c9639"
+                                                },
+                                                {
+                                                    "name":  "RimesSettingsUiTests.exe",
+                                                    "sha256":  "6e541c47ba9a008056071697f465629e2ec1249f3083fc3c4d6617872e24f3dd"
+                                                }
+                                            ]
+                          },
+                          {
+                              "architecture":  "x86",
+                              "buildExitCode":  0,
+                              "artifacts":  [
+                                                {
+                                                    "name":  "RimesTsf.dll",
+                                                    "sha256":  "c340abc1108172ca651eb1d8313b5d5897dccc0abe15cf6b0425eca0b4a853e5"
+                                                },
+                                                {
+                                                    "name":  "RimesBroker.exe",
+                                                    "sha256":  "fd7ad29951cae35f6ed868b2fb7e02f83b6a08d07ce9220d2db6b57632947250"
+                                                },
+                                                {
+                                                    "name":  "RimesSettingsUiTests.exe",
+                                                    "sha256":  "5480a7eaa6b72a5b70fd80bd17365a42607ff34fcd295a6553c9ff0917519d02"
+                                                }
+                                            ]
+                          }
+                      ],
+    "commit":  "122febda876a547e3c4883b3e9dde4dc67686474",
+    "snapshot":  "e149c0b15e6f319748bef8990c1e711871fd1b5e5a63a02b2eaf02fc9713a34f",
+    "previousSnapshot":  "fcae231e7e29988fceb4d2e48209c67d83d34a90e495c5bf35b51f6eb381897b",
+    "archiveSha256":  "11534ef5781a73274216eefa1b4c1beeede52f57ab53d7d13eae271f99b084de",
+    "sourceFileCount":  284,
+    "changedPaths":  [
+                         "platforms/windows/native/src/workbench/settings_ui_tests.cpp",
+                         "platforms/windows/native/src/workbench/window.cpp"
+                     ],
+    "finishedAt":  "2026-10-07T20:31:28.3713914+08:00"
+}

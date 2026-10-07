@@ -1,0 +1,14 @@
+﻿{
+    "status":  "expected-failure",
+    "architecture":  "x64",
+    "session":  4,
+    "exitCode":  1,
+    "expectedFailureObserved":  true,
+    "failures":  [
+                     "FAIL: native Buffer raise remains behind Settings before any Runtime update",
+                     "FAIL: Buffer movement and no-Z-order resizing retain requested geometry and Settings order"
+                 ],
+    "unexpectedFailures":  [
+
+                           ]
+}

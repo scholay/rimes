@@ -1,0 +1,10 @@
+﻿{
+    "status":  "failed",
+    "startedAt":  "2026-10-07T20:32:44.6276505+08:00",
+    "session":  4,
+    "results":  [
+
+                ],
+    "error":  "Errors while running CTest",
+    "finishedAt":  "2026-10-07T20:32:54.2831961+08:00"
+}

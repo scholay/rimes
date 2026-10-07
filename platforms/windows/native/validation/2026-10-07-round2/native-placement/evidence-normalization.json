@@ -1,0 +1,35 @@
+{
+  "normalization": "Public fixture reports omit local user-profile directory and machine name; raw reports remain local.",
+  "reports": [
+    {
+      "file": "ctest-x64.xml",
+      "rawSha256": "c80a8ab9c5ba4ce28c41c992852b759410122d67a4cde4683ff63b54c4b76e05",
+      "sharedSha256": "7552dfc308002ddb299706c03c97d7ea20231ee5158fe40a717d8116e50110e2",
+      "normalizedFields": [
+        "user-profile path",
+        "native host attribute"
+      ],
+      "testCountsAndAssertionsUnchanged": true
+    },
+    {
+      "file": "ctest-x86.xml",
+      "rawSha256": "cfe8633d509055e347d692871f88d53f9bb56014ca4fa52eeca297ff2592db55",
+      "sharedSha256": "505948831c55767868967a19b235836cf42c4072a7e9bb2d5776a9a2fdf5ac3f",
+      "normalizedFields": [
+        "user-profile path",
+        "native host attribute"
+      ],
+      "testCountsAndAssertionsUnchanged": true
+    },
+    {
+      "file": "failed-ctest-x64.xml",
+      "rawSha256": "bb93cf7e4df56556e8a0c7731c6fd2624c819c582ed4f5b90756b06f0dab877a",
+      "sharedSha256": "faf3e34900e1c3f09db37c29c65fe081bb3d84ce106eb43425602b49249dfd9c",
+      "normalizedFields": [
+        "user-profile path",
+        "native host attribute"
+      ],
+      "testCountsAndAssertionsUnchanged": true
+    }
+  ]
+}
