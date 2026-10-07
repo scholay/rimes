@@ -419,6 +419,10 @@ HRESULT STDMETHODCALLTYPE FakeContext::GetTextExt(TfEditCookie, ITfRange*,
   if (rect == nullptr) {
     return E_POINTER;
   }
+  if (document_->refuse_caret) {
+    // Leave *rect untouched and fail, the way a host mid-composition does.
+    return E_FAIL;
+  }
   *rect = document_->caret_rect;
   if (clipped != nullptr) {
     *clipped = FALSE;
