@@ -1,0 +1,16 @@
+{
+  "observedAt": "2026-10-07T20:01:15.1022432+08:00",
+  "taskRemoved": true,
+  "lastTaskResult": 0,
+  "nativeSession": 4,
+  "installedDailyUnchanged": true,
+  "brokerCount": 1,
+  "processId": 79612,
+  "sessionId": 4,
+  "created": "2026-10-07T19:01:39.1878230+08:00",
+  "installedCommit": "6d2227335c0ffd2a0240f10db406410cab2fe86f",
+  "installedVersion": "1.1.2",
+  "binarySha256": "3a412616bc2aced5e546a58ab85aed13416a67c147b748557ada703ba61af843",
+  "windowOrInputContentRead": false,
+  "processesStartedOrStopped": false
+}

@@ -1,0 +1,27 @@
+{
+  "commit": "0478e08329e6da382e3b9cc254b846f3d7370ac1",
+  "sourceSnapshot": "fcae231e7e29988fceb4d2e48209c67d83d34a90e495c5bf35b51f6eb381897b",
+  "downloadedArtifactHashesMatched": true,
+  "artifacts": [
+    {
+      "architecture": "x64",
+      "name": "RimesBroker.exe",
+      "sha256": "7cb538b9b458656b66fedb529a40022cb4c4e23d063aa6c0bcdbf6815dcf1d76"
+    },
+    {
+      "architecture": "x64",
+      "name": "RimesTsf.dll",
+      "sha256": "319e60b6a8ca3636cc6c002b3f004d82e36a58353a1b1f6ba4a75b8a2a0fa38b"
+    },
+    {
+      "architecture": "x86",
+      "name": "RimesBroker.exe",
+      "sha256": "e751b5e89fb79300f8e936b2d0416a512a4b721d3dbf2ab0f58c752a17dd92f3"
+    },
+    {
+      "architecture": "x86",
+      "name": "RimesTsf.dll",
+      "sha256": "c340abc1108172ca651eb1d8313b5d5897dccc0abe15cf6b0425eca0b4a853e5"
+    }
+  ]
+}
