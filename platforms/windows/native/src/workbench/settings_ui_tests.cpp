@@ -1,11 +1,14 @@
 #include "settings_ui.hpp"
 #include "window.hpp"
 
+#include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <thread>
+#include <vector>
 
 namespace {
 using namespace rimes::windows;
@@ -207,37 +210,114 @@ void TestHoverRepaintScopeAndResources() {
         dirty.right <= static_cast<LONG>(layout.sidebar.right * scale) + 2 &&
         !PtInRegion(region, static_cast<int>((layout.heading.left + 30) * scale),
                     static_cast<int>((layout.heading.top + 10) * scale));
-    if (!result)
-      std::cerr << "Hover update region: type=" << type << " bounds="
-                << dirty.left << ',' << dirty.top << ',' << dirty.right << ','
-                << dirty.bottom << " sidebar-right=" << layout.sidebar.right * scale
-                << " window-visible=" << IsWindowVisible(window) << '\n';
     DeleteObject(region);
     return result;
   };
-  // Same sequence as #87; inspect actual Win32 update regions before painting.
-  // Invalidating the whole client on every hover change fails these assertions.
-  for (const int row : {0, 1, 2, 3}) {
-    move(row);
-    Check(sidebar_only(), "navigation hover leaves content and native controls outside the dirty region");
+  // Session 0 discards HWND update regions. Do not claim these desktop
+  // assertions ran there; the actual GDI bitmap assertions below still run.
+  if (IsWindowVisible(window)) {
+    for (const int row : {0, 1, 2, 3}) {
+      move(row);
+      Check(sidebar_only(), "navigation hover excludes content from the HWND dirty region");
+      UpdateWindow(window);
+      move(row);
+      Check(!GetUpdateRect(window, nullptr, FALSE), "same hovered row does not invalidate again");
+    }
+    SendMessageW(window, WM_MOUSELEAVE, 0, 0);
+    Check(sidebar_only(), "mouse leave invalidates only the previous navigation highlight");
     UpdateWindow(window);
-    move(row);
-    Check(!GetUpdateRect(window, nullptr, FALSE), "moving within one hovered row does not request another frame");
+    SendMessageW(window, WM_MOUSELEAVE, 0, 0);
+    Check(!GetUpdateRect(window, nullptr, FALSE), "repeated mouse leave does not invalidate again");
+    std::cout << "Desktop HWND hover dirty-region assertions executed\n";
+  } else {
+    std::cout << "NOT EXECUTED: desktop HWND hover dirty-region assertions (invisible Session 0 window)\n";
   }
   SendMessageW(window, WM_MOUSELEAVE, 0, 0);
-  Check(sidebar_only(), "mouse leave repaints only the previous navigation highlight");
-  UpdateWindow(window);
-  SendMessageW(window, WM_MOUSELEAVE, 0, 0);
-  Check(!GetUpdateRect(window, nullptr, FALSE), "repeated mouse leave does not repaint an unchanged window");
+
+  RECT client{};
+  GetClientRect(window, &client);
+  HDC screen = GetDC(window);
+  HDC capture = CreateCompatibleDC(screen);
+  BITMAPINFO info{};
+  info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  info.bmiHeader.biWidth = client.right;
+  info.bmiHeader.biHeight = -client.bottom;
+  info.bmiHeader.biPlanes = 1;
+  info.bmiHeader.biBitCount = 32;
+  info.bmiHeader.biCompression = BI_RGB;
+  void* pixels = nullptr;
+  HBITMAP bitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+  ReleaseDC(window, screen);
+  Check(capture && bitmap && pixels, "native offscreen GDI capture allocates its bitmap and DC");
+  if (!capture || !bitmap || !pixels) {
+    if (bitmap) DeleteObject(bitmap);
+    if (capture) DeleteDC(capture);
+    host.Close(false);
+    return;
+  }
+  const auto selected = SelectObject(capture, bitmap);
+  const auto count = static_cast<std::size_t>(client.right) * client.bottom;
+  const auto bits = static_cast<std::uint32_t*>(pixels);
+  auto render = [&] {
+    std::fill(bits, bits + count, 0x00112233U);
+    SendMessageW(window, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(capture), PRF_CLIENT);
+    GdiFlush();
+    return std::vector<std::uint32_t>(bits, bits + count);
+  };
+  auto nav_bounds = [&](int row) {
+    RECT rect{};
+    if (row >= 0) {
+      const auto& dip = layout.nav[static_cast<std::size_t>(row)];
+      const auto scale = GetDpiForWindow(window) / 96.0f;
+      rect = {static_cast<LONG>(dip.left * scale) - 2,
+              static_cast<LONG>(dip.top * scale) - 2,
+              static_cast<LONG>(dip.right * scale) + 2,
+              static_cast<LONG>(dip.bottom * scale) + 2};
+    }
+    return rect;
+  };
+  auto previous = render();
+  Check(std::none_of(previous.begin(), previous.end(),
+                     [](auto pixel) { return pixel == 0x00112233U; }),
+        "buffered settings renderer covers the entire client with a completed frame");
+  int old_row = -1;
+  for (const int row : {1, 2, 3, 0, -1}) {
+    if (row < 0) SendMessageW(window, WM_MOUSELEAVE, 0, 0);
+    else move(row);
+    const auto current = render();
+    const auto old_bounds = nav_bounds(old_row), new_bounds = nav_bounds(row);
+    std::size_t changed = 0;
+    bool outside_changed = false;
+    for (std::size_t i = 0; i < count; ++i) {
+      if (current[i] == previous[i]) continue;
+      ++changed;
+      const POINT point{static_cast<LONG>(i % client.right),
+                        static_cast<LONG>(i / client.right)};
+      if (!PtInRect(&old_bounds, point) && !PtInRect(&new_bounds, point))
+        outside_changed = true;
+    }
+    // Leaving the already-selected row need not alter its selected styling.
+    if (row >= 0) Check(changed > 0, "native hover GDI output changes its navigation highlight");
+    Check(!outside_changed, "hover GDI pixel changes stay inside old and new navigation rows");
+    if (row < 0) SendMessageW(window, WM_MOUSELEAVE, 0, 0);
+    else move(row);
+    Check(render() == current, "repeated hover state produces an identical native frame");
+    previous = current;
+    old_row = row;
+  }
 
   const DWORD resources = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
-  Check(resources > 0, "GDI resource instrumentation observes the fixture's fonts and brushes");
+  Check(resources > 0, "GDI instrumentation observes the fixture's fonts, bitmap and DC");
   for (int i = 0; i < 64; ++i) {
     move(i % 4);
-    UpdateWindow(window);
+    render();  // Forces actual buffered drawing even when Session 0 is hidden.
   }
   Check(GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) <= resources + 1,
-        "repeated buffered hover frames do not retain GDI bitmaps or DCs");
+        "64 actual buffered hover renders do not retain GDI bitmaps or DCs");
+  std::cout << "Native GDI hover frame coverage, bounded pixel changes and resource assertions executed\n";
+  SelectObject(capture, selected);
+  DeleteObject(bitmap);
+  DeleteDC(capture);
   host.Close(false);
 }
 

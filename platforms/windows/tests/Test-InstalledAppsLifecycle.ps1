@@ -146,6 +146,8 @@ try {
     Expect-Failure 'script uninstall refuses occupied DLLs by default' {& "$active\Uninstall.ps1" -InstallRoot $root}
     $result=& "$active\Uninstall.ps1" -InstallRoot $root -AllowPendingRestart
     Check 'explicit pending-restart uninstall confirms completion and removes discovery entries' ($result.Uninstalled -and $result.RequiresSignOut -and $null -eq (Read-InstalledAppRegistration) -and -not (Test-Path -LiteralPath $global:RimesInstallerTestShortcut) -and -not (Test-Path -LiteralPath "$root\state.json"))
+    $message=Get-UninstallCompletionMessage $result
+    Check 'locked DLL completion reports detected use and requests sign out' ($result.SignOutReason -eq 'locked-dll' -and $message.Contains('DLL is still in use') -and $message.Contains('sign out') -and -not $message.Contains('could not be confirmed'))
     Check 'uninstall retains version files and synthetic user data unchanged' ((Test-Path -LiteralPath "$oldActive\PACKAGE.json") -and (Get-FileHash -LiteralPath $retained -Algorithm SHA256).Hash -eq $retainedHash)
     $global:RimesInstallerTestLock=$false
     & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
@@ -161,6 +163,8 @@ try {
     Check 'user-edited shortcut is preserved on reinstall' ((Get-FileHash -LiteralPath $global:RimesInstallerTestShortcut -Algorithm SHA256).Hash -eq $customHash)
     $result=& "$new\Uninstall.ps1" -InstallRoot $root
     Check 'user-edited shortcut is preserved on uninstall' ($result.Uninstalled -and (Get-FileHash -LiteralPath $global:RimesInstallerTestShortcut -Algorithm SHA256).Hash -eq $customHash)
+    $message=Get-UninstallCompletionMessage $result
+    Check 'known unlocked installation completes without a sign-out warning' (-not $result.RequiresSignOut -and $result.SignOutReason -eq 'none' -and -not $message.Contains('sign out') -and -not $message.Contains('still in use'))
     & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
     $actual=(Get-State $root).active
     $unused=Join-Path $root 'versions\zzzz-newer-looking-unused'
@@ -171,6 +175,8 @@ try {
     & "$new\Verify.ps1" -InstallRoot $root | Out-Host
     $result=& "$new\Uninstall.ps1" -InstallRoot $root
     Check 'missing state uninstall removes both architectures and records recovery' ($result.Uninstalled -and $global:RimesInstallerTestNative.Count -eq 0 -and (Test-Path -LiteralPath "$root\uninstalled-state.json"))
+    $message=Get-UninstallCompletionMessage $result
+    Check 'missing state keeps conservative sign out and describes unknown load state' ($result.RequiresSignOut -and $result.SignOutReason -eq 'unknown-installation-state' -and $message.Contains('could not be confirmed') -and $message.Contains('sign out') -and -not $message.Contains('DLL is still in use'))
     & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
     $actual=(Get-State $root).active
     '{broken' | Set-Content -LiteralPath "$root\state.json"

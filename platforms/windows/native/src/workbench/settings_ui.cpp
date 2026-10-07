@@ -498,6 +498,9 @@ LRESULT CALLBACK SettingsUiHost::Procedure(HWND hwnd, UINT message,
   if (!self) return DefWindowProcW(hwnd, message, wparam, lparam);
 
   switch (message) {
+    case WM_PRINTCLIENT:
+      if (wparam) self->Paint(reinterpret_cast<HDC>(wparam));
+      return 0;
     case WM_PAINT: {
       PAINTSTRUCT ps{};
       HDC dc = BeginPaint(hwnd, &ps);

@@ -9,7 +9,8 @@ try {Read-VerifiedPackage $PSScriptRoot | Out-Null}
 catch {throw "The current uninstall tools are incomplete or unverifiable. Run the current Setup.exe to repair the installation, then retry uninstall. No registration was changed. $($_.Exception.Message)"}
 Stop-OwnedBroker $state.active
 $requiresSignOut=($null -eq $state.requiresSignOut)
-try{Assert-Unlocked $state.active}catch{if(-not $AllowPendingRestart){throw};$requiresSignOut=$true}
+$signOutReason=if($requiresSignOut){'unknown-installation-state'}else{'none'}
+try{Assert-Unlocked $state.active}catch{if(-not $AllowPendingRestart){throw};$requiresSignOut=$true;$signOutReason='locked-dll'}
 $oldAutostart=Get-BrokerAutostart
 $oldInstalledApp=Read-InstalledAppRegistration
 Assert-OwnedBrokerAutostart $state.active
@@ -34,4 +35,4 @@ try {
     throw "Uninstall failed; registration, startup and Installed Apps entry restored. Installed files and user data retained. $failure"
 }
 Write-Host 'Unregistered RIMES. Version files, user dictionaries, settings and credentials retained for recovery. No other input method was changed.'
-[pscustomobject]@{Uninstalled=$true;RequiresSignOut=$requiresSignOut;UserDataRetained=$true}
+[pscustomobject]@{Uninstalled=$true;RequiresSignOut=$requiresSignOut;SignOutReason=$signOutReason;UserDataRetained=$true}

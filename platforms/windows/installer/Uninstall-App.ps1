@@ -26,8 +26,7 @@ try {
     # rolled back to a release predating the Installed Apps integration.
     $result=& "$PSScriptRoot\Uninstall.ps1" -InstallRoot $InstallRoot -AllowPendingRestart
     if(-not $result.Uninstalled){throw 'Uninstall did not confirm completion'}
-    $message='RIMES was uninstalled. Your dictionaries, settings and credentials were kept.'
-    if($result.RequiresSignOut){$message+="`n`nSave your work and sign out before continuing. Some applications still have the previous input method loaded."}
+    $message=Get-UninstallCompletionMessage $result
     [Windows.Forms.MessageBox]::Show($message,$caption,[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Information) | Out-Null
 } catch {
     if($_.Exception -is [ComponentModel.Win32Exception] -and $_.Exception.NativeErrorCode -eq 1223){exit 0}
