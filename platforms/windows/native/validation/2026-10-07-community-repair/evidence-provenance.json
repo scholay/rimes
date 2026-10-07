@@ -1,0 +1,16 @@
+{
+  "normalization": "UTF-8, LF and concise JSON; hashes in identity.json describe original binaries. Raw reports remain in ignored .build.",
+  "originalReportSha256": {
+    "build-result.json": "a2db9c9bfb8b943a56d50136eece51028691b68e6d7807bcf2bf5c4b96007c37",
+    "ctest-x64.xml": "f9a6b1d93402025d8d229099ddd264e2777a07d2b58ea95144fe8139327c839f",
+    "ctest-x86.xml": "a30d3e9ad8a218d4b1f36c60f3d8e045932262e8b0d7323df99a3760ed3e9107",
+    "e2e-x64.json": "5a777d9fa738de96e8c2e5497471980b431a47ec4c56f3f84aca95585aee4b16",
+    "e2e-x86.json": "909de9a278ada02cd15b7023b6e911c15fbca668f31ba082ac3f4531ffb36c8a",
+    "identity.json": "2ece2623d72694e5f93b994cef7172edd80a58440f8ba93b76a0d0acc524fc3a",
+    "installer-sandbox.json": "df41b17af2dd8a70047f0a85b2bd972643188914040ae5a8eea2e2c19c2c62ab",
+    "product-x64.txt": "c83bab46f476634088dbfd811a6bbe9d89caedd67eb9303331939fb9185bc4e0",
+    "product-x86.txt": "c83bab46f476634088dbfd811a6bbe9d89caedd67eb9303331939fb9185bc4e0",
+    "registrar-recovery.json": "8d6ef46b0f949ecc016b13dd31685d3bb3843602368f39ca817388f99fcfe17f",
+    "registrar-recovery.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

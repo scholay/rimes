@@ -1,0 +1,11 @@
+{
+  "Passed": true,
+  "Architecture": "x64",
+  "LibrimeSource": "https://github.com/rime/librime/releases/tag/1.17.0",
+  "LibrimeTag": "1.17.0",
+  "LibrimeSha256": "7478c7caa4ff6b37de86daba1f7ce4a994a4f5ba24872a820fb2b3a9b01fed15",
+  "testHost": "simulated ITfThreadMgr/ITfContext; real TextService, Broker and librime",
+  "interactiveDesktop": false,
+  "sourceCommit": "bf44117f57714fa1dd8f32e556f9a89ca6454699",
+  "normalizationNote": "Generic CI desktop-gap text omitted because it does not describe Young. Original report SHA-256 is retained in evidence-provenance.json."
+}

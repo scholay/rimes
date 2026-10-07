@@ -1,0 +1,104 @@
+{
+  "computer": "YOUNG-HOME",
+  "commit": "bf44117f57714fa1dd8f32e556f9a89ca6454699",
+  "sourceSnapshot": "937f35198f4fdf1250d31e3611d4f3fda6d44ad91face2406b5066450e2b13c6",
+  "sharedData": {
+    "files": 60,
+    "bytes": 65662811,
+    "manifestSha256": "253f42c572328648ec0519599f5640ea71d2538997909724baa9553fb80f2637",
+    "presentFilesMatchManifest": true
+  },
+  "artifacts": [
+    {
+      "architecture": "x64",
+      "file": "RimesTsf.dll",
+      "sha256": "be5c8792ed161184d4710d351c33711cd27762856fac4c8504f69574282a3399",
+      "bytes": 390144
+    },
+    {
+      "architecture": "x64",
+      "file": "RimesRegistrar.exe",
+      "sha256": "19e97a8297b3a4d1f246ef0a140ea1ea16e285ef8c3b426d4af4eed047844acd",
+      "bytes": 161792
+    },
+    {
+      "architecture": "x64",
+      "file": "RimesBroker.exe",
+      "sha256": "02893b60781978048d0cf8d7b35f95bb27cdde6cb87397ed3f91799e22cec5ee",
+      "bytes": 838656
+    },
+    {
+      "architecture": "x64",
+      "file": "RimesRecoveryTsf.dll",
+      "sha256": "70bafd3db447317493a136dd8fae405d71bb6edfc7231314cf967782a925160a",
+      "bytes": 288256
+    },
+    {
+      "architecture": "x64",
+      "file": "RimesRecoveryRegistrar.exe",
+      "sha256": "9bd827ff9a1ca72db52c9447c10a250f91b8a2394c1c644788463c5272dbf08e",
+      "bytes": 59904
+    },
+    {
+      "architecture": "x64",
+      "file": "RimesProductProbe.exe",
+      "sha256": "94e48ec6cd2b2087ba3058643df7ad7f3a8a8fa1c607ab15452a776f019726fe",
+      "bytes": 93184
+    },
+    {
+      "architecture": "x64",
+      "file": "product-probe/rime.dll",
+      "sha256": "86b4c7357d4c6d293ce5589b234d8859ca2ac30923a03bedfa3926eeaf97fb0b",
+      "bytes": 3739136
+    },
+    {
+      "architecture": "x86",
+      "file": "RimesTsf.dll",
+      "sha256": "fa38662d83dbf02ec66a80e3b1e257a46ed3facf28f1de1249928f4cb768d8f6",
+      "bytes": 349184
+    },
+    {
+      "architecture": "x86",
+      "file": "RimesRegistrar.exe",
+      "sha256": "6605e39e0bef7a7cf0c023ef087eaeb7bc1a02f84b786423d2cc8489303cee8f",
+      "bytes": 155648
+    },
+    {
+      "architecture": "x86",
+      "file": "RimesBroker.exe",
+      "sha256": "66f640b319c0084ef9651dfca786d448d21d33605cb53872a7add913f4f459cd",
+      "bytes": 757760
+    },
+    {
+      "architecture": "x86",
+      "file": "RimesRecoveryTsf.dll",
+      "sha256": "f799e8d3391258e1485a0094a5913ea9dcce5030fa714fda8a1f5de417e7b578",
+      "bytes": 247296
+    },
+    {
+      "architecture": "x86",
+      "file": "RimesRecoveryRegistrar.exe",
+      "sha256": "3dfb744f02b31682de44dd7903f2894e1e24d991c2517a300ffd84a28366c14b",
+      "bytes": 53760
+    },
+    {
+      "architecture": "x86",
+      "file": "RimesProductProbe.exe",
+      "sha256": "1af2e419e5ca020475b2a159c11d433ce4078cd8a554ef5204f78298df450d5d",
+      "bytes": 79360
+    },
+    {
+      "architecture": "x86",
+      "file": "product-probe/rime.dll",
+      "sha256": "d123622cec3bc209e0fdce5192adbe43634223518c78575b25c6fd49b0b896a6",
+      "bytes": 3194880
+    }
+  ],
+  "dailyBroker": {
+    "expectedPid": 66352,
+    "stillRunning": true,
+    "path": "C:\\Program Files\\RIMES\\versions\\1.1.0-preview.2-58fc4bcf8319-ecab591174ef\\x64\\RimesBroker.exe",
+    "expectedPath": "C:\\Program Files\\RIMES\\versions\\1.1.0-preview.2-58fc4bcf8319-ecab591174ef\\x64\\RimesBroker.exe"
+  },
+  "checkedAt": "2026-10-07T11:52:02.2153341+08:00"
+}

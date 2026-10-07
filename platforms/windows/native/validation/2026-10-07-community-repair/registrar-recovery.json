@@ -1,0 +1,22 @@
+{
+  "status": "passed",
+  "checks": [
+    "x64 register expectedFailure=False",
+    "x86 register expectedFailure=False",
+    "x86 unregister expectedFailure=True",
+    "x86 unregister expectedFailure=False",
+    "x86 verify-absent expectedFailure=False",
+    "x64 verify expectedFailure=False",
+    "x64 unregister expectedFailure=False",
+    "x64 verify-absent expectedFailure=False",
+    "x64 register expectedFailure=False",
+    "x86 register expectedFailure=False",
+    "x86 unregister expectedFailure=False",
+    "x64 unregister expectedFailure=False",
+    "x64 verify-absent expectedFailure=False",
+    "x86 verify-absent expectedFailure=False",
+    "x86 unregister expectedFailure=False",
+    "x64 unregister expectedFailure=False"
+  ],
+  "productionIdentityPreserved": true
+}
