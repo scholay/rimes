@@ -329,7 +329,7 @@ function Get-UninstallCompletionMessage($Result) {
     if($Result.RequiresSignOut){
         $message+="`n`nSave your work and sign out before continuing. "
         if($Result.SignOutReason -eq 'locked-dll'){
-            $message+='A previous input method DLL is still in use.'
+            $message+='A previous input method DLL could not be opened exclusively and may still be in use.'
         } elseif($Result.SignOutReason -eq 'previous-signout-required') {
             $message+='The previous installation recorded a pending sign-out. Checking the current version cannot confirm whether that older copy remains loaded.'
         } else {

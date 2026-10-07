@@ -147,7 +147,7 @@ try {
     $result=& "$active\Uninstall.ps1" -InstallRoot $root -AllowPendingRestart
     Check 'explicit pending-restart uninstall confirms completion and removes discovery entries' ($result.Uninstalled -and $result.RequiresSignOut -and $null -eq (Read-InstalledAppRegistration) -and -not (Test-Path -LiteralPath $global:RimesInstallerTestShortcut) -and -not (Test-Path -LiteralPath "$root\state.json"))
     $message=Get-UninstallCompletionMessage $result
-    Check 'locked DLL completion reports detected use and requests sign out' ($result.SignOutReason -eq 'locked-dll' -and $message.Contains('DLL is still in use') -and $message.Contains('sign out') -and -not $message.Contains('could not be confirmed'))
+    Check 'exclusive DLL access failure completion explains possible use and requests sign out' ($result.SignOutReason -eq 'locked-dll' -and $message.Contains('could not be opened exclusively and may still be in use') -and $message.Contains('sign out') -and -not $message.Contains('could not be confirmed'))
     Check 'uninstall retains version files and synthetic user data unchanged' ((Test-Path -LiteralPath "$oldActive\PACKAGE.json") -and (Get-FileHash -LiteralPath $retained -Algorithm SHA256).Hash -eq $retainedHash)
     $global:RimesInstallerTestLock=$false
     & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
