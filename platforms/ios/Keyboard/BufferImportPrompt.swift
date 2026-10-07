@@ -13,6 +13,10 @@ final class BufferPasteButton: UIControl {
     /// The control's opaque background must not cover the input line's outline.
     static let lineInset: CGFloat = 3
     var controlFrame: CGRect { native.frame }
+    func setPurpose(label: String, hint: String) {
+        native.accessibilityLabel = label; access.accessibilityLabel = label
+        native.accessibilityHint = hint; access.accessibilityHint = hint
+    }
 
     override init(frame: CGRect) {
         let configuration = UIPasteControl.Configuration()

@@ -81,15 +81,18 @@
 		9F7988AFA7A10E27BAA08DC1 /* TypingCardPhotos.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A65E8E32CA00E36C40C5E2 /* TypingCardPhotos.swift */; };
 		A1159714EFAF35148B97A0CB /* RimeSchemeInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5F0F1477B1FD14140DD20E9 /* RimeSchemeInstaller.swift */; };
 		A4903D0AB35165B2EC3A3B2C /* KeySurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = B579639B42DCF0E4CECDE063 /* KeySurface.swift */; };
+		AB1464C44868E8182C3C6792 /* TextClipboardStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10674AE99D2C66039BFF9D0C /* TextClipboardStore.swift */; };
 		AE09C60A0E0626DD4439C54C /* KeyboardAppearanceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22C291228871A516B47926A7 /* KeyboardAppearanceStore.swift */; };
 		B0C0DA13F6F97994AD468B1A /* KeyboardLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DE121F1A33DDDCC5A07EB42 /* KeyboardLayoutTests.swift */; };
 		B128CD8F9F802BF9045E8BE2 /* RimeMobile.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3EAB21FD96993A6C23136780 /* RimeMobile.mm */; };
 		B251D53107CA725D60847F87 /* RimeSchemeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B6051F96C6D74B03DDBD09A /* RimeSchemeStore.swift */; };
 		B25F7EF2358BAE1D1A68B9C9 /* BufferComposition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E1C9123D22B409520688270 /* BufferComposition.swift */; };
+		B5B0D445D91FD779C9814924 /* TextClipboardPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F744631C12AFB54500A8594 /* TextClipboardPanel.swift */; };
 		BA2C38C95D71718C2B4AAA4A /* KeyboardGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C72B7FA3BDA41A0631169E86 /* KeyboardGeometry.swift */; };
 		C13F6FE425476661A93F5F56 /* KeyboardAppearanceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22C291228871A516B47926A7 /* KeyboardAppearanceStore.swift */; };
 		C67268C6135B29666AB32EB5 /* TypingCardPhotos.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A65E8E32CA00E36C40C5E2 /* TypingCardPhotos.swift */; };
 		C6DC870A22C6E3C67814072D /* CandidateStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7946B62F3AF352493F425710 /* CandidateStrip.swift */; };
+		C83BF3D69D0545ED3B443F9D /* TextClipboardPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F744631C12AFB54500A8594 /* TextClipboardPanel.swift */; };
 		C8768A418DBEFEF541181C58 /* RimeSchemeImportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE80437323A144FAE0A1EC23 /* RimeSchemeImportTests.swift */; };
 		CC9298AE26DEDC6B9284B637 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD234B056A3AB0890E5F757B /* KeyboardViewController.swift */; };
 		CCEAAFA4B5400A4951D4E60E /* StandardKeyboardGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89EE0C87BBB05DE6C614083F /* StandardKeyboardGeometry.swift */; };
@@ -107,12 +110,15 @@
 		E614C97975864D22B5670551 /* DevelopmentSmoke.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89364C5C5A24F3CA907FAF2E /* DevelopmentSmoke.swift */; };
 		E6A437A646FD9419A79918B5 /* BufferImportPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C8CE08949496F7C666B93BD /* BufferImportPrompt.swift */; };
 		E72C1337034D54AE30ACC983 /* CustomLayoutStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EAE414E60D30449530F1531 /* CustomLayoutStore.swift */; };
+		E7C082A62E527CF06FCCA487 /* TextClipboardInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0166AF62B01E99472F3442D9 /* TextClipboardInteractionTests.swift */; };
 		E858892DBEC8D6E1149D9F05 /* KeyboardThemeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA3FB5E8F813ABA8A7A97E00 /* KeyboardThemeStore.swift */; };
 		F359EC1C617DC64B36FCC428 /* KeyboardThemeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA3FB5E8F813ABA8A7A97E00 /* KeyboardThemeStore.swift */; };
 		F686A4851F036E5D6AAB61DD /* TypingStatsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 958F4F15438623865AB6C313 /* TypingStatsCard.swift */; };
+		F6F9EC208A64EB40FE4C69D8 /* TextClipboardStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAB30B72DA39744075D69DB9 /* TextClipboardStoreTests.swift */; };
 		F94D4DE0296412D481BA1321 /* KeycapButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE4D3A2A8A76FA57F6693DE9 /* KeycapButton.swift */; };
 		FA1BBEF748F978F93B9BBE1D /* StandardKeyboardRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB66B9FBF335EB31A84DEEEC /* StandardKeyboardRuntimeTests.swift */; };
 		FA419B567BF9671706C576FA /* KeyboardThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD3BB4270F03915502833D52 /* KeyboardThemeTests.swift */; };
+		FC5CB482A22E4FADBDE95631 /* TextClipboardStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10674AE99D2C66039BFF9D0C /* TextClipboardStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -147,11 +153,13 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0166AF62B01E99472F3442D9 /* TextClipboardInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextClipboardInteractionTests.swift; sourceTree = "<group>"; };
 		016B8809F4A497EAD7356B4B /* TypingStatsCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingStatsCardView.swift; sourceTree = "<group>"; };
 		03E192D5EC3B652474E9D051 /* CandidateStripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CandidateStripTests.swift; sourceTree = "<group>"; };
 		05F694330D783C5822C8798A /* EngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineTests.swift; sourceTree = "<group>"; };
 		06020C1B1A04E92AD87882FD /* NineKeySpellingStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NineKeySpellingStrip.swift; sourceTree = "<group>"; };
 		06C0F09B9A5EF78FFA6770D4 /* OrdinaryKeyGestureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrdinaryKeyGestureTests.swift; sourceTree = "<group>"; };
+		10674AE99D2C66039BFF9D0C /* TextClipboardStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextClipboardStore.swift; sourceTree = "<group>"; };
 		123F4B42F6E762634480E19C /* ImportedSchemeRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedSchemeRuntimeTests.swift; sourceTree = "<group>"; };
 		1A8F28F2D8A3F3D79A70A2B1 /* TypingCardPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingCardPreview.swift; sourceTree = "<group>"; };
 		1C8CE08949496F7C666B93BD /* BufferImportPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BufferImportPrompt.swift; sourceTree = "<group>"; };
@@ -186,6 +194,7 @@
 		89364C5C5A24F3CA907FAF2E /* DevelopmentSmoke.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevelopmentSmoke.swift; sourceTree = "<group>"; };
 		89EE0C87BBB05DE6C614083F /* StandardKeyboardGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StandardKeyboardGeometry.swift; sourceTree = "<group>"; };
 		8C9250B1ED23E7A955B90C53 /* THIRD_PARTY.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = THIRD_PARTY.txt; sourceTree = "<group>"; };
+		8F744631C12AFB54500A8594 /* TextClipboardPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextClipboardPanel.swift; sourceTree = "<group>"; };
 		92FB76D5CBC4B4028F17C58A /* RimeSchemesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimeSchemesView.swift; sourceTree = "<group>"; };
 		958F4F15438623865AB6C313 /* TypingStatsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingStatsCard.swift; sourceTree = "<group>"; };
 		95E5B9D8985C1D838087287C /* OfficialPlugins.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfficialPlugins.swift; sourceTree = "<group>"; };
@@ -200,6 +209,7 @@
 		B5C6E4AD5FD1AD736D377EAB /* RIMESKeyboard.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = RIMESKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		B5F0F1477B1FD14140DD20E9 /* RimeSchemeInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimeSchemeInstaller.swift; sourceTree = "<group>"; };
 		B7A65E8E32CA00E36C40C5E2 /* TypingCardPhotos.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingCardPhotos.swift; sourceTree = "<group>"; };
+		BAB30B72DA39744075D69DB9 /* TextClipboardStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextClipboardStoreTests.swift; sourceTree = "<group>"; };
 		BD234B056A3AB0890E5F757B /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
 		BE80437323A144FAE0A1EC23 /* RimeSchemeImportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimeSchemeImportTests.swift; sourceTree = "<group>"; };
 		C382D89140A17145FACC18AB /* RIMES.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = RIMES.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -277,6 +287,8 @@
 				BE80437323A144FAE0A1EC23 /* RimeSchemeImportTests.swift */,
 				6E158E37CE90948099F8312F /* RimeSchemeStoreTests.swift */,
 				CB66B9FBF335EB31A84DEEEC /* StandardKeyboardRuntimeTests.swift */,
+				0166AF62B01E99472F3442D9 /* TextClipboardInteractionTests.swift */,
+				BAB30B72DA39744075D69DB9 /* TextClipboardStoreTests.swift */,
 				49658F734EC498A2C9CB308B /* TypingStatsCardTests.swift */,
 			);
 			path = Tests;
@@ -348,6 +360,7 @@
 				4B6051F96C6D74B03DDBD09A /* RimeSchemeStore.swift */,
 				B00BED878670FDB179561899 /* Settings.swift */,
 				89EE0C87BBB05DE6C614083F /* StandardKeyboardGeometry.swift */,
+				10674AE99D2C66039BFF9D0C /* TextClipboardStore.swift */,
 				B7A65E8E32CA00E36C40C5E2 /* TypingCardPhotos.swift */,
 				958F4F15438623865AB6C313 /* TypingStatsCard.swift */,
 			);
@@ -405,6 +418,7 @@
 				7EE0C7AE3AD47B418D0BB14A /* RepeatKeycapButton.swift */,
 				328406AEBF3F70DBFC497D85 /* RIMESKeyboard.entitlements */,
 				EF6CD944F6471C08640346FA /* SingleLineTextView.swift */,
+				8F744631C12AFB54500A8594 /* TextClipboardPanel.swift */,
 				1A8F28F2D8A3F3D79A70A2B1 /* TypingCardPreview.swift */,
 			);
 			path = Keyboard;
@@ -580,6 +594,7 @@
 				92849E5F457028B115B1FF68 /* RimesApp.swift in Sources */,
 				49D0B8B96EA1C4435CFC0051 /* Settings.swift in Sources */,
 				CCEAAFA4B5400A4951D4E60E /* StandardKeyboardGeometry.swift in Sources */,
+				AB1464C44868E8182C3C6792 /* TextClipboardStore.swift in Sources */,
 				71617EA2CC1E7B8590ABFF7C /* TranslationSetupView.swift in Sources */,
 				9F7988AFA7A10E27BAA08DC1 /* TypingCardPhotos.swift in Sources */,
 				2CC8651505B16A7250086C08 /* TypingStatsCard.swift in Sources */,
@@ -621,6 +636,9 @@
 				D081A1CEBA91C526DB633CB0 /* RimeSchemeStoreTests.swift in Sources */,
 				861BF46BEEC215A7023FBB87 /* SingleLineTextView.swift in Sources */,
 				FA1BBEF748F978F93B9BBE1D /* StandardKeyboardRuntimeTests.swift in Sources */,
+				E7C082A62E527CF06FCCA487 /* TextClipboardInteractionTests.swift in Sources */,
+				B5B0D445D91FD779C9814924 /* TextClipboardPanel.swift in Sources */,
+				F6F9EC208A64EB40FE4C69D8 /* TextClipboardStoreTests.swift in Sources */,
 				E34EA7DC7E95C18CF5525159 /* TypingCardPreview.swift in Sources */,
 				8BF0710A48CF11F0504D6803 /* TypingStatsCardTests.swift in Sources */,
 			);
@@ -657,6 +675,8 @@
 				34ED8AECFF8B222576516BC0 /* Settings.swift in Sources */,
 				51BE676C9B57DCF8AB6B8B20 /* SingleLineTextView.swift in Sources */,
 				53711EC3A47E831055F5FA12 /* StandardKeyboardGeometry.swift in Sources */,
+				C83BF3D69D0545ED3B443F9D /* TextClipboardPanel.swift in Sources */,
+				FC5CB482A22E4FADBDE95631 /* TextClipboardStore.swift in Sources */,
 				C67268C6135B29666AB32EB5 /* TypingCardPhotos.swift in Sources */,
 				527AFFFAD37FAAF49895D345 /* TypingCardPreview.swift in Sources */,
 				F686A4851F036E5D6AAB61DD /* TypingStatsCard.swift in Sources */,

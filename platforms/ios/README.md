@@ -101,6 +101,15 @@ See `CI_RELEASE.md` for the upload workflow.
   typing collapses them to one row until expanded again.
   Tap the paper plane for one block; hold it for one second for all remaining blocks.
   The More menu contains explicit source insertion, cursor movement and Clear.
+- Local clipboard in the keyboard's Settings menu and Buffer settings. Collect
+  current text uses an explicit native `UIPasteControl` tap and Full Access;
+  opening the list never reads the system clipboard. Up to 40 text entries,
+  16 KiB each and 128 KiB total remain in the keyboard's private, backup-excluded
+  `TextClipboard/history-v1.json`. Exact duplicates move to the front; old entries
+  are evicted. Delete/clear manage the history, and tapping an entry inserts it
+  at the Buffer cursor without host insertion, automatic sending or plugin runs.
+  Saved history is usable offline without Full Access. Changed fields, drafts,
+  plugins, permissions and canceled providers cannot apply a late collection.
 - After a Chinese commit, the empty candidate row offers associated words: first
   what you have typed next on this device, then continuations from the bundled Pinyin
   dictionary (`associations.tsv`, built by `scripts/build-associations.py`; e.g.

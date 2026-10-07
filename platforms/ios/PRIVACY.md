@@ -8,6 +8,12 @@ in public issues. The website contains the complete bilingual public policy.
 
 ## 中文
 
+本地剪贴板仅在你主动点击键盘内“收录当前文字”时，通过系统粘贴授权读取文字；
+读取当前剪贴板需要完全访问，不后台监听。已收录的文字最多 40 条、总计 128 KiB、
+单条 16 KiB，保存在键盘私有目录，排除备份，不上传或同步。你可逐条删除或清空。
+点击历史条目只加入 Buffer，不自动上屏或运行插件。历史与会话结束即清除的 Buffer
+草稿分别管理，已保存的本地历史无需完全访问即可使用。
+
 灵犀输入法（RIMES）的普通输入在设备本地运行。学习词频只保存在当前设备，不提供账户或云同步。
 我们不收集输入正文日志、广告标识符或使用遥测。Buffer 草稿保存在键盘会话内存中，
 不写入文件；离开键盘会话时清除。
@@ -29,6 +35,14 @@ API Key 保存在本设备 Keychain，不包含在配置导出和备份中。请
 先在 AI 服务列表中删除配置，必要时到服务方撤销 API Key。
 
 ## English
+
+Local clipboard reads text only when you explicitly tap Collect current text in
+the keyboard, using the system paste control and Full Access. It never monitors
+the clipboard. Up to 40 entries, 128 KiB total and 16 KiB each remain in private
+keyboard storage, excluded from backup, never uploaded or synced. Delete entries
+or clear the list. Tapping a record only adds it to Buffer, without automatic
+insertion or plugin execution. Saved history is separate from ephemeral Buffer
+drafts and remains usable without Full Access.
 
 Ordinary typing runs locally. Learned word frequencies and learned next-word
 associations stay in the keyboard on this device (never shared with the app, never

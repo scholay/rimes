@@ -11,6 +11,19 @@
     <string name="insert_next">插入</string>
     <string name="insert_all">全部插入</string>
     <string name="clear">清空</string>
+    <string name="clipboard_paste">粘贴剪贴板文字到 Buffer</string>
+    <string name="clipboard_pasted">已粘贴到 Buffer，确认后再插入。</string>
+    <string name="clipboard_empty">剪贴板里没有可粘贴的文字。</string>
+    <string name="clipboard_unavailable">暂时无法读取剪贴板，请重新复制后重试。</string>
+    <string name="clipboard_history">本地剪贴板</string>
+    <string name="clipboard_collect">收录当前文字</string>
+    <string name="clipboard_clear">清空历史</string>
+    <string name="clipboard_close">关闭</string>
+    <string name="clipboard_insert">加入 Buffer</string>
+    <string name="clipboard_delete">删除剪贴板条目</string>
+    <string name="clipboard_history_empty">点击收录，将文字保存于本机；不会自动读取。</string>
+    <string name="clipboard_history_hint">点条目加入 Buffer，最多 40 条，不做云同步。</string>
+    <string name="clipboard_too_large">剪贴板文字超过 16 KiB，请复制较小的选区。</string>
     <string name="backspace">删除</string>
     <string name="space">空格</string>
     <string name="enter">回车</string>
@@ -24,4 +37,3 @@
     <string name="delivery_pending">文字已保留，请腾出 Buffer 空间或重试插入</string>
     <string name="retry">重试</string>
 </resources>
-
