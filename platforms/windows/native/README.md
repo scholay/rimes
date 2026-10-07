@@ -2,9 +2,12 @@
 
 Current Windows release: **[1.1.1](https://github.com/scholay/rimes/releases/tag/windows-v1.1.1)**. Download the EXE installer for a data-preserving upgrade, including discoverable Settings and system uninstall entries. See the [release notes](RELEASE-1.1.1.md); package verification and actual desktop acceptance are recorded separately in the release BUILD-INFO.json.
 
-Post-release damaged-install recovery, candidate settings and caret placement
-changes have [separate source/native test evidence](validation/2026-10-07-community-repair.md).
-They still require a new packaged candidate and real desktop acceptance.
+The published 1.1.1 package includes damaged-install recovery, candidate settings
+and caret-placement fixes. Its BUILD-INFO.json distinguishes automated checks,
+the actual upgrade, and remaining host/uninstall acceptance. The current Shift
+and Buffer shortcut repairs still require a new package and ordinary desktop
+typing acceptance; see the [acceptance record](validation/2026-10-07-typing-buffer.md) and
+[maintenance checklist](MANUAL-TEST.md).
 
 This directory contains the native Windows implementation of RIMES. It is
 separate from the Weasel data preview in the parent directory.
@@ -64,7 +67,7 @@ Ctrl/Alt/Win/AltGr combinations with Return, Backspace or Escape are host
 commands, even while Buffer captures ordinary input. Switching the workbench
 back to Input stops automatic translation and queued processing; source and
 completed results remain available for explicit sending. These changes describe
-the current source, not a replacement of the published 1.1.0 installer.
+the current source, not a replacement of the published 1.1.1 installer.
 
 ## Build
 

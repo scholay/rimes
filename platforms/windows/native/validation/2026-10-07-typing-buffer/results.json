@@ -1,0 +1,129 @@
+{
+  "sourceBase": "45a80803436d4bf0eae8e37a93ebf89c5c81cae3",
+  "sourceSnapshot": "cb5fb1e85986c48322db197731aff3a43955927bc3f5ec6626054bda6fc005a6",
+  "build": {
+    "archiveSha256": "ec0376432a65cc78ee7a965f4734c0e1bc4de41ce9c8c540fdbaf7ec09201aa5",
+    "sourceSnapshot": "cb5fb1e85986c48322db197731aff3a43955927bc3f5ec6626054bda6fc005a6",
+    "results": [
+      {
+        "architecture": "x64",
+        "built": true,
+        "artifacts": [
+          {
+            "file": "RimesTsf.dll",
+            "sha256": "a611e499391c69b36a56950065cf10ea44b0d7c78bdf1c0049009f7d650b4d89"
+          },
+          {
+            "file": "RimesBroker.exe",
+            "sha256": "f551dc7cf0054ee340989e707b0cf1bfab9583bc9de93955d070b2aaaf587747"
+          },
+          {
+            "file": "RimesTsfE2E.exe",
+            "sha256": "0b04f37aa3725efd0b29b55f6c2c0309f63b9e8322b618f99a5482e8bd5f08a0"
+          },
+          {
+            "file": "RimesProductProbe.exe",
+            "sha256": "8ec6e00eefef72a5f8b4c9255c0575a8a73ee815e8377d441dc11d7e17a5be9c"
+          }
+        ]
+      },
+      {
+        "architecture": "x86",
+        "built": true,
+        "artifacts": [
+          {
+            "file": "RimesTsf.dll",
+            "sha256": "04a41d5bf3849e4fbb3032e03b51b5c755be59548398c958b2bed97878bc010b"
+          },
+          {
+            "file": "RimesBroker.exe",
+            "sha256": "64d11bcd7493fb1e3651bc933e278709de5622f4a6f6fe83b80542bf68dc3c26"
+          },
+          {
+            "file": "RimesTsfE2E.exe",
+            "sha256": "2845d3301812d73bdf8860a8387caa398d1095064101349e909fc78b4ac8a907"
+          },
+          {
+            "file": "RimesProductProbe.exe",
+            "sha256": "868bad4eb3b7a8fca88d1717a736d58617bdce6527398bac647d03ef2f5ad4aa"
+          }
+        ]
+      }
+    ],
+    "installedBrokerUnchangedDuringThisRun": true
+  },
+  "typing": {
+    "sourceSnapshot": "cb5fb1e85986c48322db197731aff3a43955927bc3f5ec6626054bda6fc005a6",
+    "productDataVerified": true,
+    "sharedManifestSha256": "b6141790275ab54b582ddd9752ad33cc43cdac4569a035e56801b66f588c07d0",
+    "results": [
+      {
+        "architecture": "x64",
+        "brokerArchitecture": "x64",
+        "peer": "current",
+        "passed": true,
+        "fakeTsf": true,
+        "desktopSession": 0,
+        "librimeTag": "1.17.0",
+        "librimeArchiveSha256": "7478c7caa4ff6b37de86daba1f7ce4a994a4f5ba24872a820fb2b3a9b01fed15",
+        "brokerSha256": "f551dc7cf0054ee340989e707b0cf1bfab9583bc9de93955d070b2aaaf587747"
+      },
+      {
+        "architecture": "x64",
+        "brokerArchitecture": "x64",
+        "peer": "legacy",
+        "passed": true,
+        "fakeTsf": true,
+        "desktopSession": 0,
+        "librimeTag": "1.17.0",
+        "librimeArchiveSha256": "7478c7caa4ff6b37de86daba1f7ce4a994a4f5ba24872a820fb2b3a9b01fed15",
+        "brokerSha256": "ddbfa04490eddb916645d7d815854202f958b29412938cad38dad87fe7360d5a"
+      },
+      {
+        "architecture": "x86",
+        "brokerArchitecture": "x86",
+        "peer": "current",
+        "passed": true,
+        "fakeTsf": true,
+        "desktopSession": 0,
+        "librimeTag": "1.17.0",
+        "librimeArchiveSha256": "af235c26c06152ce09ceb8fe9d9ab9fba7ab43ce30aa952b40174d806f5cc3d9",
+        "brokerSha256": "64d11bcd7493fb1e3651bc933e278709de5622f4a6f6fe83b80542bf68dc3c26"
+      },
+      {
+        "architecture": "x86",
+        "brokerArchitecture": "x64",
+        "peer": "legacy",
+        "passed": true,
+        "fakeTsf": true,
+        "desktopSession": 0,
+        "librimeTag": "1.17.0",
+        "librimeArchiveSha256": "7478c7caa4ff6b37de86daba1f7ce4a994a4f5ba24872a820fb2b3a9b01fed15",
+        "brokerSha256": "ddbfa04490eddb916645d7d815854202f958b29412938cad38dad87fe7360d5a"
+      }
+    ],
+    "realDesktopAcceptance": false,
+    "installedBrokerUnchangedDuringThisRun": true
+  },
+  "ctest": {
+    "status": "passed",
+    "session": 3,
+    "results": [
+      {
+        "architecture": "x64",
+        "exitCode": 0,
+        "tests": "18",
+        "failures": "0"
+      },
+      {
+        "architecture": "x86",
+        "exitCode": 0,
+        "tests": "18",
+        "failures": "0"
+      }
+    ],
+    "error": null,
+    "finishedAt": "2026-10-07T15:46:33.4733529+08:00"
+  },
+  "newPackagePublished": false
+}
