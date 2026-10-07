@@ -4,6 +4,8 @@ $ErrorActionPreference = 'Stop'
 function Read-VerifiedPackage([string]$Directory,[switch]$AllowMissingFiles,[string]$ManifestSourceDirectory) {
     $root = [IO.Path]::GetFullPath($Directory).TrimEnd('\')
     $manifestDirectory=if($ManifestSourceDirectory){[IO.Path]::GetFullPath($ManifestSourceDirectory)}else{$root}
+    $manifestItem=Get-Item -LiteralPath "$manifestDirectory\PACKAGE.json" -Force -ErrorAction SilentlyContinue
+    if($manifestItem -and ($manifestItem.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Reparse points are not accepted'}
     $manifest = Get-Content -LiteralPath "$manifestDirectory\PACKAGE.json" -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($manifest.formatVersion -ne 1 -or $manifest.product -ne 'RIMES' -or $manifest.protocol -ne 2 -or $manifest.commit -notmatch '^[a-f0-9]{40}$' -or $manifest.version -notmatch '^[a-zA-Z0-9._-]{1,64}$') { throw 'Unsupported package manifest' }
     $seen = @{}
@@ -14,11 +16,15 @@ function Read-VerifiedPackage([string]$Directory,[switch]$AllowMissingFiles,[str
         $seen[$path] = $true
         $cursor = $path
         while ($cursor.Length -ge $root.Length) {
-            if ((Test-Path -LiteralPath $cursor) -and (Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse points are not accepted' }
+            # Test-Path can report false for dangling links. Read the link's
+            # own metadata so repair never follows it as a missing file.
+            $cursorItem=Get-Item -LiteralPath $cursor -Force -ErrorAction SilentlyContinue
+            if ($cursorItem -and ($cursorItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Reparse points are not accepted' }
             $cursor = Split-Path -Parent $cursor
         }
-        if ($AllowMissingFiles -and -not (Test-Path -LiteralPath $path)) { continue }
-        $item = Get-Item -LiteralPath $path
+        $item=Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        if ($AllowMissingFiles -and -not $item) { continue }
+        if (-not $item) { throw "Package file is missing: $($file.path)" }
         if ($item.PSIsContainer -or $item.Length -ne $file.bytes -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $file.sha256) { throw "Package checksum failed: $($file.path)" }
     }
     foreach ($item in Get-ChildItem -LiteralPath $root -Recurse -File) {
@@ -108,7 +114,8 @@ function Assert-OwnedRegisteredPath([string]$Root,$Entry,[switch]$AllowMissingMa
     if((Split-Path -Parent $directory) -ne $versions -or $Entry.dll -ne (Join-Path $directory "$($Entry.architecture)\RimesTsf.dll")){throw 'Registered RIMES DLL points outside this managed installation. No registration was changed.'}
     $cursor=$directory
     while($cursor){
-        if((Test-Path -LiteralPath $cursor) -and ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Reparse points are not accepted for installation recovery'}
+        $cursorItem=Get-Item -LiteralPath $cursor -Force -ErrorAction SilentlyContinue
+        if($cursorItem -and ($cursorItem.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Reparse points are not accepted for installation recovery'}
         $cursor=Split-Path -Parent $cursor
     }
     if(-not (Test-Path -LiteralPath "$directory\PACKAGE.json") -and $AllowMissingManifest){

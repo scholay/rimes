@@ -464,8 +464,8 @@ class RimeEngine::Impl final {
       std::lock_guard lock(mutex_);
       if (!healthy_ || !sessions_.contains(session) || !api_ ||
           api_->data_size <
-              static_cast<int>(offsetof(abi::ApiPrefix, select_schema) +
-                               sizeof(api_->select_schema) -
+              static_cast<int>(offsetof(abi::ApiPrefix, config_set_int) +
+                               sizeof(api_->config_set_int) -
                                sizeof(api_->data_size)) ||
           !api_->select_schema || !api_->set_option || !api_->clear_composition ||
           !api_->schema_open || !api_->config_close || !api_->config_set_int ||

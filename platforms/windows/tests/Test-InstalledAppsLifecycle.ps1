@@ -180,6 +180,17 @@ try {
     Check 'corrupt state and missing x86 DLL can be uninstalled with current verified registrars' ($result.Uninstalled -and $global:RimesInstallerTestNative.Count -eq 0)
     & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
     Check 'reinstall repairs only missing immutable package files' ((Test-Path -LiteralPath "$actual\x86\RimesTsf.dll") -and $global:RimesInstallerTestNative.x64 -eq $actual -and $global:RimesInstallerTestNative.x86 -eq $actual)
+    $linkedDll=Join-Path $actual 'x86\RimesTsf.dll'
+    Remove-Item -LiteralPath $linkedDll
+    $missingLinkTarget=Join-Path $OutputDirectory 'never-created-link-target.dll'
+    & "$env:WINDIR\System32\cmd.exe" /c mklink $linkedDll $missingLinkTarget | Out-Host
+    if($LASTEXITCODE){throw 'Could not create the isolated dangling-link fixture'}
+    $reparseFailure=''
+    try {Repair-VerifiedPackage $new $actual}catch{$reparseFailure=$_.Exception.Message}
+    $linkItem=Get-Item -LiteralPath $linkedDll -Force -ErrorAction SilentlyContinue
+    Check 'repair rejects a dangling file link and preserves its missing target' ($reparseFailure.Contains('Reparse points') -and $linkItem -and ($linkItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -and -not (Test-Path -LiteralPath $missingLinkTarget))
+    Remove-Item -LiteralPath $linkedDll -Force
+    Repair-VerifiedPackage $new $actual
     $retainedTool=Join-Path $OutputDirectory 'retained-registrar.exe'
     Move-Item -LiteralPath "$new\x86\RimesRegistrar.exe" -Destination $retainedTool
     $guidance=''
