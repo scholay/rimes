@@ -94,6 +94,8 @@ Bundled plug-ins use the defaults above. Optional plug-ins require installation 
 
 This release targets **1.1.0**: [macOS installer](https://github.com/scholay/rimes/releases/tag/v1.1.0), [Android APK](https://github.com/scholay/rimes/releases/tag/android-v1.1.0), and [Windows EXE](https://github.com/scholay/rimes/releases/tag/windows-v1.1.0). The macOS package is signed and notarized; Android uses the long-term signing key; the Windows EXE is unsigned. iOS offers approved test builds through the [public TestFlight invitation](https://testflight.apple.com/join/Kdj9RB4q); TestFlight shows the builds currently available to install. Linux stays on its existing version. Refer to each release page for current availability.
 
+A user has reported host-app crashes on macOS 27 when switching to RIMES in the App Store sandboxed versions of WeChat and QQ after installation. If affected, switch to another input method and follow the [per-app input-source cache backup and recovery guide](docs/macos/input-source-cache-recovery.md#english). The installer does not clear other apps' caches; restarting the app or logging out is not a guaranteed fix. Investigation remains open in [#90](https://github.com/scholay/rimes/issues/90).
+
 To build locally, clone the source and its pinned official plugins:
 
 ```bash
