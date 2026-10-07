@@ -134,7 +134,11 @@ class ScopeRead final : public ITfEditSession {
         selection.range) {
       if (SUCCEEDED(context_->GetActiveView(&view)) && view) {
         BOOL clipped = FALSE;
-        view->GetTextExt(cookie, selection.range, &caret, &clipped);
+        RECT text_caret{};
+        if (SUCCEEDED(view->GetTextExt(cookie, selection.range, &text_caret,
+                                       &clipped))) {
+          caret = text_caret;
+        }
         view->Release();
       }
       selection.range->Release();
@@ -1160,27 +1164,9 @@ RECT TextService::QueryCaretRect(ITfContext* context, TfEditCookie cookie) noexc
     read->Release();
     if (caret.bottom > caret.top) return caret;
   }
-  ITfContextView* view = nullptr;
-  if (FAILED(context->GetActiveView(&view)) || view == nullptr) {
-    if (FAILED(context->QueryInterface(IID_ITfContextView,
-                                       reinterpret_cast<void**>(&view))) ||
-        view == nullptr) {
-      return caret;
-    }
-  }
-  if (caret.right <= caret.left || caret.bottom <= caret.top) {
-    HWND window = nullptr;
-    if (SUCCEEDED(view->GetWnd(&window)) && window != nullptr) {
-      POINT point{};
-      if (GetCaretPos(&point) && ClientToScreen(window, &point)) {
-        caret.left = point.x;
-        caret.top = point.y;
-        caret.right = point.x + 2;
-        caret.bottom = point.y + 20;
-      }
-    }
-  }
-  view->Release();
+  // A native caret can be a dummy caret, or belong to a different child
+  // window than GetWnd. Keep missing TSF geometry unknown so the caller
+  // can retain the last verified caret for this context.
   return caret;
 }
 
