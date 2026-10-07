@@ -65,6 +65,17 @@ function(rimes_harden_target target)
     endif()
 endfunction()
 
+# TSF runs inside applications that may have already loaded an older MSVC CRT.
+# Compile its whole private object-code closure with /MT (/MTd in Debug), rather
+# than depending on whichever MSVCP140.dll the host happened to load first.
+# cmake_minimum_required(3.27) sets CMP0091 to NEW before project() above.
+function(rimes_use_static_runtime target)
+    if(MSVC)
+        set_property(TARGET ${target} PROPERTY
+            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+endfunction()
+
 # MinGW does not infer its Unicode console CRT startup object from a wmain
 # definition. MSVC selects it automatically, so keep this narrowly scoped to
 # executable targets whose source entry point is wmain.
@@ -74,13 +85,24 @@ function(rimes_use_unicode_console_entrypoint target)
     endif()
 endfunction()
 
-add_library(RimesCore STATIC
+set(rimes_core_sources
     src/core/broker_protocol.cpp
 )
+add_library(RimesCore STATIC ${rimes_core_sources})
 target_include_directories(RimesCore PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core"
 )
 rimes_harden_target(RimesCore)
+
+# Keep the Broker's /MD protocol objects separate from the TSF's /MT objects.
+# The only cross-process boundary is the serialized named-pipe protocol; no
+# C++ containers or CRT-owned allocations cross between these two libraries.
+add_library(RimesTsfCore STATIC ${rimes_core_sources})
+target_include_directories(RimesTsfCore PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/core"
+)
+rimes_harden_target(RimesTsfCore)
+rimes_use_static_runtime(RimesTsfCore)
 
 add_library(RimesEngine STATIC
     src/engine/rime_engine.cpp
@@ -142,7 +164,7 @@ target_include_directories(RimesTsf PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf"
 )
 target_link_libraries(RimesTsf PRIVATE
-    RimesCore
+    RimesTsfCore
     advapi32
     gdi32
     msimg32
@@ -156,6 +178,7 @@ set_target_properties(RimesTsf PROPERTIES
     OUTPUT_NAME "RimesTsf"
 )
 rimes_harden_target(RimesTsf)
+rimes_use_static_runtime(RimesTsf)
 if(RIMES_TSF_DIAGNOSTICS)
     target_sources(RimesTsf PRIVATE src/tsf/Diagnostics.cpp)
     target_compile_definitions(RimesTsf PRIVATE RIMES_TSF_DIAGNOSTICS=1)
@@ -180,8 +203,37 @@ if(RIMES_BUILD_TESTS)
     add_library(RimesRecoveryTsf SHARED ${recovery_tsf_sources})
     target_include_directories(RimesRecoveryTsf PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
     target_compile_definitions(RimesRecoveryTsf PRIVATE RIMES_RECOVERY_TEST_IDENTITY=1)
-    target_link_libraries(RimesRecoveryTsf PRIVATE RimesCore advapi32 gdi32 msimg32 ole32 oleaut32 user32 uuid)
+    target_link_libraries(RimesRecoveryTsf PRIVATE RimesTsfCore advapi32 gdi32 msimg32 ole32 oleaut32 user32 uuid)
     rimes_harden_target(RimesRecoveryTsf)
+    rimes_use_static_runtime(RimesRecoveryTsf)
+
+    # A fresh, static-CRT host checks the actual DLL's imports before loading it,
+    # then exercises the COM destruction path which crashed with QQ's old CRT.
+    add_executable(RimesTsfRuntimeTests src/tsf/runtime_compatibility_tests.cpp)
+    target_link_libraries(RimesTsfRuntimeTests PRIVATE ole32 oleaut32 uuid)
+    rimes_harden_target(RimesTsfRuntimeTests)
+    rimes_use_static_runtime(RimesTsfRuntimeTests)
+    rimes_use_unicode_console_entrypoint(RimesTsfRuntimeTests)
+    add_dependencies(RimesTsfRuntimeTests RimesTsf RimesRecoveryTsf)
+    add_test(NAME RimesTsfRuntime
+        COMMAND RimesTsfRuntimeTests "$<TARGET_FILE:RimesTsf>")
+    if(MSVC)
+        add_test(NAME RimesRecoveryTsfRuntimeImports
+            COMMAND RimesTsfRuntimeTests --check-static-crt
+                    "$<TARGET_FILE:RimesRecoveryTsf>")
+        # A deliberately /MD test-only DLL proves the import guard detects the
+        # original failure condition, instead of silently accepting every DLL.
+        add_library(RimesSharedCrtFixture SHARED src/tsf/runtime_shared_crt_fixture.cpp)
+        rimes_harden_target(RimesSharedCrtFixture)
+        add_dependencies(RimesTsfRuntimeTests RimesSharedCrtFixture)
+        add_test(NAME RimesTsfRuntimeImportGuard
+            COMMAND RimesTsfRuntimeTests --expect-shared-crt
+                    "$<TARGET_FILE:RimesSharedCrtFixture>")
+        set_tests_properties(RimesRecoveryTsfRuntimeImports
+            RimesTsfRuntimeImportGuard PROPERTIES TIMEOUT 15)
+    endif()
+    set_tests_properties(RimesTsfRuntime PROPERTIES TIMEOUT 30)
+
     add_executable(RimesRecoveryRegistrar src/registrar/main.cpp)
     target_include_directories(RimesRecoveryRegistrar PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_compile_definitions(RimesRecoveryRegistrar PRIVATE RIMES_RECOVERY_TEST_IDENTITY=1)
