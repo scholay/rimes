@@ -98,7 +98,7 @@
 
 ## 安装
 
-本轮版本为 **1.1.0**：[macOS 安装包](https://github.com/scholay/rimes/releases/tag/v1.1.0)、[Android APK](https://github.com/scholay/rimes/releases/tag/android-v1.1.0)、[Windows EXE](https://github.com/scholay/rimes/releases/tag/windows-v1.1.0)。macOS 包已签名和公证，Android 使用长期签名，Windows EXE 未签名。iOS 通过 [TestFlight 公开邀请](https://testflight.apple.com/join/Kdj9RB4q)提供已获批的测试版本，实际可安装构建以 TestFlight 为准。Linux 保留现有版本。各平台当前状态以对应发布页为准。
+当前公开版本：[macOS 1.1.0](https://github.com/scholay/rimes/releases/tag/v1.1.0)、[Android 1.1.0](https://github.com/scholay/rimes/releases/tag/android-v1.1.0)、[Windows 1.1.1](https://github.com/scholay/rimes/releases/tag/windows-v1.1.1)、[iOS App Store 1.1.0](https://apps.apple.com/us/app/lingxi-ime/id6814620242)。macOS 包已签名和公证，Android 使用长期签名，Windows EXE 未签名。iOS 也提供 [TestFlight 公开邀请](https://testflight.apple.com/join/Kdj9RB4q)，可安装构建以 TestFlight 为准。Linux 目前公开提供方案数据预览包。最新源码与公开安装包的差异见[全平台包审计](validation/release-audit-20261007.md)，各平台可用版本以发布页或商店为准。
 
 macOS 27 有用户报告：安装后在 App Store 沙盒版微信、QQ 中切换到 RIMES，宿主应用可能闪退。若遇到这一情况，先切回其他输入法，参考[按应用备份输入源缓存的恢复指引](docs/macos/input-source-cache-recovery.md)。安装器不会清理其他应用的缓存；重启应用或退出登录并不保证解决此问题。调查进度见 [#90](https://github.com/scholay/rimes/issues/90)。
 
