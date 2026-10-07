@@ -67,7 +67,7 @@ function Assert-Unlocked([string]$Directory) {
         $path = Join-Path $Directory "$arch\RimesTsf.dll"
         if (-not (Test-Path -LiteralPath $path)) { continue }
         try { $stream = [IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None); $stream.Dispose() }
-        catch { throw "RIMES is loaded by an application. Switch input methods, close those applications or sign out, then retry. No files were overwritten: $path" }
+        catch { throw "A RIMES input method DLL could not be opened exclusively and may still be in use. Switch input methods, close applications using RIMES or sign out, then retry. No files were overwritten: $path" }
     }
 }
 function Stop-OwnedBroker([string]$Directory) {
