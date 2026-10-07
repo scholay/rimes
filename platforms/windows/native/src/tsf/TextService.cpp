@@ -1108,7 +1108,23 @@ void TextService::UpdateCandidateWindow(
     snapshot.page_start = state.page_start;
     snapshot.page_size = state.page_size;
     snapshot.composition = state.composition;
-    snapshot.caret_rect = QueryCaretRect(context, cookie);
+    const RECT queried = QueryCaretRect(context, cookie);
+    // A host mid-composition can refuse every caret source, which yields an
+    // all-zero rectangle. That is unknown geometry, not a caret at the screen
+    // origin: reusing the previous placement keeps the popup next to the input
+    // field, and suppressing it beats showing it at the work-area corner.
+    const RECT previous = candidate_window_.snapshot().caret_rect;
+    ScreenRect resolved{};
+    if (!ResolveCandidateCaret({queried.left, queried.top, queried.right,
+                                queried.bottom},
+                               {previous.left, previous.top, previous.right,
+                                previous.bottom},
+                               &resolved)) {
+      candidate_window_.Hide();
+      return;
+    }
+    snapshot.caret_rect = {resolved.left, resolved.top, resolved.right,
+                           resolved.bottom};
     snapshot.items.reserve(state.candidates.size());
     for (std::size_t index = 0; index < state.candidates.size(); ++index) {
       CandidateItem item;

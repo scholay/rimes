@@ -403,6 +403,32 @@ int RunTypingScenarios() {
            "host termination must reset the old engine context too");
   }
 
+  // A host that refuses every caret source must not move the popup to the
+  // screen origin. QueryCaretRect yields an all-zero rectangle, which used to
+  // be indistinguishable from a caret at (0, 0) and produced a visible jump to
+  // the top-left corner before the real caret arrived on the next frame.
+  ResetDocument(&document);
+  TypeLatin(service, context, "ni");
+  CandidateWindow::GetLastSnapshot(&snapshot);
+  Expect(snapshot.visible, "candidate window is visible before the host refuses");
+  const RECT known_caret = snapshot.caret_rect;
+  Expect(known_caret.left != 0 || known_caret.top != 0,
+         "the baseline caret is anchored next to the input field");
+  document.refuse_caret = true;
+  TypeLatin(service, context, "hao");
+  CandidateWindow::GetLastSnapshot(&snapshot);
+  Expect(snapshot.visible,
+         "an unknown caret must not hide an otherwise valid candidate page");
+  Expect(snapshot.caret_rect.left == known_caret.left &&
+             snapshot.caret_rect.top == known_caret.top,
+         "an unresolvable caret must reuse the previous placement, not (0, 0)");
+  Expect(!(snapshot.caret_rect.left == 0 && snapshot.caret_rect.top == 0),
+         "the candidate window must never be anchored at the screen origin");
+  document.refuse_caret = false;
+  TypeVirtualKey(service, context, VK_SPACE, true);
+  Expect(document.last_commit == L"你好",
+         "a host that briefly hides its caret must not break composition");
+
   // An asynchronous edit accepted by RequestEditSession is still revocable.
   ResetDocument(&document);
   context->defer_edits = true;

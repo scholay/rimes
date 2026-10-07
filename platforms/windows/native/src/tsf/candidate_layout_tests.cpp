@@ -22,6 +22,8 @@ using rimes::windows::ui::ThemeId;
 using rimes::windows::ui::ThemeIdOrDefault;
 using rimes::windows::ui::CandidateStripItem;
 using rimes::windows::ui::CandidateStripMetrics;
+using rimes::windows::tsf::HasVisibleCaret;
+using rimes::windows::tsf::ResolveCandidateCaret;
 
 int g_failures = 0;
 
@@ -75,6 +77,42 @@ void TestCollapsedCaretAndSelectionLabels() {
   Check(CandidateSelectionKey(L"", 9) == 0 &&
             CandidateSelectionKey(L"x", 0) == 0,
         "unsupported labels must not synthesize another candidate key");
+}
+
+void TestUnknownCaretReusesPreviousPlacement() {
+  // A host mid-composition can refuse every caret source, yielding an
+  // all-zero rectangle. Passing that to PlaceCandidateWindow would anchor the
+  // popup to the work-area origin, which is the visible jump to the screen
+  // corner. The previous placement must win instead.
+  ScreenRect resolved{};
+  Check(ResolveCandidateCaret({420, 300, 460, 324}, {0, 0, 0, 0}, &resolved),
+        "a successful query always wins");
+  Check(resolved.left == 420 && resolved.bottom == 324,
+        "the queried caret is used verbatim");
+
+  Check(ResolveCandidateCaret({0, 0, 0, 0}, {420, 300, 460, 324}, &resolved),
+        "an unknown caret falls back to the previous placement");
+  Check(resolved.left == 420 && resolved.top == 300,
+        "the popup stays next to the input field instead of jumping to (0, 0)");
+  const auto origin =
+      PlaceCandidateWindow(resolved, 320, 180, {0, 0, 1920, 1080});
+  Check(origin.x == 420 && origin.y == 330,
+        "the reused placement renders at the previous caret, not the corner");
+
+  Check(!ResolveCandidateCaret({0, 0, 0, 0}, {0, 0, 0, 0}, &resolved),
+        "no caret has ever been observed, so the popup must stay suppressed");
+
+  Check(HasVisibleCaret({120, 180, 120, 204}),
+        "a collapsed zero-width caret still identifies a visible position");
+  Check(!HasVisibleCaret({0, 0, 0, 0}),
+        "an all-zero rectangle is unknown geometry, not a caret");
+  Check(!HasVisibleCaret({100, 200, 140, 200}),
+        "a rectangle with no height carries no caret information");
+  Check(!ResolveCandidateCaret({0, 0, 0, 0}, {100, 200, 100, 200}, &resolved),
+        "a flat previous caret cannot stand in for a real one");
+  Check(!ResolveCandidateCaret({420, 300, 460, 324}, {100, 200, 140, 224},
+                               nullptr),
+        "a null output is rejected rather than written");
 }
 
 void TestThemeDefaults() {
@@ -202,6 +240,7 @@ int RunCandidateLayoutTests() {
   TestClampsToWorkArea();
   TestDpiScale();
   TestCollapsedCaretAndSelectionLabels();
+  TestUnknownCaretReusesPreviousPlacement();
   TestThemeDefaults();
   TestHorizontalWrapAndHits();
   TestLongTextDoesNotDropIndex();

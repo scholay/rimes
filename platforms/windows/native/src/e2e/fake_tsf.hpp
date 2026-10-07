@@ -19,6 +19,10 @@ struct FakeDocument {
   ITfComposition* active_composition = nullptr;
   ITfCompositionSink* composition_sink = nullptr;
   RECT caret_rect{120, 180, 122, 204};
+  // Chromium-family hosts can refuse every caret source while composing.
+  // When set, GetTextExt reports failure so QueryCaretRect falls through to
+  // its GetCaretPos fallback, which cannot succeed without an owned caret.
+  bool refuse_caret = false;
 };
 
 class FakeThreadMgr final : public ITfThreadMgr, public ITfKeystrokeMgr {
