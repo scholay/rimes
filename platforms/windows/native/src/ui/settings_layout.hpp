@@ -83,6 +83,8 @@ struct SettingsDraft {
   bool traditional = false;
   bool ascii_punctuation = false;
   unsigned font_size = 16;
+  unsigned candidate_count = 9;
+  bool vertical_candidates = false;
   wchar_t hotkey = L'B';
   std::wstring base_url;
   std::wstring model;
@@ -110,6 +112,8 @@ struct SettingsLayout {
   DipRect theme_popover{};
   std::array<DipRect, 2> subpage_tabs{};
   DipRect font_edit{};
+  DipRect candidate_count_edit{};
+  DipRect check_vertical{};
   DipRect hotkey_edit{};
   DipRect base_edit{};
   DipRect model_edit{};
@@ -225,6 +229,8 @@ struct SettingsLayout {
     const float fy = layout.body.top;
     layout.font_edit = {layout.body.left + 170.0f, fy, layout.body.left + 250.0f,
                         fy + 26.0f};
+    layout.candidate_count_edit = {layout.font_edit.left, fy + 44.f, layout.font_edit.right, fy + 70.f};
+    layout.check_vertical = {layout.body.left, fy + 88.f, layout.body.right, fy + 118.f};
   } else if (draft.page == SettingsPage::kBuffer) {
     layout.hotkey_edit = {layout.body.left + 100.0f, layout.body.top + 48.0f,
                           layout.body.left + 148.0f, layout.body.top + 74.0f};

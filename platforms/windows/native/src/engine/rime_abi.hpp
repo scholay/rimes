@@ -11,7 +11,7 @@ using SessionId = std::uintptr_t;
 
 // Prefix-compatible declarations calibrated against librime's public 1.x
 // rime_api.h and the existing Sources/CRimeBridge adapter. Only the prefix
-// through select_schema is used by the Windows broker. Never append a function
+// through config_set_int is used by the Windows broker. Never append a function
 // here without checking both its exact order and RimeApi::data_size first.
 struct Traits {
   int data_size;
@@ -68,6 +68,8 @@ struct Context {
 using NotificationHandler = void (*)(void*, SessionId, const char*,
                                      const char*);
 
+struct Config { void* ptr; };
+
 struct ApiPrefix {
   int data_size;
   void (*setup)(Traits*);
@@ -105,6 +107,33 @@ struct ApiPrefix {
   void (*free_schema_list)(void*);
   Bool (*get_current_schema)(SessionId, char*, std::size_t);
   Bool (*select_schema)(SessionId, const char*);
+  // Calibrated to librime 1.17.0 rime_api.h. Unused slots are never called;
+  // retaining their order is necessary to reach config_set_int safely.
+  Bool (*schema_open)(const char*, Config*);
+  Bool (*config_open)(const char*, Config*);
+  Bool (*config_close)(Config*);
+  void (*unused_config_get_bool)();
+  void (*unused_config_get_int)();
+  void (*unused_config_get_double)();
+  void (*unused_config_get_string)();
+  void (*unused_config_get_cstring)();
+  void (*unused_config_update_signature)();
+  void (*unused_config_begin_map)();
+  void (*unused_config_next)();
+  void (*unused_config_end)();
+  void (*unused_simulate_key_sequence)();
+  void (*unused_register_module)();
+  void (*unused_find_module)();
+  void (*unused_run_task)();
+  void (*unused_get_shared_data_dir)();
+  void (*unused_get_user_data_dir)();
+  void (*unused_get_sync_dir)();
+  void (*unused_get_user_id)();
+  void (*unused_get_user_data_sync_dir)();
+  void (*unused_config_init)();
+  void (*unused_config_load_string)();
+  void (*unused_config_set_bool)();
+  Bool (*config_set_int)(Config*, const char*, int);
 };
 
 using GetApiFunction = ApiPrefix* (*)();

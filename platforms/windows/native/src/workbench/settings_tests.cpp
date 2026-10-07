@@ -58,6 +58,17 @@ int main() {
                 restored.model == settings.model,
             "round trip retains theme and unrelated settings");
     }
+    settings.candidate_count = 5;
+    settings.vertical_candidates = true;
+    Check(SaveSettings(settings, nullptr), "save candidate options");
+    Settings candidate_options;
+    Check(LoadSettings(&candidate_options, nullptr) && candidate_options.candidate_count == 5 &&
+          candidate_options.vertical_candidates, "candidate options persist");
+    for (unsigned invalid : {0U, 10U}) {
+      settings.candidate_count = invalid;
+      Check(!SaveSettings(settings, nullptr), "reject invalid candidate counts");
+    }
+    settings.candidate_count = 5;
     settings.theme = "neon";
     Check(!SaveSettings(settings, nullptr), "reject unknown theme on save");
     Settings retained;
@@ -66,7 +77,7 @@ int main() {
     for (const auto* json : {"{}", "{\"theme\":\"unknown\"}"}) {
       std::ofstream(test.path(), std::ios::trunc) << json;
       Settings legacy;
-      Check(LoadSettings(&legacy, nullptr) && legacy.theme == "night",
+      Check(LoadSettings(&legacy, nullptr) && legacy.theme == "night" && legacy.candidate_count == 9 && !legacy.vertical_candidates,
             "legacy and unknown themes fall back safely");
     }
     std::ofstream(test.path(), std::ios::trunc) << "{\"theme\":5}";

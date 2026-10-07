@@ -82,7 +82,7 @@ bool ValidSettings(const Settings& value) {
                       value.schema == "double_pinyin" ||
                       value.schema == "double_pinyin_flypy" ||
                       value.schema == "wubi86" || value.schema == "english" || value.schema == "my_combo";
-  return schema && ValidTheme(value.theme) && value.font_size >= 10 &&
+  return schema && value.candidate_count >= 1 && value.candidate_count <= 9 && ValidTheme(value.theme) && value.font_size >= 10 &&
          value.font_size <= 40 && value.hotkey_key >= 'A' &&
          value.hotkey_key <= 'Z' &&
          value.hotkey_modifiers == (MOD_CONTROL | MOD_ALT) &&
@@ -107,6 +107,8 @@ bool LoadSettings(Settings* value, std::string* error) {
     value->traditional = j.value("traditional", false);
     value->ascii_punctuation = j.value("ascii_punctuation", false);
     value->font_size = j.value("font_size", 16U);
+    value->candidate_count = j.value("candidate_count", 9U);
+    value->vertical_candidates = j.value("vertical_candidates", false);
     value->theme = j.value("theme", "night");
     if (!ValidTheme(value->theme)) value->theme = "night";
     value->hotkey_modifiers = j.value(
@@ -132,6 +134,8 @@ bool SaveSettings(const Settings& value, std::string* error) {
               {"traditional", value.traditional},
               {"ascii_punctuation", value.ascii_punctuation},
               {"font_size", value.font_size},
+              {"candidate_count", value.candidate_count},
+              {"vertical_candidates", value.vertical_candidates},
               {"theme", value.theme},
               {"hotkey_modifiers", value.hotkey_modifiers},
               {"hotkey_key", value.hotkey_key},

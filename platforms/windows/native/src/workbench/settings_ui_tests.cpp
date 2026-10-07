@@ -152,6 +152,33 @@ void TestOwnedClicksAndTransientDetails() {
   Check(preview == ui::ThemeId::kNight && saves == 0,
         "closing unsaved settings restores the original theme");
 }
+void TestCandidateSettingsControls() {
+  workbench::Settings saved;
+  int saves = 0;
+  workbench::SettingsUiCallbacks callbacks;
+  callbacks.load = [] { workbench::Settings s; s.candidate_count = 5; return s; };
+  callbacks.save = [&](workbench::Settings s, const std::wstring&, bool, std::string*) { saved = s; ++saves; return true; };
+  workbench::SettingsUiHost host(std::move(callbacks));
+  host.Open(nullptr);
+  const auto window = host.hwnd();
+  if (!window) { Check(false, "candidate settings fixture opens"); return; }
+  ShowWindow(window, SW_SHOWNOACTIVATE);
+  ui::SettingsDraft draft;
+  auto layout = Layout(window, draft);
+  Click(window, layout.nav[1]);
+  draft.page = ui::SettingsPage::kAppearance;
+  layout = Layout(window, draft);
+  Click(window, layout.subpage_tabs[1]);
+  draft.subpage = 1;
+  layout = Layout(window, draft);
+  const auto vertical = GetDlgItem(window, 404);
+  Check(IsVisibleWithinFixture(vertical, window), "vertical candidate option is exposed in appearance size settings");
+  SendMessageW(window, WM_COMMAND, MAKEWPARAM(404, BN_CLICKED), reinterpret_cast<LPARAM>(vertical));
+  host.Close(true);
+  Check(saves == 1 && saved.candidate_count == 5 && saved.vertical_candidates,
+        "candidate controls save the requested count and arrangement");
+}
+
 void TestPluginManagementAndChordSelection() {
   Check(std::wstring(ui::kSettingsSchemeTitles[5]) == L"isaac2026",
         "chord scheme uses its current product name");
@@ -373,6 +400,7 @@ void TestSettingsPreserveRuntimeAndStreaming() {
 int main() {
   TestNestedHitTargets();
   TestOwnedClicksAndTransientDetails();
+  TestCandidateSettingsControls();
   TestPluginManagementAndChordSelection();
   TestSettingsPreserveRuntimeAndStreaming();
   if (failures) return EXIT_FAILURE;

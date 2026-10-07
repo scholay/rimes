@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cwchar>
 #include <iomanip>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -942,6 +943,11 @@ bool UnregisterTsf(const std::wstring& dll_path) {
     return false;
   }
 
+  if (!com_state.class_key_exists &&
+      (processor_exists || profile_exists || category_exists || display_exists)) {
+    std::cerr << "Cannot prove ownership of shared TSF state without its COM path; repair the installation first.\n";
+    return false;
+  }
   bool success = true;
   if (display_exists) {
     const auto result = categories->UnregisterCategory(
@@ -1120,7 +1126,18 @@ int wmain(const int argc, wchar_t** argv) {
   }
 
   std::wstring dll_path;
-  if (!ValidateDll(options.dll_path, &dll_path)) {
+  if (options.command == Command::kUnregister ||
+      options.command == Command::kVerifyAbsent) {
+    // Unregister validates the live CLSID's complete path before any mutation.
+    // A deleted file cannot be PE-validated and is not needed to remove owned
+    // COM/TSF state; register/verify still require the actual architecture DLL.
+    dll_path = FullPath(options.dll_path);
+    if (!std::filesystem::path(options.dll_path).is_absolute() || dll_path.empty() || !std::filesystem::path(dll_path).is_absolute() ||
+        _wcsicmp(std::filesystem::path(dll_path).filename().c_str(), kDllFileName)) {
+      std::cerr << "Supply the exact absolute registered RimesTsf.dll path.\n";
+      return 1;
+    }
+  } else if (!ValidateDll(options.dll_path, &dll_path)) {
     return 1;
   }
   if (options.dry_run) {

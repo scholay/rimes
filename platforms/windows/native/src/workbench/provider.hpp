@@ -13,6 +13,8 @@ struct Settings {
   // Persisted appearance colorway: night|day|quiet|rasta. Default night.
   std::string theme = "night";
   bool ascii = false, traditional = false, ascii_punctuation = false;
+  unsigned candidate_count = 9;
+  bool vertical_candidates = false;
   unsigned font_size = 16, hotkey_modifiers = MOD_CONTROL | MOD_ALT,
            hotkey_key = 'B';
 };

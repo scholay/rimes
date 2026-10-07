@@ -30,7 +30,11 @@ function Get-InstalledAppKey {return $global:RimesInstallerTestKey}
 function Get-SettingsShortcutPath {return $global:RimesInstallerTestShortcut}
 function Get-BrokerAutostart {return $global:RimesInstallerTestAutostart}
 function Restore-BrokerAutostart($Value){$global:RimesInstallerTestAutostart=$Value}
-function Get-LegacyViews {return @()}
+function Get-LegacyViews([string]$InstallRoot=''){return @()}
+function Get-RegisteredRimesViews {
+    return @($global:RimesInstallerTestNative.GetEnumerator() | ForEach-Object {[pscustomobject]@{architecture=$_.Key;dll=(Join-Path $_.Value "$($_.Key)\RimesTsf.dll")}})
+}
+function Invoke-RecoveryRegistrar([string]$Package,[string]$Directory,[string]$Architecture,[string]$Operation){Invoke-Registrar $Directory $Architecture $Operation}
 function Stop-OwnedBroker([string]$Directory){}
 function Test-SettingsCommandSupported([string]$Directory){return (Read-VerifiedPackage $Directory).version -ne '1.1.0-test-old'}
 function Assert-Unlocked([string]$Directory){if($global:RimesInstallerTestLock){throw 'Fixture DLL lock'}}
@@ -157,6 +161,42 @@ try {
     Check 'user-edited shortcut is preserved on reinstall' ((Get-FileHash -LiteralPath $global:RimesInstallerTestShortcut -Algorithm SHA256).Hash -eq $customHash)
     $result=& "$new\Uninstall.ps1" -InstallRoot $root
     Check 'user-edited shortcut is preserved on uninstall' ($result.Uninstalled -and (Get-FileHash -LiteralPath $global:RimesInstallerTestShortcut -Algorithm SHA256).Hash -eq $customHash)
+    & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
+    $actual=(Get-State $root).active
+    $unused=Join-Path $root 'versions\zzzz-newer-looking-unused'
+    Copy-Item -LiteralPath $upgrade -Destination $unused -Recurse
+    Move-Item -LiteralPath "$root\state.json" -Destination "$root\lost-state.json"
+    $resolved=Get-RimesInstallation $root
+    Check 'lost state resolves exact registered version rather than newest retained directory' ($resolved.active -eq $actual -and $resolved.recovered -and $null -eq $resolved.requiresSignOut)
+    & "$new\Verify.ps1" -InstallRoot $root | Out-Host
+    $result=& "$new\Uninstall.ps1" -InstallRoot $root
+    Check 'missing state uninstall removes both architectures and records recovery' ($result.Uninstalled -and $global:RimesInstallerTestNative.Count -eq 0 -and (Test-Path -LiteralPath "$root\uninstalled-state.json"))
+    & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
+    $actual=(Get-State $root).active
+    '{broken' | Set-Content -LiteralPath "$root\state.json"
+    Remove-Item -LiteralPath "$actual\x86\RimesTsf.dll"
+    Expect-Failure 'verify reports an incomplete installation with repair guidance' {& "$new\Verify.ps1" -InstallRoot $root}
+    $result=& "$new\Uninstall.ps1" -InstallRoot $root
+    Check 'corrupt state and missing x86 DLL can be uninstalled with current verified registrars' ($result.Uninstalled -and $global:RimesInstallerTestNative.Count -eq 0)
+    & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
+    Check 'reinstall repairs only missing immutable package files' ((Test-Path -LiteralPath "$actual\x86\RimesTsf.dll") -and $global:RimesInstallerTestNative.x64 -eq $actual -and $global:RimesInstallerTestNative.x86 -eq $actual)
+    $outside=Join-Path $OutputDirectory 'unowned'
+    $global:RimesInstallerTestNative.x86=$outside
+    Expect-Failure 'recovery refuses an architecture registered outside the managed root' {& "$new\Uninstall.ps1" -InstallRoot $root}
+    Check 'ownership failure leaves both native entries untouched' ($global:RimesInstallerTestNative.x86 -eq $outside -and $global:RimesInstallerTestNative.x64 -eq $actual)
+    $global:RimesInstallerTestNative.x86=$actual
+    $global:RimesInstallerTestNative.x86=$unused
+    Expect-Failure 'recovery refuses mixed registered versions' {& "$new\Uninstall.ps1" -InstallRoot $root}
+    $global:RimesInstallerTestNative.x86=$actual
+    $global:RimesInstallerTestAutostart='"C:\Unowned\RimesBroker.exe"'
+    Expect-Failure 'uninstall preserves another owned startup command' {& "$new\Uninstall.ps1" -InstallRoot $root}
+    Check 'foreign startup value and native registration survive rejected uninstall' ($global:RimesInstallerTestAutostart -eq '"C:\Unowned\RimesBroker.exe"' -and $global:RimesInstallerTestNative.Count -eq 2)
+    $global:RimesInstallerTestAutostart=$null
+    Remove-Item -LiteralPath "$root\state.json"
+    Remove-Item -LiteralPath "$actual\PACKAGE.json"
+    Remove-Item -LiteralPath "$actual\x86" -Recurse
+    $result=& "$new\Uninstall.ps1" -InstallRoot $root
+    Check 'external-uninstaller remnants can be removed using exact registered managed paths after manifest deletion' ($result.Uninstalled -and $global:RimesInstallerTestNative.Count -eq 0)
     $report.status='passed'
 } catch {$report.status='failed';$report.error=$_.ToString();throw}
 finally {

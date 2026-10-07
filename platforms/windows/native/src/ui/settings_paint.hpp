@@ -311,6 +311,9 @@ inline void PaintSettingsShell(HDC dc, const SettingsLayout& layout,
                   layout.font_edit.left - 8.0f, layout.font_edit.bottom});
     DrawTextW(dc, L"候选字号（10–40）", -1, &fl,
               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    RECT count_label = px({layout.body.left, layout.candidate_count_edit.top,
+      layout.candidate_count_edit.left - 8.f, layout.candidate_count_edit.bottom});
+    DrawTextW(dc, L"每页候选数（1–9）", -1, &count_label, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
   } else if (draft.page == SettingsPage::kBuffer && draft.subpage == 0) {
     SelectObject(dc, fonts.body);
     SetTextColor(dc, ToColorRef(p.text_secondary));
@@ -369,7 +372,7 @@ inline void PaintSettingsShell(HDC dc, const SettingsLayout& layout,
     DrawTextW(dc, text.c_str(), -1, &about, DT_LEFT | DT_WORDBREAK);
   }
 
-  const DipRect* fields[] = {&layout.font_edit, &layout.hotkey_edit,
+  const DipRect* fields[] = {&layout.font_edit, &layout.candidate_count_edit, &layout.hotkey_edit,
       &layout.base_edit, &layout.model_edit, &layout.key_edit, &layout.lang_edit};
   for (const auto* field : fields) {
     if (field->width() <= 0) continue;

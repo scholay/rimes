@@ -429,6 +429,18 @@ int RunTypingScenarios() {
   Expect(document.last_commit == L"你好",
          "a host that briefly hides its caret must not break composition");
 
+  // Revoked focus must retire the previous caret. A new context whose first
+  // query is unavailable must stay hidden, rather than reuse another field.
+  service->OnSetFocus(FALSE);
+  ResetDocument(&document);
+  document.refuse_caret = true;
+  service->OnSetFocus(TRUE);
+  TypeLatin(service, context, "ni");
+  CandidateWindow::GetLastSnapshot(&snapshot);
+  Expect(!snapshot.visible, "unresolved first caret after focus retirement stays hidden");
+  document.refuse_caret = false;
+  TypeVirtualKey(service, context, VK_ESCAPE, true);
+
   // An asynchronous edit accepted by RequestEditSession is still revocable.
   ResetDocument(&document);
   context->defer_edits = true;

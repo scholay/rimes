@@ -211,6 +211,24 @@ void TestNarrowViewportAndLargeFont() {
   Check(origin.y == 133, "caret gap scales to nine pixels at 150 percent");
 }
 
+void TestVerticalCandidatesKeepEveryPageItem() {
+  for (const float height : {180.f, 900.f}) {
+    const auto metrics = ui::MakeCandidateMetrics(40);
+    std::vector<CandidateStripItem> items(9);
+    for (auto& item : items) item.content_width_dip = 250;
+    const auto layout = LayoutCandidateStripMeasured(items, 50, true, metrics, 460.f, true, height);
+    Check(layout.pills.size() == 9 && layout.height_dip <= height && layout.width_dip <= 460.f,
+          "vertical pages preserve all items within monitor geometry");
+    for (std::size_t i = 0; i < layout.pills.size(); ++i) {
+      const auto& r = layout.pills[i];
+      Check(HitTestCandidateStrip(layout, (r.left+r.right)*.5f, (r.top+r.bottom)*.5f) == static_cast<int>(i),
+            "vertical or overflow-column hit retains the engine index");
+    }
+    Check(layout.pills[1].top > layout.pills[0].top,
+          "vertical reading order starts downwards");
+  }
+}
+
 void TestBufferLayoutBounds() {
   BufferPaintState state;
   state.source_blocks = {{L"a", false}};
@@ -245,6 +263,7 @@ int RunCandidateLayoutTests() {
   TestHorizontalWrapAndHits();
   TestLongTextDoesNotDropIndex();
   TestNarrowViewportAndLargeFont();
+  TestVerticalCandidatesKeepEveryPageItem();
   TestBufferLayoutBounds();
   return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

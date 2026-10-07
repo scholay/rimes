@@ -60,6 +60,17 @@ int wmain(int argc, wchar_t** argv) {
     std::cout << "Product scheme passed: " << item.schema
               << " traditional=" << item.traditional << '\n';
   }
+  for (const unsigned count : {1U, 5U, 9U}) {
+    if (!engine.Configure(session, "rime_ice", false, false, false, &error, count)) return 1;
+    EngineSnapshot page;
+    if (!engine.ProcessKey(session, 'n', 0, &page, &error) ||
+        !engine.ProcessKey(session, 'i', 0, &page, &error) ||
+        page.page_size != count || page.candidates.empty() || page.candidates.size() > count) {
+      std::cerr << "Engine candidate page size is not the requested count: " << count
+                << " actual=" << page.page_size << " candidates=" << page.candidates.size(); return 1;
+    }
+    std::cout << "Candidate page size passed: " << count << '\n';
+  }
   if (!engine.Configure(session, "my_combo", false, false, false, &error)) {
     std::cerr << "Configure failed my_combo: " << error; return 1;
   }

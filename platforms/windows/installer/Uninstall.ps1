@@ -2,26 +2,30 @@
 param([string]$InstallRoot="$env:ProgramFiles\RIMES",[switch]$AllowPendingRestart)
 . "$PSScriptRoot\Package.Common.ps1"
 Assert-Administrator
-$state=Get-Content -LiteralPath "$InstallRoot\state.json" -Raw | ConvertFrom-Json
-Assert-OwnedVersion $InstallRoot $state.active | Out-Null
+$state=Get-RimesInstallation $InstallRoot -AllowIncomplete
+# Use this verified current package for both registrar architectures even if
+# the installed x86 directory or DLL has been removed.
+Read-VerifiedPackage $PSScriptRoot | Out-Null
 Stop-OwnedBroker $state.active
-$requiresSignOut=$false
+$requiresSignOut=($null -eq $state.requiresSignOut)
 try{Assert-Unlocked $state.active}catch{if(-not $AllowPendingRestart){throw};$requiresSignOut=$true}
 $oldAutostart=Get-BrokerAutostart
 $oldInstalledApp=Read-InstalledAppRegistration
+Assert-OwnedBrokerAutostart $state.active
+if($oldInstalledApp -and (-not $oldInstalledApp.ContainsKey('RIMESInstallRoot') -or $oldInstalledApp.RIMESInstallRoot.value -ne $InstallRoot)){throw 'Installed Apps entry belongs to another managed installation. No registration was changed.'}
 $oldShortcut=Read-SettingsShortcut
 try {
-    foreach($arch in @('x86','x64')){Invoke-Registrar $state.active $arch 'unregister'}
-    & "$($state.active)\x64\RimesBroker.exe" --remove-autostart
-    if($LASTEXITCODE){throw 'Could not remove autostart'}
-    foreach($arch in @('x86','x64')){Invoke-Registrar $state.active $arch 'verify-absent'}
+    foreach($arch in @('x86','x64')){Invoke-RecoveryRegistrar $PSScriptRoot $state.active $arch 'unregister'}
+    Remove-OwnedBrokerAutostart $state.active
+    foreach($arch in @('x86','x64')){Invoke-RecoveryRegistrar $PSScriptRoot $state.active $arch 'verify-absent'}
     Restore-InstalledAppRegistration $null
     Remove-OwnedSettingsShortcut $InstallRoot
-    Move-Item -LiteralPath "$InstallRoot\state.json" -Destination "$InstallRoot\uninstalled-state.json" -Force
+    if(Test-Path -LiteralPath "$InstallRoot\state.json"){Move-Item -LiteralPath "$InstallRoot\state.json" -Destination "$InstallRoot\uninstalled-state.json" -Force}
+    else{Write-InstallState $InstallRoot ([ordered]@{active=$state.active;recovered=$true;uninstalled=$true});Move-Item -LiteralPath "$InstallRoot\state.json" -Destination "$InstallRoot\uninstalled-state.json" -Force}
 } catch {
     $failure=$_
     $recoveryFailures=@()
-    foreach($arch in @('x64','x86')){try{Invoke-Registrar $state.active $arch 'register'}catch{$recoveryFailures+=$_.ToString()}}
+    foreach($arch in @('x64','x86')){try{Invoke-RecoveryRegistrar $PSScriptRoot $state.active $arch 'register'}catch{$recoveryFailures+=$_.ToString()}}
     try{Restore-BrokerAutostart $oldAutostart}catch{$recoveryFailures+=$_.ToString()}
     try{Restore-InstalledAppRegistration $oldInstalledApp}catch{$recoveryFailures+=$_.ToString()}
     try{Restore-SettingsShortcut $oldShortcut}catch{$recoveryFailures+=$_.ToString()}
