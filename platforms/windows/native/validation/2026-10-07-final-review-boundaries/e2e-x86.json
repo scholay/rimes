@@ -1,0 +1,25 @@
+{
+    "Passed":  true,
+    "Architecture":  "x86",
+    "RimeDll":  "D:\\AI\\rimes-community-repair-20261007\\650762b-v8-e2e-x86\\librime\\rime.dll",
+    "LibrimeSource":  "https://github.com/rime/librime/releases/tag/1.17.0",
+    "LibrimeTag":  "1.17.0",
+    "LibrimeSha256":  "af235c26c06152ce09ceb8fe9d9ab9fba7ab43ce30aa952b40174d806f5cc3d9",
+    "DesktopProbe":  {
+                         "SessionId":  0,
+                         "SessionName":  null,
+                         "ExplorerProcessCount":  2,
+                         "InteractiveSession":  false,
+                         "Notepad":  {
+                                         "Attempted":  false,
+                                         "Succeeded":  false,
+                                         "Detail":  "not attempted"
+                                     },
+                         "Gap":  [
+                                     "Hosted windows-2022 runners usually have a logon session and can start Notepad, but they do not provide a reliable interactive IME desktop.",
+                                     "Registering RimesTsf and SendInput into Notepad/Edge cannot assert preedit, candidates, or 浣犲ソ on this image: there is no Chinese language pack, no user IME switch, and TSF often never attaches.",
+                                     "The required typing assertions therefore run in-process: Fake ITfThreadMgr/ITfContext + real TextService + real Broker + pinned rime.dll.",
+                                     "A later real-hardware pass must cover Win32, browsers, Electron, Office, DPI, password fields, and sleep/lock. See platforms/windows/native/MANUAL-TEST.md."
+                                 ]
+                     }
+}

@@ -1,0 +1,50 @@
+{
+  "source": {
+    "commit": "650762b27ebae5dafc380fc47e24341d3973ab11",
+    "sourceZipSha256": "c2b69771ac6a619658bc78987f0673ce2a6c1164640f502ba908d36af443e2b6",
+    "snapshot": "2abfa12a0d7b8e3e8f25bf52fcce03a3274cf3c4ea50c9dd8290312fc899dac3",
+    "files": 239
+  },
+  "exports": {
+    "build-result.json": {
+      "originalSha256": "8ea27ecde7d8e0e3679d95b3149b2861601e2edc132bd8d32043c50542276e12",
+      "normalizedSha256": "b8801f8b86bdcdf8b6cbdb6750860aa585bb99fc6fe766df553696c9f66526d5"
+    },
+    "e2e-x64.json": {
+      "originalSha256": "48f374fe1fc2bdeca740884412d9f3a1946c875abb90447d58689a7727323a96",
+      "normalizedSha256": "effef4ac1d97094b750d4c941f579d103eed8a5bbdb34e8d153bc2bf5cf83005"
+    },
+    "e2e-x64.txt": {
+      "originalSha256": "c4798e5a0834c3cace5ea8bffe693729d61d77541ac39701710b2e2ebee5d9e1",
+      "normalizedSha256": "5557d75e0569e042475a18960189e7d73953f7e9a2d1284240136cf6bb08b352"
+    },
+    "e2e-x86.json": {
+      "originalSha256": "4aa6f6e8184325651134c6ff4fa9a91b4e760a01c0c5c416f4c5a666e46a002d",
+      "normalizedSha256": "e96da2f5e4d03ba1c9e6fc47fe1ddacccd860230e77f3ef3fc2d0d9f29320f19"
+    },
+    "e2e-x86.txt": {
+      "originalSha256": "8c1d33571855fda6fdf06dbbb474d33c785a28a40edb654d2d76295dd7b8309e",
+      "normalizedSha256": "113e0550d38603d0ec23230d6dd69022b18ace1b1e636bca32f0255254640ff3"
+    },
+    "installer-sandbox.json": {
+      "originalSha256": "ab51b659d0696ec80f008872338c52ccbf3280e32c4637d56c982ba8a37fd78d",
+      "normalizedSha256": "26de511209c64669f26d5fab91232e308c8a5500f52c6ba642ba34f00adec7de"
+    }
+  },
+  "consoleExcerpt": {
+    "source": "caret-v8-run.log",
+    "originalSha256": "5257407d8af6c2ca9ffbc7737b8d45313a74e3486ebe69e3b24701fd9aae78b3",
+    "normalizedExcerptSha256": "f0496975efa66323eba27de2fcce08362d02abfb8211645aceb0048e84ac21f7",
+    "serialArchitectureOrder": [
+      "x64",
+      "x86"
+    ],
+    "selectedLinePrefixes": [
+      "caps_lock=",
+      "after keydown vk=",
+      "after nihao:",
+      "Same-thread document/key-context/pop"
+    ]
+  },
+  "normalization": "UTF-8 without BOM; LF line endings; trailing blank lines removed from text logs"
+}
