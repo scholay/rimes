@@ -180,6 +180,12 @@ try {
     Check 'corrupt state and missing x86 DLL can be uninstalled with current verified registrars' ($result.Uninstalled -and $global:RimesInstallerTestNative.Count -eq 0)
     & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
     Check 'reinstall repairs only missing immutable package files' ((Test-Path -LiteralPath "$actual\x86\RimesTsf.dll") -and $global:RimesInstallerTestNative.x64 -eq $actual -and $global:RimesInstallerTestNative.x86 -eq $actual)
+    $retainedTool=Join-Path $OutputDirectory 'retained-registrar.exe'
+    Move-Item -LiteralPath "$new\x86\RimesRegistrar.exe" -Destination $retainedTool
+    $guidance=''
+    try {& "$new\Uninstall.ps1" -InstallRoot $root | Out-Host}catch{$guidance=$_.Exception.Message}
+    finally {Move-Item -LiteralPath $retainedTool -Destination "$new\x86\RimesRegistrar.exe"}
+    Check 'incomplete current uninstall tools explain repair and preserve registration' ($guidance.Contains('current uninstall tools are incomplete') -and $guidance.Contains('Setup.exe') -and $global:RimesInstallerTestNative.x64 -eq $actual -and $global:RimesInstallerTestNative.x86 -eq $actual)
     $outside=Join-Path $OutputDirectory 'unowned'
     $global:RimesInstallerTestNative.x86=$outside
     Expect-Failure 'recovery refuses an architecture registered outside the managed root' {& "$new\Uninstall.ps1" -InstallRoot $root}

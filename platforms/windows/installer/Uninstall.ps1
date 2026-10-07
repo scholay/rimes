@@ -5,7 +5,8 @@ Assert-Administrator
 $state=Get-RimesInstallation $InstallRoot -AllowIncomplete
 # Use this verified current package for both registrar architectures even if
 # the installed x86 directory or DLL has been removed.
-Read-VerifiedPackage $PSScriptRoot | Out-Null
+try {Read-VerifiedPackage $PSScriptRoot | Out-Null}
+catch {throw "The current uninstall tools are incomplete or unverifiable. Run the current Setup.exe to repair the installation, then retry uninstall. No registration was changed. $($_.Exception.Message)"}
 Stop-OwnedBroker $state.active
 $requiresSignOut=($null -eq $state.requiresSignOut)
 try{Assert-Unlocked $state.active}catch{if(-not $AllowPendingRestart){throw};$requiresSignOut=$true}

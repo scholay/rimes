@@ -9,8 +9,15 @@ New-Item -ItemType Directory -Path $ReportDirectory | Out-Null
 $testClsid='{726F9B64-3421-4B62-8AE9-306959136101}'
 $checks=@()
 function Native([string]$Arch,[string]$Op,[string]$Dll,[bool]$Fail=$false){
-    & "$ReportDirectory\$Arch\RimesRecoveryRegistrar.exe" $Op --dll $Dll | Out-Host
-    $code=$LASTEXITCODE
+    # Windows PowerShell 5.1 can turn a native stderr record into a terminating
+    # error when the caller redirects all streams. Judge native failures by
+    # their exit status, including the intentional ownership-refusal cases.
+    $previousPreference=$ErrorActionPreference
+    try {
+        $ErrorActionPreference='Continue'
+        & "$ReportDirectory\$Arch\RimesRecoveryRegistrar.exe" $Op --dll $Dll 2>&1 | Out-Host
+        $code=$LASTEXITCODE
+    } finally {$ErrorActionPreference=$previousPreference}
     if(($Fail -and $code -eq 0) -or (-not $Fail -and $code -ne 0)){throw "Unexpected $Arch $Op exit=$code"}
     $script:checks+="$Arch $Op expectedFailure=$Fail"
 }

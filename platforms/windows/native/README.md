@@ -39,6 +39,13 @@ Where the TSF host cooperates, typing matches the macOS RIMES controller:
 The candidate panel is a `WS_EX_NOACTIVATE` topmost tool window so it cannot
 steal focus from the host.
 
+Settings → Appearance → Size controls the candidate font, page size (1–9),
+and vertical arrangement. Page size changes the real librime menu pagination.
+Vertical candidates use additional columns when the current monitor is too
+short to fit the page. If the host temporarily cannot resolve its caret, the
+panel keeps the last position within the current focus context; with no valid
+position it stays hidden until a caret is available.
+
 ## Build
 
 Use a Visual Studio 2022 developer environment with the x86/x64 C++ workload
