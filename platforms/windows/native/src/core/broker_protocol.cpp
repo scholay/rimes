@@ -362,6 +362,23 @@ bool ValidateKeyEvent(const KeyEvent& dto, std::string* error) {
     SetError(error, "repeat flag and repeat_count disagree");
     return false;
   }
+  if ((dto.event_flags & static_cast<std::uint32_t>(KeyEventFlags::kShiftTap)) != 0) {
+    constexpr auto incompatible =
+        static_cast<std::uint32_t>(KeyEventFlags::kKeyDown) |
+        static_cast<std::uint32_t>(KeyEventFlags::kRepeat) |
+        static_cast<std::uint32_t>(KeyEventFlags::kTestOnly) |
+        static_cast<std::uint32_t>(KeyEventFlags::kPreservedKey) |
+        static_cast<std::uint32_t>(KeyEventFlags::kSystemKey);
+    constexpr auto commands = static_cast<std::uint32_t>(KeyModifiers::kControl) |
+        static_cast<std::uint32_t>(KeyModifiers::kAlt) |
+        static_cast<std::uint32_t>(KeyModifiers::kWindows) |
+        static_cast<std::uint32_t>(KeyModifiers::kAltGr);
+    if ((dto.virtual_key != 0x10 && dto.virtual_key != 0xa0 && dto.virtual_key != 0xa1) ||
+        (dto.event_flags & incompatible) != 0 || (dto.modifiers & commands) != 0) {
+      SetError(error, "Shift tap must be a bare real Shift release");
+      return false;
+    }
+  }
   return true;
 }
 
@@ -393,6 +410,12 @@ bool ValidateInputState(const InputState& dto, std::string* error) {
        static_cast<std::uint32_t>(InputStateFlags::kCandidatesVisible)) != 0;
   const bool handled = (dto.state_flags & static_cast<std::uint32_t>(
                                               InputStateFlags::kHandled)) != 0;
+  const bool modifier_snapshot = (dto.state_flags & static_cast<std::uint32_t>(
+      InputStateFlags::kModifierSnapshot)) != 0;
+  if (handled && modifier_snapshot) {
+    SetError(error, "modifier snapshot cannot own a host key");
+    return false;
+  }
   const std::uint32_t composition_units =
       Utf16Length(dto.composition).value_or(0);
   if (static_cast<std::uint64_t>(dto.caret_utf16) + dto.selection_length_utf16 >
@@ -406,7 +429,7 @@ bool ValidateInputState(const InputState& dto, std::string* error) {
     SetError(error, "non-composing state contains composition data");
     return false;
   }
-  if (!handled && (composing || !dto.commit_text.empty())) {
+  if (!handled && !modifier_snapshot && (composing || !dto.commit_text.empty())) {
     SetError(error, "unhandled input state contains a text mutation");
     return false;
   }

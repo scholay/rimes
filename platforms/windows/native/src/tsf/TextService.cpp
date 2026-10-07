@@ -1008,10 +1008,12 @@ HRESULT TextService::HandleKey(BrokerKeyPhase phase, ITfContext* context,
     if (virtual_key == VK_RETURN && phase == BrokerKeyPhase::kKeyDown &&
         broker_client_->Capturing())
       return_owned_ = true;
-    if (context != nullptr && is_real_event && state.has_snapshot) {
-      ApplyDocumentState(context, state);
-    }
   }
+  // A Shift modifier can commit existing code while remaining a host key.
+  // Snapshot application and keyboard ownership are independent.
+  if (result != BrokerKeyResult::kUnavailable && context != nullptr &&
+      is_real_event && state.has_snapshot)
+    ApplyDocumentState(context, state);
   return S_OK;
 }
 

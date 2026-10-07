@@ -4,6 +4,7 @@
 
 #include "rime_engine.hpp"
 #include "../broker/key_translation.hpp"
+#include "../broker/broker_connection.hpp"
 using namespace rimes::windows::engine;
 int wmain(int argc, wchar_t** argv) {
   if (argc != 5) return 2;
@@ -179,6 +180,118 @@ int wmain(int argc, wchar_t** argv) {
     if (!windows_key('L', 0, false, &direct) || !direct.commit_text.empty()) return 1;
   }
   std::cout << "Windows printable keys passed: question/slash, Shift release, English case\n";
+  // ascii_composer returns kNoop for both Shift phases even when release
+  // commits existing raw input. A successful process_key call alone cannot
+  // prove that the resulting text was collected promptly.
+  for (const auto* schema : {"rime_ice", "double_pinyin", "double_pinyin_flypy", "wubi86", "english"}) {
+    if (!engine.Configure(session, schema, false, false, false, &error)) return 1;
+    const std::string code = std::string(schema) == "wubi86" ? "wq" : "ni";
+    EngineSnapshot before;
+    for (const char key : code)
+      if (!engine.ProcessKey(session, key, 0, &before, &error)) return 1;
+    EngineSnapshot down, up;
+    if (!engine.ProcessKey(session, 0xffe1, 1, &down, &error) ||
+        !engine.ProcessKey(session, 0xffe1, released, &up, &error) ||
+        down.handled || up.handled || up.commit_text != code || up.composing) {
+      std::cerr << "Shift raw-code snapshot lost: " << schema
+                << " commit=" << up.commit_text; return 1;
+    }
+    EngineSnapshot ascii;
+    if (!engine.ProcessKey(session, 'a', 0, &ascii, &error) || ascii.handled ||
+        !ascii.commit_text.empty()) {
+      std::cerr << "Shift mode did not pass ASCII through cleanly: " << schema; return 1;
+    }
+  }
+  std::cout << "Product Shift raw-code and ASCII passthrough passed\n";
+
+  for (const auto side : {0xffe1, 0xffe2}) {
+    if (!engine.Configure(session, "my_combo", false, false, false, &error)) return 1;
+    EngineSnapshot composed;
+    for (const char key : {'d', 'v', 'i'})
+      if (!engine.ProcessKey(session, key, 0, &composed, &error)) return 1;
+    for (const char key : {'v', 'd', 'i'})
+      if (!engine.ProcessKey(session, key, released, &composed, &error)) return 1;
+    if (!engine.ProcessShiftTap(session, side, released, &composed, &error) ||
+        composed.handled || !composed.modifier_snapshot ||
+        composed.commit_text != "ni" || composed.composing) {
+      std::cerr << "Chord qualified Shift tap lost raw code: " << side
+                << " commit=" << composed.commit_text << " error=" << error; return 1;
+    }
+  }
+  std::cout << "Both product chord Shift styles passed\n";
+  // Leave the isolated engine's default schema in Chinese before opening
+  // real BrokerConnection sessions. The direct frames exercise negotiation
+  // without modifying pipe authentication or registering an input method.
+  if (!engine.Configure(session, "rime_ice", false, false, false, &error)) return 1;
   engine.DestroySession(session);
+  for (const auto capabilities : {0ULL, core::kModifierSnapshotsCapability}) {
+    broker::BrokerConnection connection(0, &engine);
+    std::uint32_t request_id = 1;
+    auto exchange = [&](core::MessageType type, std::vector<std::byte> payload,
+                        core::Frame* response) {
+      core::Frame frame;
+      frame.header.message_type = type;
+      frame.header.request_id = request_id++;
+      frame.payload = std::move(payload);
+      return connection.Handle(frame, GetCurrentProcessId(), response) ==
+             broker::ClientAction::kContinue;
+    };
+    core::Frame response;
+    std::vector<std::byte> payload;
+    core::ClientHello hello{GetCurrentProcessId(), 0, capabilities, "ProductProbe"};
+    core::BrokerHello broker_hello;
+    if (!core::EncodeClientHello(hello, &payload) ||
+        !exchange(core::MessageType::kClientHello, std::move(payload), &response) ||
+        !core::DecodeBrokerHello(response.payload, &broker_hello) ||
+        !(broker_hello.capabilities & core::kModifierSnapshotsCapability)) return 1;
+    core::InputSessionOpened opened;
+    if (!core::EncodeOpenInputSession({1, {}}, &payload) ||
+        !exchange(core::MessageType::kOpenInputSession, std::move(payload), &response) ||
+        !core::DecodeInputSessionOpened(response.payload, &opened)) return 1;
+    std::uint64_t sequence = 1;
+    auto key = [&](std::uint32_t vk, std::uint32_t flags, std::uint32_t modifiers,
+                   core::InputState* state) {
+      core::KeyEvent event;
+      event.session_id = opened.session_id;
+      event.sequence_id = sequence++;
+      event.virtual_key = vk;
+      event.event_flags = flags;
+      event.modifiers = modifiers;
+      return core::EncodeKeyEvent(event, &payload) &&
+             exchange(core::MessageType::kKeyEvent, std::move(payload), &response) &&
+             core::DecodeInputState(response.payload, state);
+    };
+    constexpr auto down = static_cast<std::uint32_t>(core::KeyEventFlags::kKeyDown);
+    constexpr auto tap = static_cast<std::uint32_t>(core::KeyEventFlags::kShiftTap);
+    constexpr auto modifier_state = static_cast<std::uint32_t>(core::InputStateFlags::kModifierSnapshot);
+    core::InputState state;
+    if (!key('N', down, 0, &state) || !key('I', down, 0, &state) ||
+        state.composition.empty()) return 1;
+    if (capabilities == 0) {
+      // The old client has neither the new flag nor a Shift gesture contract.
+      if (!key(VK_LSHIFT, down, shift, &state) || state.state_flags != 0 ||
+          !key(VK_LSHIFT, 0, 0, &state) || state.state_flags != 0 ||
+          !state.commit_text.empty()) {
+        std::cerr << "Legacy client received a new modifier snapshot"; return 1;
+      }
+      // Even an unnegotiated gesture must not arm the engine.
+      if (!key(VK_LSHIFT, tap, 0, &state) || state.state_flags != 0 ||
+          !key('H', down, 0, &state) || !key('A', down, 0, &state) ||
+          !key('O', down, 0, &state) || !key(VK_SPACE, down, 0, &state) ||
+          state.commit_text != "你好") {
+        std::cerr << "Legacy Shift modified the new Broker's input session"; return 1;
+      }
+    } else {
+      if (!key(VK_LSHIFT, tap, 0, &state) ||
+          state.state_flags != modifier_state || state.commit_text != "ni" ||
+          !key('A', down, 0, &state) || state.state_flags != 0 ||
+          !state.commit_text.empty()) {
+        std::cerr << "Negotiated Shift tap failed its real Broker snapshot contract"; return 1;
+      }
+    }
+    if (!core::EncodeCloseInputSession({opened.session_id}, &payload) ||
+        !exchange(core::MessageType::kCloseInputSession, std::move(payload), &response)) return 1;
+  }
+  std::cout << "Real Broker legacy/new client capability negotiation passed\n";
   return 0;
 }

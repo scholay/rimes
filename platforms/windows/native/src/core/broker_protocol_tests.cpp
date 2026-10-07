@@ -319,6 +319,29 @@ void TestKeyEventRoundTripAndValidation() {
   input.virtual_key = 0x41;
   input.modifiers = 0x80000000U;
   EXPECT(!EncodeKeyEvent(input, &encoded));
+
+  input.virtual_key = 0xa0;
+  input.modifiers = 0;
+  input.event_flags = static_cast<std::uint32_t>(KeyEventFlags::kShiftTap);
+  EXPECT(EncodeKeyEvent(input, &encoded));
+  EXPECT(DecodeKeyEvent(encoded, &decoded));
+  EXPECT(decoded.event_flags == input.event_flags);
+  for (const auto flag : {KeyEventFlags::kKeyDown, KeyEventFlags::kRepeat,
+                         KeyEventFlags::kTestOnly, KeyEventFlags::kPreservedKey,
+                         KeyEventFlags::kSystemKey}) {
+    input.event_flags = static_cast<std::uint32_t>(KeyEventFlags::kShiftTap) |
+                        static_cast<std::uint32_t>(flag);
+    EXPECT(!EncodeKeyEvent(input, &encoded));
+  }
+  input.event_flags = static_cast<std::uint32_t>(KeyEventFlags::kShiftTap);
+  for (const auto modifier : {KeyModifiers::kControl, KeyModifiers::kAlt,
+                             KeyModifiers::kWindows, KeyModifiers::kAltGr}) {
+    input.modifiers = static_cast<std::uint32_t>(modifier);
+    EXPECT(!EncodeKeyEvent(input, &encoded));
+  }
+  input.modifiers = 0;
+  input.virtual_key = 0x41;
+  EXPECT(!EncodeKeyEvent(input, &encoded));
 }
 
 InputState MakeInputState() {
@@ -375,6 +398,12 @@ void TestInputStateRoundTripAndValidation() {
 
   bad = input;
   bad.state_flags &= ~static_cast<std::uint32_t>(InputStateFlags::kHandled);
+  EXPECT(!EncodeInputState(bad, &encoded));
+  bad.state_flags |= static_cast<std::uint32_t>(InputStateFlags::kModifierSnapshot);
+  EXPECT(EncodeInputState(bad, &encoded));
+  EXPECT(DecodeInputState(encoded, &decoded));
+  EXPECT(decoded.state_flags == bad.state_flags);
+  bad.state_flags |= static_cast<std::uint32_t>(InputStateFlags::kHandled);
   EXPECT(!EncodeInputState(bad, &encoded));
 
   bad = input;

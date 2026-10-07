@@ -174,7 +174,10 @@ ClientAction BrokerConnection::HandleHello(const core::Frame& request,
   core::BrokerHello broker_hello;
   broker_hello.process_id = GetCurrentProcessId();
   broker_hello.session_id = broker_session_id_;
-  broker_hello.capabilities = runtime_ ? 1 : 0;
+  broker_hello.capabilities = (runtime_ ? 1ULL : 0ULL) |
+      core::kModifierSnapshotsCapability;
+  modifier_snapshots_ =
+      (hello.capabilities & core::kModifierSnapshotsCapability) != 0;
   peer_process_ = verified_client_process_id;
   broker_hello.broker_version = std::string(kBrokerVersion);
   std::vector<std::byte> payload;
@@ -409,6 +412,10 @@ ClientAction BrokerConnection::HandleKeyEvent(const core::Frame& request,
     }
     return RespondPassThrough(request, key, session, response);
   }
+  const bool shift = translated->keycode == 0xffe1 || translated->keycode == 0xffe2;
+  const bool shift_tap = HasFlag(key.event_flags, Flag(core::KeyEventFlags::kShiftTap));
+  if (shift && (!modifier_snapshots_ || !shift_tap))
+    return RespondPassThrough(request, key, session, response);
   // Refuse the event before touching librime if the wire revision cannot be
   // advanced. Checking after process_key would violate fail-open by mutating
   // an engine state that TSF can no longer identify.
@@ -419,8 +426,12 @@ ClientAction BrokerConnection::HandleKeyEvent(const core::Frame& request,
 
   engine::EngineSnapshot snapshot;
   std::string engine_error;
-  if (!engine_->ProcessKey(session.engine_session_id, translated->keycode,
-                           translated->modifiers, &snapshot, &engine_error)) {
+  const bool processed = shift_tap
+      ? engine_->ProcessShiftTap(session.engine_session_id, translated->keycode,
+                                translated->modifiers, &snapshot, &engine_error)
+      : engine_->ProcessKey(session.engine_session_id, translated->keycode,
+                            translated->modifiers, &snapshot, &engine_error);
+  if (!processed) {
     LogEngineFailure("ProcessKey", key.session_id, engine_error);
     if (!key_down) {
       session.handled_key_downs.reset(key.virtual_key);
@@ -439,7 +450,7 @@ ClientAction BrokerConnection::HandleKeyEvent(const core::Frame& request,
     runtime_->Capture(session.target, &snapshot);
   }
   std::uint64_t next_revision = session.revision;
-  if (snapshot.handled) {
+  if (snapshot.handled || snapshot.modifier_snapshot) {
     ++next_revision;
   }
 
@@ -455,10 +466,11 @@ ClientAction BrokerConnection::HandleKeyEvent(const core::Frame& request,
   if (runtime_ && runtime_->Capturing(session.target))
     state.state_flags |= StateFlag(core::InputStateFlags::kBufferCapture);
   session.revision = next_revision;
-  // An unhandled event has no authoritative snapshot (notably letter KeyUp).
+  // An ordinary unhandled event has no authoritative snapshot (letter KeyUp).
   // Preserve the displayed composition just as BrokerClient does, otherwise
   // candidate_guard rejects every mouse selection after the final key release.
-  if (snapshot.handled) session.composing = snapshot.composing;
+  if (snapshot.handled || snapshot.modifier_snapshot)
+    session.composing = snapshot.composing;
   if (key_down && snapshot.handled) {
     session.handled_key_downs.set(key.virtual_key);
   } else if (!key_down) {

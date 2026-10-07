@@ -104,6 +104,10 @@ inline constexpr std::size_t kMaxCandidateCommentBytes = 512;
 inline constexpr std::size_t kMaxCandidateLabelBytes = 32;
 inline constexpr std::size_t kMaxCandidateCount = 64;
 
+// Negotiated separately from the original workbench-control capability. A
+// legacy peer never receives pass-through modifier snapshots or offers Shift.
+inline constexpr std::uint64_t kModifierSnapshotsCapability = 1ULL << 1;
+
 struct ClientHello {
   std::uint32_t process_id = 0;
   // Windows logon session, including 0 for explicitly permitted automation.
@@ -182,6 +186,9 @@ enum class KeyEventFlags : std::uint32_t {
   // the subsequent real event.
   kTestOnly = 1U << 4,
   kPreservedKey = 1U << 5,
+  // A physically observed, uninterrupted Shift tap, delivered only on its
+  // real release. Requires kModifierSnapshotsCapability on both peers.
+  kShiftTap = 1U << 6,
 };
 
 inline constexpr std::uint32_t kKnownKeyEventFlags =
@@ -190,7 +197,8 @@ inline constexpr std::uint32_t kKnownKeyEventFlags =
     static_cast<std::uint32_t>(KeyEventFlags::kExtended) |
     static_cast<std::uint32_t>(KeyEventFlags::kSystemKey) |
     static_cast<std::uint32_t>(KeyEventFlags::kTestOnly) |
-    static_cast<std::uint32_t>(KeyEventFlags::kPreservedKey);
+    static_cast<std::uint32_t>(KeyEventFlags::kPreservedKey) |
+    static_cast<std::uint32_t>(KeyEventFlags::kShiftTap);
 
 struct KeyEvent {
   std::uint64_t session_id = 0;
@@ -217,13 +225,17 @@ enum class InputStateFlags : std::uint32_t {
   kComposing = 1U << 1,
   kCandidatesVisible = 1U << 2,
   kBufferCapture = 1U << 3,
+  // A real modifier may update librime while remaining a host key. Mutually
+  // exclusive with kHandled; this is an authoritative snapshot, not an eat.
+  kModifierSnapshot = 1U << 4,
 };
 
 inline constexpr std::uint32_t kKnownInputStateFlags =
     static_cast<std::uint32_t>(InputStateFlags::kHandled) |
     static_cast<std::uint32_t>(InputStateFlags::kComposing) |
     static_cast<std::uint32_t>(InputStateFlags::kCandidatesVisible) |
-    static_cast<std::uint32_t>(InputStateFlags::kBufferCapture);
+    static_cast<std::uint32_t>(InputStateFlags::kBufferCapture) |
+    static_cast<std::uint32_t>(InputStateFlags::kModifierSnapshot);
 inline constexpr std::uint16_t kNoCandidateSelected = 0xffffU;
 
 // One atomic response contains every text mutation for a key event. Wire text

@@ -39,6 +39,10 @@ Where the TSF host cooperates, typing matches the macOS RIMES controller:
 - `1`–`9` select by label.
 - PageDown / PageUp page the menu.
 - Escape cancels and commits nothing.
+- A short independent Shift tap uses the scheme's Chinese/English switch.
+  Its raw-code commit is collected immediately while Shift remains a host
+  modifier. Other key combinations, long holds and focus changes cancel the
+  tap; unavailable or older Brokers do not receive deferred input.
 
 The candidate panel is a `WS_EX_NOACTIVATE` topmost tool window so it cannot
 steal focus from the host.
@@ -49,6 +53,18 @@ Vertical candidates use additional columns when the current monitor is too
 short to fit the page. If the host temporarily cannot resolve its caret, the
 panel keeps the last position within the current focus context; with no valid
 position it stays hidden until a caret is available.
+
+New Buffer shortcut settings default to **Ctrl+Shift+B**, corresponding to
+macOS Cmd+Shift+B. Saved Ctrl+Alt shortcuts are retained; Settings can select
+either combination and another letter. A conflicting shortcut is reported,
+and a failed change keeps the previous shortcut active. Buffer remains
+accessible from the tray when registration fails.
+
+Ctrl/Alt/Win/AltGr combinations with Return, Backspace or Escape are host
+commands, even while Buffer captures ordinary input. Switching the workbench
+back to Input stops automatic translation and queued processing; source and
+completed results remain available for explicit sending. These changes describe
+the current source, not a replacement of the published 1.1.0 installer.
 
 ## Build
 
@@ -83,7 +99,7 @@ does not load `rime.dll`.
 `testdata/e2e` table schema and drives the real `TextService` through a Fake
 TSF stack (`ITfThreadMgr` / `ITfContext` / `ITfComposition`). It asserts
 preedit, candidate contents, `nihao`+Space → `你好`, number selection, paging,
-and Escape.
+Escape, Shift switching, ordinary editing and host-command pass-through.
 
 Hosted GitHub `windows-2022` runners usually have a logon session and can
 launch Notepad, but they are **not** a reliable interactive IME desktop: no

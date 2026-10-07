@@ -560,6 +560,20 @@ bool IsModifierKey(WPARAM virtual_key) noexcept {
   }
 }
 
+bool IsShiftKey(WPARAM virtual_key) noexcept {
+  return virtual_key == VK_SHIFT || virtual_key == VK_LSHIFT ||
+         virtual_key == VK_RSHIFT;
+}
+
+bool HasCommandModifiers(std::uint32_t modifiers) noexcept {
+  constexpr std::uint32_t commands =
+      static_cast<std::uint32_t>(protocol::KeyModifiers::kControl) |
+      static_cast<std::uint32_t>(protocol::KeyModifiers::kAlt) |
+      static_cast<std::uint32_t>(protocol::KeyModifiers::kWindows) |
+      static_cast<std::uint32_t>(protocol::KeyModifiers::kAltGr);
+  return (modifiers & commands) != 0;
+}
+
 bool IsPrintableKey(WPARAM virtual_key) noexcept {
   return (virtual_key >= '0' && virtual_key <= '9') ||
          (virtual_key >= 'A' && virtual_key <= 'Z') ||
@@ -724,7 +738,13 @@ class NamedPipeBrokerClient final : public BrokerClient {
   bool SetContext(std::uint64_t context_id) noexcept override {
     try {
       std::unique_lock lock(io_mutex_, std::defer_lock);
-      if (!lock.try_lock_for(std::chrono::milliseconds(2))) return false;
+      if (!lock.try_lock_for(std::chrono::milliseconds(2))) {
+        // TSF fails open before HandleKey when binding cannot be confirmed.
+        // Retire only the locally observed modifier, not consumed key pairs.
+        CancelShiftTap();
+        for (auto& held : held_shift_) held.store(false);
+        return false;
+      }
       if (!connected_.load() || pipe_ == INVALID_HANDLE_VALUE) {
         ScheduleReconnectLocked();
         return false;
@@ -742,6 +762,8 @@ class NamedPipeBrokerClient final : public BrokerClient {
       }
       composing_.store(false);
       for (auto& pressed : pressed_keys_) pressed.store(false);
+      for (auto& observed : observed_shift_) observed.store(false);
+      for (auto& held : held_shift_) held.store(false);
       context_id_ = context_id;
       if (context_id == 0) return true;
       protocol::OpenInputSession open{context_id, {}};
@@ -834,57 +856,92 @@ class NamedPipeBrokerClient final : public BrokerClient {
     }
     if (event.phase == BrokerKeyPhase::kPreservedKey ||
         event.virtual_key == 0 || event.virtual_key > 0xffU) {
+      CancelShiftTap();
       return BrokerKeyResult::kPassThrough;
     }
-    const std::size_t key_index = static_cast<std::size_t>(event.virtual_key);
+    const bool shift = IsShiftKey(event.virtual_key);
+    const std::size_t key_index = shift && event.virtual_key == VK_SHIFT
+        ? (((event.key_data >> 16U) & 0xffU) == 0x36U ? VK_RSHIFT : VK_LSHIFT)
+        : static_cast<std::size_t>(event.virtual_key);
 
     if (event.phase == BrokerKeyPhase::kTestKeyUp) {
       if (!connected_.load(std::memory_order_acquire)) {
         return BrokerKeyResult::kUnavailable;
       }
-      return pressed_keys_[key_index].load(std::memory_order_acquire)
+      return (pressed_keys_[key_index].load(std::memory_order_acquire) ||
+              held_shift_[key_index].load(std::memory_order_acquire))
                  ? BrokerKeyResult::kConsumed
                  : BrokerKeyResult::kPassThrough;
     }
 
     const std::uint32_t modifiers = ReadModifiers();
     const bool composing = composing_.load(std::memory_order_acquire);
+    const bool observe_shift = shift && modifier_capable_.load() &&
+                               !HasCommandModifiers(modifiers);
+    const bool capture_key = capturing_.load() && !HasCommandModifiers(modifiers) &&
+        (event.virtual_key == VK_RETURN || event.virtual_key == VK_BACK ||
+         event.virtual_key == VK_ESCAPE);
     if (event.phase == BrokerKeyPhase::kTestKeyDown) {
+      // A filtered host shortcut may never receive OnKeyDown. This is local
+      // gesture bookkeeping only: test callbacks never send input to Rime.
+      if (!shift || HasCommandModifiers(modifiers)) CancelShiftTap();
       if (!connected_.load(std::memory_order_acquire)) {
         return BrokerKeyResult::kUnavailable;
       }
-      return (ShouldOfferKey(event.virtual_key, modifiers, composing) ||
-              (capturing_.load() && (event.virtual_key == VK_RETURN ||
-                                     event.virtual_key == VK_BACK ||
-                                     event.virtual_key == VK_ESCAPE)))
+      return (observe_shift || ShouldOfferKey(event.virtual_key, modifiers, composing) || capture_key)
                  ? BrokerKeyResult::kConsumed
                  : BrokerKeyResult::kPassThrough;
     }
 
     const bool key_down = event.phase == BrokerKeyPhase::kKeyDown;
     const bool key_up = event.phase == BrokerKeyPhase::kKeyUp;
+    if (key_down && (!shift || HasCommandModifiers(modifiers))) CancelShiftTap();
     if ((!key_down && !key_up) ||
-        (key_down && !ShouldOfferKey(event.virtual_key, modifiers, composing) &&
-         !(capturing_.load() &&
-           (event.virtual_key == VK_RETURN || event.virtual_key == VK_BACK ||
-            event.virtual_key == VK_ESCAPE))) ||
-        (key_up && !pressed_keys_[key_index].load(std::memory_order_acquire))) {
+        (key_down && !observe_shift &&
+         !ShouldOfferKey(event.virtual_key, modifiers, composing) && !capture_key) ||
+        (key_up && !pressed_keys_[key_index].load(std::memory_order_acquire) &&
+         !held_shift_[key_index].load(std::memory_order_acquire))) {
       return BrokerKeyResult::kPassThrough;
     }
 
     try {
       std::unique_lock lock(io_mutex_, std::defer_lock);
       if (!lock.try_lock_for(std::chrono::milliseconds(2))) {
+        // This physical event has already failed open. Retire its gesture;
+        // a repeated release must never become a later synthetic tap.
+        CancelShiftTap();
+        if (shift && key_up) held_shift_[key_index].store(false);
         return BrokerKeyResult::kUnavailable;
       }
-      if (key_up && !pressed_keys_[key_index].exchange(
-                        false, std::memory_order_acq_rel)) {
+      const bool owned_up = key_up && pressed_keys_[key_index].exchange(
+          false, std::memory_order_acq_rel);
+      const bool observed_up = key_up && observed_shift_[key_index].exchange(
+          false, std::memory_order_acq_rel);
+      const bool held_up = key_up && held_shift_[key_index].exchange(false);
+      if (key_up && !owned_up && !held_up) {
         return BrokerKeyResult::kPassThrough;
       }
       if (!connected_.load(std::memory_order_acquire) ||
           pipe_ == INVALID_HANDLE_VALUE || input_session_id_ == 0) {
         return BrokerKeyResult::kUnavailable;
       }
+      if (shift && key_down) {
+        const bool another_shift = held_shift_[VK_LSHIFT].load() ||
+                                   held_shift_[VK_RSHIFT].load();
+        if (another_shift) CancelShiftTap();
+        const bool repeat = (static_cast<std::uint64_t>(event.key_data) & (1ULL << 30)) != 0 ||
+                            (event.key_data & 0xffffU) > 1;
+        held_shift_[key_index].store(true);
+        observed_shift_[key_index].store(observe_shift && !another_shift && !repeat);
+        shift_down_at_[key_index] = GetTickCount64();
+        // Do not arm ascii_composer until a real, uninterrupted release is
+        // known. Physical Shift remains with the host throughout the gesture.
+        return BrokerKeyResult::kPassThrough;
+      }
+      if (shift && (!observed_up || HasCommandModifiers(modifiers) ||
+                    !modifier_capable_.load() ||
+                    GetTickCount64() - shift_down_at_[key_index] >= 500))
+        return BrokerKeyResult::kPassThrough;
       if (next_request_id_ == 0 ||
           next_request_id_ == std::numeric_limits<std::uint32_t>::max() ||
           next_sequence_id_ == 0 ||
@@ -910,6 +967,7 @@ class NamedPipeBrokerClient final : public BrokerClient {
                     1, static_cast<std::uint32_t>(event.key_data & 0xffffU))
               : 1;
       key.modifiers = modifiers;
+      if (shift) key.event_flags |= static_cast<std::uint32_t>(protocol::KeyEventFlags::kShiftTap);
       if (key_down) {
         key.event_flags |=
             static_cast<std::uint32_t>(protocol::KeyEventFlags::kKeyDown);
@@ -968,11 +1026,17 @@ class NamedPipeBrokerClient final : public BrokerClient {
       const bool handled =
           (decoded.state_flags & static_cast<std::uint32_t>(
                                      protocol::InputStateFlags::kHandled)) != 0;
+      const bool modifier_snapshot = (decoded.state_flags &
+          static_cast<std::uint32_t>(protocol::InputStateFlags::kModifierSnapshot)) != 0;
+      if (modifier_snapshot && (!modifier_capable_.load() || !shift)) {
+        FailConnectionLocked();
+        return BrokerKeyResult::kUnavailable;
+      }
       const bool is_composing =
           (decoded.state_flags &
            static_cast<std::uint32_t>(protocol::InputStateFlags::kComposing)) !=
           0;
-      if (!handled) {
+      if (!handled && !modifier_snapshot) {
         LogDiagnosticStage(DiagnosticStage::kKeyResponseUnhandled);
         // An unhandled response is explicitly "no mutation" in the wire
         // contract, not an empty authoritative snapshot.  In particular,
@@ -986,11 +1050,11 @@ class NamedPipeBrokerClient final : public BrokerClient {
         // KeyUp to the host breaks chord_composer and some app key state.
         // Leave `state` as the empty default (has_snapshot=false) so TSF does
         // not treat this eat-without-mutation as "cancel the composition".
-        return key_up ? BrokerKeyResult::kConsumed
+        return owned_up ? BrokerKeyResult::kConsumed
                       : BrokerKeyResult::kPassThrough;
       }
       composing_.store(is_composing, std::memory_order_release);
-      if (key_down) {
+      if (key_down && handled) {
         pressed_keys_[key_index].store(true, std::memory_order_release);
       }
 
@@ -1052,7 +1116,8 @@ class NamedPipeBrokerClient final : public BrokerClient {
                 ? DiagnosticStage::kKeyResponseHandledCommitEmpty
                 : DiagnosticStage::kKeyResponseHandledCommitNonempty);
       }
-      return BrokerKeyResult::kConsumed;
+      return handled || owned_up ? BrokerKeyResult::kConsumed
+                                 : BrokerKeyResult::kPassThrough;
     } catch (...) {
       FailConnection();
       return BrokerKeyResult::kUnavailable;
@@ -1060,6 +1125,10 @@ class NamedPipeBrokerClient final : public BrokerClient {
   }
 
  private:
+  void CancelShiftTap() noexcept {
+    for (auto& observed : observed_shift_) observed.store(false);
+  }
+
   void ConnectWorker() noexcept {
     struct Finished {
       std::atomic_bool& value;
@@ -1173,6 +1242,7 @@ class NamedPipeBrokerClient final : public BrokerClient {
       hello.process_id = GetCurrentProcessId();
       hello.session_id = current_session_id;
       hello.client_name = "RimesTsf";
+      hello.capabilities = protocol::kModifierSnapshotsCapability;
       std::vector<std::byte> payload;
       protocol::Frame response;
       if (!protocol::EncodeClientHello(hello, &payload)) {
@@ -1209,6 +1279,8 @@ class NamedPipeBrokerClient final : public BrokerClient {
       }
 
       control_capable_.store((broker_hello.capabilities & 1) != 0);
+      modifier_capable_.store((broker_hello.capabilities &
+                              protocol::kModifierSnapshotsCapability) != 0);
       protocol::OpenInputSession open;
       open.context_id =
           (static_cast<std::uint64_t>(GetCurrentProcessId()) << 32U) ^
@@ -1421,9 +1493,12 @@ class NamedPipeBrokerClient final : public BrokerClient {
     last_revision_ = 0;
     composing_.store(false, std::memory_order_release);
     connected_.store(false, std::memory_order_release);
+    modifier_capable_.store(false);
     for (auto& pressed : pressed_keys_) {
       pressed.store(false, std::memory_order_release);
     }
+    for (auto& observed : observed_shift_) observed.store(false);
+    for (auto& held : held_shift_) held.store(false);
     if (const auto window = notification_window_.load())
       PostMessageW(window, kBrokerNotification, 0, 0);
   }
@@ -1464,6 +1539,7 @@ class NamedPipeBrokerClient final : public BrokerClient {
 
   std::atomic<HWND> notification_window_{nullptr};
   std::atomic_bool capturing_{false}, control_capable_{false};
+  std::atomic_bool modifier_capable_{false};
   std::atomic<std::uint64_t> connection_generation_{0};
   std::mutex notification_mutex_;
   std::deque<core::Json> notifications_;
@@ -1480,6 +1556,11 @@ class NamedPipeBrokerClient final : public BrokerClient {
   std::atomic_bool reconnecting_{false};
   std::atomic_bool composing_{false};
   std::array<std::atomic_bool, 256> pressed_keys_{};
+  std::array<std::atomic_bool, 256> observed_shift_{};
+  std::array<std::atomic_bool, 256> held_shift_{};
+  // Written/read only by the owning TSF thread; worker resets only the atomic
+  // eligibility flags, so a disconnect can retire but never revive a tap.
+  std::array<ULONGLONG, 256> shift_down_at_{};
   std::uint64_t input_session_id_ = 0;
   std::uint32_t next_request_id_ = 1;
   std::uint64_t next_sequence_id_ = 1;

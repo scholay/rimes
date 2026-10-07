@@ -23,6 +23,7 @@ struct EngineCandidate {
 
 struct EngineSnapshot {
   bool handled = false;
+  bool modifier_snapshot = false;
   bool composing = false;
   std::uint32_t caret_utf16 = 0;
   std::uint32_t selection_start_utf16 = 0;
@@ -45,6 +46,7 @@ struct RawCandidateView {
 
 struct RawSnapshotView {
   bool handled = false;
+  bool modifier_snapshot = false;
   bool has_context = false;
   std::string_view composition;
   std::string_view commit_text;

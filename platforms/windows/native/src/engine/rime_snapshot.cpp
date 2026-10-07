@@ -157,10 +157,11 @@ bool BuildEngineSnapshot(const RawSnapshotView& raw,
   try {
     EngineSnapshot built;
     built.handled = raw.handled;
+    built.modifier_snapshot = raw.modifier_snapshot;
 
-    // An unhandled event must not carry a mutation. This mirrors the broker's
-    // fail-open rule: TSF leaves the host application's key untouched.
-    if (!raw.handled) {
+    // Ordinary unhandled events remain mutation-free. The negotiated modifier
+    // path carries a separately marked snapshot without claiming the host key.
+    if (!raw.handled && !raw.modifier_snapshot) {
       *output = std::move(built);
       return true;
     }
@@ -295,13 +296,14 @@ bool MapSnapshotToInputState(std::uint64_t broker_session_id,
     mapped.session_id = broker_session_id;
     mapped.sequence_id = sequence_id;
     mapped.revision = revision;
-    if (!snapshot.handled) {
+    if (!snapshot.handled && !snapshot.modifier_snapshot) {
       *output = std::move(mapped);
       return true;
     }
 
-    mapped.state_flags =
-        static_cast<std::uint32_t>(core::InputStateFlags::kHandled);
+    mapped.state_flags = static_cast<std::uint32_t>(
+        snapshot.modifier_snapshot ? core::InputStateFlags::kModifierSnapshot
+                                   : core::InputStateFlags::kHandled);
     if (snapshot.composing) {
       mapped.state_flags |=
           static_cast<std::uint32_t>(core::InputStateFlags::kComposing);
