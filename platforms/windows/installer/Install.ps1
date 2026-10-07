@@ -35,7 +35,7 @@ if(-not $previous){
         Stop-OwnedBroker (Split-Path -Parent (Split-Path -Parent $entry.dll))
         if($entry.missing){$requiresRestart=$true;continue}
         try{$stream=[IO.File]::Open($entry.dll,'Open','ReadWrite','None');$stream.Dispose()}
-        catch{if(-not $AllowPendingRestart){throw 'Existing RIMES is loaded. Sign out first or explicitly use -AllowPendingRestart with immutable version directories.'};$requiresRestart=$true}
+        catch{if(-not $AllowPendingRestart){throw 'An existing RIMES DLL could not be opened exclusively and may still be in use. Sign out first or explicitly use -AllowPendingRestart with immutable version directories.'};$requiresRestart=$true}
     }
 }
 if (Test-Path -LiteralPath $target) {
