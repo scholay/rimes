@@ -5,7 +5,7 @@ This record follows the [pre-refresh package audit](release-audit-20261007.md), 
 | Platform | Public state | Refresh evidence |
 | --- | --- | --- |
 | Android | [1.1.1 / code15](https://github.com/scholay/rimes/releases/tag/android-v1.1.1) | Published 2026-10-07 09:24:50 UTC. Exact production APK upgraded the Xiaomi 17 Pro running Android 16 from 1.1.0/code12 without clearing data. Public downloads match the accepted files. |
-| macOS | 1.1.0 remains public; 1.1.1 in progress | Formal tag v1.1.1 targets main `41d38d0`; build/sign/notarize/staged-package installation/publication follow the protected release workflow. A tag is not a public installer. |
+| macOS | 1.1.0 remains public; 1.1.1 in progress | Formal tag v1.1.1 targets main `41d38d0`. Universal build, runtime smoke, CI upgrade, Developer ID signing and notarization passed. The exact staged package passed local passive verification; GUI installation is waiting for macOS administrator authorization. Public approval remains withheld. |
 | Windows | 1.1.1 remains public; 1.1.2 draft | Exact x64/x86 source freeze built and verified on YOUNG-HOME. GUI upgrade from 1.1.1 succeeded and retained all 11 dictionary/settings files byte-for-byte. Installed files, registrations and launcher entries verified. Installer requires Windows restart; post-restart runtime acceptance is pending. |
 | iOS | App Store 1.1.0/build48 | 1.1.1/build49 remains waiting for review. Build50 was uploaded and processed as VALID, and a development-signed export of the same archive was installed on the test iPhone. Device acceptance and review replacement remain pending. |
 | Linux | Experimental scheme-data preview | There is no public native stable Linux installer. This refresh does not promote the existing data preview to one. |
@@ -24,3 +24,19 @@ This record follows the [pre-refresh package audit](release-audit-20261007.md), 
 - All four public assets (APK, AAB, BUILD-INFO.json, SHA256SUMS) were downloaded without authentication and matched local SHA-256 values. Release metadata and tag point to the recorded build source.
 
 Other Android vendors, long-duration use and iPhone paste/keyboard interaction are separate coverage. No new paid AI request was issued during this package acceptance. Issue #76 retains its iOS acceptance requirement.
+
+## macOS staged package
+
+- Workflow [37599723640](https://github.com/scholay/rimes/actions/runs/37599723640), artifact `11473483489` (`RIMES-1.1.1-signed-stage-37599723640-1`).
+- Immutable archive SHA-256: `bd94bfb84644d04a465c0ab4fc88792230fa49b5905ffbe84fa37952e3089184`.
+- Exact package SHA-256: `1619ff281b788aeabe92a1c9f241c7a706ab4ab3797122085d028aa455658783`, 122,769,532 bytes.
+- Manifest binds main `41d38d0`, v1.1.1 and the workflow run. Package and notes hashes match it. Local `rehearse-release-pkg.sh` passive checks passed for Developer ID Application/Installer, team identity, hardened runtime, universal architectures, Gatekeeper and stapled notarization.
+- GUI installation was opened from that exact package on macOS 27.0 (26A428). System administrator authorization and post-install receipt/activation verification remain pending. The public release gate has not been approved.
+
+## Windows upgrade acceptance
+
+- Exact build source `6d22273`; frozen source snapshot `40de2e9f37aff692af91b4f0ce506b4e6a9e9b8a5fb03770eae844c1e215aedc`.
+- EXE SHA-256 `2444c237a22c10e14cc7cb66e85d4cee2658434db68be614251a39a80f121821`; ZIP SHA-256 `ea3cd5dae5686f169187b5f4cf93bacabcd562fdb6f5161eeaf4e1cf69c23318`.
+- x64/x86 native builds and 18 tests per architecture passed; real librime product probes, simulated TSF probes, 38 installer sandbox checks and 16 registrar recovery checks passed. Exact EXE payload and all 109 manifest files were verified.
+- The old Buffer was visibly empty and the old Broker exited through its tray menu. The exact final EXE upgraded the real installation from 1.1.1 to 1.1.2 with exit code 0. All 11 pre-existing dictionary/settings files retained their hashes. Installed verification passed for both registrations, and Installed Apps/Start Menu entries point to the new version.
+- Installer requests Windows restart; `requiresSignOut=true` and post-restart runtime acceptance remains pending. No restart or sign-out was forced. The new release is still a draft. Cross-account installation, damaged-install full lifecycle and physical Ctrl-shortcut behavior remain separate coverage.
