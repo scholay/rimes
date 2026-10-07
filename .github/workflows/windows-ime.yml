@@ -62,6 +62,14 @@ jobs:
           python -m unittest discover -s platforms/windows/tests -p test_native_data.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Test installer verification result
+        if: matrix.architecture == 'x64'
+        shell: powershell
+        run: |
+          ./platforms/windows/tests/Test-SetupResult.ps1 `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP ('rimes-setup-result-' + [guid]::NewGuid().ToString('N')))
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Run static checks, build, and CTest
         shell: pwsh
         run: |

@@ -7,6 +7,10 @@ New-Item -ItemType Directory -Path "$OutputDirectory\x64" -Force | Out-Null
 Copy-Item -LiteralPath "$PSScriptRoot\..\installer\Verify.ps1" -Destination $OutputDirectory
 @'
 function Assert-OwnedVersion([string]$root,[string]$directory){[pscustomobject]@{version='1.0.0';commit=('a'*40)}}
+function Get-RimesInstallation([string]$root){
+    $state=Get-Content -LiteralPath (Join-Path $root 'state.json') -Raw | ConvertFrom-Json
+    [pscustomobject]@{active=$state.active;manifest=(Assert-OwnedVersion $root $state.active);requiresSignOut=$state.requiresSignOut;recovered=$false}
+}
 function Assert-InstalledAppRegistration([string]$root,[string]$directory,$manifest){}
 function Assert-SettingsShortcut([string]$root,[string]$directory){}
 function Invoke-Registrar([string]$directory,[string]$architecture,[string]$operation){Write-Output "Verified fixture registration: $architecture"}
