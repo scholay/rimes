@@ -50,6 +50,7 @@ class SettingsUiHost {
   void UpdatePlugins();
   bool CommitSave();
   void Paint(HDC dc);
+  void InvalidateHover(int hit);
   void ActivateHit(int hit);
   static LRESULT CALLBACK Procedure(HWND, UINT, WPARAM, LPARAM);
 

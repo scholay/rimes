@@ -412,7 +412,42 @@ bool SettingsUiHost::CommitSave() {
 }
 
 void SettingsUiHost::Paint(HDC dc) {
-  ui::PaintSettingsShell(dc, layout_, draft_, fonts_, dpi_);
+  RECT client{};
+  if (!GetClientRect(hwnd_, &client) || client.right <= 0 || client.bottom <= 0)
+    return;
+  HDC frame = CreateCompatibleDC(dc);
+  HBITMAP bitmap = frame
+      ? CreateCompatibleBitmap(dc, client.right, client.bottom) : nullptr;
+  if (!bitmap) {
+    if (frame) DeleteDC(frame);
+    ui::PaintSettingsShell(dc, layout_, draft_, fonts_, dpi_);
+    return;
+  }
+  const auto previous = SelectObject(frame, bitmap);
+  // Background clearing, text and highlights must reach the window together.
+  // WM_ERASEBKGND alone cannot prevent a direct GDI clear/draw sequence from
+  // exposing an empty intermediate frame when the mouse crosses navigation.
+  ui::PaintSettingsShell(frame, layout_, draft_, fonts_, dpi_);
+  BitBlt(dc, 0, 0, client.right, client.bottom, frame, 0, 0, SRCCOPY);
+  SelectObject(frame, previous);
+  DeleteObject(bitmap);
+  DeleteDC(frame);
+}
+
+void SettingsUiHost::InvalidateHover(int hit) {
+  const ui::DipRect* bounds = nullptr;
+  if (hit >= 0 && hit < ui::kSettingsPageCount)
+    bounds = &layout_.nav[static_cast<std::size_t>(hit)];
+  else if (hit >= 100 && hit < 100 + static_cast<int>(layout_.scheme_cards.size()))
+    bounds = &layout_.scheme_cards[static_cast<std::size_t>(hit - 100)];
+  else if (hit >= 200 && hit < 200 + static_cast<int>(layout_.theme_cards.size()))
+    bounds = &layout_.theme_cards[static_cast<std::size_t>(hit - 200)];
+  else if (hit >= 400 && hit < 400 + static_cast<int>(layout_.theme_details.size()))
+    bounds = &layout_.theme_details[static_cast<std::size_t>(hit - 400)];
+  if (!bounds) return;
+  auto rect = DipToPx(*bounds, dpi_);
+  InflateRect(&rect, 2, 2);
+  InvalidateRect(hwnd_, &rect, FALSE);
 }
 
 void SettingsUiHost::ActivateHit(int hit) {
@@ -614,16 +649,18 @@ LRESULT CALLBACK SettingsUiHost::Procedure(HWND hwnd, UINT message,
                       96.0f / self->dpi_;
       const int hover = ui::HitTestSettings(self->layout_, x, y);
       if (self->draft_.hover != hover) {
+        const int previous = self->draft_.hover;
         self->draft_.hover = hover;
-        InvalidateRect(hwnd, nullptr, FALSE);
+        self->InvalidateHover(previous);
+        self->InvalidateHover(hover);
       }
       TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, hwnd, 0};
       TrackMouseEvent(&track);
       return 0;
     }
     case WM_MOUSELEAVE:
+      self->InvalidateHover(self->draft_.hover);
       self->draft_.hover = -1;
-      InvalidateRect(hwnd, nullptr, FALSE);
       return 0;
     case WM_SETCURSOR:
       if (reinterpret_cast<HWND>(wparam) == hwnd && LOWORD(lparam) == HTCLIENT) {

@@ -179,6 +179,62 @@ void TestCandidateSettingsControls() {
         "candidate controls save the requested count and arrangement");
 }
 
+void TestHoverRepaintScopeAndResources() {
+  workbench::SettingsUiCallbacks callbacks;
+  callbacks.load = [] { return workbench::Settings{}; };
+  workbench::SettingsUiHost host(std::move(callbacks));
+  host.Open(nullptr);
+  const auto window = host.hwnd();
+  Check(window != nullptr, "hover repaint fixture opens");
+  if (!window) return;
+  ShowWindow(window, SW_SHOWNOACTIVATE);
+  UpdateWindow(window);
+  ui::SettingsDraft draft;
+  const auto layout = Layout(window, draft);
+  auto move = [&](int row) {
+    const auto& rect = layout.nav[static_cast<std::size_t>(row)];
+    SendMessageW(window, WM_MOUSEMOVE, 0,
+                 Point(window, (rect.left + rect.right) / 2,
+                       (rect.top + rect.bottom) / 2));
+  };
+  auto sidebar_only = [&] {
+    HRGN region = CreateRectRgn(0, 0, 0, 0);
+    const int type = GetUpdateRgn(window, region, FALSE);
+    RECT dirty{};
+    GetRgnBox(region, &dirty);
+    const float scale = GetDpiForWindow(window) / 96.0f;
+    const bool result = type != ERROR && type != NULLREGION &&
+        dirty.right <= static_cast<LONG>(layout.sidebar.right * scale) + 2 &&
+        !PtInRegion(region, static_cast<int>((layout.heading.left + 30) * scale),
+                    static_cast<int>((layout.heading.top + 10) * scale));
+    DeleteObject(region);
+    return result;
+  };
+  // Same sequence as #87; inspect actual Win32 update regions before painting.
+  // Invalidating the whole client on every hover change fails these assertions.
+  for (const int row : {0, 1, 2, 3}) {
+    move(row);
+    Check(sidebar_only(), "navigation hover leaves content and native controls outside the dirty region");
+    UpdateWindow(window);
+    move(row);
+    Check(!GetUpdateRect(window, nullptr, FALSE), "moving within one hovered row does not request another frame");
+  }
+  SendMessageW(window, WM_MOUSELEAVE, 0, 0);
+  Check(sidebar_only(), "mouse leave repaints only the previous navigation highlight");
+  UpdateWindow(window);
+  SendMessageW(window, WM_MOUSELEAVE, 0, 0);
+  Check(!GetUpdateRect(window, nullptr, FALSE), "repeated mouse leave does not repaint an unchanged window");
+
+  const DWORD resources = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
+  for (int i = 0; i < 64; ++i) {
+    move(i % 4);
+    UpdateWindow(window);
+  }
+  Check(GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) <= resources + 1,
+        "repeated buffered hover frames do not retain GDI bitmaps or DCs");
+  host.Close(false);
+}
+
 void TestPluginManagementAndChordSelection() {
   Check(std::wstring(ui::kSettingsSchemeTitles[5]) == L"isaac2026",
         "chord scheme uses its current product name");
@@ -401,6 +457,7 @@ int main() {
   TestNestedHitTargets();
   TestOwnedClicksAndTransientDetails();
   TestCandidateSettingsControls();
+  TestHoverRepaintScopeAndResources();
   TestPluginManagementAndChordSelection();
   TestSettingsPreserveRuntimeAndStreaming();
   if (failures) return EXIT_FAILURE;
