@@ -79,7 +79,7 @@
 
 ## 설치
 
-공개 버전은 [macOS 1.1.0](https://github.com/scholay/rimes/releases/tag/v1.1.0), [Android 1.1.1](https://github.com/scholay/rimes/releases/tag/android-v1.1.1), [Windows 1.1.1](https://github.com/scholay/rimes/releases/tag/windows-v1.1.1), [iOS App Store 1.1.0](https://apps.apple.com/us/app/lingxi-ime/id6814620242)입니다. macOS 패키지는 서명 및 공증되었고 Android는 장기 서명 키를 사용하며 Windows EXE는 서명되지 않았습니다. iOS는 [TestFlight 공개 초대](https://testflight.apple.com/join/Kdj9RB4q)도 제공하며 설치 가능한 빌드는 TestFlight에서 확인할 수 있습니다. Linux는 현재 입력 스키마 데이터 미리보기를 공개합니다. 최신 소스와의 차이는 [패키지 점검 기록](validation/release-refresh-20261007.md)을 참고하세요. 소스를 받아 로컬에서 빌드할 수도 있습니다.
+공개 버전은 [macOS 1.1.1](https://github.com/scholay/rimes/releases/tag/v1.1.1), [Android 1.1.1](https://github.com/scholay/rimes/releases/tag/android-v1.1.1), [Windows 1.1.1](https://github.com/scholay/rimes/releases/tag/windows-v1.1.1), [iOS App Store 1.1.0](https://apps.apple.com/us/app/lingxi-ime/id6814620242)입니다. macOS 패키지는 서명 및 공증되었고 Android는 장기 서명 키를 사용하며 Windows EXE는 서명되지 않았습니다. iOS는 [TestFlight 공개 초대](https://testflight.apple.com/join/Kdj9RB4q)도 제공하며 설치 가능한 빌드는 TestFlight에서 확인할 수 있습니다. Linux는 현재 입력 스키마 데이터 미리보기를 공개합니다. 최신 소스와의 차이는 [패키지 점검 기록](validation/release-refresh-20261007.md)을 참고하세요. 소스를 받아 로컬에서 빌드할 수도 있습니다.
 
 ```bash
 git clone --recurse-submodules https://github.com/scholay/rimes.git

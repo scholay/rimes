@@ -5,7 +5,7 @@ This record follows the [pre-refresh package audit](release-audit-20261007.md), 
 | Platform | Public state | Refresh evidence |
 | --- | --- | --- |
 | Android | [1.1.1 / code15](https://github.com/scholay/rimes/releases/tag/android-v1.1.1) | Published 2026-10-07 09:24:50 UTC. Exact production APK upgraded the Xiaomi 17 Pro running Android 16 from 1.1.0/code12 without clearing data. Public downloads match the accepted files. |
-| macOS | 1.1.0 remains public; 1.1.1 in progress | Formal tag v1.1.1 targets main `41d38d0`. Universal build, runtime smoke, CI upgrade, Developer ID signing and notarization passed. The exact staged package passed local passive verification; GUI installation is waiting for macOS administrator authorization. Public approval remains withheld. |
+| macOS | [1.1.1 / build99](https://github.com/scholay/rimes/releases/tag/v1.1.1) | Published 2026-10-07 10:01:14 UTC after normal signing and publication gates. The signed, notarized universal PKG passed local GUI installation and installed-bundle verification. Anonymous public downloads match the accepted package. |
 | Windows | 1.1.1 remains public; 1.1.2 draft | Exact x64/x86 source freeze built and verified on YOUNG-HOME. GUI upgrade from 1.1.1 succeeded and retained all 11 dictionary/settings files byte-for-byte. Installed files, registrations and launcher entries verified. Installer requires Windows restart; post-restart runtime acceptance is pending. |
 | iOS | App Store 1.1.0/build48 | 1.1.1/build49 remains waiting for review. Build50 was uploaded and processed as VALID, and a development-signed export of the same archive was installed on the test iPhone. Device acceptance and review replacement remain pending. |
 | Linux | Experimental scheme-data preview | There is no public native stable Linux installer. This refresh does not promote the existing data preview to one. |
@@ -25,13 +25,15 @@ This record follows the [pre-refresh package audit](release-audit-20261007.md), 
 
 Other Android vendors, long-duration use and iPhone paste/keyboard interaction are separate coverage. No new paid AI request was issued during this package acceptance. Issue #76 retains its iOS acceptance requirement.
 
-## macOS staged package
+## macOS accepted public package
 
 - Workflow [37599723640](https://github.com/scholay/rimes/actions/runs/37599723640), artifact `11473483489` (`RIMES-1.1.1-signed-stage-37599723640-1`).
 - Immutable archive SHA-256: `bd94bfb84644d04a465c0ab4fc88792230fa49b5905ffbe84fa37952e3089184`.
 - Exact package SHA-256: `1619ff281b788aeabe92a1c9f241c7a706ab4ab3797122085d028aa455658783`, 122,769,532 bytes.
 - Manifest binds main `41d38d0`, v1.1.1 and the workflow run. Package and notes hashes match it. Local `rehearse-release-pkg.sh` passive checks passed for Developer ID Application/Installer, team identity, hardened runtime, universal architectures, Gatekeeper and stapled notarization.
-- GUI installation was opened from that exact package on macOS 27.0 (26A428). System administrator authorization and post-install receipt/activation verification remain pending. The public release gate has not been approved.
+- GUI installation of that exact package on macOS 27.0 (26A428) completed after native administrator authorization. `rehearse-release-pkg.sh --install-gui` passed, the PackageKit receipt reports 1.1.1, and `/Library/Input Methods/RIMES.app` reports 1.1.1/build99. One canonical process runs from the system bundle. The foreground input source was ABC at readback; this is installation verification, not a new host-app typing acceptance.
+- Both protected release gates were approved in their normal order after verification. The workflow completed successfully and published v1.1.1 as latest; main stayed frozen throughout. The public PKG and SHA256SUMS were downloaded without authentication and matched the exact locally installed staged bytes. The old v1.1.0 release remains available.
+- macOS 27 sandboxed WeChat/QQ host crashes in issue #90 remain under investigation; this release does not claim that issue resolved.
 
 ## Windows upgrade acceptance
 
