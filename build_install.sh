@@ -499,6 +499,11 @@ If RIMES doesn't appear in the input menu (⌃Space) immediately, run:
   log out and back in once, then add RIMES in System Settings if needed.
 After switching to it, press F4 to choose an input scheme.
 
+macOS 27: switching to RIMES in sandboxed WeChat/QQ has been reported to crash
+the host app. If affected, use another input method and see:
+  https://github.com/scholay/rimes/blob/main/docs/macos/input-source-cache-recovery.md
+App caches were not cleared. Restarting/logging out is not a guaranteed fix (#90).
+
 Watch behaviour:  tail -f ~/rimebuffer.log
 Self-contained: librime + Rime data are bundled, no Squirrel needed.
 EOF
