@@ -79,7 +79,7 @@
 
 ## インストール
 
-公開版は [macOS 1.1.0](https://github.com/scholay/rimes/releases/tag/v1.1.0)、[Android 1.1.0](https://github.com/scholay/rimes/releases/tag/android-v1.1.0)、[Windows 1.1.1](https://github.com/scholay/rimes/releases/tag/windows-v1.1.1)、[iOS App Store 1.1.0](https://apps.apple.com/us/app/lingxi-ime/id6814620242) です。macOS は署名・公証済み、Android は長期署名鍵を使用し、Windows EXE は未署名です。iOS は [TestFlight 公開招待](https://testflight.apple.com/join/Kdj9RB4q)も提供し、インストール可能なビルドは TestFlight に表示されます。Linux は現在、入力スキームのデータプレビューを公開しています。最新ソースとの差分は[パッケージ監査](validation/release-audit-20261007.md)を参照してください。ソースからローカルビルドも可能です。
+公開版は [macOS 1.1.1](https://github.com/scholay/rimes/releases/tag/v1.1.1)、[Android 1.1.1](https://github.com/scholay/rimes/releases/tag/android-v1.1.1)、[Windows 1.1.1](https://github.com/scholay/rimes/releases/tag/windows-v1.1.1)、[iOS App Store 1.1.0](https://apps.apple.com/us/app/lingxi-ime/id6814620242) です。macOS は署名・公証済み、Android は長期署名鍵を使用し、Windows EXE は未署名です。iOS は [TestFlight 公開招待](https://testflight.apple.com/join/Kdj9RB4q)も提供し、インストール可能なビルドは TestFlight に表示されます。Linux は現在、入力スキームのデータプレビューを公開しています。最新ソースとの差分は[パッケージ監査](validation/release-refresh-20261007.md)を参照してください。ソースからローカルビルドも可能です。
 
 ```bash
 git clone --recurse-submodules https://github.com/scholay/rimes.git

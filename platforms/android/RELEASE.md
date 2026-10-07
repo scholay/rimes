@@ -1,6 +1,6 @@
-# Android 1.1.1 发布准备
+# Android 1.1.1 发布与维护
 
-产品版本由 `VERSION` 提供，本轮目标为 **1.1.1**，`versionCode=15`。构建号递增，已发布的版本与文件不覆盖。正式身份仍为 `org.scholay.rimes.android`；开发包使用独立的 `.debug` 身份。
+产品版本由 `VERSION` 提供，当前发布版本为 **1.1.1**，`versionCode=15`。构建号递增，已发布的版本与文件不覆盖。正式身份仍为 `org.scholay.rimes.android`；开发包使用独立的 `.debug` 身份。
 
 ## 本地构建
 
@@ -12,6 +12,10 @@
 配置完成后执行 `bash scripts/build-release.sh`。脚本运行核心测试、Release lint、APK/AAB 构建、APK 签名验证及 16 KB 对齐验证，在 `dist/1.1.1/` 保存产物与 SHA256SUMS。没有签名时直接停止，不回退到 debug keystore，不安装或上传。
 
 ## 当前交付证据
+
+- [1.1.1 code 15 已公开](https://github.com/scholay/rimes/releases/tag/android-v1.1.1)。小米 Android 16 从 code12 保留数据升级通过；正式 APK 的实际候选上屏、Buffer 开关、密码框隔离、主动剪贴板收录与确认上屏均通过。12 项独立存储 contract 补测通过。公开 APK/AAB 与元数据已无登录下载读回，精确 SHA-256 见[此次发布记录](../../validation/release-refresh-20261007.md)。
+
+### 历史验收与覆盖边界
 
 - [1.1.0 code 12 已公开](https://github.com/scholay/rimes/releases/tag/android-v1.1.0)，使用与 1.0.0 相同的长期生产密钥签名，签名、对齐、核心测试和 Release lint 均通过；公开证书 SHA-256 为 `e6228d5b065f1f8c2f1e1162b80ea1a9245ce59a091bb6e403e47936c3820c54`。
 - code 10 的正式包已在小米真机验收拼音上屏、密码/私密字段隔离及独立 API 地址、模型与密钥入口。code 12 仅更新设置首页 Hero、中英文品牌文案、官网与邮箱链接和构建号，保留数据升级成功，版本元数据与 Hero 实际界面均已核对。
