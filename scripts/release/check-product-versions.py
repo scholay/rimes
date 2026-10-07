@@ -12,10 +12,15 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def parse_product_version(version, label):
+    require(re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version),
+            f'{label} must be MAJOR.MINOR.PATCH without a preview suffix')
+    return tuple(map(int, version.split('.')))
+
+
 def check(root, android=None, windows=None, require_all=False):
     version = (root / 'VERSION').read_text().strip()
-    require(re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version),
-            'VERSION must be MAJOR.MINOR.PATCH without a preview suffix')
+    root_version = parse_product_version(version, 'VERSION')
     plist = plistlib.loads((root / 'Info.plist').read_bytes())
     require(plist['CFBundleShortVersionString'] == version, 'macOS Info.plist version drift')
     ios = root / 'platforms/ios'
@@ -42,11 +47,17 @@ def check(root, android=None, windows=None, require_all=False):
         result['android'] = {'version': version, 'versionCode': int(codes[0])}
     if windows:
         base = windows / 'platforms/windows/native'
-        require((base / 'VERSION').read_text().strip() == version, 'Windows version drift')
+        windows_version = (base / 'VERSION').read_text().strip()
+        windows_parts = parse_product_version(windows_version, 'Windows VERSION')
+        require(windows_parts[:2] == root_version[:2],
+                'Windows VERSION must stay on the root major/minor line')
+        require(windows_parts[2] >= root_version[2],
+                'Windows patch version must not be lower than root VERSION')
         cmake = (base / 'CMakeLists.txt').read_text()
-        require('project(RIMESWindows VERSION ${RIMES_PRODUCT_VERSION}' in cmake,
+        require('file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" RIMES_PRODUCT_VERSION)' in cmake
+                and 'project(RIMESWindows VERSION ${RIMES_PRODUCT_VERSION}' in cmake,
                 'Windows must consume its VERSION anchor')
-        result['windows'] = {'version': version, 'fileVersion': version + '.0'}
+        result['windows'] = {'version': windows_version, 'fileVersion': windows_version + '.0'}
     if require_all:
         require(android is not None and windows is not None,
                 'Supply --android-root and --windows-root for the active platform worktrees')
