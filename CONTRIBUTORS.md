@@ -16,7 +16,7 @@ Core maintainer / 核心维护者: [学术海](https://pm.scholay.com) ([GitHub:
 These tools helped design, implement, and review substantial parts of RIMES:
 
 - **Claude** (Anthropic) — Claude Code / Claude in Cursor
-- **[Cursor Agent](https://github.com/cursoragent)** — Cursor editor and CLI agent workflows
+- **[Cursor Agent](https://github.com/cursoragent)** — Cursor editor and CLI agent workflows; [Bugbot](https://cursor.com/docs/bugbot) automated pull-request review
 - **[Codex](https://github.com/codex)** (OpenAI) — Codex CLI / desktop coding agent
 - **Grok** (xAI) — Cursor Grok agent
 - **[OpenCode](https://opencode.ai/)** — the [PR #82](https://github.com/scholay/rimes/pull/82) candidate-window contribution

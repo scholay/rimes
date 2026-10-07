@@ -1,0 +1,36 @@
+{
+  "exports": {
+    "ctest-x64.xml": {
+      "originalSha256": "1d8472ad7f6a3408b77ffd42cdb5be893674efcba36a6b582b19f5cca4b8ce37",
+      "normalizedSha256": "a06b0ce83ea40e9cbbd6fee2527720403022afd4cb78d4191f47613195feac5f"
+    },
+    "ctest-x86.xml": {
+      "originalSha256": "37974a4a7af968c98c193dac14a6acabb625842fb5a3e2e805a0b86b1de1ceaf",
+      "normalizedSha256": "1235afc97814b93a82ac10fa86259ba9cf19b902567a69a3958eef2a24cee647"
+    },
+    "installer-build-result.json": {
+      "originalSha256": "c753449f272c70450a5f7cd9391e2f8c1d0e7e6b1bb0216cfe2d7ee38afb362b",
+      "normalizedSha256": "9471ca8ea3a82b3bffd334485a3c1fa93e5f95543691a3860a5932e30e3ecfa3"
+    },
+    "installer-sandbox.json": {
+      "originalSha256": "33b78d37c812076d7d5d491cbd0abef893bfba35ac2d57e4ebccbd05fb802245",
+      "normalizedSha256": "13941a10819e81d355dfb9290ca662e29cecd934b91562fc8a636a52e18320b3"
+    },
+    "native-build-result.json": {
+      "originalSha256": "4804f8da6617e043525095efc7ee9849f19f03135557a5567a2db2f7debc8f8c",
+      "normalizedSha256": "31fa994b2008dc4267f515aa766f923c50c41d6175b9bb6de841f20b3a686885"
+    }
+  },
+  "nativeSource": {
+    "commit": "1f00e8631ab3e2c23244e01998147505422bfd3a",
+    "sourceZipSha256": "aded60e158f077e9edfb48f93f14a0eb9e3ba0b2bbdb61fdf5a456a910b12b22",
+    "snapshot": "3ebba8cbddc32037018c31677f483c3522c661905e8107a40d8eb78df0faabc8",
+    "files": 239
+  },
+  "installerSource": {
+    "commit": "773092b6484d8f9129e2ecf02f8e9994e92de564",
+    "sourceZipSha256": "f11faef5536c1bd827c91352ce92d4768e85b8b803f788d05807b32c71922efc",
+    "snapshot": "5d9915a46983db7322ed30ca6f229a1e73c64734e4104807b84a6bbe18a0d8f8",
+    "files": 239
+  }
+}

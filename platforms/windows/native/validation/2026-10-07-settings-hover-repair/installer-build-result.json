@@ -1,0 +1,25 @@
+{
+    "status":  "passed",
+    "startedAt":  "2026-10-07T12:19:51.1181474+08:00",
+    "phases":  [
+                   "source-manifest",
+                   "native-source-equivalence"
+               ],
+    "commit":  "773092b6484d8f9129e2ecf02f8e9994e92de564",
+    "phase":  "done",
+    "installerChecks":  36,
+    "nativeCompiledCommit":  "1f00e8631ab3e2c23244e01998147505422bfd3a",
+    "nativeEquivalentFiles":  198,
+    "changedSourcePaths":  [
+                               "platforms/windows/installer/Package.Common.ps1",
+                               "platforms/windows/installer/Uninstall.ps1",
+                               "platforms/windows/tests/Test-InstalledAppsLifecycle.ps1"
+                           ],
+    "dailyBroker":  [
+                        {
+                            "ProcessId":  66352,
+                            "ExecutablePath":  "C:\\Program Files\\RIMES\\versions\\1.1.0-preview.2-58fc4bcf8319-ecab591174ef\\x64\\RimesBroker.exe"
+                        }
+                    ],
+    "finishedAt":  "2026-10-07T12:20:01.4692036+08:00"
+}
