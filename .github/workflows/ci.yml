@@ -227,6 +227,7 @@ jobs:
             exit 1
           fi
 
+          python3 -m unittest discover -s scripts/pkg/tests -p "test*.py" -v
           helper_probe="$(mktemp -d /tmp/rimes-helper-ci.XXXXXX)"
           clang -std=c11 -Wall -Wextra -Werror -mmacosx-version-min=13.0 \
             scripts/pkg/helpers/rimes-timeout.c \

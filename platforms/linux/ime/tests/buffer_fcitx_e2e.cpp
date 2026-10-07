@@ -396,17 +396,18 @@ void RunBufferSuite(fcitx::Instance& instance,
             AfterUs(ctx, 50000, [](SuiteCtx ctx) {
                 AfterUs(ctx, 300000, [](SuiteCtx ctx) {
                     SendBufferOp("drag_end");
-                    // Stay well inside the 1 s tail. A late event-loop wake
-                    // (Capsule socket + a prior librime deploy in e2e.sh)
-                    // can stretch an 800 ms timer past expiry.
-                    AfterUs(ctx, 400000, [](SuiteCtx ctx) {
+                    // IME command-order coverage for #44: the next same-IC
+                    // activation after the socket command is dispatched is
+                    // a field switch. This headless test does not exercise
+                    // physical button release or GTK's 50ms release poll.
+                    AfterUs(ctx, 10000, [](SuiteCtx ctx) {
                         ctx.ic->focusOut();
                         ctx.ic->focusIn();
                         auto snapshot = ReadDump(ctx.dump_path);
                         ExpectContains(
-                            snapshot, "\"capturing\":true",
-                            "same-IC reactivate 400ms after drag_end must stay in the 1s tail");
-                        std::cout << "ok: drag_end plus 400ms tail keeps capture\n";
+                            snapshot, "\"capturing\":false",
+                            "same-IC reactivate within 10ms after drag_end must pause");
+                        std::cout << "ok: immediate field switch after drag_end pauses capture\n";
 
                         ctx.ic->focusOut();
                         ctx.ic->focusIn();
@@ -424,9 +425,9 @@ void RunBufferSuite(fcitx::Instance& instance,
                                 ctx.ic->focusIn();
                                 auto snapshot = ReadDump(ctx.dump_path);
                                 ExpectContains(snapshot, "\"capturing\":false",
-                                               "same-IC reactivate after the drag tail must pause");
+                                               "same-IC reactivate after drag_end must pause");
                                 std::cout
-                                    << "ok: same-IC reactivate after drag tail expires pauses\n";
+                                    << "ok: same-IC reactivate 1.2s after drag_end pauses\n";
 
                                 ctx.ic->focusIn();
                                 EnsureCapturing(ctx.frontend, ctx.uuid, ctx.dump_path);

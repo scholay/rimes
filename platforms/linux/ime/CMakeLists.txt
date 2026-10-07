@@ -66,6 +66,7 @@ add_library(RimesEngine STATIC
     src/engine/rime_key.cpp
     src/engine/rime_paths.cpp
     src/engine/rime_snapshot.cpp
+    src/engine/rime_user_lock.cpp
 )
 target_include_directories(RimesEngine PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -201,6 +202,11 @@ if(RIMES_BUILD_TESTS)
     add_executable(rimes-paths-tests tests/rime_paths_tests.cpp)
     target_link_libraries(rimes-paths-tests PRIVATE RimesEngine)
     rimes_harden(rimes-paths-tests)
+
+    add_executable(rimes-user-lock-tests tests/rime_user_lock_tests.cpp)
+    target_link_libraries(rimes-user-lock-tests PRIVATE RimesEngine)
+    rimes_harden(rimes-user-lock-tests)
+    add_test(NAME RimesUserLock COMMAND rimes-user-lock-tests)
 
     add_executable(rimes-engine-smoke tests/rime_engine_smoke.cpp)
     target_link_libraries(rimes-engine-smoke PRIVATE RimesEngine)

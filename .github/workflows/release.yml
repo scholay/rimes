@@ -354,7 +354,7 @@ jobs:
           # shipped runtime: the built-in presets, 自然码 encoding, and the
           # bundled 呦呦音形 native schemes, whose Lua and dictionaries only
           # load correctly from the assembled app.
-          for smoke in chord-keymap-engine-smoke chord-ziranma-engine-smoke yoyo-engine-smoke; do
+          for smoke in chord-keymap-engine-smoke chord-ziranma-engine-smoke yoyo-engine-smoke external-schema-engine-smoke; do
             smoke_root="$RUNNER_TEMP/rimes-$smoke"
             mkdir -p "$smoke_root"
             RIMEBUFFER_USER_DIR="$smoke_root" \
