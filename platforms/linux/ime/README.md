@@ -23,6 +23,10 @@ Mailbox is still later. Buffer and Capsule behavior are specified in
   Fcitx5 stays responsive and keys pass through until librime is ready
   (`subMode` shows `Deploying`). The maintenance thread notifies the Fcitx5
   event loop when deploy finishes — status leaves `Deploying` without a restart.
+- A process-lifetime user-directory lock prevents two RIMES instances from
+  deploying or opening user dictionaries in the same directory concurrently.
+  A replacement reports a locked-directory error until the owner finishes
+  exiting. The lock file remains on disk; the OS releases ownership on exit.
 - Isolated user directory: `$XDG_DATA_HOME/rimes` (not `…/fcitx5/rime`)
 - Shared data: `$prefix/share/rimes/data` (policy-staged 55-file closure)
 - Default Buffer workbench (`Ctrl+Shift+B` / `Super+Shift+B`): Rime commits
@@ -37,6 +41,19 @@ Mailbox, Capsule clipboard history / iCloud / password vault / media kinds,
 Buffer plugins (AI / translation / stream / music), cross-batch chord pairing,
 IMK `Delivery.insert`. See [`../buffer/SPEC.md`](../buffer/SPEC.md) and
 [`../capsule/SPEC.md`](../capsule/SPEC.md) for the explicit gap lists.
+
+## Maintenance limits
+
+Stopping Fcitx5 during a librime rebuild can still wait for that rebuild to
+finish ([#43](https://github.com/scholay/rimes/issues/43)). Do not start a
+second instance against the same user directory while waiting. The lock
+prevents concurrent RIMES writers; it does not coordinate stock fcitx5-rime,
+IBus, or external deploy tools. A bounded shutdown requires deployment
+process isolation rather than detaching a thread that still uses librime.
+
+Buffer preserves capture for a same-IC activation only while a toolbar drag
+is active. After release, the next activation always retires capture, even
+when another field is clicked immediately ([#44](https://github.com/scholay/rimes/issues/44)).
 
 ## Dependencies
 

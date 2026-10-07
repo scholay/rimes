@@ -33,7 +33,6 @@ FCITX_DEFINE_LOG_CATEGORY(rimes_buffer_log, "rimes.buffer");
 
 constexpr int kHoldTickUs = 50000;
 constexpr int kDefaultFocusGraceMs = 5000;
-constexpr int kDragTailMs = 1000;
 constexpr int kDragHardTimeoutMs = 30000;
 
 rimes::buffer::CaretRect CaretFromIc(InputContext* ic) {
@@ -223,23 +222,15 @@ void BufferService::RefreshCaret(InputContext* ic) {
     }
 }
 
-bool BufferService::InDragTail() const {
-    return dragging_ || std::chrono::steady_clock::now() < drag_tail_until_;
-}
-
 void BufferService::EndDrag() {
+    // Once release is reported, another activation may be a different field
+    // in Firefox's shared IC. Never retain a time window that consumes it.
     dragging_ = false;
     CancelDragHardTimer();
-    if (!drag_blip_consumed_) {
-        drag_tail_until_ =
-            std::chrono::steady_clock::now() + std::chrono::milliseconds(kDragTailMs);
-    }
 }
 
 void BufferService::ConsumeDragBlip() {
     dragging_ = false;
-    drag_blip_consumed_ = true;
-    drag_tail_until_ = {};
     CancelDragHardTimer();
 }
 
@@ -441,13 +432,12 @@ void BufferService::OnActivate(InputContext* ic) {
                          model_.captures(token);
     if (same_ic) {
         // Firefox/Chromium keep one IC per window. Keep capture only for an
-        // explicit toolbar drag (or its short tail). The first same-IC
-        // reactivation after drag_begin is the WM move-grab ending: keep
-        // capture and consume the drag so a later same-IC click is a
-        // real field switch.
+        // explicit, still-active toolbar drag. Consume one WM activation;
+        // after drag_end every activation is a field switch, even when it
+        // arrives immediately after release.
         pending_unfocus_token_.clear();
         CancelFocusGraceTimer();
-        if (dragging_ || InDragTail()) {
+        if (dragging_) {
             ConsumeDragBlip();
             RefreshCaret(ic);
             OnPasswordField(ic, ic->capabilityFlags().test(CapabilityFlag::Password));
@@ -571,8 +561,6 @@ void BufferService::CloseAndPause() {
     CancelHoldTimer();
     CancelFocusGraceTimer();
     dragging_ = false;
-    drag_blip_consumed_ = false;
-    drag_tail_until_ = {};
     CancelDragHardTimer();
     pending_unfocus_token_.clear();
     raw_input_.clear();
@@ -600,8 +588,6 @@ void BufferService::DropCaptureForSwitch(std::string_view reason) {
     CancelHoldTimer();
     CancelFocusGraceTimer();
     dragging_ = false;
-    drag_blip_consumed_ = false;
-    drag_tail_until_ = {};
     CancelDragHardTimer();
     pending_unfocus_token_.clear();
     model_.route_direct_preserving_content(reason);
@@ -747,8 +733,6 @@ void BufferService::HandleCommand(const rimes::buffer::Command& command) {
             break;
         case rimes::buffer::CommandOp::DragBegin:
             dragging_ = true;
-            drag_blip_consumed_ = false;
-            drag_tail_until_ = {};
             pending_unfocus_token_.clear();
             CancelFocusGraceTimer();
             ArmDragHardTimer();

@@ -28,7 +28,15 @@ void FinishAsyncDeploy(rimes::linuxime::RimeEngine& engine,
     std::string error;
     while (std::chrono::steady_clock::now() < deadline) {
         if (engine.PollMaintenance(&error)) {
-            if (engine.IsDeploying()) {
+            // Reject a competing owner before it initializes librime or deploys.
+    rimes::linuxime::RimeEngine replacement;
+    if (replacement.Start(options, &error) ||
+        error.find("locked by another RIMES process") == std::string::npos) {
+        Die("concurrent engine was not rejected by the user directory lock");
+    }
+    replacement.Stop();
+    std::cout << "ok: competing user-directory owner rejected before deploy\n";
+    if (engine.IsDeploying()) {
                 Die(std::string(label) + ": engine stayed in deploying after ready");
             }
             return;
