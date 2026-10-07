@@ -71,6 +71,11 @@ static void terminate_group_bounded(pid_t leader, bool leader_reaped) {
     if (process_group_exists(leader)) {
         (void)kill(-leader, SIGTERM);
     }
+    // A genuine group-creation failure must still retire the direct child.
+    // Never signal the supervisor's own group as a fallback.
+    if (!leader_reaped) {
+        (void)kill(leader, SIGTERM);
+    }
     const double term_deadline = monotonic_seconds() + 0.25;
     while (monotonic_seconds() < term_deadline) {
         if (!leader_reaped) {
@@ -84,6 +89,9 @@ static void terminate_group_bounded(pid_t leader, bool leader_reaped) {
 
     if (process_group_exists(leader)) {
         (void)kill(-leader, SIGKILL);
+    }
+    if (!leader_reaped) {
+        (void)kill(leader, SIGKILL);
     }
     // SIGKILL is not an instantaneous completion fence for an uninterruptible
     // filesystem syscall. Poll/reap for a bounded interval, then return. The
@@ -183,8 +191,17 @@ static void child_main(
     int stdout_file,
     int stderr_file
 ) {
+    // Both sides close the fork/exec race. On Darwin a losing setpgid can
+    // report EPERM even though the other side created the required group.
+    // Accept the observed group, never an errno by itself.
     if (setpgid(0, 0) != 0) {
-        _exit(125);
+        const int group_error = errno;
+        if (getpgid(0) != getpid()) {
+            (void)dprintf(stderr_file,
+                "rimes-timeout: child setpgid (group not established): %s\n",
+                strerror(group_error));
+            _exit(125);
+        }
     }
     (void)signal(SIGTERM, SIG_DFL);
     (void)signal(SIGINT, SIG_DFL);
@@ -326,18 +343,24 @@ int main(int argc, char *argv[]) {
         );
     }
 
-    // The child also calls setpgid; doing it from both sides closes the fork /
-    // exec race. EACCES means it already exec'd after creating its own group.
-    if (setpgid(child, child) != 0
-        && errno != EACCES
-        && errno != ESRCH) {
-        perror("rimes-timeout: parent setpgid");
-        terminate_group_bounded(child, false);
-        emit_output(stdout_file, STDOUT_FILENO);
-        emit_output(stderr_file, STDERR_FILENO);
-        close(stdout_file);
-        close(stderr_file);
-        return 125;
+    // Check the actual group after a losing fork/exec race. In particular,
+    // EPERM is harmless only when the group really is child-owned. ESRCH from
+    // getpgid means the leader already exited; child_main never execs before
+    // proving its own group, and the normal wait path still cleans descendants.
+    if (setpgid(child, child) != 0) {
+        const int group_error = errno;
+        const pid_t group = getpgid(child);
+        const bool leader_exited = group < 0 && errno == ESRCH;
+        if (group != child && !leader_exited) {
+            errno = group_error;
+            perror("rimes-timeout: parent setpgid (group not established)");
+            terminate_group_bounded(child, false);
+            emit_output(stdout_file, STDOUT_FILENO);
+            emit_output(stderr_file, STDERR_FILENO);
+            close(stdout_file);
+            close(stderr_file);
+            return 125;
+        }
     }
 
     const double deadline = monotonic_seconds() + (double)timeout_seconds;

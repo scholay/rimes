@@ -408,6 +408,7 @@ final class RimeEngine {
         try? FileManager.default.createDirectory(atPath: userDataDir, withIntermediateDirectories: true)
         started = BBRimeStart(sharedDataDir, userDataDir, logDir, frameworksDir)
         if started {
+            _ = schemaList()
             IMELog.write("rime start OK shared=\(sharedDataDir) fw=\(frameworksDir) user=\(userDataDir)")
         } else {
             IMELog.write("rime start FAILED: \(lastError())")
@@ -528,6 +529,7 @@ final class RimeEngine {
                 lastLoggedSchemaCacheHit = hits
                 IMELog.write("rime schema cache hit count=\(hits) entries=\(schemas.count)")
             }
+            InputSchemaCatalog.updateDeployedSchemas(schemas)
             return schemas
         case let .miss(reason):
             missReason = reason
@@ -565,6 +567,11 @@ final class RimeEngine {
         IMELog.write(
             "rime schema cache reload reason=\(missReason.rawValue) entries=\(schemas.count) cached=\(cached)"
         )
+        // Empty bridge reads stay retryable and must not erase a preserved
+        // external preference during cold startup or a transient engine fault.
+        if !schemas.isEmpty {
+            InputSchemaCatalog.updateDeployedSchemas(schemas)
+        }
         return schemas
     }
 
