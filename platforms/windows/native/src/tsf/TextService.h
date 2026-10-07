@@ -80,6 +80,7 @@ class TextService final : public ITfTextInputProcessorEx,
   [[nodiscard]] bool IsBrokerConnected() const noexcept;
 
  private:
+  friend struct CaretRegressionProbe;
   ~TextService();
 
   HRESULT HandleKey(BrokerKeyPhase phase, ITfContext* context,

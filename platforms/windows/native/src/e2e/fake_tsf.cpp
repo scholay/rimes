@@ -445,7 +445,10 @@ HRESULT STDMETHODCALLTYPE FakeContext::GetTextExt(TfEditCookie, ITfRange*,
     return E_POINTER;
   }
   if (document_->refuse_caret) {
-    // Leave *rect untouched and fail, the way a host mid-composition does.
+    // A failed call's output is unspecified and must not become an anchor.
+    if (document_->write_caret_before_failure) {
+      *rect = document_->caret_rect;
+    }
     return E_FAIL;
   }
   *rect = document_->caret_rect;
@@ -465,9 +468,9 @@ HRESULT STDMETHODCALLTYPE FakeContext::GetScreenExt(RECT* rect) {
 
 HRESULT STDMETHODCALLTYPE FakeContext::GetWnd(HWND* window) {
   if (window != nullptr) {
-    *window = nullptr;
+    *window = document_->view_window;
   }
-  return S_FALSE;
+  return document_->view_window ? S_OK : S_FALSE;
 }
 
 HRESULT STDMETHODCALLTYPE FakeContext::GetType(GUID* guid) {

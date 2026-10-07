@@ -174,6 +174,32 @@ rimes_harden_target(RimesRegistrar)
 rimes_use_unicode_console_entrypoint(RimesRegistrar)
 
 if(RIMES_BUILD_TESTS)
+    add_executable(RimesCaretRegressionTests
+        src/e2e/caret_regression.cpp
+        src/e2e/fake_tsf.cpp
+        src/tsf/BrokerClient.cpp
+        src/tsf/CandidateWindow.cpp
+        src/tsf/DisplayAttribute.cpp
+        src/tsf/ModuleState.cpp
+        src/tsf/TextService.cpp
+    )
+    target_include_directories(RimesCaretRegressionTests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/e2e"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(RimesCaretRegressionTests PRIVATE
+        RimesCore
+        advapi32
+        gdi32
+        msimg32
+        ole32
+        oleaut32
+        user32
+        uuid
+    )
+    rimes_harden_target(RimesCaretRegressionTests)
+    add_test(NAME RimesCaretRegression COMMAND RimesCaretRegressionTests)
     # Separate COM/TSF identity for elevated recovery lifecycle testing. These
     # binaries are never packaged or installed as the daily input method.
     get_target_property(recovery_tsf_sources RimesTsf SOURCES)
