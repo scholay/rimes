@@ -1623,6 +1623,11 @@ final class KeyboardViewController: UIInputViewController {
     private func importHostText() {
         guard onscreen, bufferEnabled, buffer.source.isEmpty, !hasComposition,
               hostImportTask == nil, let offered = offeredHostText else { return }
+        // Hand off browsing before the import owns its temporary pause. Otherwise
+        // completion could restore the browser's pause after it was dismissed.
+        if clipboardPresentation != nil {
+            closeClipboard(restoringAuto: true); panelOpen = false
+        }
         let epoch = bufferImportEpoch, plugin = selectedPlugin
         let wasSuspended = autoSuspended
         surface.feedback.send(.press); cancelDeletes(); surface.cancel(); cancelRequest()

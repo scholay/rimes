@@ -116,6 +116,74 @@ import RimesCore
         XCTAssertEqual(controller.layoutProxy.native.text, "A。B。")
     }
 
+    func testHostImportFromClipboardBrowserRestoresOnlyTheLaterEditPolicy() async throws {
+        let (window, controller) = host(); defer { window.isHidden = true; controller.developmentAutoDelay(0) }
+        var time: TimeInterval = 0; controller.defaultClockNow = { time }
+        controller.layoutProxy.native.text = "A。"
+        controller.layoutProxy.native.selectedRange = NSRange(location: 2, length: 0)
+        controller.developmentBuffer(""); controller.developmentAutoDelay(1)
+        controller.developmentOpenClipboard()
+        try hostImportPrompt(controller).sendActions(for: .touchUpInside)
+        // Close before the import task can finish its asynchronous host checks.
+        controller.developmentClosePanel()
+        await controller.developmentWaitForBufferImport()
+        XCTAssertNil(controller.developmentClipboardPanel)
+        XCTAssertEqual(controller.developmentBufferSource.text, "A。")
+        XCTAssertTrue(controller.layoutProxy.native.text.isEmpty)
+        controller.developmentAutoTick(); time = 10; controller.developmentAutoTick()
+        await controller.developmentWaitForDelivery()
+        XCTAssertTrue(controller.layoutProxy.native.text.isEmpty, "Importing must not release the browser's ordinary-edit gate")
+        controller.developmentType("B"); controller.developmentAutoTick()
+        time = 10.99; controller.developmentAutoTick()
+        XCTAssertTrue(controller.layoutProxy.native.text.isEmpty, "A later edit must receive the full fresh delay")
+        time = 11; controller.developmentAutoTick(); await controller.developmentWaitForDelivery()
+        XCTAssertEqual(controller.layoutProxy.native.text, "A。", "The import must not restore the browser's temporary pause")
+    }
+
+    func testHostImportFromClipboardBrowserPreservesAnEarlierExplicitPause() async throws {
+        let (window, controller) = host(); defer { window.isHidden = true; controller.developmentAutoDelay(0) }
+        var time: TimeInterval = 0; controller.defaultClockNow = { time }
+        let entry = try XCTUnwrap(TextClipboardStore(root: root).collect("saved").first)
+        controller.developmentBuffer(""); controller.developmentAutoDelay(1)
+        controller.developmentOpenClipboard(); controller.developmentSelectClipboard(entry.id)
+        // A prior explicit history import pauses automatic delivery independently.
+        controller.layoutProxy.native.text = "A。"
+        controller.layoutProxy.native.selectedRange = NSRange(location: 2, length: 0)
+        controller.developmentBuffer(""); controller.developmentOpenClipboard()
+        try hostImportPrompt(controller).sendActions(for: .touchUpInside)
+        controller.developmentClosePanel(); await controller.developmentWaitForBufferImport()
+        XCTAssertEqual(controller.developmentBufferSource.text, "A。")
+        XCTAssertTrue(controller.layoutProxy.native.text.isEmpty)
+        controller.developmentType("B"); controller.developmentAutoTick()
+        time = 10; controller.developmentAutoTick(); await controller.developmentWaitForDelivery()
+        XCTAssertTrue(controller.layoutProxy.native.text.isEmpty, "The handoff must not force-resume an earlier explicit pause")
+    }
+
+    func testCancelledHostImportFromClipboardBrowserCannotResumeTheNewField() async throws {
+        let (window, controller) = host(); defer { window.isHidden = true; controller.developmentAutoDelay(0) }
+        var time: TimeInterval = 0; controller.defaultClockNow = { time }
+        controller.layoutProxy.native.text = "A。"
+        controller.layoutProxy.native.selectedRange = NSRange(location: 2, length: 0)
+        controller.developmentBuffer(""); controller.developmentAutoDelay(1)
+        controller.developmentOpenClipboard()
+        controller.layoutProxy.onProxyWrite = {
+            controller.textDidChange(nil); controller.selectionDidChange(nil)
+            guard controller.layoutProxy.native.text.count < 2 else { return }
+            controller.layoutProxy.onProxyWrite = nil
+            controller.layoutProxy.documentIdentifier = UUID()
+            controller.layoutProxy.native.text = "new field"
+            controller.layoutProxy.native.selectedRange = NSRange(location: 9, length: 0)
+            controller.textDidChange(nil)
+        }
+        try hostImportPrompt(controller).sendActions(for: .touchUpInside)
+        controller.developmentClosePanel(); await controller.developmentWaitForBufferImport()
+        XCTAssertEqual(controller.layoutProxy.native.text, "new field")
+        XCTAssertEqual(controller.developmentBufferSource.text, "A。")
+        controller.developmentType("B"); controller.developmentAutoTick()
+        time = 10; controller.developmentAutoTick(); await controller.developmentWaitForDelivery()
+        XCTAssertEqual(controller.layoutProxy.native.text, "new field", "A cancelled import must not restore its old automatic policy")
+    }
+
     func testExplicitSystemCollectionSavesVerbatimWithoutChangingBuffer() async throws {
         let (window, controller) = host(); defer { window.isHidden = true }
         controller.developmentClipboardAccess = true; controller.developmentBuffer("保留")
@@ -188,6 +256,11 @@ import RimesCore
 
     private func waitForCollection() async throws {
         for _ in 0..<100 where TextClipboardStore(root: root).load().isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+    }
+    private func hostImportPrompt(_ controller: KeyboardViewController) throws -> BufferImportPrompt {
+        try XCTUnwrap(controller.layoutViews.buffer.subviews.first {
+            $0.accessibilityIdentifier == "keyboard.buffer.importHost"
+        } as? BufferImportPrompt)
     }
     private func host(width: CGFloat = 393) -> (UIWindow, KeyboardViewController) {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: width, height: 900))
