@@ -1,0 +1,21 @@
+{
+  "status": "passed",
+  "startedAt": "2026-10-07T11:46:55.0481766+08:00",
+  "phases": [
+    "source-manifest",
+    "build-and-ctest-x64",
+    "build-and-ctest-x86",
+    "product-x64",
+    "e2e-x64",
+    "product-x86",
+    "e2e-x86"
+  ],
+  "commit": "bf44117f57714fa1dd8f32e556f9a89ca6454699",
+  "phase": "done",
+  "installerChecks": 32,
+  "registrarChecks": 16,
+  "finishedAt": "2026-10-07T11:51:10.2899255+08:00",
+  "sourceArchiveSha256": "3473fbda1fda8d93c29e9305f0c61cb5407725266bbf6c82ef3854b316b36604",
+  "sourceSnapshotSha256": "937f35198f4fdf1250d31e3611d4f3fda6d44ad91face2406b5066450e2b13c6",
+  "runnerExitCode": 0
+}

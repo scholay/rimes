@@ -1,9 +1,12 @@
 #requires -Version 5.1
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-function Read-VerifiedPackage([string]$Directory) {
+function Read-VerifiedPackage([string]$Directory,[switch]$AllowMissingFiles,[string]$ManifestSourceDirectory) {
     $root = [IO.Path]::GetFullPath($Directory).TrimEnd('\')
-    $manifest = Get-Content -LiteralPath "$root\PACKAGE.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+    $manifestDirectory=if($ManifestSourceDirectory){[IO.Path]::GetFullPath($ManifestSourceDirectory)}else{$root}
+    $manifestItem=Get-Item -LiteralPath "$manifestDirectory\PACKAGE.json" -Force -ErrorAction SilentlyContinue
+    if($manifestItem -and ($manifestItem.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Reparse points are not accepted'}
+    $manifest = Get-Content -LiteralPath "$manifestDirectory\PACKAGE.json" -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($manifest.formatVersion -ne 1 -or $manifest.product -ne 'RIMES' -or $manifest.protocol -ne 2 -or $manifest.commit -notmatch '^[a-f0-9]{40}$' -or $manifest.version -notmatch '^[a-zA-Z0-9._-]{1,64}$') { throw 'Unsupported package manifest' }
     $seen = @{}
     foreach ($file in $manifest.files) {
@@ -13,16 +16,41 @@ function Read-VerifiedPackage([string]$Directory) {
         $seen[$path] = $true
         $cursor = $path
         while ($cursor.Length -ge $root.Length) {
-            if ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse points are not accepted' }
+            # Test-Path can report false for dangling links. Read the link's
+            # own metadata so repair never follows it as a missing file.
+            $cursorItem=Get-Item -LiteralPath $cursor -Force -ErrorAction SilentlyContinue
+            if ($cursorItem -and ($cursorItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Reparse points are not accepted' }
             $cursor = Split-Path -Parent $cursor
         }
-        $item = Get-Item -LiteralPath $path
+        $item=Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        if ($AllowMissingFiles -and -not $item) { continue }
+        if (-not $item) { throw "Package file is missing: $($file.path)" }
         if ($item.PSIsContainer -or $item.Length -ne $file.bytes -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $file.sha256) { throw "Package checksum failed: $($file.path)" }
     }
     foreach ($item in Get-ChildItem -LiteralPath $root -Recurse -File) {
         if ($item.FullName -ne "$root\PACKAGE.json" -and -not $seen.ContainsKey($item.FullName)) { throw "Unlisted package file: $($item.Name)" }
     }
     return $manifest
+}
+function Repair-VerifiedPackage([string]$Source,[string]$Target){
+    Read-VerifiedPackage $Source | Out-Null
+    if(-not (Test-Path -LiteralPath "$Target\PACKAGE.json")){
+        # The target name was derived from this exact manifest. Validate every
+        # surviving byte and reject reparse/unlisted files before restoring it.
+        Read-VerifiedPackage $Target -AllowMissingFiles -ManifestSourceDirectory $Source | Out-Null
+        Copy-Item -LiteralPath "$Source\PACKAGE.json" -Destination "$Target\PACKAGE.json"
+    }
+    Read-VerifiedPackage $Target -AllowMissingFiles | Out-Null
+    if((Get-FileHash -LiteralPath "$Source\PACKAGE.json" -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath "$Target\PACKAGE.json" -Algorithm SHA256).Hash){throw 'Repair package does not match the retained version manifest'}
+    $manifest=Get-Content -LiteralPath "$Source\PACKAGE.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach($file in $manifest.files){
+        $destination=Join-Path $Target $file.path
+        if(-not (Test-Path -LiteralPath $destination)){
+            New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+            Copy-Item -LiteralPath (Join-Path $Source $file.path) -Destination $destination
+        }
+    }
+    Read-VerifiedPackage $Target | Out-Null
 }
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -37,6 +65,7 @@ function Invoke-Registrar([string]$Directory,[string]$Architecture,[string]$Oper
 function Assert-Unlocked([string]$Directory) {
     foreach ($arch in @('x64','x86')) {
         $path = Join-Path $Directory "$arch\RimesTsf.dll"
+        if (-not (Test-Path -LiteralPath $path)) { continue }
         try { $stream = [IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None); $stream.Dispose() }
         catch { throw "RIMES is loaded by an application. Switch input methods, close those applications or sign out, then retry. No files were overwritten: $path" }
     }
@@ -50,6 +79,7 @@ function Stop-OwnedBroker([string]$Directory) {
     }
 }
 function Write-InstallState([string]$Root,$State) {
+    New-Item -ItemType Directory -Path $Root -Force | Out-Null
     $temporary = Join-Path $Root ('state.'+[guid]::NewGuid().ToString('N')+'.tmp')
     $State | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $temporary -Encoding UTF8
     Move-Item -LiteralPath $temporary -Destination (Join-Path $Root 'state.json') -Force
@@ -59,26 +89,109 @@ function Assert-OwnedVersion([string]$Root,[string]$Directory) {
     if (-not [IO.Path]::GetFullPath($Directory).StartsWith($versions,[StringComparison]::OrdinalIgnoreCase)) {throw 'Installed state points outside the managed versions directory'}
     return Read-VerifiedPackage $Directory
 }
-function Get-LegacyViews {
+# Registry is the authority for recovery. Never guess the active version by
+# directory ordering: an older retained directory can be the one still loaded.
+function Get-RegisteredRimesViews {
     $entries=@()
     foreach($arch in @('x64','x86')) {
         $view=if($arch -eq 'x64'){[Microsoft.Win32.RegistryView]::Registry64}else{[Microsoft.Win32.RegistryView]::Registry32}
         $base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,$view)
-        $key=$base.OpenSubKey('SOFTWARE\Classes\CLSID\{0B2C570B-9811-45DF-989B-EA306281F6B4}\InprocServer32')
-        if($key){
-            $path=[string]$key.GetValue('')
-            if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw 'Existing RIMES registration points to a missing file; repair it before migrating.'}
-            $entries += [pscustomobject]@{architecture=$arch;dll=$path;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash}
-            $key.Dispose()
+        $key=$null
+        try {
+            $key=$base.OpenSubKey('SOFTWARE\Classes\CLSID\{0B2C570B-9811-45DF-989B-EA306281F6B4}\InprocServer32')
+            if($key){
+                $path=[string]$key.GetValue('')
+                if(-not [IO.Path]::IsPathRooted($path) -or [IO.Path]::GetFileName($path) -ne 'RimesTsf.dll' -or $key.GetValue('ThreadingModel') -ne 'Apartment'){throw 'RIMES registration ownership is incomplete. Preserve it and repair from a current RIMES package.'}
+                $entries += [pscustomobject]@{architecture=$arch;dll=[IO.Path]::GetFullPath($path)}
+            }
+        } finally {if($key){$key.Dispose()};$base.Dispose()}
+    }
+    return $entries
+}
+function Assert-OwnedRegisteredPath([string]$Root,$Entry,[switch]$AllowMissingManifest) {
+    $directory=Split-Path -Parent (Split-Path -Parent $Entry.dll)
+    $versions=[IO.Path]::GetFullPath((Join-Path $Root 'versions')).TrimEnd('\')
+    if((Split-Path -Parent $directory) -ne $versions -or $Entry.dll -ne (Join-Path $directory "$($Entry.architecture)\RimesTsf.dll")){throw 'Registered RIMES DLL points outside this managed installation. No registration was changed.'}
+    $cursor=$directory
+    while($cursor){
+        $cursorItem=Get-Item -LiteralPath $cursor -Force -ErrorAction SilentlyContinue
+        if($cursorItem -and ($cursorItem.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Reparse points are not accepted for installation recovery'}
+        $cursor=Split-Path -Parent $cursor
+    }
+    if(-not (Test-Path -LiteralPath "$directory\PACKAGE.json") -and $AllowMissingManifest){
+        # The actual complete RIMES CLSID registration still identifies this
+        # exact immutable directory after an external uninstaller removed it.
+        if([IO.Path]::GetFileName($directory) -notmatch '^[a-zA-Z0-9._-]{1,64}-[a-f0-9]{12}-[a-f0-9]{12}$'){throw 'The missing installation has no identifiable managed version identity'}
+        return $directory
+    }
+    $manifest=Read-VerifiedPackage $directory -AllowMissingFiles
+    foreach($arch in @('x64','x86')){
+        if(-not ($manifest.files | Where-Object {$_.path -eq "$arch/RimesTsf.dll"}) -or -not ($manifest.files | Where-Object {$_.path -eq "$arch/RimesRegistrar.exe"})){throw 'Package manifest does not identify both RIMES architectures'}
+    }
+    return $directory
+}
+function Get-RimesInstallation([string]$Root,[switch]$AllowIncomplete) {
+    $Root=[IO.Path]::GetFullPath($Root)
+    $state=$null
+    if(Test-Path -LiteralPath "$Root\state.json"){
+        try {$state=Get-Content -LiteralPath "$Root\state.json" -Raw | ConvertFrom-Json}catch{}
+    }
+    $entries=@(Get-RegisteredRimesViews)
+    $directories=@($entries | ForEach-Object {Assert-OwnedRegisteredPath $Root $_ -AllowMissingManifest:$AllowIncomplete} | Select-Object -Unique)
+    if($directories.Count -gt 1){throw 'RIMES registry views point to different versions. Repair with a current Setup package before uninstalling.'}
+    $active=if($directories.Count){$directories[0]}elseif($state -and $state.PSObject.Properties['active']){[string]$state.active}else{''}
+    if(-not $active){
+        $app=Read-InstalledAppRegistration
+        if($app -and $app.ContainsKey('RIMESInstallRoot') -and $app.RIMESInstallRoot.value -eq $Root -and $app.ContainsKey('InstallLocation')){$active=[string]$app.InstallLocation.value}
+    }
+    if(-not $active){throw 'Cannot identify an owned RIMES installation. Run the current Setup.exe to repair it, then use Windows Installed Apps to uninstall. No registration was changed.'}
+    try {
+        # This validates containment and every present hash; missing bytes are
+        # accepted only for unregistering the exact paths read above.
+        $probe=[pscustomobject]@{architecture='x64';dll=(Join-Path $active 'x64\RimesTsf.dll')}
+        $missingManifest=$AllowIncomplete -and $entries.Count -gt 0 -and -not (Test-Path -LiteralPath "$active\PACKAGE.json")
+        Assert-OwnedRegisteredPath $Root $probe -AllowMissingManifest:$missingManifest | Out-Null
+        $manifest=if($missingManifest){$null}elseif($AllowIncomplete){Read-VerifiedPackage $active -AllowMissingFiles}else{Assert-OwnedVersion $Root $active}
+    } catch {throw "RIMES installation is incomplete or unverifiable. Run the current Setup.exe to repair it, then retry uninstall. No registration was changed. $($_.Exception.Message)"}
+    $knownState=$state -and $state.PSObject.Properties['active'] -and $state.active -eq $active
+    $requiresSignOut=if($knownState -and $state.PSObject.Properties['requiresSignOut']){[bool]$state.requiresSignOut}else{$null}
+    return [pscustomobject]@{active=$active;manifest=$manifest;requiresSignOut=$requiresSignOut;recovered=(-not $knownState);entries=$entries}
+}
+function Get-LegacyViews([string]$InstallRoot='') {
+    $entries=@(Get-RegisteredRimesViews)
+    foreach($entry in $entries){
+        $missing=-not (Test-Path -LiteralPath $entry.dll -PathType Leaf)
+        if($missing){
+            if(-not $InstallRoot){throw 'Existing RIMES registration points to a missing DLL. Run a current Setup package with the original install directory to repair it.'}
+            Assert-OwnedRegisteredPath $InstallRoot $entry -AllowMissingManifest | Out-Null
         }
-        $base.Dispose()
+        $entry | Add-Member -NotePropertyName missing -NotePropertyValue $missing
+        $entry | Add-Member -NotePropertyName sha256 -NotePropertyValue $(if($missing){$null}else{(Get-FileHash -LiteralPath $entry.dll -Algorithm SHA256).Hash})
     }
     return $entries
 }
 function Invoke-LegacyRegistrar([string]$Package,$Entry,[string]$Operation){
-    if((Get-FileHash -LiteralPath $Entry.dll -Algorithm SHA256).Hash -ne $Entry.sha256){throw 'Previous DLL changed since its recovery record was written'}
+    if($Entry.missing){
+        if($Operation -eq 'register'){throw 'The original DLL was missing; a dangling registration cannot be restored. Recovery record retained.'}
+        if(Test-Path -LiteralPath $Entry.dll){throw 'The missing DLL path changed during recovery'}
+    } elseif((Get-FileHash -LiteralPath $Entry.dll -Algorithm SHA256).Hash -ne $Entry.sha256){throw 'Previous DLL changed since its recovery record was written'}
     & (Join-Path $Package "$($Entry.architecture)\RimesRegistrar.exe") $Operation --dll $Entry.dll
     if($LASTEXITCODE){throw "Legacy registration $Operation failed"}
+}
+function Invoke-RecoveryRegistrar([string]$Package,[string]$Directory,[string]$Architecture,[string]$Operation){
+    & (Join-Path $Package "$Architecture\RimesRegistrar.exe") $Operation --dll (Join-Path $Directory "$Architecture\RimesTsf.dll")
+    if($LASTEXITCODE){throw "Registrar $Operation $Architecture failed: $LASTEXITCODE"}
+}
+function Assert-OwnedBrokerAutostart([string]$Directory){
+    $current=Get-BrokerAutostart
+    if($null -eq $current){return}
+    $expected='"'+(Join-Path $Directory 'x64\RimesBroker.exe')+'"'
+    if($current -ne $expected){throw 'The RimesBroker startup command belongs to another version. Preserve it and repair the installation.'}
+    return
+}
+function Remove-OwnedBrokerAutostart([string]$Directory){
+    Assert-OwnedBrokerAutostart $Directory
+    Restore-BrokerAutostart $null
 }
 function Get-BrokerAutostart {
     $key=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run')
@@ -210,6 +323,22 @@ function Assert-SettingsShortcut([string]$InstallRoot,[string]$Directory) {
         }
         # User-edited shortcuts retain their target and arguments.
     } finally {if($shortcut){[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) | Out-Null};[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null}
+}
+function Get-UninstallCompletionMessage($Result) {
+    $message='RIMES was uninstalled. Your dictionaries, settings and credentials were kept.'
+    if($Result.RequiresSignOut){
+        $message+="`n`nSave your work and sign out before continuing. "
+        if($Result.SignOutReason -eq 'locked-dll'){
+            $message+='A previous input method DLL could not be opened exclusively and may still be in use.'
+        } elseif($Result.SignOutReason -eq 'missing-registered-dll') {
+            $message+='A registered input method DLL was missing, so whether a deleted copy remains loaded could not be confirmed. Signing out completes recovery.'
+        } elseif($Result.SignOutReason -eq 'previous-signout-required') {
+            $message+='The previous installation recorded a pending sign-out. Checking the current version cannot confirm whether that older copy remains loaded.'
+        } else {
+            $message+='Installation history was missing or damaged, so whether an old copy remains loaded could not be confirmed. Signing out completes recovery.'
+        }
+    }
+    return $message
 }
 function Remove-OwnedSettingsShortcut([string]$InstallRoot) {
     $path=Get-SettingsShortcutPath

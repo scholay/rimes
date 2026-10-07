@@ -9,15 +9,17 @@ Core maintainer / 核心维护者: [学术海](https://pm.scholay.com) ([GitHub:
 - cuihaiyang
 - pengjiebo
 - [Kindred5210](https://github.com/Kindred5210) — Liquid Glass theme design and implementation adapted from [PR #46](https://github.com/scholay/rimes/pull/46).
+- [XyTT2N2bTc](https://github.com/XyTT2N2bTc) — Windows candidate-window placement via [PR #82](https://github.com/scholay/rimes/pull/82).
 
 ## AI coding assistants
 
 These tools helped design, implement, and review substantial parts of RIMES:
 
 - **Claude** (Anthropic) — Claude Code / Claude in Cursor
-- **[Cursor Agent](https://github.com/cursoragent)** — Cursor editor and CLI agent workflows
+- **[Cursor Agent](https://github.com/cursoragent)** — Cursor editor and CLI agent workflows; [Bugbot](https://cursor.com/docs/bugbot) automated pull-request review
 - **[Codex](https://github.com/codex)** (OpenAI) — Codex CLI / desktop coding agent
 - **Grok** (xAI) — Cursor Grok agent
+- **[OpenCode](https://opencode.ai/)** — the [PR #82](https://github.com/scholay/rimes/pull/82) candidate-window contribution
 
 ## Attribution policy
 

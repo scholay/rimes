@@ -19,16 +19,14 @@ try {
         exit $child.ExitCode
     }
     Assert-Administrator
-    $state=Get-Content -LiteralPath "$InstallRoot\state.json" -Raw | ConvertFrom-Json
-    Assert-OwnedVersion $InstallRoot $state.active | Out-Null
+    $state=Get-RimesInstallation $InstallRoot -AllowIncomplete
     $text="Uninstall RIMES?`n`nFirst copy or send pending Buffer content, exit RIMES from its tray, and switch to another input method.`n`nDictionaries, settings and API credentials will be kept. Version files remain for recovery. If an application still holds the input method, sign out after uninstalling.`n`nUse the same Windows account that installed RIMES."
     if([Windows.Forms.MessageBox]::Show($text,$caption,[Windows.Forms.MessageBoxButtons]::OKCancel,[Windows.Forms.MessageBoxIcon]::Question) -ne [Windows.Forms.DialogResult]::OK){exit 0}
     # Use this launcher's verified scripts even when the active package was
     # rolled back to a release predating the Installed Apps integration.
     $result=& "$PSScriptRoot\Uninstall.ps1" -InstallRoot $InstallRoot -AllowPendingRestart
     if(-not $result.Uninstalled){throw 'Uninstall did not confirm completion'}
-    $message='RIMES was uninstalled. Your dictionaries, settings and credentials were kept.'
-    if($result.RequiresSignOut){$message+="`n`nSave your work and sign out before continuing. Some applications still have the previous input method loaded."}
+    $message=Get-UninstallCompletionMessage $result
     [Windows.Forms.MessageBox]::Show($message,$caption,[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Information) | Out-Null
 } catch {
     if($_.Exception -is [ComponentModel.Win32Exception] -and $_.Exception.NativeErrorCode -eq 1223){exit 0}

@@ -19,6 +19,10 @@ struct FakeDocument {
   ITfComposition* active_composition = nullptr;
   ITfCompositionSink* composition_sink = nullptr;
   RECT caret_rect{120, 180, 122, 204};
+  // Chromium-family hosts can refuse every caret source while composing.
+  // When set, GetTextExt reports failure so QueryCaretRect falls through to
+  // its GetCaretPos fallback, which cannot succeed without an owned caret.
+  bool refuse_caret = false;
 };
 
 class FakeThreadMgr final : public ITfThreadMgr, public ITfKeystrokeMgr {
@@ -78,9 +82,7 @@ class FakeThreadMgr final : public ITfThreadMgr, public ITfKeystrokeMgr {
 
 class FakeDocumentMgr final : public ITfDocumentMgr {
  public:
-  explicit FakeDocumentMgr(ITfContext* context) : context_(context) {
-    if (context_) context_->AddRef();
-  }
+  explicit FakeDocumentMgr(ITfContext* context);
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override;
   ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
   ULONG STDMETHODCALLTYPE Release() override {
@@ -92,8 +94,8 @@ class FakeDocumentMgr final : public ITfDocumentMgr {
                                           ITfContext**, TfEditCookie*) override {
     return E_NOTIMPL;
   }
-  HRESULT STDMETHODCALLTYPE Push(ITfContext*) override { return E_NOTIMPL; }
-  HRESULT STDMETHODCALLTYPE Pop(DWORD) override { return E_NOTIMPL; }
+  HRESULT STDMETHODCALLTYPE Push(ITfContext*) override;
+  HRESULT STDMETHODCALLTYPE Pop(DWORD) override;
   HRESULT STDMETHODCALLTYPE GetTop(ITfContext** context) override {
     if (!context) return E_POINTER;
     *context = context_;
@@ -107,9 +109,9 @@ class FakeDocumentMgr final : public ITfDocumentMgr {
     return E_NOTIMPL;
   }
  private:
-  ~FakeDocumentMgr() { if (context_) context_->Release(); }
+  ~FakeDocumentMgr();
   std::atomic_ulong refs_{1};
-  ITfContext* context_;
+  ITfContext* context_ = nullptr;
 };
 
 class FakeContext final : public ITfContext,
@@ -194,9 +196,11 @@ class FakeContext final : public ITfContext,
   FakeDocument* document() noexcept { return document_; }
 
  private:
+  friend class FakeDocumentMgr;
   ~FakeContext() = default;
   std::atomic_ulong reference_count_{1};
   FakeDocument* document_;
+  ITfDocumentMgr* document_manager_ = nullptr;  // Non-owning stack membership.
 };
 
 class FakeRange final : public ITfRangeACP {

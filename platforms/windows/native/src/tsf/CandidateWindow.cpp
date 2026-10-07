@@ -244,7 +244,8 @@ void CandidateWindow::LayoutAndShow(
   if (pre_font) DeleteObject(pre_font);
 
   const auto layout = ui::LayoutCandidateStripMeasured(
-      items, preedit_w_dip, show_preedit, metrics, available_dip);
+      items, preedit_w_dip, show_preedit, metrics, available_dip, vertical_,
+      static_cast<float>(work.height()) * 96.f / static_cast<float>(dpi));
   hit_pills_ = layout.pills;
   layout_width_dip_ = layout.width_dip;
   layout_height_dip_ = layout.height_dip;

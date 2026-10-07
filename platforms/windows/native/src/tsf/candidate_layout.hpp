@@ -32,6 +32,39 @@ inline wchar_t CandidateSelectionKey(std::wstring_view label,
              : 0;
 }
 
+// A caret rectangle that identifies a visible caret: TSF may report a
+// collapsed range of zero width, so only the vertical extent is required.
+inline bool HasVisibleCaret(const ScreenRect& caret) noexcept {
+  return caret.bottom > caret.top && caret.right >= caret.left;
+}
+
+// Picks the caret rectangle to place the candidate window at.
+//
+// The caret query can legitimately fail while a host is mid-composition: it
+// refuses the read edit session, or no thread owns the caret for GetCaretPos.
+// Treating that unknown state as a real caret would send PlaceCandidateWindow
+// to the work-area origin, which shows up as a visible jump to the top-left
+// corner of the screen on the frame before the real caret is observed.
+// Reusing the last known caret keeps the popup near the input field, and a
+// first query that has never succeeded suppresses the popup instead of
+// displaying it at a position that is known to be wrong.
+inline bool ResolveCandidateCaret(const ScreenRect& queried,
+                                  const ScreenRect& previous,
+                                  ScreenRect* resolved) noexcept {
+  if (resolved == nullptr) {
+    return false;
+  }
+  if (HasVisibleCaret(queried)) {
+    *resolved = queried;
+    return true;
+  }
+  if (HasVisibleCaret(previous)) {
+    *resolved = previous;
+    return true;
+  }
+  return false;
+}
+
 // Places a candidate window near the caret rectangle. Prefers immediately
 // below the caret, flips above when the work area cannot hold it, and clamps
 // the origin so the window stays on the same monitor.
@@ -41,9 +74,7 @@ inline ScreenPoint PlaceCandidateWindow(const ScreenRect& caret,
                                         const ScreenRect& work_area,
                                         long caret_gap_px = 6) noexcept {
   ScreenPoint origin;
-  // A collapsed TSF selection can have zero width while still identifying a
-  // visible caret. Treating that range as empty placed candidates at (0, 0).
-  const bool has_caret = caret.bottom > caret.top && caret.right >= caret.left;
+  const bool has_caret = HasVisibleCaret(caret);
   if (window_width <= 0) {
     window_width = 1;
   }

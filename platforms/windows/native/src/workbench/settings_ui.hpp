@@ -50,6 +50,7 @@ class SettingsUiHost {
   void UpdatePlugins();
   bool CommitSave();
   void Paint(HDC dc);
+  void InvalidateHover(int hit);
   void ActivateHit(int hit);
   static LRESULT CALLBACK Procedure(HWND, UINT, WPARAM, LPARAM);
 
@@ -62,6 +63,8 @@ class SettingsUiHost {
   HWND hwnd_ = nullptr;
   HWND owner_ = nullptr;
   HWND edit_font_ = nullptr;
+  HWND edit_candidate_count_ = nullptr;
+  HWND check_vertical_ = nullptr;
   HWND edit_hotkey_ = nullptr;
   HWND edit_base_ = nullptr;
   HWND edit_model_ = nullptr;

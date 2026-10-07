@@ -1,0 +1,13 @@
+{
+    "status":  "passed",
+    "startedAt":  "2026-10-07T12:14:28.4323368+08:00",
+    "phases":  [
+                   "source-manifest",
+                   "build-and-ctest-x64",
+                   "build-and-ctest-x86"
+               ],
+    "commit":  "1f00e8631ab3e2c23244e01998147505422bfd3a",
+    "phase":  "done",
+    "installerChecks":  35,
+    "finishedAt":  "2026-10-07T12:17:44.8735408+08:00"
+}

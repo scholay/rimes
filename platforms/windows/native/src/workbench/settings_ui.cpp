@@ -70,6 +70,8 @@ void SettingsUiHost::SyncDraftFromConfig(const Settings& config) {
   draft_.traditional = config.traditional;
   draft_.ascii_punctuation = config.ascii_punctuation;
   draft_.font_size = config.font_size;
+  draft_.candidate_count = config.candidate_count;
+  draft_.vertical_candidates = config.vertical_candidates;
   draft_.hotkey = static_cast<wchar_t>(config.hotkey_key);
   draft_.base_url = Wide(config.base_url);
   draft_.model = Wide(config.model);
@@ -161,7 +163,7 @@ bool SettingsUiHost::HandleDialogMessage(MSG* message) {
     if (key == VK_TAB) {
       std::vector<HWND> controls;
       for (const auto control : {check_ascii_, check_trad_, check_punct_,
-                                edit_font_, edit_hotkey_, edit_base_,
+                                edit_font_, edit_candidate_count_, check_vertical_, edit_hotkey_, edit_base_,
                                 edit_model_, edit_key_, edit_lang_})
         if (control && IsWindowVisible(control)) controls.push_back(control);
       const bool back = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
@@ -224,6 +226,7 @@ void SettingsUiHost::CreateOrUpdateChildren() {
                             nullptr);
   };
   make_edit(&edit_font_, false);
+  make_edit(&edit_candidate_count_, false);
   make_edit(&edit_hotkey_, false);
   make_edit(&edit_base_, false);
   make_edit(&edit_model_, false);
@@ -232,7 +235,9 @@ void SettingsUiHost::CreateOrUpdateChildren() {
   make_check(&check_ascii_, L"英文直输", 401);
   make_check(&check_trad_, L"繁体转换", 402);
   make_check(&check_punct_, L"英文标点", 403);
+  make_check(&check_vertical_, L"竖向排列候选", 404);
   SetWindowTextW(edit_font_, std::to_wstring(draft_.font_size).c_str());
+  SetWindowTextW(edit_candidate_count_, std::to_wstring(draft_.candidate_count).c_str());
   SetWindowTextW(edit_hotkey_, std::wstring(1, draft_.hotkey).c_str());
   SetWindowTextW(edit_base_, draft_.base_url.c_str());
   SetWindowTextW(edit_model_, draft_.model.c_str());
@@ -280,7 +285,7 @@ void SettingsUiHost::ThemeEdits() {
   DwmSetWindowAttribute(hwnd_, DWMWA_TEXT_COLOR, &text, sizeof(text));
   if (edit_brush_) DeleteObject(edit_brush_);
   edit_brush_ = CreateSolidBrush(ui::ToColorRef(p.surface));
-  HWND edits[] = {edit_font_, edit_hotkey_, edit_base_,
+  HWND edits[] = {edit_font_, edit_candidate_count_, check_vertical_, edit_hotkey_, edit_base_,
                   edit_model_, edit_key_,   edit_lang_};
   for (HWND edit : edits) {
     if (!edit) continue;
@@ -292,7 +297,7 @@ void SettingsUiHost::ThemeEdits() {
       SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(fonts_.body), TRUE);
   }
   SendMessageW(plugin_status_, WM_SETFONT, reinterpret_cast<WPARAM>(fonts_.body), TRUE);
-  HWND checks[] = {check_ascii_, check_trad_, check_punct_};
+  HWND checks[] = {check_ascii_, check_trad_, check_punct_, check_vertical_};
   for (HWND check : checks) {
     if (!check) continue;
     SendMessageW(check, WM_SETFONT, reinterpret_cast<WPARAM>(fonts_.body), TRUE);
@@ -330,6 +335,7 @@ void SettingsUiHost::Relayout() {
   };
 
   place_edit(edit_font_, layout_.font_edit, appearance);
+  place_edit(edit_candidate_count_, layout_.candidate_count_edit, appearance);
   place_edit(edit_hotkey_, layout_.hotkey_edit, buffer);
   place_edit(edit_base_, layout_.base_edit, api);
   place_edit(edit_model_, layout_.model_edit, api);
@@ -339,6 +345,7 @@ void SettingsUiHost::Relayout() {
   Place(check_ascii_, layout_.check_ascii, dpi_, input);
   Place(check_trad_, layout_.check_trad, dpi_, input);
   Place(check_punct_, layout_.check_punct, dpi_, input);
+  Place(check_vertical_, layout_.check_vertical, dpi_, appearance);
   const bool plugins = draft_.page == ui::SettingsPage::kPlugins && draft_.subpage == 0;
   UpdatePlugins();
   for (std::size_t i = 0; i < 3; ++i) {
@@ -368,8 +375,11 @@ bool SettingsUiHost::CommitSave() {
     const auto font_text = GetText(edit_font_);
     std::size_t parsed = 0;
     config.font_size = static_cast<unsigned>(std::stoul(font_text, &parsed));
+    if (parsed != font_text.size()) throw std::runtime_error("font range");
+    const auto count_text = GetText(edit_candidate_count_);
+    config.candidate_count = static_cast<unsigned>(std::stoul(count_text, &parsed));
     auto hotkey = GetText(edit_hotkey_);
-    if (parsed != font_text.size() || config.font_size < 10 ||
+    if (parsed != count_text.size() || config.candidate_count < 1 || config.candidate_count > 9 || config.font_size < 10 ||
         config.font_size > 40 || hotkey.size() != 1)
       throw std::runtime_error("range");
     config.hotkey_key = static_cast<unsigned>(towupper(hotkey[0]));
@@ -377,6 +387,7 @@ bool SettingsUiHost::CommitSave() {
     config.ascii = draft_.ascii;
     config.traditional = draft_.traditional;
     config.ascii_punctuation = draft_.ascii_punctuation;
+    config.vertical_candidates = draft_.vertical_candidates;
     auto key = GetText(edit_key_);
     std::string error;
     const bool ok =
@@ -395,13 +406,48 @@ bool SettingsUiHost::CommitSave() {
       callbacks_.on_theme_preview(draft_.theme);
     return true;
   } catch (...) {
-    MessageBoxW(hwnd_, L"请检查输入方案、字号和快捷键。", L"RIMES", MB_OK);
+    MessageBoxW(hwnd_, L"请检查输入方案、候选数（1–9）、字号和快捷键。", L"RIMES", MB_OK);
     return false;
   }
 }
 
 void SettingsUiHost::Paint(HDC dc) {
-  ui::PaintSettingsShell(dc, layout_, draft_, fonts_, dpi_);
+  RECT client{};
+  if (!GetClientRect(hwnd_, &client) || client.right <= 0 || client.bottom <= 0)
+    return;
+  HDC frame = CreateCompatibleDC(dc);
+  HBITMAP bitmap = frame
+      ? CreateCompatibleBitmap(dc, client.right, client.bottom) : nullptr;
+  if (!bitmap) {
+    if (frame) DeleteDC(frame);
+    ui::PaintSettingsShell(dc, layout_, draft_, fonts_, dpi_);
+    return;
+  }
+  const auto previous = SelectObject(frame, bitmap);
+  // Background clearing, text and highlights must reach the window together.
+  // WM_ERASEBKGND alone cannot prevent a direct GDI clear/draw sequence from
+  // exposing an empty intermediate frame when the mouse crosses navigation.
+  ui::PaintSettingsShell(frame, layout_, draft_, fonts_, dpi_);
+  BitBlt(dc, 0, 0, client.right, client.bottom, frame, 0, 0, SRCCOPY);
+  SelectObject(frame, previous);
+  DeleteObject(bitmap);
+  DeleteDC(frame);
+}
+
+void SettingsUiHost::InvalidateHover(int hit) {
+  const ui::DipRect* bounds = nullptr;
+  if (hit >= 0 && hit < ui::kSettingsPageCount)
+    bounds = &layout_.nav[static_cast<std::size_t>(hit)];
+  else if (hit >= 100 && hit < 100 + static_cast<int>(layout_.scheme_cards.size()))
+    bounds = &layout_.scheme_cards[static_cast<std::size_t>(hit - 100)];
+  else if (hit >= 200 && hit < 200 + static_cast<int>(layout_.theme_cards.size()))
+    bounds = &layout_.theme_cards[static_cast<std::size_t>(hit - 200)];
+  else if (hit >= 400 && hit < 400 + static_cast<int>(layout_.theme_details.size()))
+    bounds = &layout_.theme_details[static_cast<std::size_t>(hit - 400)];
+  if (!bounds) return;
+  auto rect = DipToPx(*bounds, dpi_);
+  InflateRect(&rect, 2, 2);
+  InvalidateRect(hwnd_, &rect, FALSE);
 }
 
 void SettingsUiHost::ActivateHit(int hit) {
@@ -452,6 +498,9 @@ LRESULT CALLBACK SettingsUiHost::Procedure(HWND hwnd, UINT message,
   if (!self) return DefWindowProcW(hwnd, message, wparam, lparam);
 
   switch (message) {
+    case WM_PRINTCLIENT:
+      if (wparam) self->Paint(reinterpret_cast<HDC>(wparam));
+      return 0;
     case WM_PAINT: {
       PAINTSTRUCT ps{};
       HDC dc = BeginPaint(hwnd, &ps);
@@ -481,6 +530,7 @@ LRESULT CALLBACK SettingsUiHost::Procedure(HWND hwnd, UINT message,
           case 401: self->draft_.ascii = !self->draft_.ascii; break;
           case 402: self->draft_.traditional = !self->draft_.traditional; break;
           case 403: self->draft_.ascii_punctuation = !self->draft_.ascii_punctuation; break;
+          case 404: self->draft_.vertical_candidates = !self->draft_.vertical_candidates; break;
           default: return 0;
         }
         InvalidateRect(reinterpret_cast<HWND>(lparam), nullptr, FALSE);
@@ -495,7 +545,8 @@ LRESULT CALLBACK SettingsUiHost::Procedure(HWND hwnd, UINT message,
                        ui::ToColorRef(p.settings_background));
       const bool checked = draw->CtlID == 401 ? self->draft_.ascii
           : draw->CtlID == 402 ? self->draft_.traditional
-                               : self->draft_.ascii_punctuation;
+                               : draw->CtlID == 403 ? self->draft_.ascii_punctuation
+                                : self->draft_.vertical_candidates;
       RECT box = draw->rcItem;
       const int size = MulDiv(14, static_cast<int>(self->dpi_), 96);
       box.right = box.left + size;
@@ -601,16 +652,18 @@ LRESULT CALLBACK SettingsUiHost::Procedure(HWND hwnd, UINT message,
                       96.0f / self->dpi_;
       const int hover = ui::HitTestSettings(self->layout_, x, y);
       if (self->draft_.hover != hover) {
+        const int previous = self->draft_.hover;
         self->draft_.hover = hover;
-        InvalidateRect(hwnd, nullptr, FALSE);
+        self->InvalidateHover(previous);
+        self->InvalidateHover(hover);
       }
       TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, hwnd, 0};
       TrackMouseEvent(&track);
       return 0;
     }
     case WM_MOUSELEAVE:
+      self->InvalidateHover(self->draft_.hover);
       self->draft_.hover = -1;
-      InvalidateRect(hwnd, nullptr, FALSE);
       return 0;
     case WM_SETCURSOR:
       if (reinterpret_cast<HWND>(wparam) == hwnd && LOWORD(lparam) == HTCLIENT) {
@@ -684,9 +737,9 @@ LRESULT CALLBACK SettingsUiHost::Procedure(HWND hwnd, UINT message,
     case WM_DESTROY:
       KillTimer(hwnd, 11);
       self->hwnd_ = nullptr;
-      self->edit_font_ = self->edit_hotkey_ = self->edit_base_ = nullptr;
+      self->edit_font_ = self->edit_candidate_count_ = self->edit_hotkey_ = self->edit_base_ = nullptr;
       self->edit_model_ = self->edit_key_ = self->edit_lang_ = nullptr;
-      self->check_ascii_ = self->check_trad_ = self->check_punct_ = nullptr;
+      self->check_vertical_ = self->check_ascii_ = self->check_trad_ = self->check_punct_ = nullptr;
       if (!self->saved_ && self->callbacks_.on_theme_preview)
         self->callbacks_.on_theme_preview(self->opened_theme_);
       if (self->callbacks_.on_closed) self->callbacks_.on_closed();

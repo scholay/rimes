@@ -51,6 +51,13 @@ class CandidateWindow {
     if (window_ && GetCapture() == window_) ReleaseCapture();
     if (snapshot_.visible) Update(snapshot_);
   }
+  void SetVertical(bool vertical) {
+    if (vertical_ == vertical) return;
+    vertical_ = vertical;
+    pressed_index_ = -1;
+    if (window_ && GetCapture() == window_) ReleaseCapture();
+    if (snapshot_.visible) Update(snapshot_);
+  }
   void SetTheme(ui::ThemeId theme) {
     if (theme_ == theme) return;
     theme_ = theme;
@@ -72,6 +79,7 @@ class CandidateWindow {
 
   std::function<void(std::size_t)> select_;
   unsigned font_size_ = 16;
+  bool vertical_ = false;
   ui::ThemeId theme_ = ui::ThemeId::kNight;
   int hover_index_ = -1;
   int pressed_index_ = -1;

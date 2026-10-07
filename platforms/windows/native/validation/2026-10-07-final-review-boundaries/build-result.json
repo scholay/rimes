@@ -1,0 +1,21 @@
+{
+    "status":  "passed",
+    "startedAt":  "2026-10-07T12:41:37.5261528+08:00",
+    "phases":  [
+                   "source-manifest",
+                   "build-x64",
+                   "e2e-x64",
+                   "build-x86",
+                   "e2e-x86"
+               ],
+    "commit":  "650762b27ebae5dafc380fc47e24341d3973ab11",
+    "phase":  "done",
+    "installerChecks":  38,
+    "dailyBroker":  [
+                        {
+                            "ProcessId":  66352,
+                            "ExecutablePath":  "C:\\Program Files\\RIMES\\versions\\1.1.0-preview.2-58fc4bcf8319-ecab591174ef\\x64\\RimesBroker.exe"
+                        }
+                    ],
+    "finishedAt":  "2026-10-07T12:44:04.9619095+08:00"
+}

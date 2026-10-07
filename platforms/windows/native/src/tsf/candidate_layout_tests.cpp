@@ -22,6 +22,8 @@ using rimes::windows::ui::ThemeId;
 using rimes::windows::ui::ThemeIdOrDefault;
 using rimes::windows::ui::CandidateStripItem;
 using rimes::windows::ui::CandidateStripMetrics;
+using rimes::windows::tsf::HasVisibleCaret;
+using rimes::windows::tsf::ResolveCandidateCaret;
 
 int g_failures = 0;
 
@@ -75,6 +77,42 @@ void TestCollapsedCaretAndSelectionLabels() {
   Check(CandidateSelectionKey(L"", 9) == 0 &&
             CandidateSelectionKey(L"x", 0) == 0,
         "unsupported labels must not synthesize another candidate key");
+}
+
+void TestUnknownCaretReusesPreviousPlacement() {
+  // A host mid-composition can refuse every caret source, yielding an
+  // all-zero rectangle. Passing that to PlaceCandidateWindow would anchor the
+  // popup to the work-area origin, which is the visible jump to the screen
+  // corner. The previous placement must win instead.
+  ScreenRect resolved{};
+  Check(ResolveCandidateCaret({420, 300, 460, 324}, {0, 0, 0, 0}, &resolved),
+        "a successful query always wins");
+  Check(resolved.left == 420 && resolved.bottom == 324,
+        "the queried caret is used verbatim");
+
+  Check(ResolveCandidateCaret({0, 0, 0, 0}, {420, 300, 460, 324}, &resolved),
+        "an unknown caret falls back to the previous placement");
+  Check(resolved.left == 420 && resolved.top == 300,
+        "the popup stays next to the input field instead of jumping to (0, 0)");
+  const auto origin =
+      PlaceCandidateWindow(resolved, 320, 180, {0, 0, 1920, 1080});
+  Check(origin.x == 420 && origin.y == 330,
+        "the reused placement renders at the previous caret, not the corner");
+
+  Check(!ResolveCandidateCaret({0, 0, 0, 0}, {0, 0, 0, 0}, &resolved),
+        "no caret has ever been observed, so the popup must stay suppressed");
+
+  Check(HasVisibleCaret({120, 180, 120, 204}),
+        "a collapsed zero-width caret still identifies a visible position");
+  Check(!HasVisibleCaret({0, 0, 0, 0}),
+        "an all-zero rectangle is unknown geometry, not a caret");
+  Check(!HasVisibleCaret({100, 200, 140, 200}),
+        "a rectangle with no height carries no caret information");
+  Check(!ResolveCandidateCaret({0, 0, 0, 0}, {100, 200, 100, 200}, &resolved),
+        "a flat previous caret cannot stand in for a real one");
+  Check(!ResolveCandidateCaret({420, 300, 460, 324}, {100, 200, 140, 224},
+                               nullptr),
+        "a null output is rejected rather than written");
 }
 
 void TestThemeDefaults() {
@@ -173,6 +211,24 @@ void TestNarrowViewportAndLargeFont() {
   Check(origin.y == 133, "caret gap scales to nine pixels at 150 percent");
 }
 
+void TestVerticalCandidatesKeepEveryPageItem() {
+  for (const float height : {180.f, 900.f}) {
+    const auto metrics = ui::MakeCandidateMetrics(40);
+    std::vector<CandidateStripItem> items(9);
+    for (auto& item : items) item.content_width_dip = 250;
+    const auto layout = LayoutCandidateStripMeasured(items, 50, true, metrics, 460.f, true, height);
+    Check(layout.pills.size() == 9 && layout.height_dip <= height && layout.width_dip <= 460.f,
+          "vertical pages preserve all items within monitor geometry");
+    for (std::size_t i = 0; i < layout.pills.size(); ++i) {
+      const auto& r = layout.pills[i];
+      Check(HitTestCandidateStrip(layout, (r.left+r.right)*.5f, (r.top+r.bottom)*.5f) == static_cast<int>(i),
+            "vertical or overflow-column hit retains the engine index");
+    }
+    Check(layout.pills[1].top > layout.pills[0].top,
+          "vertical reading order starts downwards");
+  }
+}
+
 void TestBufferLayoutBounds() {
   BufferPaintState state;
   state.source_blocks = {{L"a", false}};
@@ -202,10 +258,12 @@ int RunCandidateLayoutTests() {
   TestClampsToWorkArea();
   TestDpiScale();
   TestCollapsedCaretAndSelectionLabels();
+  TestUnknownCaretReusesPreviousPlacement();
   TestThemeDefaults();
   TestHorizontalWrapAndHits();
   TestLongTextDoesNotDropIndex();
   TestNarrowViewportAndLargeFont();
+  TestVerticalCandidatesKeepEveryPageItem();
   TestBufferLayoutBounds();
   return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

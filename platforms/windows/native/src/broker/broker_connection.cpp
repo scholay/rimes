@@ -242,7 +242,7 @@ ClientAction BrokerConnection::HandleOpenSession(const core::Frame& request,
       const auto config = runtime_->Configuration();
       if (!engine_->Configure(engine_session, config.schema, config.ascii,
                               config.traditional, config.ascii_punctuation,
-                              nullptr))
+                              nullptr, config.candidate_count))
         throw std::runtime_error("Schema unavailable");
       state.target =
           runtime_->Register(peer_process_, session_id, open.context_id);
@@ -352,7 +352,7 @@ ClientAction BrokerConnection::HandleKeyEvent(const core::Frame& request,
         session.capture != capture) {
       if (!engine_->Configure(session.engine_session_id, config.schema,
                               config.ascii, config.traditional,
-                              config.ascii_punctuation, nullptr))
+                              config.ascii_punctuation, nullptr, config.candidate_count))
         return RespondPassThrough(request, key, session, response);
       session.settings_revision = config.revision;
       session.composing = false;

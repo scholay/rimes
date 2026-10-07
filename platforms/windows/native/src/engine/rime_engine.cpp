@@ -459,21 +459,39 @@ class RimeEngine::Impl final {
 
   bool Configure(SessionId session, const std::string& schema, bool ascii,
                  bool traditional, bool punctuation,
-                 std::string* error) noexcept {
+                 std::string* error, unsigned candidate_count) noexcept {
     try {
       std::lock_guard lock(mutex_);
       if (!healthy_ || !sessions_.contains(session) || !api_ ||
           api_->data_size <
-              static_cast<int>(offsetof(abi::ApiPrefix, select_schema) +
-                               sizeof(api_->select_schema) -
+              static_cast<int>(offsetof(abi::ApiPrefix, config_set_int) +
+                               sizeof(api_->config_set_int) -
                                sizeof(api_->data_size)) ||
-          !api_->select_schema || !api_->set_option || !api_->clear_composition)
+          !api_->select_schema || !api_->set_option || !api_->clear_composition ||
+          !api_->schema_open || !api_->config_close || !api_->config_set_int ||
+          candidate_count < 1 || candidate_count > 9)
         return false;
+      abi::Config config{};
+      if (!api_->schema_open(schema.c_str(), &config)) {
+        SetError(error, "Schema configuration unavailable");
+        return false;
+      }
+      const bool page_set = api_->config_set_int(
+          &config, "menu/page_size", static_cast<int>(candidate_count));
+      if (!page_set) {
+        api_->config_close(&config);
+        SetError(error, "Candidate count unavailable");
+        return false;
+      }
       api_->clear_composition(session);
       if (!api_->select_schema(session, schema.c_str())) {
+        api_->config_close(&config);
         SetError(error, "Schema unavailable");
         return false;
       }
+      // Keep the config alive until ApplySchema acquires its shared data.
+      // The deployed schema component does not auto-save: custom YAML remains untouched.
+      api_->config_close(&config);
       api_->set_option(session, "ascii_mode", ascii ? 1 : 0);
       api_->set_option(session, "traditionalization", traditional ? 1 : 0);
       api_->set_option(session, "ascii_punct", punctuation ? 1 : 0);
@@ -751,9 +769,9 @@ bool RimeEngine::ProcessKey(SessionId session, std::int32_t keycode,
 
 bool RimeEngine::Configure(SessionId session, const std::string& schema,
                            bool ascii, bool traditional, bool punctuation,
-                           std::string* error) noexcept {
+                           std::string* error, unsigned candidate_count) noexcept {
   return impl_->Configure(session, schema, ascii, traditional, punctuation,
-                          error);
+                          error, candidate_count);
 }
 
 }  // namespace rimes::windows::engine

@@ -54,7 +54,7 @@ class RimeEngine final {
 
   bool Configure(SessionId session, const std::string& schema, bool ascii,
                  bool traditional, bool ascii_punctuation,
-                 std::string* error = nullptr) noexcept;
+                 std::string* error = nullptr, unsigned candidate_count = 9) noexcept;
 
   // Applies one key and atomically drains its commit/context into output. An
   // unhandled key yields an empty snapshot so callers can pass it through.

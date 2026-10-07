@@ -81,7 +81,7 @@ struct CandidateStripLayout {
 [[nodiscard]] inline CandidateStripLayout LayoutCandidateStripMeasured(
     const std::vector<CandidateStripItem>& items,
     float measured_preedit_width_dip, bool show_preedit,
-    const CandidateStripMetrics& metrics, float available_width_dip) {
+    const CandidateStripMetrics& metrics, float available_width_dip, bool vertical = false, float available_height_dip = 0.f) {
   CandidateStripLayout layout;
   const float max_width = (std::max)(1.f, (std::min)(
       static_cast<float>(metrics.max_strip_width_dip),
@@ -98,17 +98,26 @@ struct CandidateStripLayout {
       ? static_cast<float>(metrics.preedit_height_dip) : 0.f;
   const float strip_top = show_preedit && !items.empty()
       ? preedit_h + static_cast<float>(metrics.preedit_gap_dip) : 0.f;
+  const int vertical_rows = vertical && available_height_dip > 0.f
+      ? (std::max)(1, static_cast<int>((available_height_dip - strip_top) / strip_h))
+      : static_cast<int>((std::max)(std::size_t{1}, items.size()));
+  const int vertical_columns = vertical
+      ? (std::max)(1, (static_cast<int>(items.size()) + vertical_rows - 1) / vertical_rows) : 1;
+  const float column_width = inner / static_cast<float>(vertical_columns);
   float row_end = 0.f, widest = 0.f;
   int row = 0;
   layout.pills.reserve(items.size());
   layout.order.reserve(items.size());
   for (std::size_t i = 0; i < items.size(); ++i) {
     const float content = static_cast<float>((std::max)(0, items[i].content_width_dip));
-    const float width = (std::min)(inner, (std::max)(
+    const float width = (std::min)(vertical ? column_width : inner, (std::max)(
         2.f * static_cast<float>(metrics.pill_padding_dip),
         content + 2.f * static_cast<float>(metrics.pill_padding_dip)));
     float x = row_end == 0.f ? 0.f : row_end + gap;
-    if (row_end > 0.f && x + width > inner + 0.01f) {
+    if (vertical) {
+      row = static_cast<int>(i) % vertical_rows;
+      x = static_cast<float>(static_cast<int>(i) / vertical_rows) * column_width;
+    } else if (row_end > 0.f && x + width > inner + 0.01f) {
       ++row;
       x = 0.f;
     }
@@ -119,7 +128,7 @@ struct CandidateStripLayout {
     row_end = x + width;
     widest = (std::max)(widest, row_end);
   }
-  layout.row_count = items.empty() ? 0 : row + 1;
+  layout.row_count = items.empty() ? 0 : vertical ? (std::min)(vertical_rows, static_cast<int>(items.size())) : row + 1;
   layout.show_preedit = show_preedit;
   const float preedit_w = show_preedit ? (std::min)(max_width, (std::max)(24.f,
       (std::max)(0.f, measured_preedit_width_dip) +
