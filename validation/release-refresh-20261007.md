@@ -6,7 +6,7 @@ This record follows the [pre-refresh package audit](release-audit-20261007.md), 
 | --- | --- | --- |
 | Android | [1.1.1 / code15](https://github.com/scholay/rimes/releases/tag/android-v1.1.1) | Published 2026-10-07 09:24:50 UTC. Exact production APK upgraded the Xiaomi 17 Pro running Android 16 from 1.1.0/code12 without clearing data. Public downloads match the accepted files. |
 | macOS | 1.1.0 remains public; 1.1.1 in progress | Formal tag v1.1.1 targets main `41d38d0`; build/sign/notarize/staged-package installation/publication follow the protected release workflow. A tag is not a public installer. |
-| Windows | 1.1.1 remains public; 1.1.2 draft | Exact x64/x86 source freeze built and verified on YOUNG-HOME. Actual production upgrade acceptance remains pending; the old Broker must exit after preserving unsent Buffer content. |
+| Windows | 1.1.1 remains public; 1.1.2 draft | Exact x64/x86 source freeze built and verified on YOUNG-HOME. GUI upgrade from 1.1.1 succeeded and retained all 11 dictionary/settings files byte-for-byte. Installed files, registrations and launcher entries verified. Installer requires Windows restart; post-restart runtime acceptance is pending. |
 | iOS | App Store 1.1.0/build48 | 1.1.1/build49 remains waiting for review. Build50 was uploaded and processed as VALID, and a development-signed export of the same archive was installed on the test iPhone. Device acceptance and review replacement remain pending. |
 | Linux | Experimental scheme-data preview | There is no public native stable Linux installer. This refresh does not promote the existing data preview to one. |
 
