@@ -1,0 +1,5 @@
+{
+  "en-US": "This update improves keyboard responsiveness, candidate display and layout sizing. It also improves Clipboard handling and returning to the keyboard after opening the app, fixes imported input-scheme management, and strengthens privacy controls and input stability.",
+  "zh-Hans": "本次更新优化键盘响应、候选显示与布局尺寸，改进剪贴板处理及打开 App 后返回键盘的体验，修复导入输入方案的管理问题，并加强隐私控制和输入稳定性。",
+  "zh-Hant": "本次更新優化鍵盤回應、候選顯示與版面尺寸，改進剪貼簿處理及開啟 App 後返回鍵盤的體驗，修復匯入輸入方案的管理問題，並加強隱私控制和輸入穩定性。"
+}
