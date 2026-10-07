@@ -76,6 +76,31 @@ FixtureWindows WindowsOnFixtureThread(DWORD thread) {
   return windows;
 }
 
+bool SettingsPrecedesBuffer(const FixtureWindows& windows) {
+  if (!windows.settings || !windows.buffer) return false;
+  for (HWND next = GetWindow(windows.settings, GW_HWNDNEXT); next;
+       next = GetWindow(next, GW_HWNDNEXT))
+    if (next == windows.buffer) return true;
+  return false;
+}
+
+void CheckBufferRestored(const FixtureWindows& windows, bool visible) {
+  WaitUntil([&] {
+    return windows.buffer &&
+        (GetWindowLongPtrW(windows.buffer, GWL_EXSTYLE) &
+         (WS_EX_TOPMOST | WS_EX_NOACTIVATE)) ==
+            (WS_EX_TOPMOST | WS_EX_NOACTIVATE);
+  }, "closing settings restores the Buffer's topmost and no-activation styles");
+  Check(windows.buffer &&
+            IsVisibleWithinFixture(windows.buffer, windows.buffer) == visible,
+        "restoring Buffer topmost preserves its previous visibility");
+  GUITHREADINFO state{sizeof(state)};
+  Check(windows.buffer &&
+            GetGUIThreadInfo(GetWindowThreadProcessId(windows.buffer, nullptr), &state) &&
+            state.hwndActive != windows.buffer,
+        "restoring Buffer topmost does not activate the Buffer");
+}
+
 void CheckProductionWindowPlacement(const FixtureWindows& windows) {
   if (!windows.buffer || !windows.settings) {
     Check(false, "production Buffer and settings windows exist for placement checks");
@@ -84,10 +109,14 @@ void CheckProductionWindowPlacement(const FixtureWindows& windows) {
   WaitUntil([&] {
     return IsVisibleWithinFixture(windows.settings, windows.settings);
   }, "settings finishes showing before its native placement is checked");
+  WaitUntil([&] {
+    return !(GetWindowLongPtrW(windows.buffer, GWL_EXSTYLE) & WS_EX_TOPMOST) &&
+           SettingsPrecedesBuffer(windows);
+  }, "settings appears above the retained Buffer in the normal window band");
   const auto buffer_style = GetWindowLongPtrW(windows.buffer, GWL_EXSTYLE);
   Check((buffer_style & (WS_EX_TOPMOST | WS_EX_NOACTIVATE)) ==
-            (WS_EX_TOPMOST | WS_EX_NOACTIVATE),
-        "opening settings retains the Buffer's topmost and no-activation styles");
+            WS_EX_NOACTIVATE,
+        "opening settings temporarily demotes Buffer while retaining no-activation");
   Check((GetWindowLongPtrW(windows.settings, GWL_EXSTYLE) &
          (WS_EX_TOPMOST | WS_EX_NOACTIVATE)) == 0 &&
             GetWindow(windows.settings, GW_OWNER) == nullptr,
@@ -98,6 +127,23 @@ void CheckProductionWindowPlacement(const FixtureWindows& windows) {
 
   RECT original{}, client{};
   GetWindowRect(windows.settings, &original);
+  RECT original_buffer{}, overlap{}, overlapped_buffer{};
+  GetWindowRect(windows.buffer, &original_buffer);
+  Check(MoveWindow(windows.buffer, original.left + 20, original.top + 100,
+                   original_buffer.right - original_buffer.left,
+                   original_buffer.bottom - original_buffer.top, TRUE) != FALSE,
+        "fixture positions the retained Buffer over settings content");
+  GetWindowRect(windows.buffer, &overlapped_buffer);
+  Check(IntersectRect(&overlap, &original, &overlapped_buffer) &&
+            SettingsPrecedesBuffer(windows),
+        "settings remains above the Buffer when their native rectangles overlap");
+  GUITHREADINFO state{sizeof(state)};
+  Check(GetGUIThreadInfo(GetWindowThreadProcessId(windows.buffer, nullptr), &state) &&
+            state.hwndActive != windows.buffer,
+        "temporary Buffer demotion and placement do not activate it");
+  MoveWindow(windows.buffer, original_buffer.left, original_buffer.top,
+             original_buffer.right - original_buffer.left,
+             original_buffer.bottom - original_buffer.top, TRUE);
   GetClientRect(windows.settings, &client);
   POINT client_origin{client.left, client.top};
   ClientToScreen(windows.settings, &client_origin);
@@ -662,8 +708,22 @@ void TestSettingsPreserveRuntimeAndStreaming() {
     WaitUntil([&] { return windows().settings != nullptr; }, "settings command opens the production settings host");
     CheckProductionWindowPlacement(windows());
     Check(!runtime.Snapshot().value("visible", true), "settings do not open a closed Buffer");
+    Check(!IsVisibleWithinFixture(windows().buffer, windows().buffer),
+          "opening settings leaves a closed Buffer physically hidden");
+    runtime.Toggle(0);  // Own tray/hotkey behavior with no authorized host.
+    WaitUntil([&] {
+      const auto current = windows();
+      return IsVisibleWithinFixture(current.buffer, current.buffer) &&
+             SettingsPrecedesBuffer(current);
+    }, "Buffer opened after settings remains below it without a capture target");
+    Check(!runtime.Snapshot().value("capture", true),
+          "opening the Buffer behind settings does not authorize host capture");
+    runtime.Close();
+    WaitUntil([&] { return !IsVisibleWithinFixture(windows().buffer, windows().buffer); },
+              "closing Buffer while settings is open preserves its hidden state");
     if (const HWND settings = windows().settings) PostMessageW(settings, WM_CLOSE, 0, 0);
     WaitUntil([&] { return windows().settings == nullptr; }, "closing settings retires its own window");
+    CheckBufferRestored(windows(), false);
 
     const auto peer = GetCurrentProcessId() + 1;
     const auto target = runtime.Register(peer, 9001, 9001);
@@ -695,16 +755,28 @@ void TestSettingsPreserveRuntimeAndStreaming() {
     WaitUntil([&] { return IsVisibleWithinFixture(windows().buffer, windows().buffer); },
               "production Buffer window remains shown while settings are open");
 
+    // Exercise a later production Update while the stream is still in flight.
+    // Raising only our own disposable Buffer reproduces the ordering that a
+    // native ShowWindow refresh can introduce in the normal window band.
+    Check(SetWindowPos(windows().buffer, HWND_TOP, 0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE) != FALSE,
+          "fixture raises its own Buffer before a later runtime notification");
     runtime.Focus({});  // The real host can report focus loss after activation.
+    WaitUntil([&] { return SettingsPrecedesBuffer(windows()); },
+              "streaming runtime refresh restores settings above the retained Buffer");
     Check(runtime.Snapshot().value("busy", false) &&
               runtime.Snapshot().value("preview", std::string()) == "Stream",
           "following host focus loss preserves the already-paused request");
     const HWND first_settings = windows().settings;
+    SetWindowPos(windows().buffer, HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     Check(commands.RequestSettings(), "repeated settings command posts");
-    WaitUntil([&] { return windows().settings == first_settings; },
-              "repeated settings request reuses the existing host");
+    WaitUntil([&] {
+      return windows().settings == first_settings && SettingsPrecedesBuffer(windows());
+    }, "repeated settings request reuses the host and restores its order above Buffer");
     if (first_settings) PostMessageW(first_settings, WM_CLOSE, 0, 0);
     WaitUntil([&] { return windows().settings == nullptr; }, "settings can dismiss while streaming continues");
+    CheckBufferRestored(windows(), true);
     Check(runtime.Snapshot().value("visible", false) &&
               runtime.Snapshot().value("busy", false) &&
               runtime.Snapshot()["source_blocks"] == before["source_blocks"],
@@ -729,6 +801,7 @@ void TestSettingsPreserveRuntimeAndStreaming() {
     Check(commands.RequestSettings(), "settings request posts while composing");
     WaitUntil([&] { return windows().settings && !runtime.Capturing(target); },
               "settings pauses an explicitly rebound input context");
+    CheckProductionWindowPlacement(windows());
     Check(runtime.Snapshot().value("preedit", std::string()) == "" &&
               runtime.Snapshot().value("result", std::string()) == "Stream done." &&
               runtime.Snapshot()["source_blocks"] == before["source_blocks"],

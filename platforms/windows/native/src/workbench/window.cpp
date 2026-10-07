@@ -53,6 +53,7 @@ struct Window {
   UiCommands* commands = nullptr;
   UINT taskbar_created = RegisterWindowMessageW(L"TaskbarCreated");
   HWND window = nullptr;
+  bool destroying = false;
   std::unique_ptr<SettingsUiHost> settings;
   std::atomic<HWND> notification{nullptr};
   ID2D1Factory* factory = nullptr;
@@ -96,6 +97,7 @@ struct Window {
   }
   void EnsureSettings();
   void OpenSettings();
+  void UpdateBufferZOrder();
   void Paint();
   void Update();
   void Action(int index);
@@ -212,6 +214,7 @@ void Window::EnsureSettings() {
     theme = preview;
     InvalidateRect(window, nullptr, FALSE);
   };
+  cb.on_closed = [this] { UpdateBufferZOrder(); };
   cb.about_text = std::wstring(L"RIMES Windows ") + kProductVersionWide + L"\nCommit: " + Wide(RIMES_BUILD_COMMIT) +
                   L"\n协议 v2\n词库：%APPDATA%\\RIMES\n设置与日志：%LOCALAPPDATA%"
                   L"\\RIMES";
@@ -225,6 +228,25 @@ void Window::OpenSettings() {
   EnsureSettings();
   // The host retains Settings' lifetime; this HWND is only a placement anchor.
   settings->Open(window);
+  UpdateBufferZOrder();
+}
+
+void Window::UpdateBufferZOrder() {
+  if (destroying || !window) return;
+  constexpr UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+  const bool topmost =
+      (GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+  if (settings && settings->IsOpen()) {
+    // A retained Buffer must not cover the ordinary Settings window. Repeat
+    // its relative placement after ShowWindow/stream updates, without making
+    // Settings topmost or moving either window above other applications.
+    if (topmost) SetWindowPos(window, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+    SetWindowPos(window, settings->hwnd(), 0, 0, 0, 0, flags);
+  } else if (!topmost) {
+    // Settings' close callback also restores a hidden Buffer without showing
+    // it, activating it, or resuming its revoked capture authority.
+    SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0, flags);
+  }
 }
 
 void Window::AddTrayIcon() {
@@ -338,6 +360,10 @@ void Window::PopupTrayMenu() {
       TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, cursor.x, cursor.y, 0,
                      window, nullptr);
   DestroyMenu(menu);
+  // The tray's foreground requirement can raise a demoted Buffer. Restore
+  // its relative order even when the menu is cancelled and no action updates
+  // the Runtime; never force Settings back above another application.
+  UpdateBufferZOrder();
   PostMessageW(window, WM_COMMAND, command, 0);
 }
 
@@ -525,6 +551,7 @@ void Window::Update() {
                    SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
   }
+  UpdateBufferZOrder();
   InvalidateRect(window, nullptr, FALSE);
 }
 
@@ -857,6 +884,7 @@ LRESULT CALLBACK Window::Procedure(HWND hwnd, UINT message, WPARAM wparam,
         DestroyWindow(hwnd);
         return 0;
       case WM_DESTROY:
+        self->destroying = true;
         if (self->commands) self->commands->Attach(nullptr);
         self->notification.store(nullptr);
         self->runtime.SetNotify({});
