@@ -174,6 +174,18 @@ try {
     Check 'unlocked active DLL retains a previous installation sign-out requirement' ($result.RequiresSignOut -and $result.SignOutReason -eq 'previous-signout-required' -and $message.Contains('recorded a pending sign-out') -and -not $message.Contains('history was missing') -and -not $message.Contains('DLL is still in use'))
     & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
     $actual=(Get-State $root).active
+    Remove-Item -LiteralPath "$actual\x86\RimesTsf.dll"
+    $result=& "$new\Uninstall.ps1" -InstallRoot $root
+    $message=Get-UninstallCompletionMessage $result
+    Check 'known false with a missing registered DLL requires sign out without claiming loaded state' ($result.RequiresSignOut -and $result.SignOutReason -eq 'missing-registered-dll' -and $message.Contains('deleted copy remains loaded could not be confirmed') -and -not $message.Contains('DLL is still in use'))
+    & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
+    $actual=(Get-State $root).active
+    Remove-Item -LiteralPath "$actual\x86\RimesTsf.dll"
+    $global:RimesInstallerTestNative.Remove('x86')
+    $result=& "$new\Uninstall.ps1" -InstallRoot $root
+    Check 'missing DLL in an unregistered architecture does not invent a sign-out requirement' (-not $result.RequiresSignOut -and $result.SignOutReason -eq 'none')
+    & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
+    $actual=(Get-State $root).active
     $unused=Join-Path $root 'versions\zzzz-newer-looking-unused'
     Copy-Item -LiteralPath $upgrade -Destination $unused -Recurse
     Move-Item -LiteralPath "$root\state.json" -Destination "$root\lost-state.json"

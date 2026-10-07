@@ -10,6 +10,9 @@ catch {throw "The current uninstall tools are incomplete or unverifiable. Run th
 Stop-OwnedBroker $state.active
 $requiresSignOut=($null -eq $state.requiresSignOut -or [bool]$state.requiresSignOut)
 $signOutReason=if($null -eq $state.requiresSignOut){'unknown-installation-state'}elseif($state.requiresSignOut){'previous-signout-required'}else{'none'}
+# A deleted registered DLL can remain mapped in an application. Only use the
+# exact owned registrations resolved above, not an absent unused architecture.
+if(@($state.entries | Where-Object {-not (Test-Path -LiteralPath $_.dll -PathType Leaf)}).Count){$requiresSignOut=$true;$signOutReason='missing-registered-dll'}
 try{Assert-Unlocked $state.active}catch{if(-not $AllowPendingRestart){throw};$requiresSignOut=$true;$signOutReason='locked-dll'}
 $oldAutostart=Get-BrokerAutostart
 $oldInstalledApp=Read-InstalledAppRegistration
