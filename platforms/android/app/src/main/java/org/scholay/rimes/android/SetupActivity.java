@@ -464,7 +464,7 @@ public final class SetupActivity extends Activity {
     }
     private void privacy() {
         LinearLayout input=group(t("输入与学习","Typing & learning")); paragraph(input,getString(R.string.privacy)+"\n\n"+getString(R.string.learning_detail));
-        LinearLayout plugins=group(t("翻译与 AI","Translation & AI")); paragraph(plugins,t("翻译默认查阅本机 CC-CEDICT 词典。联网 AI 需在 AI 服务中配置并启用，点执行后仅发送本次 Buffer 原文给 CometAPI。未启用时可用本机 Mock。不读取剪贴板、联系人或完整输入历史。结果只有点发送后进入当前输入框。","Translation defaults to bundled CC-CEDICT lookup. Online AI requires explicit configuration and enabling; Run sends only the current Buffer source to your configured AI service. A local mock is available when online AI is off. There is no clipboard, contacts or full typing-history access. Results enter the current field only after you insert them."));
+        LinearLayout plugins=group(t("翻译与 AI","Translation & AI")); paragraph(plugins,t("翻译默认查阅本机 CC-CEDICT 词典。联网 AI 需在 AI 服务中配置并启用，点执行后仅发送本次 Buffer 原文给你配置的服务。未启用时可用本机 Mock。只有主动点“粘贴剪贴板文字”才读取当前文字到 Buffer，不监听剪贴板，不读取联系人或完整输入历史。结果只有点发送后进入当前输入框。","Translation defaults to bundled CC-CEDICT lookup. Online AI requires explicit configuration and enabling; Run sends only the current Buffer source to your configured AI service. A local mock is available when online AI is off. An explicit Paste clipboard text tap reads the current text into Buffer; there is no clipboard monitoring, contacts or full typing-history access. Results enter the current field only after you insert them."));
         LinearLayout legal=group(t("开源软件与资源","Open-source software & resources")); row(legal,KeyboardIcon.BOOK,t("第三方许可","Third-party licenses"),null,null,"settings.privacy.licenses",() -> navigate("licenses"));
     }
     private void differences() {

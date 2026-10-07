@@ -1,6 +1,8 @@
 package org.scholay.rimes.android;
 
 import android.content.SharedPreferences;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.res.Configuration;
 import android.inputmethodservice.InputMethodService;
 import android.os.Build;
@@ -24,6 +26,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import org.scholay.rimes.core.BufferSession;
+import org.scholay.rimes.core.ExplicitClipboardImport;
 import org.scholay.rimes.core.InputEpoch;
 import org.scholay.rimes.core.PluginSession;
 import org.scholay.rimes.core.RimeEngine;
@@ -75,7 +78,7 @@ public final class RimesInputMethodService extends InputMethodService {
     private String pluginResultAuthorization;
     private boolean pluginSettingsOpen, renderedPluginMode;
     private LinearLayout bufferTop,bufferBottom;
-    private KeyButton bufferSettings,bufferClear,pluginButton,pluginRunButton;
+    private KeyButton bufferSettings,bufferClear,bufferPaste,pluginButton,pluginRunButton;
     private FrameLayout surfaceContainer;
     private KeyButton themeButton,layoutButton;
     private final List<KeyButton> chromeButtons=new ArrayList<>();
@@ -464,6 +467,33 @@ public final class RimesInputMethodService extends InputMethodService {
         if(deferredSettingsPair!=null) { deferredSettingsPair=null; restoreSettings(); }
         resetEngine(); render();
     }
+    private boolean canPasteClipboard() {
+        return ownsTarget() && buffer.isEnabled() && buffer.isPermitted()
+                && !privateField && !directOnly && pending==0 && !snapshot.composing()
+                && retained.isEmpty() && (chords==null || !chords.isChordActive());
+    }
+    private void pasteClipboard() {
+        if(!isInputViewShown() || !canPasteClipboard()) return;
+        InputEpoch.Ticket ticket=epoch.issue(); InputConnection connection=target;
+        String plugin=activePlugin;
+        try {
+            ExplicitClipboardImport.Outcome outcome=ExplicitClipboardImport.read(buffer,
+                    () -> isInputViewShown() && canPasteClipboard() && epoch.current(ticket) && target==connection && java.util.Objects.equals(plugin,activePlugin),
+                    () -> {
+                        ClipboardManager clipboard=getSystemService(ClipboardManager.class);
+                        ClipData clip=clipboard==null?null:clipboard.getPrimaryClip();
+                        // Text only. Do not coerce a URI, open files, or inspect an image.
+                        return clip==null || clip.getItemCount()==0?null:clip.getItemAt(0).getText();
+                    });
+            if(outcome==ExplicitClipboardImport.Outcome.IMPORTED) {
+                cancelChord(); invalidatePlugin(); pluginResultAuthorization=null;
+                appearanceOpen=false; pluginSettingsOpen=false;
+                notice(R.string.clipboard_pasted);
+            } else if(outcome==ExplicitClipboardImport.Outcome.EMPTY) notice(R.string.clipboard_empty);
+            else if(outcome==ExplicitClipboardImport.Outcome.TOO_LARGE) notice(R.string.buffer_limit);
+            render();
+        } catch(SecurityException denied) { notice(R.string.clipboard_unavailable); }
+    }
     private void deleteHostOrBuffer() {
         if(!ownsTarget()) return;
         if(buffer.isEnabled()) buffer.deleteLastBlock();
@@ -692,6 +722,8 @@ public final class RimesInputMethodService extends InputMethodService {
         themeButton=button(input,theme.glyph,this::toggleAppearance,0); fixedWidth(themeButton,32); gapRight(themeButton,4);
         themeButton.setContentDescription("布局与配色"); themeButton.icon(KeyboardIcon.APPEARANCE);
         bufferRail=new BufferRail(this); input.addView(bufferRail,new LinearLayout.LayoutParams(0,-1,1));
+        bufferPaste=button(input,"粘贴",this::pasteClipboard,0); fixedWidth(bufferPaste,32); gapLeft(bufferPaste,4);
+        bufferPaste.icon(KeyboardIcon.WRITE); bufferPaste.setContentDescription(getString(R.string.clipboard_paste));
         insertNext=button(input,"↑",() -> insert(false),0); fixedWidth(insertNext,32); gapLeft(insertNext,4);
         ((KeyButton)insertNext).icon(KeyboardIcon.PAPER_PLANE); ((KeyButton)insertNext).appearance(false,false,true); insertNext.setContentDescription(getString(R.string.insert_next)); insertNext.setOnLongClickListener(v -> { insert(true); return true; });
         LinearLayout details=new LinearLayout(this); bufferBottom=details; bufferRow.addView(details,new LinearLayout.LayoutParams(-1,dp(railHeight)));
@@ -745,6 +777,7 @@ public final class RimesInputMethodService extends InputMethodService {
         appearancePanel.schemes(schema,this::chooseSchema);
         appearancePanel.action("全部插入",getString(R.string.insert_all),() -> insert(true));
         appearancePanel.action("清空 Buffer",getString(R.string.clear),this::clearBuffer);
+        appearancePanel.action("粘贴剪贴板文字",getString(R.string.clipboard_paste),this::pasteClipboard);
         appearancePanel.action("系统键盘",getString(R.string.switch_keyboard),() -> { endTarget(); getSystemService(InputMethodManager.class).showInputMethodPicker(); });
         surfaceContainer.addView(appearancePanel,new FrameLayout.LayoutParams(-1,-1));
         pluginPanel=new BufferPluginPanel(this,new BufferPluginPanel.Listener() {
@@ -795,7 +828,7 @@ public final class RimesInputMethodService extends InputMethodService {
     private String pluginStatus(PluginSession.Snapshot state) {
         if(cometProfile.remote(activePlugin)) {
             if(state.status==PluginSession.Status.ERROR) return state.message;
-            return state.status==PluginSession.Status.RUNNING?"AI 生成中… · 点停止可取消":"CometAPI · "+cometProfile.model+" · 点执行";
+            return state.status==PluginSession.Status.RUNNING?"AI 生成中… · 点停止可取消":"AI · "+cometProfile.model+" · 点执行";
         }
         if(state.status==PluginSession.Status.RUNNING) return activePlugin.equals("translate")?"本机词典查译中…":"Mock 生成中…";
         if(state.status==PluginSession.Status.ERROR) return state.message;
@@ -927,6 +960,7 @@ public final class RimesInputMethodService extends InputMethodService {
         pluginRunButton.setEnabled(plugin && pluginAllowed() && pending==0 && !snapshot.composing() && !chords.isChordActive() && buffer.blockCount()>0);
         pluginButton.setSelected(plugin);
         bufferClear.setEnabled(ownsTarget() && buffer.isEnabled() && buffer.isPermitted() && !privateField);
+        bufferPaste.setEnabled(canPasteClipboard());
         insertNext.setEnabled(pending==0 && !snapshot.composing() && buffer.blockCount()>0 && !chords.isChordActive() && (!plugin || pluginState==PluginSession.Status.READY));
         retryButton.setVisibility(failed || !retained.isEmpty()?View.VISIBLE:View.GONE);
         boolean chord=chordVisible();

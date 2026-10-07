@@ -233,7 +233,12 @@ UTF-16 units. Ordinary Buffer retains its existing next/all block delivery behav
 
 “Learn words on this device” in Setup is on by default. Rime candidate selections,
 including Buffer selections, update local user dictionaries. There is no complete
-input-history log, clipboard access or cloud synchronization. The INTERNET
+input-history log or cloud synchronization. Open Buffer and tap its paste button
+to explicitly read the current clipboard text; it is appended as a preserved block,
+without inserting into the host or running a plugin. Empty/non-text and over-capacity
+clips leave the draft intact. Composition, private fields, hidden keyboards and
+changed targets cannot read or apply a paste. There is no clipboard monitoring.
+The INTERNET
 permission serves explicitly configured and invoked online AI and user-requested
 official plugin downloads.
 Turning learning off preserves existing data and uses precompiled schema variants

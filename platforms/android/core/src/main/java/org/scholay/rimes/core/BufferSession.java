@@ -113,6 +113,28 @@ public final class BufferSession {
         return new Capture(this, target, revision, text());
     }
 
+    /** A paste lease can start from an empty Buffer; edits, hides and targets retire it. */
+    public Import prepareImport() {
+        return enabled && permitted ? new Import(this, target, revision) : null;
+    }
+
+    public boolean isCurrent(Import request) {
+        return request != null && request.owner == this && enabled && permitted
+                && request.target == target && request.revision == revision;
+    }
+
+    public boolean appendImported(Import request, String text) {
+        return isCurrent(request) && appendCommittedBlock(text);
+    }
+
+    public static final class Import {
+        private final BufferSession owner;
+        private final long target, revision;
+        private Import(BufferSession owner, long target, long revision) {
+            this.owner = owner; this.target = target; this.revision = revision;
+        }
+    }
+
     public boolean isCurrent(Capture capture) {
         return capture != null && capture.owner == this && enabled && permitted
                 && capture.target == target && capture.revision == revision;

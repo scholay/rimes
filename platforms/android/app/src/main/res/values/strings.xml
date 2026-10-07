@@ -11,6 +11,10 @@
     <string name="insert_next">Insert</string>
     <string name="insert_all">Insert all</string>
     <string name="clear">Clear</string>
+    <string name="clipboard_paste">Paste clipboard text into Buffer</string>
+    <string name="clipboard_pasted">Pasted into Buffer. Insert when ready.</string>
+    <string name="clipboard_empty">No clipboard text is available to paste.</string>
+    <string name="clipboard_unavailable">Clipboard access is unavailable. Copy the text again and retry.</string>
     <string name="backspace">Delete</string>
     <string name="space">Space</string>
     <string name="enter">Enter</string>
