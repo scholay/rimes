@@ -104,6 +104,14 @@ int main(int argc, char** argv) {
         Die("first-run Start blocked the caller for " + std::to_string(start_ms) +
             " ms");
     }
+    // Reject a competing owner before it initializes librime or deploys.
+    rimes::linuxime::RimeEngine replacement;
+    if (replacement.Start(options, &error) ||
+        error.find("locked by another RIMES process") == std::string::npos) {
+        Die("concurrent engine was not rejected by the user directory lock");
+    }
+    replacement.Stop();
+    std::cout << "ok: competing user-directory owner rejected before deploy\n";
     if (engine.IsDeploying()) {
         std::cout << "ok: Start returned in " << start_ms
                   << " ms while deploying\n";

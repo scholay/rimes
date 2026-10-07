@@ -69,7 +69,6 @@ private:
 
     InputContext* LiveTarget() const;
     void RefreshCaret(InputContext* ic);
-    bool InDragTail() const;
     void EndDrag();
     void ConsumeDragBlip();
     void ArmDragHardTimer();
@@ -122,9 +121,7 @@ private:
     std::string pending_unfocus_token_;
     std::string target_token_;
     std::string raw_input_;
-    std::chrono::steady_clock::time_point drag_tail_until_{};
     bool dragging_ = false;
-    bool drag_blip_consumed_ = false;
     bool auto_capture_ = false;
     bool headless_ = false;
     bool eat_return_until_release_ = false;

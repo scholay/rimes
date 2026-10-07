@@ -15,6 +15,7 @@
 
 #include "rime_key.hpp"
 #include "rime_paths.hpp"
+#include "rime_user_lock.hpp"
 
 namespace rimes::linuxime {
 namespace {
@@ -62,6 +63,10 @@ public:
                 api_->process_key == nullptr || api_->get_commit == nullptr ||
                 api_->get_context == nullptr) {
                 SetError(error, "librime API is incomplete");
+                return false;
+            }
+
+            if (!user_lock_.Acquire(options.user_data_dir, error)) {
                 return false;
             }
 
@@ -703,8 +708,10 @@ private:
         user_data_dir_.clear();
         log_dir_.clear();
         ReleaseBuildHeap();
+        user_lock_.Release();
     }
 
+    RimeUserLock user_lock_;
     mutable std::mutex mutex_;
     std::mutex callback_mutex_;
     RimeApi* api_ = nullptr;
