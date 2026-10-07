@@ -85,6 +85,8 @@ bool SettingsPrecedesBuffer(const FixtureWindows& windows) {
 }
 
 constexpr UINT kFixturePosition = WM_APP + 1;
+constexpr UINT kFixtureSettingsClose = WM_APP + 2;
+constexpr UINT kFixtureSettingsCloseBarrier = WM_APP + 3;
 struct NativePositionRequest {
   FixtureWindows windows;
   HWND insert_after = HWND_TOP;
@@ -95,8 +97,51 @@ struct NativePositionRequest {
   LONG_PTR buffer_style = 0;
   RECT rectangle{};
 };
+struct NativeSettingsCloseRequest {
+  FixtureWindows windows, observed;
+  workbench::UiCommands* commands = nullptr;
+  bool reopen = false, reopen_queued = false, closed = false;
+  bool barrier_posted = false, ordered = false, inspected = false;
+  LONG_PTR buffer_style = 0;
+  HWND active = nullptr;
+  std::atomic<bool> completed{false};
+};
 LRESULT CALLBACK FixturePositionProcedure(HWND window, UINT message,
                                           WPARAM wparam, LPARAM lparam) {
+  if (message == kFixtureSettingsClose) {
+    auto* request = reinterpret_cast<NativeSettingsCloseRequest*>(lparam);
+    if (!request) return FALSE;
+    if (GetWindowThreadProcessId(request->windows.buffer, nullptr) != GetCurrentThreadId() ||
+        GetWindowThreadProcessId(request->windows.settings, nullptr) != GetCurrentThreadId()) {
+      request->completed = true;
+      return FALSE;
+    }
+    // Both actions run in this dispatch. Queue reopen before closing so it
+    // executes before the close callback's deferred Buffer-order message.
+    if (request->reopen && request->commands)
+      request->reopen_queued = request->commands->RequestSettings();
+    SendMessageW(request->windows.settings, WM_CLOSE, 0, 0);
+    request->closed = !IsWindow(request->windows.settings);
+    request->barrier_posted =
+        PostMessageW(window, kFixtureSettingsCloseBarrier, 0, lparam) != FALSE;
+    if (!request->barrier_posted) request->completed = true;
+    return TRUE;
+  }
+  if (message == kFixtureSettingsCloseBarrier) {
+    auto* request = reinterpret_cast<NativeSettingsCloseRequest*>(lparam);
+    if (!request) return FALSE;
+    // Posted FIFO places this observation after the deferred restore. In the
+    // reopen case, its Runtime notification is appended after this barrier;
+    // it cannot repair an incorrect stale restoration before we observe it.
+    request->observed = WindowsOnFixtureThread(GetCurrentThreadId());
+    request->ordered = SettingsPrecedesBuffer(request->observed);
+    request->buffer_style = GetWindowLongPtrW(request->observed.buffer, GWL_EXSTYLE);
+    GUITHREADINFO state{sizeof(state)};
+    request->inspected = GetGUIThreadInfo(GetCurrentThreadId(), &state) != FALSE;
+    request->active = state.hwndActive;
+    request->completed = true;
+    return TRUE;
+  }
   if (message == kFixturePosition) {
     auto* request = reinterpret_cast<NativePositionRequest*>(lparam);
     if (!request ||
@@ -116,6 +161,35 @@ LRESULT CALLBACK FixturePositionProcedure(HWND window, UINT message,
     return TRUE;
   }
   return DefWindowProcW(window, message, wparam, lparam);
+}
+
+void CloseSettingsAtUiBarrier(HWND driver, const FixtureWindows& windows,
+                              workbench::UiCommands& commands,
+                              NativeSettingsCloseRequest& request, bool reopen) {
+  request.windows = windows;
+  request.commands = &commands;
+  request.reopen = reopen;
+  // Posting the action first drains preexisting Runtime notifications before
+  // closing. No Runtime method is called between a plain close and its barrier.
+  const bool posted = driver &&
+      PostMessageW(driver, kFixtureSettingsClose, 0,
+                   reinterpret_cast<LPARAM>(&request));
+  Check(posted, "owned UI driver queues the settings-close lifecycle action");
+  if (!posted || !WaitUntil([&] { return request.completed.load(); },
+          "settings close reaches its posted UI queue barrier")) return;
+  Check(request.closed && request.barrier_posted,
+        "settings destruction completes before the deferred-placement barrier");
+  if (reopen) {
+    Check(request.reopen_queued && request.observed.settings && request.ordered &&
+              !(request.buffer_style & WS_EX_TOPMOST),
+          "stale close restoration keeps reopened Settings above the Buffer before a Runtime update");
+  } else {
+    Check(!request.observed.settings && (request.buffer_style & WS_EX_TOPMOST),
+          "settings close restores Buffer topmost at the UI barrier without a Runtime update");
+  }
+  Check(request.inspected && request.active != windows.buffer &&
+            (request.buffer_style & WS_EX_NOACTIVATE),
+        "deferred settings placement preserves Buffer no-activation");
 }
 
 void CheckSynchronousBufferPosition(HWND driver, const FixtureWindows& windows) {
@@ -769,6 +843,9 @@ void TestSettingsPreserveRuntimeAndStreaming() {
       return accepted.load();
     });
     workbench::UiCommands commands;
+    // Posted request pointers remain valid until the UI thread is joined,
+    // including timeout/error paths; each request is used only once.
+    NativeSettingsCloseRequest close_requests[3];
     std::atomic<DWORD> ui_thread{0};
     std::atomic<HWND> position_driver{nullptr};
     std::jthread ui([&] {
@@ -805,7 +882,8 @@ void TestSettingsPreserveRuntimeAndStreaming() {
     runtime.Close();
     WaitUntil([&] { return !IsVisibleWithinFixture(windows().buffer, windows().buffer); },
               "closing Buffer while settings is open preserves its hidden state");
-    if (const HWND settings = windows().settings) PostMessageW(settings, WM_CLOSE, 0, 0);
+    CloseSettingsAtUiBarrier(position_driver.load(), windows(), commands,
+                             close_requests[0], false);
     WaitUntil([&] { return windows().settings == nullptr; }, "closing settings retires its own window");
     CheckBufferRestored(windows(), false);
 
@@ -853,7 +931,14 @@ void TestSettingsPreserveRuntimeAndStreaming() {
     WaitUntil([&] {
       return windows().settings == first_settings && SettingsPrecedesBuffer(windows());
     }, "repeated settings request reuses the host and restores its order above Buffer");
-    if (first_settings) PostMessageW(first_settings, WM_CLOSE, 0, 0);
+    CloseSettingsAtUiBarrier(position_driver.load(), windows(), commands,
+                             close_requests[1], true);
+    Check(runtime.Snapshot().value("busy", false) &&
+              runtime.Snapshot().value("preview", std::string()) == "Stream" &&
+              runtime.Snapshot()["source_blocks"] == before["source_blocks"],
+          "closing and reopening settings preserves the in-flight Buffer request");
+    CloseSettingsAtUiBarrier(position_driver.load(), windows(), commands,
+                             close_requests[2], false);
     WaitUntil([&] { return windows().settings == nullptr; }, "settings can dismiss while streaming continues");
     CheckBufferRestored(windows(), true);
     Check(runtime.Snapshot().value("visible", false) &&

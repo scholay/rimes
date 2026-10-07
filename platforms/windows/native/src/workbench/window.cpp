@@ -31,6 +31,7 @@ namespace rimes::windows::workbench {
 namespace {
 constexpr UINT kChanged = WM_APP + 80, kTray = WM_APP + 81;
 constexpr UINT kOpenSettings = WM_APP + 82;
+constexpr UINT kUpdateBufferZOrder = WM_APP + 83;
 constexpr int kToggle = 100, kSettings = 101, kDeploy = 102, kStartup = 103,
               kAbout = 105, kExit = 104, kPasteMenu = 106;
 constexpr int kModeInput = 110, kModeGenerate = 111, kModeTranslate = 112;
@@ -214,7 +215,13 @@ void Window::EnsureSettings() {
     theme = preview;
     InvalidateRect(window, nullptr, FALSE);
   };
-  cb.on_closed = [this] { UpdateBufferZOrder(); };
+  cb.on_closed = [this] {
+    // Settings' WM_DESTROY callback runs before DestroyWindow has finished.
+    // Defer native placement until that operation has unwound; a reentrant
+    // SetWindowPos can succeed without applying the topmost style change.
+    if (!destroying && window)
+      PostMessageW(window, kUpdateBufferZOrder, 0, 0);
+  };
   cb.about_text = std::wstring(L"RIMES Windows ") + kProductVersionWide + L"\nCommit: " + Wide(RIMES_BUILD_COMMIT) +
                   L"\n协议 v2\n词库：%APPDATA%\\RIMES\n设置与日志：%LOCALAPPDATA%"
                   L"\\RIMES";
@@ -243,7 +250,7 @@ void Window::UpdateBufferZOrder() {
     if (topmost) SetWindowPos(window, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
     SetWindowPos(window, settings->hwnd(), 0, 0, 0, 0, flags);
   } else if (!topmost) {
-    // Settings' close callback also restores a hidden Buffer without showing
+    // The deferred close message also restores a hidden Buffer without showing
     // it, activating it, or resuming its revoked capture authority.
     SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0, flags);
   }
@@ -644,6 +651,11 @@ LRESULT CALLBACK Window::Procedure(HWND hwnd, UINT message, WPARAM wparam,
         return 0;
       case kOpenSettings:
         self->OpenSettings();
+        return 0;
+      case kUpdateBufferZOrder:
+        // Recheck the current lifetime: Settings may have reopened while this
+        // close notification was queued, and shutdown must not restore it.
+        self->UpdateBufferZOrder();
         return 0;
       case WM_TIMER:
         self->runtime.Tick();
