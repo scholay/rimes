@@ -396,8 +396,10 @@ void RunBufferSuite(fcitx::Instance& instance,
             AfterUs(ctx, 50000, [](SuiteCtx ctx) {
                 AfterUs(ctx, 300000, [](SuiteCtx ctx) {
                     SendBufferOp("drag_end");
-                    // Regression #44: the very next same-IC activation is
-                    // a field switch, even within 10 ms of toolbar release.
+                    // IME command-order coverage for #44: the next same-IC
+                    // activation after the socket command is dispatched is
+                    // a field switch. This headless test does not exercise
+                    // physical button release or GTK's 50ms release poll.
                     AfterUs(ctx, 10000, [](SuiteCtx ctx) {
                         ctx.ic->focusOut();
                         ctx.ic->focusIn();

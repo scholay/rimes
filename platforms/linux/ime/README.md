@@ -51,9 +51,14 @@ prevents concurrent RIMES writers; it does not coordinate stock fcitx5-rime,
 IBus, or external deploy tools. A bounded shutdown requires deployment
 process isolation rather than detaching a thread that still uses librime.
 
-Buffer preserves capture for a same-IC activation only while a toolbar drag
-is active. After release, the next activation always retires capture, even
-when another field is clicked immediately ([#44](https://github.com/scholay/rimes/issues/44)).
+Buffer preserves capture for one same-IC activation while a toolbar drag
+is pending. Once the IME receives `drag_end`, the next activation retires
+capture without a grace period. The GTK workbench normally detects physical
+release by polling every 50 ms; a click before the IME receives that message
+can still consume the pending drag. The 0–10 ms physical-release case in
+[#44](https://github.com/scholay/rimes/issues/44) still needs X11/xfwm/Firefox
+acceptance. The Fcitx regression covers command receipt, not physical pointer
+release. See the timing matrix in [`../buffer/MANUAL-TEST.md`](../buffer/MANUAL-TEST.md).
 
 ## Dependencies
 

@@ -433,8 +433,8 @@ void BufferService::OnActivate(InputContext* ic) {
     if (same_ic) {
         // Firefox/Chromium keep one IC per window. Keep capture only for an
         // explicit, still-active toolbar drag. Consume one WM activation;
-        // after drag_end every activation is a field switch, even when it
-        // arrives immediately after release.
+        // after receiving drag_end every activation is a field switch.
+        // Physical release can precede that command (GTK polls every 50ms).
         pending_unfocus_token_.clear();
         CancelFocusGraceTimer();
         if (dragging_) {
@@ -732,12 +732,14 @@ void BufferService::HandleCommand(const rimes::buffer::Command& command) {
             model_.set_insertion_point(command.insertion_index);
             break;
         case rimes::buffer::CommandOp::DragBegin:
+            FCITX_LOGC(rimes_buffer_log, Info) << "toolbar drag_begin received";
             dragging_ = true;
             pending_unfocus_token_.clear();
             CancelFocusGraceTimer();
             ArmDragHardTimer();
             return;
         case rimes::buffer::CommandOp::DragEnd:
+            FCITX_LOGC(rimes_buffer_log, Info) << "toolbar drag_end received";
             EndDrag();
             return;
         case rimes::buffer::CommandOp::Unknown:
