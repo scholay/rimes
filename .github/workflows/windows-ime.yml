@@ -66,9 +66,11 @@ jobs:
         if: matrix.architecture == 'x64'
         shell: powershell
         run: |
-          ./platforms/windows/tests/Test-SetupPayload.ps1 -OutputDirectory "$env:RUNNER_TEMP/rimes-setup-payload"
+          ./platforms/windows/tests/Test-SetupPayload.ps1 `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP ('rimes-setup-payload-' + [guid]::NewGuid().ToString('N')))
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./platforms/windows/tests/Test-SetupResult.ps1 -OutputDirectory "$env:RUNNER_TEMP/rimes-setup-result"
+          ./platforms/windows/tests/Test-SetupResult.ps1 `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP ('rimes-setup-result-' + [guid]::NewGuid().ToString('N')))
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run static checks, build, and CTest
