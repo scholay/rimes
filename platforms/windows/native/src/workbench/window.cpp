@@ -617,6 +617,19 @@ LRESULT CALLBACK Window::Procedure(HWND hwnd, UINT message, WPARAM wparam,
         return 0;
       case WM_MOUSEACTIVATE:
         return MA_NOACTIVATE;
+      case WM_WINDOWPOSCHANGING: {
+        auto* position = reinterpret_cast<WINDOWPOS*>(lparam);
+        if (position && !(position->flags & SWP_NOZORDER) &&
+            !self->destroying && self->settings && self->settings->IsOpen()) {
+          // Constrain native Z-order raises before Windows applies
+          // them, including paths that produce no Runtime notification. Keep
+          // coordinates and sizing flags intact; DefWindowProc still enforces
+          // native thickframe constraints below. NOACTIVATE cannot be changed
+          // here: Windows ignores changes to that flag in this message.
+          position->hwndInsertAfter = self->settings->hwnd();
+        }
+        break;
+      }
       case WM_PAINT:
         self->Paint();
         return 0;

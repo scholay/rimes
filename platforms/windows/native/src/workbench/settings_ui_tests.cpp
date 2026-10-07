@@ -84,6 +84,77 @@ bool SettingsPrecedesBuffer(const FixtureWindows& windows) {
   return false;
 }
 
+constexpr UINT kFixturePosition = WM_APP + 1;
+struct NativePositionRequest {
+  FixtureWindows windows;
+  HWND insert_after = HWND_TOP;
+  int x = 0, y = 0, width = 0, height = 0;
+  UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+  bool positioned = false, ordered = false, inspected = false;
+  HWND active = nullptr;
+  LONG_PTR buffer_style = 0;
+  RECT rectangle{};
+};
+LRESULT CALLBACK FixturePositionProcedure(HWND window, UINT message,
+                                          WPARAM wparam, LPARAM lparam) {
+  if (message == kFixturePosition) {
+    auto* request = reinterpret_cast<NativePositionRequest*>(lparam);
+    if (!request ||
+        GetWindowThreadProcessId(request->windows.buffer, nullptr) != GetCurrentThreadId() ||
+        GetWindowThreadProcessId(request->windows.settings, nullptr) != GetCurrentThreadId())
+      return FALSE;
+    request->positioned = SetWindowPos(request->windows.buffer, request->insert_after,
+        request->x, request->y, request->width, request->height, request->flags) != FALSE;
+    // Sample in the same UI dispatch as SetWindowPos. A later queued Runtime
+    // update cannot repair an incorrect native order before this observation.
+    request->ordered = SettingsPrecedesBuffer(request->windows);
+    request->buffer_style = GetWindowLongPtrW(request->windows.buffer, GWL_EXSTYLE);
+    GetWindowRect(request->windows.buffer, &request->rectangle);
+    GUITHREADINFO state{sizeof(state)};
+    request->inspected = GetGUIThreadInfo(GetCurrentThreadId(), &state) != FALSE;
+    request->active = state.hwndActive;
+    return TRUE;
+  }
+  return DefWindowProcW(window, message, wparam, lparam);
+}
+
+void CheckSynchronousBufferPosition(HWND driver, const FixtureWindows& windows) {
+  NativePositionRequest request;
+  request.windows = windows;
+  for (const HWND placement : {HWND_TOP, HWND_TOPMOST}) {
+    request.insert_after = placement;
+    Check(driver && SendMessageW(driver, kFixturePosition, 0,
+                                 reinterpret_cast<LPARAM>(&request)) && request.positioned,
+          "owned UI driver executes a native Buffer raise synchronously");
+    Check(request.ordered && !(request.buffer_style & WS_EX_TOPMOST),
+          "native Buffer raise remains behind Settings before any Runtime update");
+    Check(request.inspected && request.active != windows.buffer &&
+              (request.buffer_style & WS_EX_NOACTIVATE),
+          "native no-activation raise keeps Buffer inactive");
+  }
+
+  const RECT original = request.rectangle;
+  request.x = original.left + 12;
+  request.y = original.top + 8;
+  request.width = original.right - original.left + 16;
+  request.height = original.bottom - original.top + 10;
+  request.flags = SWP_NOZORDER | SWP_NOACTIVATE;
+  Check(driver && SendMessageW(driver, kFixturePosition, 0,
+                               reinterpret_cast<LPARAM>(&request)) && request.positioned &&
+            request.rectangle.left == request.x && request.rectangle.top == request.y &&
+            request.rectangle.right - request.rectangle.left == request.width &&
+            request.rectangle.bottom - request.rectangle.top == request.height &&
+            request.ordered && !(request.buffer_style & WS_EX_TOPMOST),
+        "Buffer movement and no-Z-order resizing retain requested geometry and Settings order");
+  request.x = original.left;
+  request.y = original.top;
+  request.width = original.right - original.left;
+  request.height = original.bottom - original.top;
+  Check(driver && SendMessageW(driver, kFixturePosition, 0,
+                               reinterpret_cast<LPARAM>(&request)) && request.positioned,
+        "owned UI driver restores the Buffer geometry without changing its order");
+}
+
 void CheckBufferRestored(const FixtureWindows& windows, bool visible) {
   WaitUntil([&] {
     return windows.buffer &&
@@ -699,9 +770,22 @@ void TestSettingsPreserveRuntimeAndStreaming() {
     });
     workbench::UiCommands commands;
     std::atomic<DWORD> ui_thread{0};
+    std::atomic<HWND> position_driver{nullptr};
     std::jthread ui([&] {
       ui_thread = GetCurrentThreadId();
+      SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+      WNDCLASSW driver_class{};
+      driver_class.lpfnWndProc = FixturePositionProcedure;
+      driver_class.hInstance = GetModuleHandleW(nullptr);
+      driver_class.lpszClassName = L"Rimes.SettingsPositionFixture";
+      RegisterClassW(&driver_class);
+      const HWND driver = CreateWindowExW(0, driver_class.lpszClassName, L"", 0,
+          0, 0, 0, 0, HWND_MESSAGE, nullptr, driver_class.hInstance, nullptr);
+      position_driver = driver;
       workbench::RunWindow(runtime, [] {}, [] {}, &commands);
+      position_driver = nullptr;
+      if (driver) DestroyWindow(driver);
+      UnregisterClassW(driver_class.lpszClassName, driver_class.hInstance);
     });
     const auto windows = [&] { return WindowsOnFixtureThread(ui_thread.load()); };
     WaitUntil([&] { return commands.RequestSettings(); }, "production settings dispatcher becomes ready");
@@ -755,12 +839,7 @@ void TestSettingsPreserveRuntimeAndStreaming() {
     WaitUntil([&] { return IsVisibleWithinFixture(windows().buffer, windows().buffer); },
               "production Buffer window remains shown while settings are open");
 
-    // Exercise a later production Update while the stream is still in flight.
-    // Raising only our own disposable Buffer reproduces the ordering that a
-    // native ShowWindow refresh can introduce in the normal window band.
-    Check(SetWindowPos(windows().buffer, HWND_TOP, 0, 0, 0, 0,
-                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE) != FALSE,
-          "fixture raises its own Buffer before a later runtime notification");
+    CheckSynchronousBufferPosition(position_driver.load(), windows());
     runtime.Focus({});  // The real host can report focus loss after activation.
     WaitUntil([&] { return SettingsPrecedesBuffer(windows()); },
               "streaming runtime refresh restores settings above the retained Buffer");
