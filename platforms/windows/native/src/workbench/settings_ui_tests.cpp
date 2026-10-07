@@ -76,6 +76,51 @@ FixtureWindows WindowsOnFixtureThread(DWORD thread) {
   return windows;
 }
 
+void CheckProductionWindowPlacement(const FixtureWindows& windows) {
+  if (!windows.buffer || !windows.settings) {
+    Check(false, "production Buffer and settings windows exist for placement checks");
+    return;
+  }
+  WaitUntil([&] {
+    return IsVisibleWithinFixture(windows.settings, windows.settings);
+  }, "settings finishes showing before its native placement is checked");
+  const auto buffer_style = GetWindowLongPtrW(windows.buffer, GWL_EXSTYLE);
+  Check((buffer_style & (WS_EX_TOPMOST | WS_EX_NOACTIVATE)) ==
+            (WS_EX_TOPMOST | WS_EX_NOACTIVATE),
+        "opening settings retains the Buffer's topmost and no-activation styles");
+  Check((GetWindowLongPtrW(windows.settings, GWL_EXSTYLE) &
+         (WS_EX_TOPMOST | WS_EX_NOACTIVATE)) == 0 &&
+            GetWindow(windows.settings, GW_OWNER) == nullptr,
+        "production settings is a normal activatable top-level window without a topmost owner");
+  Check((GetWindowLongPtrW(windows.settings, GWL_STYLE) &
+         (WS_CAPTION | WS_THICKFRAME)) == (WS_CAPTION | WS_THICKFRAME),
+        "settings retains native caption dragging and resizing");
+
+  RECT original{}, client{};
+  GetWindowRect(windows.settings, &original);
+  GetClientRect(windows.settings, &client);
+  POINT client_origin{client.left, client.top};
+  ClientToScreen(windows.settings, &client_origin);
+  const LONG x = original.left + (original.right - original.left) / 2;
+  const LONG y = original.top + (client_origin.y - original.top) / 2;
+  Check(SendMessageW(windows.settings, WM_NCHITTEST, 0,
+                    MAKELPARAM(static_cast<WORD>(x), static_cast<WORD>(y))) == HTCAPTION,
+        "the settings title bar delegates native dragging to Windows");
+
+  // Own disposable windows only. This exercises normal OS positioning in
+  // headless CTest; it does not claim an interactive multi-monitor drag.
+  Check(MoveWindow(windows.settings, original.left + 20, original.top + 20,
+                   original.right - original.left, original.bottom - original.top,
+                   TRUE) != FALSE,
+        "production settings accepts an ordinary window move");
+  RECT moved{};
+  GetWindowRect(windows.settings, &moved);
+  Check(moved.left == original.left + 20 && moved.top == original.top + 20,
+        "settings does not clamp an ordinary move to its initial placement");
+  MoveWindow(windows.settings, original.left, original.top,
+             original.right - original.left, original.bottom - original.top, TRUE);
+}
+
 void TestNestedHitTargets() {
   ui::SettingsDraft draft;
   draft.page = ui::SettingsPage::kAppearance;
@@ -615,6 +660,7 @@ void TestSettingsPreserveRuntimeAndStreaming() {
     const auto windows = [&] { return WindowsOnFixtureThread(ui_thread.load()); };
     WaitUntil([&] { return commands.RequestSettings(); }, "production settings dispatcher becomes ready");
     WaitUntil([&] { return windows().settings != nullptr; }, "settings command opens the production settings host");
+    CheckProductionWindowPlacement(windows());
     Check(!runtime.Snapshot().value("visible", true), "settings do not open a closed Buffer");
     if (const HWND settings = windows().settings) PostMessageW(settings, WM_CLOSE, 0, 0);
     WaitUntil([&] { return windows().settings == nullptr; }, "closing settings retires its own window");
@@ -635,6 +681,7 @@ void TestSettingsPreserveRuntimeAndStreaming() {
     Check(commands.RequestSettings(), "settings request posts while Buffer is active");
     WaitUntil([&] { return windows().settings && !runtime.Capturing(target); },
               "settings opens and pauses the previous host capture");
+    CheckProductionWindowPlacement(windows());
     auto after = runtime.Snapshot();
     Check(after["visible"] == before["visible"] &&
               after["source_blocks"] == before["source_blocks"] &&
@@ -708,6 +755,8 @@ void TestSettingsPreserveRuntimeAndStreaming() {
     runtime.Stop();
     if (const HWND buffer = windows().buffer) PostMessageW(buffer, WM_CLOSE, 0, 0);
     ui.join();
+    Check(!windows().buffer && !windows().settings,
+          "Broker window shutdown also destroys its independent settings window");
   }
   Check(SetEnvironmentVariableW(L"LOCALAPPDATA", original_size ? original.c_str() : nullptr) != 0,
         "runtime fixture restores the original preferences path after joining its workers");

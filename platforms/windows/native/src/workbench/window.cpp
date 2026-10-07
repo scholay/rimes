@@ -223,6 +223,7 @@ void Window::OpenSettings() {
   // Buffer, consume its blocks, or cancel its source/configuration-frozen job.
   runtime.PauseCapture();
   EnsureSettings();
+  // The host retains Settings' lifetime; this HWND is only a placement anchor.
   settings->Open(window);
 }
 
