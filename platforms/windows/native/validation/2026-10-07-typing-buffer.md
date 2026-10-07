@@ -13,6 +13,8 @@ its frozen snapshot and exact changed-file hashes are in
 [results.json](2026-10-07-typing-buffer/results.json) and
 [source-overlay.json](2026-10-07-typing-buffer/source-overlay.json).
 Subsequent documentation records these results without changing compiled code.
+The tracked JUnit copies normalize line endings to LF; SHA256SUMS describes
+those tracked copies.
 
 - VS 2022 / MSVC 19.44, SDK 10.0.26100.0, Release `/W4 /WX`.
 - Real librime 1.17.0, official checksum-pinned x64 and x86 archives.
