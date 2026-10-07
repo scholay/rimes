@@ -452,6 +452,7 @@ if StandaloneRimeCommandRules.requiresIsolatedUserDir(
     }
     if (CommandLine.arguments.contains("smoke")
         || CommandLine.arguments.contains("user-lexicon-bridge-smoke")
+        || CommandLine.arguments.contains("external-schema-engine-smoke")
         || CommandLine.arguments.contains("chord-keymap-engine-smoke")
         || CommandLine.arguments.contains("chord-ziranma-engine-smoke")
         || CommandLine.arguments.contains("yoyo-engine-smoke")),
@@ -648,8 +649,11 @@ if CommandLine.arguments.contains("global-hotkey-registration-smoke") {
     defaults.removePersistentDomain(forName: suite)
     exit(installed ? 0 : 1)
 }
+if CommandLine.arguments.contains("external-schema-engine-smoke") {
+    exit(runExternalSchemaEngineSmokeTest() ? 0 : 1)
+}
 if CommandLine.arguments.contains("schema-smoke") {
-    exit(runSchemaListStoreSmokeTest() ? 0 : 1)
+    exit(runSchemaListStoreSmokeTest() && runExternalSchemaSmokeTest() ? 0 : 1)
 }
 if CommandLine.arguments.contains("marine-bridge-smoke") {
     exit(runMarineBridgeSmokeTest() ? 0 : 1)
@@ -1368,6 +1372,12 @@ if CommandLine.arguments.contains("gateway-serve") {
     app.run()
 }
 
+let startupRimeUserDir = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DIR"]
+    .flatMap { $0.isEmpty ? nil : $0 }
+    .map { URL(fileURLWithPath: $0, isDirectory: true) }
+    ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
+InputSchemaCatalog.prepareStartup(in: startupRimeUserDir)
 retryPendingInputSourceActivationIfNeeded()
 
 // IMK bootstrap. The connection name MUST match Info.plist; IMK finds our
@@ -1408,11 +1418,6 @@ IMELog.reset("=== \(ProductIdentity.displayName) IME launch ===")
 // catalog before librime opens it. This is intentionally a narrow rewrite of
 // `patch.schema_list`: SchemaListStore preserves every unrelated custom key,
 // while the optional chord schema follows the extension's authoritative state.
-let startupRimeUserDir = ProcessInfo.processInfo.environment["RIMEBUFFER_USER_DIR"]
-    .flatMap { $0.isEmpty ? nil : $0 }
-    .map { URL(fileURLWithPath: $0, isDirectory: true) }
-    ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-        .appendingPathComponent("Library/\(RimesPaths.directoryName)", isDirectory: true)
 let startupSchemaListURL = startupRimeUserDir.appendingPathComponent(
     "default.custom.yaml"
 )
@@ -1435,7 +1440,8 @@ do {
     )
 }
 let desiredStartupSchemaIDs = InputSchemaCatalog.enabledIDs(
-    chordExtensionEnabled: ChordExtensionStore.shared.isEnabled
+    chordExtensionEnabled: ChordExtensionStore.shared.isEnabled,
+    userDirectory: startupRimeUserDir
 )
 if SchemaListStore.enabledIDs(at: startupSchemaListURL)
     != desiredStartupSchemaIDs {

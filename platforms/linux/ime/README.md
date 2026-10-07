@@ -23,6 +23,10 @@ Mailbox is still later. Buffer and Capsule behavior are specified in
   Fcitx5 stays responsive and keys pass through until librime is ready
   (`subMode` shows `Deploying`). The maintenance thread notifies the Fcitx5
   event loop when deploy finishes — status leaves `Deploying` without a restart.
+- A process-lifetime user-directory lock prevents two RIMES instances from
+  deploying or opening user dictionaries in the same directory concurrently.
+  A replacement reports a locked-directory error until the owner finishes
+  exiting. The lock file remains on disk; the OS releases ownership on exit.
 - Isolated user directory: `$XDG_DATA_HOME/rimes` (not `…/fcitx5/rime`)
 - Shared data: `$prefix/share/rimes/data` (policy-staged 55-file closure)
 - Default Buffer workbench (`Ctrl+Shift+B` / `Super+Shift+B`): Rime commits
@@ -37,6 +41,24 @@ Mailbox, Capsule clipboard history / iCloud / password vault / media kinds,
 Buffer plugins (AI / translation / stream / music), cross-batch chord pairing,
 IMK `Delivery.insert`. See [`../buffer/SPEC.md`](../buffer/SPEC.md) and
 [`../capsule/SPEC.md`](../capsule/SPEC.md) for the explicit gap lists.
+
+## Maintenance limits
+
+Stopping Fcitx5 during a librime rebuild can still wait for that rebuild to
+finish ([#43](https://github.com/scholay/rimes/issues/43)). Do not start a
+second instance against the same user directory while waiting. The lock
+prevents concurrent RIMES writers; it does not coordinate stock fcitx5-rime,
+IBus, or external deploy tools. A bounded shutdown requires deployment
+process isolation rather than detaching a thread that still uses librime.
+
+Buffer preserves capture for one same-IC activation while a toolbar drag
+is pending. Once the IME receives `drag_end`, the next activation retires
+capture without a grace period. The GTK workbench normally detects physical
+release by polling every 50 ms; a click before the IME receives that message
+can still consume the pending drag. The 0–10 ms physical-release case in
+[#44](https://github.com/scholay/rimes/issues/44) still needs X11/xfwm/Firefox
+acceptance. The Fcitx regression covers command receipt, not physical pointer
+release. See the timing matrix in [`../buffer/MANUAL-TEST.md`](../buffer/MANUAL-TEST.md).
 
 ## Dependencies
 

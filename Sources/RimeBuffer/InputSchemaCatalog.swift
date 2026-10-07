@@ -112,7 +112,16 @@ enum InputConfigurationResolver {
     }
 
     static func profile(schemaID: String) -> RuntimeInputProfile? {
-        profiles.first { $0.schemaID == schemaID }
+        if let builtIn = profiles.first(where: { $0.schemaID == schemaID }) {
+            return builtIn
+        }
+        guard InputSchemaCatalog.options.contains(where: {
+            $0.id == schemaID && !$0.requiresChordExtension
+        }) else { return nil }
+        // The v1 encoding is only a compatibility projection. Runtime routing
+        // keeps the concrete external schema ID and never enables chord replay.
+        return RuntimeInputProfile(configuration: .defaultValue,
+                                   schemaID: schemaID, lexiconFamily: .chinese)
     }
 
     static func selecting(_ encoding: InputEncoding,
@@ -159,10 +168,15 @@ final class InputConfigurationStore {
 
     private let defaults: UserDefaults
     private let chordExtensionStore: ChordExtensionStore
+    private let resolveProfile: (String) -> RuntimeInputProfile?
 
     init(defaults: UserDefaults = .standard,
-         chordExtensionStore: ChordExtensionStore? = nil) {
+         chordExtensionStore: ChordExtensionStore? = nil,
+         schemaProfile: @escaping (String) -> RuntimeInputProfile? = {
+             InputConfigurationResolver.profile(schemaID: $0)
+         }) {
         self.defaults = defaults
+        self.resolveProfile = schemaProfile
         if let chordExtensionStore {
             self.chordExtensionStore = chordExtensionStore
         } else if defaults === UserDefaults.standard {
@@ -190,7 +204,7 @@ final class InputConfigurationStore {
         let stored = defaults.string(forKey: Key.lastOrdinarySchemaID)
         if let stored,
            !ChordExtensionStore.isChordSchema(stored),
-           InputConfigurationResolver.profile(schemaID: stored) != nil {
+           resolveProfile(stored) != nil {
             return stored
         }
         return InputConfigurationResolver.profile(for: .defaultValue)!.schemaID
@@ -198,7 +212,7 @@ final class InputConfigurationStore {
 
     var runtimeProfile: RuntimeInputProfile {
         let schemaID = selectedSchemaID
-        return InputConfigurationResolver.profile(schemaID: schemaID)
+        return resolveProfile(schemaID)
             ?? InputConfigurationResolver.profile(for: .defaultValue)!
     }
 
@@ -271,7 +285,7 @@ final class InputConfigurationStore {
 
     private func select(schemaID: String,
                         source: ChordExtensionChangeSource) -> Bool {
-        guard let profile = InputConfigurationResolver.profile(schemaID: schemaID) else { return false }
+        guard let profile = resolveProfile(schemaID) else { return false }
 
         if schemaID == ChordExtensionStore.schemaID {
             _ = chordExtensionStore.setEnabled(true, source: source)
@@ -306,7 +320,7 @@ final class InputConfigurationStore {
             defaults.set(replacement, forKey: Key.preferredSchema)
         }
         if let stored = defaults.string(forKey: Key.selectedSchemaID),
-           InputConfigurationResolver.profile(schemaID: stored) != nil {
+           resolveProfile(stored) != nil {
             // `selectedSchemaID` can outlive a deploy or a crashed settings
             // transaction. Once the extension has an explicit disabled state,
             // that residue is not an enable gesture: fail closed to the last
@@ -318,9 +332,7 @@ final class InputConfigurationStore {
                 defaults.set(fallback, forKey: Key.selectedSchemaID)
                 defaults.set(fallback, forKey: Key.preferredSchema)
                 defaults.set(fallback, forKey: Key.lastOrdinarySchemaID)
-                if let profile = InputConfigurationResolver.profile(
-                    schemaID: fallback
-                ) {
+                if let profile = resolveProfile(fallback) {
                     persistLegacyProjection(profile.configuration)
                 }
                 IMELog.write(
@@ -330,7 +342,7 @@ final class InputConfigurationStore {
                 return
             }
             ensureOrdinaryFallbackExists(selectedSchemaID: stored)
-            if let profile = InputConfigurationResolver.profile(schemaID: stored) {
+            if let profile = resolveProfile(stored) {
                 persistLegacyProjection(profile.configuration)
             }
             return
@@ -354,7 +366,7 @@ final class InputConfigurationStore {
         let legacySchemaID = legacyConfiguration
             .flatMap(InputConfigurationResolver.profile(for:))?.schemaID
             ?? defaults.string(forKey: Key.preferredSchema)
-                .flatMap(InputConfigurationResolver.profile(schemaID:))?.schemaID
+                .flatMap(resolveProfile)?.schemaID
         var schemaID = legacySchemaID
             ?? InputConfigurationResolver.profile(for: .defaultValue)!.schemaID
 
@@ -372,7 +384,7 @@ final class InputConfigurationStore {
         defaults.set(schemaID, forKey: Key.selectedSchemaID)
         defaults.set(schemaID, forKey: Key.preferredSchema)
         ensureOrdinaryFallbackExists(selectedSchemaID: schemaID)
-        if let profile = InputConfigurationResolver.profile(schemaID: schemaID) {
+        if let profile = resolveProfile(schemaID) {
             persistLegacyProjection(profile.configuration)
         }
     }
@@ -385,7 +397,7 @@ final class InputConfigurationStore {
         let existing = defaults.string(forKey: Key.lastOrdinarySchemaID)
         if existing == nil
             || existing.map(ChordExtensionStore.isChordSchema) == true
-            || InputConfigurationResolver.profile(schemaID: existing!) == nil {
+            || resolveProfile(existing!) == nil {
             defaults.set(
                 InputConfigurationResolver.profile(for: .defaultValue)!.schemaID,
                 forKey: Key.lastOrdinarySchemaID
@@ -396,7 +408,7 @@ final class InputConfigurationStore {
     private func storedOrdinaryFallback() -> String {
         if let stored = defaults.string(forKey: Key.lastOrdinarySchemaID),
            !ChordExtensionStore.isChordSchema(stored),
-           InputConfigurationResolver.profile(schemaID: stored) != nil {
+           resolveProfile(stored) != nil {
             return stored
         }
         return InputConfigurationResolver.profile(for: .defaultValue)!.schemaID
@@ -436,11 +448,11 @@ struct InputSchemaOption {
     }
 }
 
-/// The product-level schema catalog. Supporting schemas such as melt_eng and
-/// radical_pinyin stay on disk as dependencies, but never appear here or in
-/// the user's F4 switcher.
+/// Built-in schemes plus ordinary schemes from Rime's effective deployed
+/// list. Unlisted dependency schemas stay hidden; the chord extension keeps
+/// its separate authoritative enablement gate.
 enum InputSchemaCatalog {
-    static var options: [InputSchemaOption] { [
+    static var builtInOptions: [InputSchemaOption] { [
         InputSchemaOption(id: "rime_ice", name: "雾凇全拼", detail: "完整拼音输入"),
         InputSchemaOption(id: "double_pinyin", name: "自然码双拼", detail: "自然码双拼方案"),
         InputSchemaOption(id: "double_pinyin_flypy", name: "小鹤双拼", detail: "小鹤双拼方案"),
@@ -452,25 +464,107 @@ enum InputSchemaCatalog {
                           requiresChordExtension: true),
     ] }
 
+    private static let metadataLock = NSLock()
+    private static var deployedMetadata: [(id: String, name: String)] = []
+
+    static var options: [InputSchemaOption] {
+        metadataLock.lock()
+        let metadata = deployedMetadata
+        metadataLock.unlock()
+        return options(deployedSchemas: metadata)
+    }
+
+    static func updateDeployedSchemas(_ schemas: [(id: String, name: String)]) {
+        metadataLock.lock()
+        deployedMetadata = schemas
+        metadataLock.unlock()
+    }
+
+    /// Keep an already-selected external identity through cold startup before
+    /// librime publishes authoritative schema names. This never starts Rime or
+    /// opens a userdb; the engine replaces the snapshot after deployment.
+    static func prepareStartup(in root: URL) {
+        updateDeployedSchemas(preservedExternalIDs(in: root).map { ($0, $0) })
+    }
+
+    static func options(deployedSchemas: [(id: String, name: String)]) -> [InputSchemaOption] {
+        var result = builtInOptions
+        var seen = Set(result.map(\.id))
+        for schema in deployedSchemas where isExternalOrdinaryID(schema.id) {
+            guard seen.insert(schema.id).inserted else { continue }
+            result.append(InputSchemaOption(
+                id: schema.id,
+                name: schema.name.isEmpty ? schema.id : schema.name,
+                detail: "已部署的自定义方案 · \(schema.id)"
+            ))
+        }
+        return result
+    }
+
+    private static let hiddenDependencyIDs: Set<String> = [
+        "melt_eng", "radical_pinyin", "stream_input_local", "my_serial"
+    ]
+
+    static func isExternalOrdinaryID(_ id: String) -> Bool {
+        !id.isEmpty && id.utf8.count <= 128
+            && id.range(of: "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+                        options: .regularExpression) != nil
+            && !hiddenDependencyIDs.contains(id)
+            && !ChordExtensionStore.isChordSchema(id)
+            && !builtInOptions.contains(where: { $0.id == id })
+    }
+
+    /// Startup precedes librime. Retain only explicitly configured external
+    /// schemes with a local source or deployed schema, rather than scanning
+    /// every dependency file into the user's selectable list.
+    static func preservedExternalIDs(in root: URL) -> [String] {
+        let manager = FileManager.default
+        let custom = root.appendingPathComponent("default.custom.yaml")
+        let hasExplicitList = (try? String(contentsOf: custom, encoding: .utf8))?
+            .components(separatedBy: .newlines).contains {
+                $0.trimmingCharacters(in: .whitespaces) == "schema_list:"
+            } ?? false
+        let requested = SchemaListStore.requestedIDs(at: hasExplicitList
+            ? custom : root.appendingPathComponent("build/default.yaml"))
+        var seen = Set<String>()
+        return requested.filter { id in
+            guard isExternalOrdinaryID(id), seen.insert(id).inserted else { return false }
+            return [root.appendingPathComponent(id + ".schema.yaml"),
+                    root.appendingPathComponent("build/" + id + ".schema.yaml")]
+                .contains { url in
+                    guard let metadata = try? manager.attributesOfItem(atPath: url.path) else { return false }
+                    return metadata[.type] as? FileAttributeType == .typeRegular
+                }
+        }
+    }
+
     /// Fresh profiles expose ordinary schemes only. Enabling the optional
     /// chord extension appends `my_combo` through the same catalog order.
     static var defaultEnabledIDs: [String] {
         enabledIDs(chordExtensionEnabled: false)
     }
 
-    static func enabledIDs(chordExtensionEnabled: Bool) -> [String] {
-        options.compactMap { option in
+    static func enabledIDs(chordExtensionEnabled: Bool,
+                           userDirectory: URL? = nil) -> [String] {
+        let ids = options.compactMap { option in
             (!option.requiresChordExtension || chordExtensionEnabled)
                 ? option.id : nil
         }
+        let external = userDirectory.map(preservedExternalIDs(in:)) ?? []
+        return ids + external.filter { !ids.contains($0) }
     }
 
-    static func normalized(_ ids: [String], chordSchemaID: String? = nil) -> [String] {
+    static func normalized(_ ids: [String], chordSchemaID: String? = nil,
+                           preservingExternalIDs: [String] = []) -> [String] {
         let requested = Set(ids)
         let available = options.map { option in
             option.requiresChordExtension ? (chordSchemaID ?? option.id) : option.id
         }
-        return available.filter(requested.contains)
+        let extra = preservingExternalIDs.filter(isExternalOrdinaryID)
+        var seen = Set<String>()
+        return (available.filter(requested.contains) + extra).filter {
+            seen.insert($0).inserted
+        }
     }
 }
 
@@ -488,6 +582,11 @@ enum SchemaListStore {
     }
 
     static func enabledIDs(at url: URL) -> [String] {
+        InputSchemaCatalog.normalized(requestedIDs(at: url),
+            preservingExternalIDs: InputSchemaCatalog.preservedExternalIDs(in: url.deletingLastPathComponent()))
+    }
+
+    static func requestedIDs(at url: URL) -> [String] {
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
         let lines = text.components(separatedBy: .newlines)
         guard let start = lines.firstIndex(where: {
@@ -509,12 +608,13 @@ enum SchemaListStore {
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
             if !id.isEmpty { ids.append(id) }
         }
-        return InputSchemaCatalog.normalized(ids)
+        return ids
     }
 
     static func writeEnabledIDs(_ requestedIDs: [String], to url: URL,
                                 chordSchemaID: String? = nil) throws {
-        let ids = InputSchemaCatalog.normalized(requestedIDs, chordSchemaID: chordSchemaID)
+        let ids = InputSchemaCatalog.normalized(requestedIDs, chordSchemaID: chordSchemaID,
+            preservingExternalIDs: InputSchemaCatalog.preservedExternalIDs(in: url.deletingLastPathComponent()))
         guard !ids.isEmpty else { throw StoreError.emptySelection }
 
         var text = (try? String(contentsOf: url, encoding: .utf8))

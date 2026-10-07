@@ -755,6 +755,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private weak var capsuleSyncSettingsDisableButton: NSButton?
 
     private var encodingRadios: [InputEncoding: RimeFixedAccentChoiceButton] = [:]
+    private var externalSchemaRadios: [String: RimeFixedAccentChoiceButton] = [:]
+    private var externalSchemaChoiceIDs: [String] = []
     private var chordSchemaStatusRow: NSView?
     private let appearancePopUp = RimeFixedAccentPopUpButton()
     private let alignToInputBoxCheck = RimeFixedAccentSwitch(frame: .zero)
@@ -1194,7 +1196,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 .allSatisfy { $0 is SettingsPointingSegmentedControl }
         var encodingOK = exactCenterHits(
             encodingCards,
-            expectedCount: InputEncoding.allCases.count,
+            expectedCount: InputEncoding.allCases.count + externalSchemaChoiceIDs.count,
             label: "input scheme card"
         )
         var taggedCards: [(tag: Int,
@@ -1238,15 +1240,15 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             choice.action = previousAction
             guard choice.state == .on,
                   actionProbe.choiceTags.last == choice.tag,
-                  InputEncoding.allCases.indices.contains(choice.tag) else {
+                  (0..<(InputEncoding.allCases.count + externalSchemaChoiceIDs.count)).contains(choice.tag) else {
                 print("settings card hit-test smoke: wrong input scheme action tag=\(choice.tag)")
                 encodingOK = false
                 continue
             }
         }
         encodingOK = encodingOK
-            && actionProbe.choiceTags.count == InputEncoding.allCases.count
-            && Set(actionProbe.choiceTags) == Set(InputEncoding.allCases.indices)
+            && actionProbe.choiceTags.count == InputEncoding.allCases.count + externalSchemaChoiceIDs.count
+            && Set(actionProbe.choiceTags) == Set(0..<(InputEncoding.allCases.count + externalSchemaChoiceIDs.count))
 
         taggedCards.sort { $0.tag < $1.tag }
         var cursorOwnershipOK = taggedCards.allSatisfy {
@@ -3000,7 +3002,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     private func inputEncodingSelectionView() -> NSView {
-        let cards = InputEncoding.allCases.compactMap { encoding -> NSView? in
+        // Refresh metadata after an external deploy before rebuilding cards.
+        _ = rimeEngine.schemaList()
+        var cards = InputEncoding.allCases.compactMap { encoding -> NSView? in
             guard let button = encodingRadios[encoding] else { return nil }
             let detail: String
             let symbol: String
@@ -3027,6 +3031,26 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 detail: detail,
                 symbolName: symbol
             )
+        }
+        externalSchemaRadios.removeAll()
+        let external = InputSchemaCatalog.options.filter {
+            InputSchemaCatalog.isExternalOrdinaryID($0.id)
+        }
+        externalSchemaChoiceIDs = external.map(\.id)
+        for (index, option) in external.enumerated() {
+            let button = RimeFixedAccentChoiceButton.radio(
+                title: option.name, target: self,
+                action: #selector(externalInputSchemaSelected(_:))
+            )
+            button.tag = InputEncoding.allCases.count + index
+            button.font = .systemFont(ofSize: 13, weight: .medium)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.state = InputConfigurationStore.shared.selectedSchemaID == option.id ? .on : .off
+            externalSchemaRadios[option.id] = button
+            cards.append(SettingsChoiceCardView(
+                choice: button, title: option.name, detail: option.detail,
+                symbolName: "keyboard"
+            ))
         }
         return choiceGrid(cards)
     }
@@ -4882,6 +4906,9 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
                 ? .on
                 : .off
         }
+        for (schemaID, button) in externalSchemaRadios {
+            button.state = schemaID == selectedSchemaID ? .on : .off
+        }
     }
 
     private func refreshAIConnectorSelection() {
@@ -5823,6 +5850,14 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         _ = InputConfigurationStore.shared.select(
             encoding: InputEncoding.allCases[sender.tag]
         )
+        RIMESController.applyStoredInputConfiguration()
+        reload()
+    }
+
+    @objc private func externalInputSchemaSelected(_ sender: RimeFixedAccentChoiceButton) {
+        let index = sender.tag - InputEncoding.allCases.count
+        guard externalSchemaChoiceIDs.indices.contains(index),
+              InputConfigurationStore.shared.select(schemaID: externalSchemaChoiceIDs[index]) else { return }
         RIMESController.applyStoredInputConfiguration()
         reload()
     }

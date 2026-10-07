@@ -100,6 +100,49 @@ For each host above, switch to **RIMES** (雾凇全拼) first.
     (no syllable spaces). It is not inserted into the old field. Switching
     away no longer silently drops it.
 
+## X11 drag-release timing (#44)
+
+Run this separately from the headless `rimes-buffer-fcitx-e2e` test. That
+test injects socket commands and covers a same-IC activation after
+`drag_end` is dispatched; it does not operate a pointer, a WM move-grab,
+GTK's release detection, or Firefox's frontend.
+
+Use the originally affected stack: X11, xfwm4 and Firefox, with two text
+areas on one page (one IC shared by both). Record the build/commit, GTK,
+Fcitx5, WM and browser versions. Enable Buffer capture in the first area,
+stage harmless text, then drag the toolbar about 80 px. An input driver
+should release button 1 and click the second area at the following delays:
+
+| Nominal delay after physical button release | Repetitions | Required result |
+| --- | --- | --- |
+| 0, 5, 10 ms | At least 30 per delay | The field click pauses capture; the next text goes to the second area. |
+| 30, 50, 100 ms | At least 10 per delay | The same result, with no stale drag or lost staged chip. |
+
+Record the observed event timing, not just the requested sleep: WM grabs,
+the test driver and IPC can change the actual interval. Fcitx's
+`rimes.buffer` log records `toolbar drag_begin received`,
+`toolbar drag_end received`, and activation with `drag=0/1`; correlate these
+with the driver's physical release/click events. Do not log user text.
+Distinguish these two orderings in the report:
+
+- `drag_end` received before the field activation: capture must pause even
+  at the shortest interval. This is the command-order fix's contract.
+- Field activation before `drag_end` received: this is the remaining
+  physical-release race. Keeping capture here is a failure of #44, even
+  if another activation or Escape recovers it.
+
+Also repeat a drag with a pause of 2 s and 5 s while button 1 remains down,
+and a tiny 3 px drag: the WM's own focus return during a live drag must
+keep capture. After release without a field click, the next key should
+still stage. Check that the field-switch failure never commits a staged
+chip to the wrong field; Escape must pause capture and preserve the chip.
+Do not treat passing the >=50 ms cases or the headless test as proof of
+the 0–10 ms case. Keep #44 open until the physical-release matrix passes.
+
+Wayland layer-shell disables toolbar move-drag, so this X11 result does
+not establish a Wayland drag contract. Still run the independent Wayland
+focus-switch, password and Escape checks above.
+
 ## Session notes
 
 - Xfce X11: confirm `gtk_window` keep-above above a maximized gedit.

@@ -75,23 +75,28 @@ content; blocks are not persisted.
 11. Destroying the captured input context (app exit) pauses capture, clears
     the toolbar target, and keeps any staged chips. The workbench stays
     visible as Paused with target `·` until the user closes it.
-12. A same-IC reactivation keeps capture **only** during an explicit toolbar
-    drag. The drag lasts until the WM move-grab actually ends — the UI
-    polls pointer button 1 about every 50 ms after `begin_move_drag` and
+12. A same-IC reactivation keeps capture **only** while the IME still has an
+    explicit toolbar drag pending. The UI detects the end of the WM move-grab:
+    it polls pointer button 1 about every 50 ms after `begin_move_drag` and
     sends `drag_end` on release or a 30 s safety cap. It does **not**
     treat configure-idle or grab-broken as the end — xfwm fires
     grab-broken when it *takes* the move-grab, while the button is
-    still down. After `drag_end` the IME keeps a tail of at least 1 s
-    for a late xfwm focus-in. The **first** same-IC reactivation after
-    `drag_begin` keeps capture and consumes the drag, so a later click
-    into another Firefox field (same IC) is a real field switch and
-    pauses. A same-IC reactivation after `drag_end` plus the tail also
-    pauses. Every other same-IC reactivation is a field switch. A gedit
-    hamburger-menu focus blip pauses capture (expected). Another IC
+    still down. Once the IME **receives** `drag_end`, the next same-IC
+    reactivation pauses capture immediately; there is no post-drag tail.
+    Before that message arrives, the **first** same-IC reactivation after
+    `drag_begin` keeps capture and consumes the pending drag, so a later
+    reactivation is a field switch and pauses. Physical button release and
+    receipt of `drag_end` are different events: the 50 ms UI poll and socket
+    dispatch can leave a window in which a fast field click is still taken
+    for the drag's focus return ([#44](https://github.com/scholay/rimes/issues/44)).
+    The command-order regression covers the IME after receipt, not this
+    physical-release window. Every other same-IC reactivation is a field
+    switch. A gedit hamburger-menu focus blip pauses capture (expected). Another IC
     activating, or a focus-out grace (`RIMES_BUFFER_FOCUS_GRACE_MS`,
     default 5000) without the same IC returning, also drops capture. A
     key must never be routed into Buffer when the focused field may have
-    changed since capture started.
+    changed since capture started; the unresolved physical-release window
+    remains an acceptance gap for that requirement.
 13. An unresolved composition at a real field switch is staged as a `local`
     block using librime `get_input` (raw spelling, e.g. `zhongguoren`), the
     same text composing Return / `commit_raw_input` would settle. Syllable
