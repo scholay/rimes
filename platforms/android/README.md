@@ -238,6 +238,13 @@ to explicitly read the current clipboard text; it is appended as a preserved blo
 without inserting into the host or running a plugin. Empty/non-text and over-capacity
 clips leave the draft intact. Composition, private fields, hidden keyboards and
 changed targets cannot read or apply a paste. There is no clipboard monitoring.
+The keyboard settings also offer **Local clipboard**, or hold the Buffer paste
+button to open it. **Collect current text** explicitly saves plain text in
+`no_backup/text-clipboard/history-v1.json`: at most 40 entries, 16 KiB each and
+128 KiB total, exact duplicates move to the front and oldest entries are evicted.
+Entries can be deleted or cleared and tapped into Buffer; no AI or host insertion
+runs automatically. Private fields cannot view, collect or insert the history.
+This is local explicit collection, not a background clipboard history or sync service.
 The INTERNET
 permission serves explicitly configured and invoked online AI and user-requested
 official plugin downloads.

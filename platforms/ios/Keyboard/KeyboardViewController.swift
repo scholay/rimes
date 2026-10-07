@@ -81,10 +81,17 @@ final class KeyboardViewController: UIInputViewController {
         let savedBuffer: BufferSession
         var expectedRevision: UUID
         var restoreBuffer = false
+        var collectOnly = false
     }
     /// Bound to the same field, Buffer and plugin across iOS's paste alert.
     private var pendingPaste: PendingPaste?
     private let importPrompt = BufferImportPrompt(), pasteButton = BufferPasteButton()
+    private var clipboardStore = TextClipboardStore()
+    private let clipboardView = TextClipboardPanel()
+    private var clipboardEntries: [TextClipboardStore.Entry] = []
+    private struct ClipboardPresentation { let id = UUID(); let target: UUID; let plugin: KeyboardPlugin? }
+    private var clipboardPresentation: ClipboardPresentation?
+    private var clipboardMessage = ""
     private var offeredHostText: HostTextSnapshot?
     private var hostImportTask: Task<Void, Never>?
     private var bufferImportEpoch = UUID()
@@ -563,6 +570,7 @@ final class KeyboardViewController: UIInputViewController {
         bufferEnabled = mode.0; selectedPlugin = mode.1; refreshPluginMenu(); render()
     }
     @objc private func protect() {
+        closeClipboard()
         cancelBufferImport(); pendingPaste = nil
         candidateStrip.cancelSelection()
         dismissTypingCard(resume: false)
@@ -584,7 +592,7 @@ final class KeyboardViewController: UIInputViewController {
             // A field change within this visible session stops work for the old
             // target, but keeps unsubmitted blocks for another explicit insertion.
             // Hiding/resigning the keyboard ends the session and clears the draft.
-            cancelBufferImport(); pendingPaste = nil
+            closeClipboard(); cancelBufferImport(); pendingPaste = nil
             cancelDeletes(); delivery.abandonMarkedText(); cancelRequest(); engine.clear(); snapshot = .init(); chordPreview = ""; surface.retire()
             dismissTypingCard(resume: false)
             stopDefaultAutoSend(); autoSuspended = true; liveTyping.reset(); breakAssociationChain()
@@ -919,7 +927,7 @@ final class KeyboardViewController: UIInputViewController {
         else if bufferEnabled && !bufferIsEmpty { cancelRequest(); if isDefaultBuffer { buffer.deleteBlockBackward() } else { buffer.backspace() }; sourceChanged(); render() }
         else if let target = currentDocument { _ = delivery.deleteBackward(target:target) }
     }
-    private func toggleBuffer() { cancelBufferImport(); pendingPaste = nil; breakAssociationChain(); stopDefaultAutoSend(); autoSuspended = false; liveTyping.reset(); cancelDeletes(); surface.cancel(); settle(); bufferEnabled.toggle(); if !bufferEnabled { cancelRequest(); selectedPlugin = nil; panelOpen = false; refreshPluginMenu() }; bufferButton.isSelected = bufferEnabled; render() }
+    private func toggleBuffer() { closeClipboard(); cancelBufferImport(); pendingPaste = nil; breakAssociationChain(); stopDefaultAutoSend(); autoSuspended = false; liveTyping.reset(); cancelDeletes(); surface.cancel(); settle(); bufferEnabled.toggle(); if !bufferEnabled { cancelRequest(); selectedPlugin = nil; panelOpen = false; refreshPluginMenu() }; bufferButton.isSelected = bufferEnabled; render() }
     private func render() {
         guard !preparingPresentation else { return }
         if let pending = pendingAIConsent, !isCurrentConsent(pending) { dismissAIConsent() }
@@ -1461,6 +1469,7 @@ final class KeyboardViewController: UIInputViewController {
             items.append(UIAction(title: directEnglish ? L("切换中文", "Switch to Chinese") : L("切换英文", "Switch to English"), image: UIImage(systemName: "globe")) { [weak self] _ in self?.toggleLanguage() })
             items.append(UIAction(title: L("表情", "Emoji"), image: UIImage(systemName: "face.smiling")) { [weak self] _ in self?.surface.showEmoji() })
         }
+        items.append(UIAction(title: L("本地剪贴板", "Local clipboard"), image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.openClipboard() })
         items.append(haptics)
         moreButton.menu = UIMenu(children: items)
     }
@@ -1624,17 +1633,18 @@ final class KeyboardViewController: UIInputViewController {
     private func explainClipboardAccess() {
         status.text = L("读取剪贴板需要为 RIMES 开启“完全访问”", "Pasting needs Full Access for RIMES"); render()
     }
-    private func beginPaste() -> Bool {
+    private func beginPaste(collectOnly: Bool = false) -> Bool {
         guard onscreen, bufferEnabled, pendingPaste == nil, hostImportTask == nil, let target = currentDocument,
               target == DocumentIdentity.read(textDocumentProxy) else { return false }
         guard canReadClipboard else { explainClipboardAccess(); return false }
         surface.feedback.send(.press); surface.cancel(); settle(); cancelDeletes()
         pendingPaste = PendingPaste(target: target, plugin: selectedPlugin, savedBuffer: buffer, expectedRevision: buffer.sourceRevision)
+        pendingPaste?.collectOnly = collectOnly
         refreshBufferImports()
         return true
     }
-    private func pasteIntoBuffer(itemProviders: [NSItemProvider]) {
-        guard let provider = itemProviders.first(where: { $0.canLoadObject(ofClass: NSString.self) }), beginPaste(),
+    private func pasteIntoBuffer(itemProviders: [NSItemProvider], collectOnly: Bool = false) {
+        guard let provider = itemProviders.first(where: { $0.canLoadObject(ofClass: NSString.self) }), beginPaste(collectOnly: collectOnly),
               let request = pendingPaste?.id else { return }
         // UIPasteControl supplies the provider for this explicit tap. Retain the
         // draft while loading it, including a host's first-paste permission alert.
@@ -1650,10 +1660,24 @@ final class KeyboardViewController: UIInputViewController {
     private func applyPendingPaste() {
         guard onscreen, let paste = pendingPaste, let text = paste.text else { return }
         pendingPaste = nil
-        guard bufferEnabled, selectedPlugin == paste.plugin, currentDocument == paste.target,
+        guard canReadClipboard, bufferEnabled, selectedPlugin == paste.plugin, currentDocument == paste.target,
               DocumentIdentity.read(textDocumentProxy) == paste.target, buffer.sourceRevision == paste.expectedRevision else { refreshBufferImports(); return }
         if paste.restoreBuffer { buffer = paste.savedBuffer; buffer.cancel() }
         guard !text.isEmpty else { status.text = L("剪贴板里没有可粘贴的文字", "No clipboard text is available to paste"); render(); return }
+        if paste.collectOnly {
+            do {
+                clipboardEntries = try clipboardStore.collect(text)
+                clipboardMessage = L("已收录于本机", "Saved on this device")
+                status.text = clipboardMessage
+            } catch TextClipboardStore.Failure.invalidText {
+                clipboardMessage = L("文字超过 16 KiB，未收录", "Text exceeds 16 KiB; nothing saved")
+                status.text = clipboardMessage
+            } catch {
+                clipboardMessage = L("无法保存剪贴板，原文未改变", "Could not save clipboard text; the original is unchanged")
+                status.text = clipboardMessage
+            }
+            render(); return
+        }
         surface.cancel(); surface.feedback.send(.commit); cancelRequest()
         buffer.insert(text); sourceChanged(); status.text = L("已粘贴到 Buffer", "Pasted into Buffer"); render()
     }
@@ -1764,7 +1788,7 @@ final class KeyboardViewController: UIInputViewController {
             status.text = L("请在 RIMES App 的“官方插件”中安装并启用", "Install and enable this plugin in RIMES → Official plugins")
             return
         }
-        cancelBufferImport(); pendingPaste = nil
+        closeClipboard(); cancelBufferImport(); pendingPaste = nil
         cancelRequest(); buffer.invalidateResult(); selectedPlugin = plugin
         if plugin != .translate { speaker.stop() }
         status.text = plugin?.isAI == true ? aiReadinessHint() ?? "" : ""
@@ -1776,6 +1800,60 @@ final class KeyboardViewController: UIInputViewController {
         return nil
     }
     // MARK: Settings panel
+    private func isCurrentClipboard(_ id: UUID) -> Bool {
+        guard let current = clipboardPresentation, current.id == id else { return false }
+        return onscreen && bufferEnabled && currentDocument == current.target
+            && DocumentIdentity.read(textDocumentProxy) == current.target && selectedPlugin == current.plugin
+    }
+    private func openClipboard() {
+        guard onscreen, !hasComposition, pendingPaste == nil, hostImportTask == nil,
+              let target = currentDocument, DocumentIdentity.read(textDocumentProxy) == target else { return }
+        dismissAIConsent(); surface.cancel(); cancelDeletes(); insertButton.cancelPress(); cancelRequest()
+        collapseCandidates(); stopDefaultAutoSend(); autoSuspended = true
+        if !bufferEnabled { liveTyping.reset(); bufferEnabled = true }
+        let presentation = ClipboardPresentation(target: target, plugin: selectedPlugin)
+        clipboardPresentation = presentation; clipboardEntries = clipboardStore.load(); clipboardMessage = ""
+        clipboardView.collect.onPaste = { [weak self] providers in
+            guard let self, self.isCurrentClipboard(presentation.id) else { return }
+            self.pasteIntoBuffer(itemProviders: providers, collectOnly: true)
+        }
+        clipboardView.collect.onNeedsAccess = { [weak self] in
+            guard let self, self.isCurrentClipboard(presentation.id) else { return }
+            self.clipboardMessage = L("收录当前文字需要开启“完全访问”；已保存的本地历史仍可使用。", "Collecting current text needs Full Access. Saved local history remains available.")
+            self.render()
+        }
+        clipboardView.onSelect = { [weak self] id in self?.selectClipboard(id, presentation: presentation.id) }
+        clipboardView.onDelete = { [weak self] id in self?.deleteClipboard(id, presentation: presentation.id) }
+        clipboardView.onClear = { [weak self] in self?.clearClipboard(presentation: presentation.id) }
+        panelOpen = true; render()
+    }
+    private func closeClipboard() {
+        clipboardPresentation = nil; clipboardEntries = []; clipboardMessage = ""; clipboardView.redact()
+        if pendingPaste?.collectOnly == true { pendingPaste = nil }
+    }
+    private func selectClipboard(_ id: UUID, presentation: UUID) {
+        guard isCurrentClipboard(presentation), pendingPaste == nil,
+              let entry = clipboardEntries.first(where: { $0.id == id }) else { return }
+        guard buffer.source.utf8.count + entry.text.utf8.count <= 16 * 1024 else {
+            clipboardMessage = L("Buffer 已满，请先插入或清空", "Buffer is full. Insert or clear it first."); render(); return
+        }
+        cancelRequest(); stopDefaultAutoSend(); autoSuspended = true
+        buffer.insert(entry.text); buffer.invalidateResult()
+        closeClipboard(); panelOpen = false
+        status.text = L("已加入 Buffer，确认后再上屏", "Added to Buffer. Insert when ready."); render()
+    }
+    private func deleteClipboard(_ id: UUID, presentation: UUID) {
+        guard isCurrentClipboard(presentation), pendingPaste == nil else { return }
+        do { clipboardEntries = try clipboardStore.remove(id); clipboardMessage = "" }
+        catch { clipboardMessage = L("删除未完成，请重试", "Could not delete; try again") }
+        render()
+    }
+    private func clearClipboard(presentation: UUID) {
+        guard isCurrentClipboard(presentation), pendingPaste == nil else { return }
+        do { try clipboardStore.clear(); clipboardEntries = []; clipboardMessage = "" }
+        catch { clipboardMessage = L("清空未完成，请重试", "Could not clear; try again") }
+        render()
+    }
     @objc private func bufferHeld(_ recognizer: UILongPressGestureRecognizer) {
         guard recognizer.state == .began else { return }
         surface.feedback.send(.press); openSettings(for: selectedPlugin)
@@ -1784,16 +1862,28 @@ final class KeyboardViewController: UIInputViewController {
     private func openSettings(for plugin: KeyboardPlugin?) {
         guard onscreen else { return }
         dismissAIConsent()
+        closeClipboard()
         surface.cancel(); settle(); cancelDeletes(); insertButton.cancelPress(); collapseCandidates()
         if !bufferEnabled { stopDefaultAutoSend(); autoSuspended = false; liveTyping.reset(); bufferEnabled = true }
         if plugin != selectedPlugin { selectPlugin(plugin) }
         panelOpen = true; render()
     }
-    private func closePanel() { dismissAIConsent(); panelOpen = false; render() }
+    private func closePanel() { closeClipboard(); dismissAIConsent(); panelOpen = false; render() }
     private func renderPanel() {
         panel.isHidden = !panelOpen
         guard panelOpen else { return }
         view.bringSubviewToFront(panel)
+        if let clipboard = clipboardPresentation {
+            guard isCurrentClipboard(clipboard.id) else { closeClipboard(); panelOpen = false; panel.isHidden = true; return }
+            clipboardView.update(clipboardEntries, fullAccess: canReadClipboard, enabled: pendingPaste == nil)
+            panel.show(title: L("本地剪贴板", "Local clipboard"), sections: [
+                PanelSection(title: L("文字历史", "Text history"),
+                    note: clipboardMessage.isEmpty ? L("仅显式收录；最多 40 条。点条目加入 Buffer，不会自动上屏或联网。", "Explicit collection only, up to 40 entries. Tap an entry to add to Buffer without automatic insertion or networking.") : clipboardMessage,
+                    custom: clipboardView, customHeight: max(110, min(220, panel.bounds.height - 92)),
+                    customKey: clipboard.id.uuidString + clipboardEntries.map { $0.id.uuidString }.joined() + "\(pendingPaste != nil)|\(canReadClipboard)")
+            ])
+            return
+        }
         if let pending = pendingAIConsent {
             panel.show(title: L("发送到 AI 服务", "Send to AI service"), sections: [
                 PanelSection(title: pending.provider.name,
@@ -1810,6 +1900,9 @@ final class KeyboardViewController: UIInputViewController {
     }
     private func panelSections() -> [PanelSection] {
         var sections: [PanelSection] = []
+        sections.append(PanelSection(title: L("本地文字", "Local text"), items: [
+            PanelItem(id: "clipboard", title: L("本地剪贴板", "Local clipboard"), symbol: "doc.on.clipboard")
+        ]) { [weak self] _ in self?.openClipboard() })
         let plugins = [PanelItem(id: "default", title: "Buffer", symbol: "square.stack.3d.up", selected: selectedPlugin == nil)]
             + KeyboardPlugin.allCases.map { PanelItem(id: $0.rawValue, title: $0.title, symbol: $0.symbol, selected: selectedPlugin == $0) }
         sections.append(PanelSection(title: L("插件", "Plugin"), items: plugins) { [weak self] id in self?.selectPlugin(KeyboardPlugin(rawValue: id)) })
@@ -2041,6 +2134,17 @@ final class KeyboardViewController: UIInputViewController {
         } else { render() }
     }
     #if KEYBOARD_LAYOUT_TESTS
+    func developmentClipboardHistory(root: URL) { clipboardStore = TextClipboardStore(root: root) }
+    func developmentOpenClipboard() { openClipboard() }
+    var developmentClipboardPanel: TextClipboardPanel? { clipboardPresentation == nil ? nil : clipboardView }
+    func developmentCollectClipboard() {
+        guard clipboardPresentation != nil, beginPaste(collectOnly: true) else { return }
+        let text = developmentReadClipboard?() ?? ""
+        pendingPaste?.text = text; applyPendingPaste()
+    }
+    func developmentSelectClipboard(_ id: UUID) {
+        guard let presentation = clipboardPresentation else { return }; selectClipboard(id, presentation: presentation.id)
+    }
     private func developmentPasteClipboard() {
         guard beginPaste() else { return }
         let text = developmentReadClipboard?() ?? ""

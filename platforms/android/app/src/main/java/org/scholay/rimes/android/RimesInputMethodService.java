@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Locale;
 import org.scholay.rimes.core.BufferSession;
 import org.scholay.rimes.core.ExplicitClipboardImport;
+import org.scholay.rimes.core.TextClipboardHistory;
 import org.scholay.rimes.core.InputEpoch;
 import org.scholay.rimes.core.PluginSession;
 import org.scholay.rimes.core.RimeEngine;
@@ -72,6 +73,12 @@ public final class RimesInputMethodService extends InputMethodService {
     private String chordPreview="",hostPreedit="";
     private KeyboardSurface keys;
     private KeyboardAppearancePanel appearancePanel;
+    private TextClipboardPanel clipboardPanel;
+    private TextClipboardStore clipboardStore;
+    private final TextClipboardHistory clipboardHistory=new TextClipboardHistory();
+    private boolean clipboardOpen;
+    private InputEpoch.Ticket clipboardTicket;
+    private InputConnection clipboardTarget;
     private PluginShortcutBar pluginShortcuts;
     private BufferPluginPanel pluginPanel;
     private String activePlugin;
@@ -122,6 +129,7 @@ public final class RimesInputMethodService extends InputMethodService {
         preferences.registerOnSharedPreferenceChangeListener(preferenceListener);
         restoreSettings();
         pluginExecutor=new BufferPluginExecutor(getApplicationContext());
+        clipboardStore=new TextClipboardStore(getApplicationContext());
         initialize();
     }
     private void initialize() {
@@ -263,6 +271,7 @@ public final class RimesInputMethodService extends InputMethodService {
         },true);
     }
     private void endTarget() {
+        closeClipboard();
         deferredSettingsPair=null;
         cancelPlugin(); pluginSession.clear();
         // Clear the old composition before revoking its connection, never through the new target.
@@ -494,6 +503,61 @@ public final class RimesInputMethodService extends InputMethodService {
             render();
         } catch(SecurityException denied) { notice(R.string.clipboard_unavailable); }
     }
+    private void openClipboard() {
+        if(!isInputViewShown() || !canSelectPlugin() || privateField || directOnly) return;
+        cancelChord();
+        if(pluginSession.snapshot(buffer).status==PluginSession.Status.RUNNING) invalidatePlugin();
+        if(!buffer.isEnabled()) buffer.setEnabled(true);
+        clipboardTicket=epoch.issue(); clipboardTarget=target; clipboardOpen=true;
+        appearanceOpen=false; pluginSettingsOpen=false;
+        clipboardHistory.clear(); clipboardHistory.restore(clipboardStore.load()); render();
+    }
+    private void closeClipboard() {
+        clipboardOpen=false; clipboardTicket=null; clipboardTarget=null; clipboardHistory.clear();
+        if(clipboardPanel!=null) clipboardPanel.redact();
+    }
+    private boolean clipboardCurrent() {
+        return clipboardOpen && clipboardTicket!=null && epoch.current(clipboardTicket)
+                && clipboardTarget==target && canPasteClipboard();
+    }
+    private void collectClipboard() {
+        if(!isInputViewShown() || !clipboardCurrent()) return;
+        InputEpoch.Ticket ticket=clipboardTicket;
+        try {
+            ClipboardManager clipboard=getSystemService(ClipboardManager.class);
+            ClipData clip=clipboard==null?null:clipboard.getPrimaryClip();
+            CharSequence value=clip==null || clip.getItemCount()==0?null:clip.getItemAt(0).getText();
+            if(ticket!=clipboardTicket || !isInputViewShown() || !clipboardCurrent()) return;
+            if(value==null || value.length()==0) { notice(R.string.clipboard_empty); return; }
+            if(value.length()>TextClipboardHistory.MAX_ENTRY_BYTES) { notice(R.string.clipboard_too_large); return; }
+            String text=value.toString();
+            List<TextClipboardHistory.Entry> original=clipboardHistory.entries();
+            if(!clipboardHistory.collect(text)) { notice(R.string.clipboard_too_large); return; }
+            saveClipboard(original);
+        } catch(SecurityException denied) { notice(R.string.clipboard_unavailable); }
+    }
+    private void selectClipboard(String id) {
+        if(!isInputViewShown() || !clipboardCurrent()) return;
+        for(TextClipboardHistory.Entry entry:clipboardHistory.entries()) if(entry.id.equals(id)) {
+            ExplicitClipboardImport.Outcome outcome=ExplicitClipboardImport.read(buffer,this::clipboardCurrent,() -> entry.text);
+            if(outcome==ExplicitClipboardImport.Outcome.IMPORTED) { invalidatePlugin(); closeClipboard(); notice(R.string.clipboard_pasted); }
+            else if(outcome==ExplicitClipboardImport.Outcome.TOO_LARGE) notice(R.string.buffer_limit);
+            render(); return;
+        }
+    }
+    private void deleteClipboard(String id) {
+        if(!isInputViewShown() || !clipboardCurrent()) return;
+        List<TextClipboardHistory.Entry> original=clipboardHistory.entries(); clipboardHistory.remove(id); saveClipboard(original);
+    }
+    private void clearClipboardHistory() {
+        if(!isInputViewShown() || !clipboardCurrent()) return;
+        List<TextClipboardHistory.Entry> original=clipboardHistory.entries(); clipboardHistory.clear(); saveClipboard(original);
+    }
+    private void saveClipboard(List<TextClipboardHistory.Entry> original) {
+        try { clipboardStore.save(clipboardHistory.entries()); }
+        catch(java.io.IOException failure) { clipboardHistory.restore(original); notice(R.string.clipboard_unavailable); }
+        render();
+    }
     private void deleteHostOrBuffer() {
         if(!ownsTarget()) return;
         if(buffer.isEnabled()) buffer.deleteLastBlock();
@@ -586,6 +650,7 @@ public final class RimesInputMethodService extends InputMethodService {
                 :nineKeyVisible()?KeyboardLayout.Mode.NINE_KEY:KeyboardLayout.Mode.QWERTY;
     }
     private void toggleAppearance() {
+        closeClipboard();
         cancelChord();
         pluginSettingsOpen=false; appearanceOpen=!appearanceOpen;
         if(appearanceOpen) appearancePanel.scrollTo(0,0);
@@ -724,6 +789,7 @@ public final class RimesInputMethodService extends InputMethodService {
         bufferRail=new BufferRail(this); input.addView(bufferRail,new LinearLayout.LayoutParams(0,-1,1));
         bufferPaste=button(input,"粘贴",this::pasteClipboard,0); fixedWidth(bufferPaste,32); gapLeft(bufferPaste,4);
         bufferPaste.icon(KeyboardIcon.WRITE); bufferPaste.setContentDescription(getString(R.string.clipboard_paste));
+        bufferPaste.setOnLongClickListener(v -> { openClipboard(); return true; });
         insertNext=button(input,"↑",() -> insert(false),0); fixedWidth(insertNext,32); gapLeft(insertNext,4);
         ((KeyButton)insertNext).icon(KeyboardIcon.PAPER_PLANE); ((KeyButton)insertNext).appearance(false,false,true); insertNext.setContentDescription(getString(R.string.insert_next)); insertNext.setOnLongClickListener(v -> { insert(true); return true; });
         LinearLayout details=new LinearLayout(this); bufferBottom=details; bufferRow.addView(details,new LinearLayout.LayoutParams(-1,dp(railHeight)));
@@ -778,8 +844,12 @@ public final class RimesInputMethodService extends InputMethodService {
         appearancePanel.action("全部插入",getString(R.string.insert_all),() -> insert(true));
         appearancePanel.action("清空 Buffer",getString(R.string.clear),this::clearBuffer);
         appearancePanel.action("粘贴剪贴板文字",getString(R.string.clipboard_paste),this::pasteClipboard);
+        appearancePanel.action("本地剪贴板",getString(R.string.clipboard_history),this::openClipboard);
         appearancePanel.action("系统键盘",getString(R.string.switch_keyboard),() -> { endTarget(); getSystemService(InputMethodManager.class).showInputMethodPicker(); });
         surfaceContainer.addView(appearancePanel,new FrameLayout.LayoutParams(-1,-1));
+        clipboardPanel=new TextClipboardPanel(this,this::collectClipboard,this::selectClipboard,this::deleteClipboard,
+                this::clearClipboardHistory,() -> { closeClipboard(); render(); });
+        surfaceContainer.addView(clipboardPanel,new FrameLayout.LayoutParams(-1,-1));
         pluginPanel=new BufferPluginPanel(this,new BufferPluginPanel.Listener() {
             public void onPlugin(String id) { openPluginSettings(id); }
             public void onDefaultBuffer() { cancelPlugin(); pluginSession.clear(); activePlugin=null; pluginSettingsOpen=false; render(); }
@@ -811,12 +881,14 @@ public final class RimesInputMethodService extends InputMethodService {
     private void selectPlugin(String id) {
         pluginName(id);
         if(!canSelectPlugin() || !officialPlugins.enabled(id)) return;
+        closeClipboard();
         cancelChord(); cancelPlugin(); if(!buffer.isEnabled()) buffer.setEnabled(true); activePlugin=id.equals(activePlugin)?null:id;
         pluginSession.select(activePlugin);
         punctuationOpen=false; appearanceOpen=false; pluginSettingsOpen=false; render();
     }
     private void openPluginSettings(String id) {
         if(!canSelectPlugin()) return;
+        closeClipboard();
         cancelChord(); if(!buffer.isEnabled()) buffer.setEnabled(true);
         if(!java.util.Objects.equals(activePlugin,id)) cancelPlugin(); activePlugin=id; pluginSession.select(id);
         appearanceOpen=false; pluginSettingsOpen=true; render();
@@ -892,6 +964,7 @@ public final class RimesInputMethodService extends InputMethodService {
     }
     private void render() {
         if(keyboard==null) return;
+        if(clipboardOpen && !clipboardCurrent()) closeClipboard();
         KeyboardTheme.Palette palette=theme.palette(this); keyboard.setBackgroundColor(palette.background);
         for(KeyButton button:chromeButtons) button.theme(theme);
         setText(layoutButton,appearanceOpen?"✓":"⚙"); layoutButton.icon(appearanceOpen?KeyboardIcon.CHECK:KeyboardIcon.SETTINGS);
@@ -966,7 +1039,7 @@ public final class RimesInputMethodService extends InputMethodService {
         boolean chord=chordVisible();
         float width=(keyboard.getWidth()>0?keyboard.getWidth():getResources().getDisplayMetrics().widthPixels)-keyboard.getPaddingLeft()-keyboard.getPaddingRight();
         float surfaceHeight=chord?ChordLayout.height(Math.max(1,width/getResources().getDisplayMetrics().density),"splitOrthogonal".equals(layout)):KeyboardLayout.height(landscape());
-        boolean panelOpen=appearanceOpen || pluginSettingsOpen;
+        boolean panelOpen=appearanceOpen || pluginSettingsOpen || clipboardOpen;
         if(chord && panelOpen) surfaceHeight+=landscape()?35:41;
         int desiredHeight=Math.round(surfaceHeight*getResources().getDisplayMetrics().density);
         if(surfaceContainer.getLayoutParams().height!=desiredHeight) { surfaceContainer.getLayoutParams().height=desiredHeight; surfaceContainer.requestLayout(); }
@@ -990,6 +1063,8 @@ public final class RimesInputMethodService extends InputMethodService {
         if(appearanceOpen) appearancePanel.render(layout,theme);
         pluginPanel.setVisibility(pluginSettingsOpen?View.VISIBLE:View.GONE);
         if(pluginSettingsOpen) pluginPanel.render(theme,activePlugin,translationDirection);
+        clipboardPanel.setVisibility(clipboardOpen?View.VISIBLE:View.GONE);
+        if(clipboardOpen) { clipboardPanel.render(clipboardHistory.entries(),theme,true); clipboardPanel.bringToFront(); }
     }
     private static void setText(TextView view,String value) {
         if(!android.text.TextUtils.equals(view.getText(),value)) view.setText(value);

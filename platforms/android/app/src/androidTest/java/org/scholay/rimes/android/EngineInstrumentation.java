@@ -11,6 +11,9 @@ public final class EngineInstrumentation extends Instrumentation {
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
+            if(arguments!=null && "clipboard-store".equals(arguments.getString("mode"))) {
+                result.putString("stream","PASS clipboard store checks="+TextClipboardStoreContract.run(this)+"\n"); finish(-1,result); return;
+            }
             if(arguments!=null && "feedback-engine".equals(arguments.getString("mode"))) {
                 result.putString("stream",EngineFeedbackContract.run(this)); finish(-1,result); return;
             }
