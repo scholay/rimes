@@ -207,6 +207,11 @@ void TestHoverRepaintScopeAndResources() {
         dirty.right <= static_cast<LONG>(layout.sidebar.right * scale) + 2 &&
         !PtInRegion(region, static_cast<int>((layout.heading.left + 30) * scale),
                     static_cast<int>((layout.heading.top + 10) * scale));
+    if (!result)
+      std::cerr << "Hover update region: type=" << type << " bounds="
+                << dirty.left << ',' << dirty.top << ',' << dirty.right << ','
+                << dirty.bottom << " sidebar-right=" << layout.sidebar.right * scale
+                << " window-visible=" << IsWindowVisible(window) << '\n';
     DeleteObject(region);
     return result;
   };
@@ -226,6 +231,7 @@ void TestHoverRepaintScopeAndResources() {
   Check(!GetUpdateRect(window, nullptr, FALSE), "repeated mouse leave does not repaint an unchanged window");
 
   const DWORD resources = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
+  Check(resources > 0, "GDI resource instrumentation observes the fixture's fonts and brushes");
   for (int i = 0; i < 64; ++i) {
     move(i % 4);
     UpdateWindow(window);
