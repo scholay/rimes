@@ -1,6 +1,6 @@
 # RIMES Native Windows Foundation
 
-Current stable release: **[1.1.0](https://github.com/scholay/rimes/releases/tag/windows-v1.1.0)**. Download the EXE installer for a data-preserving upgrade. Version resources are unified; [acceptance evidence](validation/2026-10-04-1.1.0.md) distinguishes package checks, the actual upgrade and remaining daily-use coverage.
+Current Windows release: **[1.1.1](https://github.com/scholay/rimes/releases/tag/windows-v1.1.1)**. Download the EXE installer for a data-preserving upgrade, including discoverable Settings and system uninstall entries. See the [release notes](RELEASE-1.1.1.md); package verification and actual desktop acceptance are recorded separately in the release BUILD-INFO.json.
 
 Post-release damaged-install recovery, candidate settings and caret placement
 changes have [separate source/native test evidence](validation/2026-10-07-community-repair.md).
