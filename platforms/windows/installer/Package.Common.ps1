@@ -330,6 +330,8 @@ function Get-UninstallCompletionMessage($Result) {
         $message+="`n`nSave your work and sign out before continuing. "
         if($Result.SignOutReason -eq 'locked-dll'){
             $message+='A previous input method DLL is still in use.'
+        } elseif($Result.SignOutReason -eq 'previous-signout-required') {
+            $message+='The previous installation recorded a pending sign-out. Checking the current version cannot confirm whether that older copy remains loaded.'
         } else {
             $message+='Installation history was missing or damaged, so whether an old copy remains loaded could not be confirmed. Signing out completes recovery.'
         }

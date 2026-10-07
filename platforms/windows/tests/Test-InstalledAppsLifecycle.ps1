@@ -166,6 +166,13 @@ try {
     $message=Get-UninstallCompletionMessage $result
     Check 'known unlocked installation completes without a sign-out warning' (-not $result.RequiresSignOut -and $result.SignOutReason -eq 'none' -and -not $message.Contains('sign out') -and -not $message.Contains('still in use'))
     & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
+    $pending=Get-State $root
+    $pending.requiresSignOut=$true
+    Write-InstallState $root $pending
+    $result=& "$new\Uninstall.ps1" -InstallRoot $root
+    $message=Get-UninstallCompletionMessage $result
+    Check 'unlocked active DLL retains a previous installation sign-out requirement' ($result.RequiresSignOut -and $result.SignOutReason -eq 'previous-signout-required' -and $message.Contains('recorded a pending sign-out') -and -not $message.Contains('history was missing') -and -not $message.Contains('DLL is still in use'))
+    & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
     $actual=(Get-State $root).active
     $unused=Join-Path $root 'versions\zzzz-newer-looking-unused'
     Copy-Item -LiteralPath $upgrade -Destination $unused -Recurse

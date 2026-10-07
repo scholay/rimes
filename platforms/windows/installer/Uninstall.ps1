@@ -8,8 +8,8 @@ $state=Get-RimesInstallation $InstallRoot -AllowIncomplete
 try {Read-VerifiedPackage $PSScriptRoot | Out-Null}
 catch {throw "The current uninstall tools are incomplete or unverifiable. Run the current Setup.exe to repair the installation, then retry uninstall. No registration was changed. $($_.Exception.Message)"}
 Stop-OwnedBroker $state.active
-$requiresSignOut=($null -eq $state.requiresSignOut)
-$signOutReason=if($requiresSignOut){'unknown-installation-state'}else{'none'}
+$requiresSignOut=($null -eq $state.requiresSignOut -or [bool]$state.requiresSignOut)
+$signOutReason=if($null -eq $state.requiresSignOut){'unknown-installation-state'}elseif($state.requiresSignOut){'previous-signout-required'}else{'none'}
 try{Assert-Unlocked $state.active}catch{if(-not $AllowPendingRestart){throw};$requiresSignOut=$true;$signOutReason='locked-dll'}
 $oldAutostart=Get-BrokerAutostart
 $oldInstalledApp=Read-InstalledAppRegistration
