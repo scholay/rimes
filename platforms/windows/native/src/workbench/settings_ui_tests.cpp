@@ -1,4 +1,5 @@
 #include "settings_ui.hpp"
+#include "buffer_hotkey.hpp"
 #include "window.hpp"
 
 #include <algorithm>
@@ -180,6 +181,181 @@ void TestCandidateSettingsControls() {
   host.Close(true);
   Check(saves == 1 && saved.candidate_count == 5 && saved.vertical_candidates,
         "candidate controls save the requested count and arrangement");
+}
+
+void TestBufferHotkeyRegistrationLifecycle() {
+  // Real Win32 registration, disposable message-only windows, no synthesized
+  // input. The native suite runs in the isolated build session, not a desktop
+  // user session. Discover free letter chords rather than assuming availability.
+  struct Fixture {
+    HWND owner = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+                                  HWND_MESSAGE, nullptr, nullptr, nullptr);
+    HWND contender = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+                                      HWND_MESSAGE, nullptr, nullptr, nullptr);
+    ~Fixture() {
+      for (int id : {100, 101, 102, 200})
+        UnregisterHotKey(contender, id);
+      if (owner) DestroyWindow(owner);
+      if (contender) DestroyWindow(contender);
+    }
+  } fixture;
+  Check(fixture.owner && fixture.contender, "hotkey fixture owns two isolated windows");
+  if (!fixture.owner || !fixture.contender) return;
+  struct Chord { unsigned modifiers, key; };
+  std::vector<Chord> chords;
+  for (unsigned key = 'A'; key <= 'Z' && chords.size() < 3; ++key) {
+    const unsigned modifiers = chords.empty() ? MOD_CONTROL | MOD_ALT
+                                              : MOD_CONTROL | MOD_SHIFT;
+    const int id = 100 + static_cast<int>(chords.size());
+    if (RegisterHotKey(fixture.contender, id, modifiers | MOD_NOREPEAT, key))
+      chords.push_back({modifiers, key});
+  }
+  Check(chords.size() == 3, "three real letter chords available in the build session");
+  if (chords.size() != 3) return;
+  const auto old = chords[0], busy = chords[1], next = chords[2];
+  auto can_claim = [&](Chord chord) {
+    const bool claimed = RegisterHotKey(fixture.contender, 200,
+        chord.modifiers | MOD_NOREPEAT, chord.key) != FALSE;
+    if (claimed) UnregisterHotKey(fixture.contender, 200);
+    return claimed;
+  };
+  workbench::BufferHotkeyRegistration hotkey(fixture.owner);
+  const Chord bare{0, old.key};
+  const bool bare_was_free = can_claim(bare);
+  Check(!hotkey.RegisterInitial(bare.modifiers, bare.key) && !hotkey.Registered() &&
+            (!bare_was_free || can_claim(bare)),
+        "invalid startup settings never reserve a bare typing key");
+  Check(!hotkey.RegisterInitial(old.modifiers, old.key) && !hotkey.Registered(),
+        "startup conflict reports unavailable rather than a fictitious active chord");
+  UnregisterHotKey(fixture.contender, 100);
+  Check(hotkey.RegisterInitial(old.modifiers, old.key) && !can_claim(old),
+        "startup retry owns the requested real chord");
+  int saves = 0;
+  const Chord invalid[] = {
+      {0, old.key}, {MOD_CONTROL, old.key}, {MOD_WIN, old.key},
+      {MOD_CONTROL | MOD_ALT | MOD_SHIFT, old.key},
+      {MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, old.key},
+      {MOD_CONTROL | MOD_SHIFT, 0}, {MOD_CONTROL | MOD_SHIFT, 'b'},
+      {MOD_CONTROL | MOD_SHIFT, VK_F1},
+      {MOD_CONTROL | MOD_SHIFT, static_cast<unsigned>(-1)}};
+  for (const auto chord : invalid) {
+    const bool was_free = can_claim(chord);
+    const auto result = hotkey.Update(chord.modifiers, chord.key,
+                                     [&] { ++saves; return true; });
+    Check(result == workbench::HotkeyUpdate::kInvalid && saves == 0 &&
+              !can_claim(old) && (!was_free || can_claim(chord)),
+          "unsupported modifiers/letters skip Save and registration while retaining the old chord");
+  }
+  const auto conflict = hotkey.Update(busy.modifiers, busy.key, [&] { ++saves; return true; });
+  Check(conflict == workbench::HotkeyUpdate::kUnavailable && saves == 0 && !can_claim(old),
+        "new chord conflict skips Save and leaves the old chord registered");
+  UnregisterHotKey(fixture.contender, 102);
+  const auto failed = hotkey.Update(next.modifiers, next.key, [&] {
+    ++saves;
+    Check(!can_claim(old) && !can_claim(next), "both chords stay owned while Save runs");
+    return false;
+  });
+  Check(failed == workbench::HotkeyUpdate::kSaveFailed && !can_claim(old) && can_claim(next),
+        "failed Save releases the candidate and retains the original real registration");
+  const auto saved = hotkey.Update(next.modifiers, next.key, [&] { ++saves; return true; });
+  Check(saved == workbench::HotkeyUpdate::kSaved && can_claim(old) && !can_claim(next),
+        "successful Save releases the old chord and owns the new chord");
+  const auto next_message = MAKELPARAM(next.modifiers, next.key);
+  const WPARAM current_id = hotkey.Matches(1, next_message) ? 1 : 2;
+  const auto same = hotkey.Update(next.modifiers, next.key, [&] {
+    ++saves;
+    Check(!can_claim(next), "unchanged chord is continuously registered during Save");
+    return true;
+  });
+  Check(same == workbench::HotkeyUpdate::kSaved && saves == 3 &&
+            hotkey.Matches(current_id, next_message),
+        "unchanged settings save retains the original registration id");
+  Check(!hotkey.Matches(current_id == 1 ? 2 : 1, next_message) &&
+            !hotkey.Matches(current_id, MAKELPARAM(old.modifiers, old.key)),
+        "queued old ids and mismatched chord messages do not toggle Buffer");
+  hotkey.Reset();
+  Check(!hotkey.Registered() && can_claim(next), "closing the owner releases its real chord");
+}
+
+void TestBufferHotkeyModifierControl() {
+  for (const unsigned modifiers : {MOD_CONTROL | MOD_SHIFT,
+                                   MOD_CONTROL | MOD_ALT}) {
+    workbench::Settings current;
+    current.hotkey_modifiers = modifiers;
+    current.hotkey_key = 'J';
+    workbench::Settings saved;
+    int saves = 0;
+    workbench::SettingsUiCallbacks callbacks;
+    callbacks.load = [&] { return current; };
+    callbacks.save = [&](workbench::Settings value, const std::wstring&, bool,
+                         std::string*) {
+      saved = value;
+      ++saves;
+      return true;
+    };
+    workbench::SettingsUiHost host(std::move(callbacks));
+    auto open_buffer_page = [&]() -> HWND {
+      host.Open(nullptr);
+      const auto window = host.hwnd();
+      Check(window != nullptr, "shortcut settings fixture opens");
+      if (!window) return nullptr;
+      ShowWindow(window, SW_SHOWNOACTIVATE);
+      ui::SettingsDraft draft;
+      Click(window, Layout(window, draft).nav[2]);
+      const HWND choices = GetDlgItem(window, 405);
+      Check(IsVisibleWithinFixture(choices, window),
+            "native modifier selector is exposed only on the shortcut page");
+      Check(SendMessageW(choices, CB_GETCOUNT, 0, 0) == 2 &&
+                SendMessageW(choices, CB_GETCURSEL, 0, 0) ==
+                    (modifiers == (MOD_CONTROL | MOD_ALT) ? 1 : 0),
+            "selector displays the complete configured chord without migration");
+      return choices;
+    };
+    HWND choices = open_buffer_page();
+    if (!choices) continue;
+    for (const WPARAM key : {VK_RETURN, VK_ESCAPE}) {
+      SendMessageW(choices, CB_SHOWDROPDOWN, TRUE, 0);
+      Check(SendMessageW(choices, CB_GETDROPPEDSTATE, 0, 0) != 0,
+            "native shortcut dropdown opens for keyboard interaction");
+      MSG message{};
+      message.hwnd = choices;
+      message.message = WM_KEYDOWN;
+      message.wParam = key;
+      const bool handled = host.HandleDialogMessage(&message);
+      Check(!handled && host.IsOpen() && saves == 0,
+            "Return and Escape in an open combo do not Save or close settings");
+      if (!handled) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+      }
+      Check(SendMessageW(choices, CB_GETDROPPEDSTATE, 0, 0) == 0 &&
+                host.IsOpen() && saves == 0,
+            "native combo handles popup confirmation/cancellation before the settings window");
+    }
+    // Saving an unrelated preference must keep the legacy modifier and letter.
+    host.Close(true);
+    Check(saves == 1 && saved.hotkey_modifiers == modifiers && saved.hotkey_key == 'J',
+          "ordinary Save preserves an explicitly configured complete shortcut");
+    choices = open_buffer_page();
+    if (!choices) continue;
+    const auto selected = modifiers == (MOD_CONTROL | MOD_ALT) ? 0 : 1;
+    SendMessageW(choices, CB_SETCURSEL, selected, 0);
+    SendMessageW(host.hwnd(), WM_COMMAND, MAKEWPARAM(405, CBN_SELCHANGE),
+                 reinterpret_cast<LPARAM>(choices));
+    host.Close(false);
+    Check(saves == 1 && current.hotkey_modifiers == modifiers,
+          "cancelled explicit modifier edits never invoke Save");
+    choices = open_buffer_page();
+    if (!choices) continue;
+    SendMessageW(choices, CB_SETCURSEL, selected, 0);
+    SendMessageW(host.hwnd(), WM_COMMAND, MAKEWPARAM(405, CBN_SELCHANGE),
+                 reinterpret_cast<LPARAM>(choices));
+    host.Close(true);
+    Check(saves == 2 && saved.hotkey_modifiers ==
+              static_cast<unsigned>(selected == 0 ? MOD_CONTROL | MOD_SHIFT : MOD_CONTROL | MOD_ALT) &&
+              saved.hotkey_key == 'J',
+          "explicit modifier migration keeps the user's custom letter");
+  }
 }
 
 void TestHoverRepaintScopeAndResources() {
@@ -543,6 +719,8 @@ int main() {
   TestNestedHitTargets();
   TestOwnedClicksAndTransientDetails();
   TestCandidateSettingsControls();
+  TestBufferHotkeyRegistrationLifecycle();
+  TestBufferHotkeyModifierControl();
   TestHoverRepaintScopeAndResources();
   TestPluginManagementAndChordSelection();
   TestSettingsPreserveRuntimeAndStreaming();

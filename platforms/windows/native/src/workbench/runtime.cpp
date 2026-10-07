@@ -100,6 +100,14 @@ bool Runtime::BeforeKey(Target target, const core::KeyEvent& key,
     }
     return true;
   }
+  // A Return already owned above keeps its repeat/release lifecycle even if
+  // modifiers change. New host shortcuts must not become Buffer commands.
+  constexpr auto command_modifiers =
+      static_cast<unsigned>(core::KeyModifiers::kControl) |
+      static_cast<unsigned>(core::KeyModifiers::kAlt) |
+      static_cast<unsigned>(core::KeyModifiers::kWindows) |
+      static_cast<unsigned>(core::KeyModifiers::kAltGr);
+  if ((key.modifiers & command_modifiers) != 0) return false;
   if (!model_.capture || model_.bound != target || model_.live != target)
     return false;
   if (key.virtual_key != VK_ESCAPE && key.virtual_key != VK_RETURN &&
@@ -326,6 +334,17 @@ void Runtime::Generate(bool translation) {
   std::lock_guard lock(mutex_);
   model_.translate = translation;
   StartGeneration(translation);
+}
+void Runtime::ReturnToInput() {
+  std::lock_guard lock(mutex_);
+  api_job_.reset();
+  model_.Cancel();
+  model_.translate = false;
+  if (!model_.Pending() &&
+      (model_.status == "Waiting for response..." ||
+       model_.status == "Receiving..."))
+    model_.status = "Processing stopped. Source retained.";
+  Changed();
 }
 void Runtime::Cancel() {
   std::lock_guard lock(mutex_);

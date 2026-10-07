@@ -22,6 +22,7 @@
 #include "../ui/icons.hpp"
 #include "../ui/menu_draw.hpp"
 #include "../ui/theme.hpp"
+#include "buffer_hotkey.hpp"
 #include "settings_ui.hpp"
 
 #pragma comment(lib, "comctl32.lib")
@@ -33,6 +34,12 @@ constexpr UINT kOpenSettings = WM_APP + 82;
 constexpr int kToggle = 100, kSettings = 101, kDeploy = 102, kStartup = 103,
               kAbout = 105, kExit = 104, kPasteMenu = 106;
 constexpr int kModeInput = 110, kModeGenerate = 111, kModeTranslate = 112;
+
+std::wstring BufferHotkeyTitle(const Settings& settings) {
+  return std::wstring(settings.hotkey_modifiers == (MOD_CONTROL | MOD_ALT)
+                          ? L"Ctrl+Alt+" : L"Ctrl+Shift+") +
+         static_cast<wchar_t>(settings.hotkey_key);
+}
 
 DWORD ForegroundProcess() {
   DWORD process = 0;
@@ -67,6 +74,7 @@ struct Window {
   HICON product_icon = nullptr;
   HFONT menu_font = nullptr;
   std::map<UINT, std::wstring> menu_labels;
+  std::unique_ptr<BufferHotkeyRegistration> buffer_hotkey;
 
   Window(Runtime& r, std::function<void()> s, std::function<void()> d,
          UiCommands* c)
@@ -120,6 +128,7 @@ ui::BufferPaintState Window::MakePaintState(const core::Json& state) const {
       {"Protected", L"已暂停"},
       {"Waiting for response...", L"等待响应…"},
       {"Receiving...", L"接收中…"},
+      {"Processing stopped. Source retained.", L"已停止处理，原文已保留"},
       {"Request failed. Source retained.", L"请求失败，原文已保留"},
       {"Sending...", L"发送中…"}, {"Delivered", L"已发送"},
       {"Delivery failed. Content retained.", L"发送失败，内容已保留"},
@@ -135,6 +144,8 @@ ui::BufferPaintState Window::MakePaintState(const core::Json& state) const {
     paint.status = paint.capturing ? L"已绑定" : L"等待输入框";
   const bool has_result = !state.value("result", std::string()).empty();
   const bool has_source = !state.value("source", std::string()).empty();
+  if (has_result && !paint.translate)
+    paint.status += L" · 待发结果已保留";
   paint.copy_enabled = has_result || has_source;
   paint.send_enabled = paint.capturing && paint.bound &&
                        !state.value("uncertain", false) &&
@@ -166,21 +177,23 @@ void Window::EnsureSettings() {
   cb.load = [this] { return runtime.Configuration(); };
   cb.save = [this](Settings value, const std::wstring& key, bool replace,
                    std::string* error) {
-    auto old = runtime.Configuration();
-    UnregisterHotKey(window, 1);
-    if (!RegisterHotKey(window, 1, value.hotkey_modifiers | MOD_NOREPEAT,
-                        value.hotkey_key)) {
-      RegisterHotKey(window, 1, old.hotkey_modifiers | MOD_NOREPEAT,
-                     old.hotkey_key);
-      if (error) *error = "快捷键已被占用，请选择其他字母。";
+    const auto result = buffer_hotkey->Update(
+        value.hotkey_modifiers, value.hotkey_key,
+        [&] { return runtime.Configure(value, key, replace, error); });
+    if (result == HotkeyUpdate::kInvalid) {
+      if (error) *error = "快捷键必须为 Ctrl+Shift 或 Ctrl+Alt 加 A–Z 字母；设置未保存。";
       return false;
     }
-    if (!runtime.Configure(value, key, replace, error)) {
-      UnregisterHotKey(window, 1);
-      RegisterHotKey(window, 1, old.hotkey_modifiers | MOD_NOREPEAT,
-                     old.hotkey_key);
+    if (result == HotkeyUpdate::kUnavailable) {
+      if (error) *error = Utf8(BufferHotkeyTitle(value) +
+          (buffer_hotkey->Registered()
+              ? L" 不可用，设置未保存；原快捷键仍有效。请选择其他组合或字母。"
+              : L" 不可用，设置未保存。请使用托盘打开 Buffer，或选择其他组合或字母。"));
       return false;
     }
+    if (result == HotkeyUpdate::kSaveFailed) return false;
+    wcscpy_s(tray.szTip, L"RIMES 输入法与 Buffer");
+    Shell_NotifyIconW(NIM_MODIFY, &tray);
     if (product_icon) {
       DestroyIcon(product_icon);
       product_icon = ui::CreateProductIcon(16);
@@ -246,9 +259,16 @@ void Window::PopupModeMenu() {
       TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, cursor.x, cursor.y, 0,
                      window, nullptr);
   DestroyMenu(menu);
-  if (command == kModeInput) mode = ui::BufferMode::kInput;
-  if (command == kModeGenerate) mode = ui::BufferMode::kGenerate;
-  if (command == kModeTranslate) mode = ui::BufferMode::kTranslate;
+  if (command == kModeInput || command == kModeGenerate ||
+      command == kModeTranslate) {
+    // Selection is a real processing boundary, not an API request. Cancel
+    // the previous automatic translation/queued producer first; reviewed
+    // results and an issued insertion remain available for explicit sending.
+    runtime.ReturnToInput();
+    mode = command == kModeInput ? ui::BufferMode::kInput
+        : command == kModeGenerate ? ui::BufferMode::kGenerate
+                                   : ui::BufferMode::kTranslate;
+  }
   InvalidateRect(window, nullptr, FALSE);
 }
 
@@ -340,7 +360,8 @@ void Window::UpdateTooltip(int hit) {
       text = L"复制";
       break;
     case ui::BufferHitKind::kSend:
-      text = L"发送";
+      text = runtime.Snapshot().value("result", std::string()).empty()
+                 ? L"发送下一块" : L"发送下一块待发结果";
       break;
     case ui::BufferHitKind::kBind:
       text = L"在当前输入框接收输入到 Buffer";
@@ -574,7 +595,8 @@ LRESULT CALLBACK Window::Procedure(HWND hwnd, UINT message, WPARAM wparam,
       case WM_ERASEBKGND:
         return 1;
       case WM_HOTKEY:
-        if (wparam == 1) self->runtime.Toggle(ForegroundProcess());
+        if (self->buffer_hotkey && self->buffer_hotkey->Matches(wparam, lparam))
+          self->runtime.Toggle(ForegroundProcess());
         return 0;
       case kChanged:
         self->Update();
@@ -837,7 +859,7 @@ LRESULT CALLBACK Window::Procedure(HWND hwnd, UINT message, WPARAM wparam,
         if (self->commands) self->commands->Attach(nullptr);
         self->notification.store(nullptr);
         self->runtime.SetNotify({});
-        UnregisterHotKey(hwnd, 1);
+        if (self->buffer_hotkey) self->buffer_hotkey->Reset();
         WTSUnRegisterSessionNotification(hwnd);
         Shell_NotifyIconW(NIM_DELETE, &self->tray);
         self->settings.reset();
@@ -932,8 +954,8 @@ void RunWindow(Runtime& runtime, const std::function<void()>& stop,
   });
   auto config = runtime.Configuration();
   ui.theme = ui::ThemeIdOrDefault(config.theme);
-  RegisterHotKey(window, 1, config.hotkey_modifiers | MOD_NOREPEAT,
-                 config.hotkey_key);
+  ui.buffer_hotkey = std::make_unique<BufferHotkeyRegistration>(window);
+  ui.buffer_hotkey->RegisterInitial(config.hotkey_modifiers, config.hotkey_key);
   ui.product_icon = ui::CreateProductIcon(16);
   ui.tray.cbSize = sizeof(ui.tray);
   ui.tray.hWnd = window;
@@ -943,7 +965,20 @@ void RunWindow(Runtime& runtime, const std::function<void()>& stop,
   ui.tray.hIcon =
       ui.product_icon ? ui.product_icon : LoadIconW(nullptr, IDI_APPLICATION);
   wcscpy_s(ui.tray.szTip, L"RIMES 输入法与 Buffer");
+  if (!ui.buffer_hotkey->Registered())
+    wcscpy_s(ui.tray.szTip, L"RIMES · Buffer 快捷键不可用，请使用托盘");
   ui.AddTrayIcon();
+  if (!ui.buffer_hotkey->Registered()) {
+    const auto notice = BufferHotkeyTitle(config) +
+        L" 未能注册。仍可从托盘打开 Buffer，在设置中选择其他组合或字母。";
+    wcscpy_s(ui.tray.szInfoTitle, L"Buffer 快捷键未启用");
+    wcscpy_s(ui.tray.szInfo, notice.c_str());
+    ui.tray.dwInfoFlags = NIIF_WARNING;
+    ui.tray.uFlags |= NIF_INFO;
+    Shell_NotifyIconW(NIM_MODIFY, &ui.tray);
+    ui.tray.uFlags &= ~NIF_INFO;
+    OutputDebugStringW(notice.c_str());
+  }
   ui.tooltip = CreateWindowExW(0, TOOLTIPS_CLASSW, nullptr,
                                WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, 0, 0, 0,
                                0, window, nullptr, wc.hInstance, nullptr);

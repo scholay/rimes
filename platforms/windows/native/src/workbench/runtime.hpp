@@ -40,6 +40,10 @@ class Runtime {
   void Paste(std::string text);
   void Send(bool all);
   void Generate(bool translation);
+  // Stop queued/in-flight automatic translation when changing the displayed
+  // mode. Source, completed results and an issued delivery/ack are retained;
+  // selecting a mode does not dispatch a new request or deliver content.
+  void ReturnToInput();
   void Cancel();
   void Tick();
   void Stop();

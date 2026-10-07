@@ -85,7 +85,8 @@ bool ValidSettings(const Settings& value) {
   return schema && value.candidate_count >= 1 && value.candidate_count <= 9 && ValidTheme(value.theme) && value.font_size >= 10 &&
          value.font_size <= 40 && value.hotkey_key >= 'A' &&
          value.hotkey_key <= 'Z' &&
-         value.hotkey_modifiers == (MOD_CONTROL | MOD_ALT) &&
+         (value.hotkey_modifiers == (MOD_CONTROL | MOD_SHIFT) ||
+          value.hotkey_modifiers == (MOD_CONTROL | MOD_ALT)) &&
          value.base_url.size() <= 2048 && value.model.size() <= 256 &&
          value.target_language.size() <= 128;
 }
@@ -98,24 +99,35 @@ bool LoadSettings(Settings* value, std::string* error) {
       throw std::runtime_error("Invalid settings file");
     std::ifstream file(path);
     auto j = Json::parse(file);
-    value->revision = j.value("revision", 1ULL);
-    value->schema = j.value("schema", "rime_ice");
-    value->base_url = j.value("base_url", "");
-    value->model = j.value("model", "");
-    value->target_language = j.value("target_language", "English");
-    value->ascii = j.value("ascii", false);
-    value->traditional = j.value("traditional", false);
-    value->ascii_punctuation = j.value("ascii_punctuation", false);
-    value->font_size = j.value("font_size", 16U);
-    value->candidate_count = j.value("candidate_count", 9U);
-    value->vertical_candidates = j.value("vertical_candidates", false);
-    value->theme = j.value("theme", "night");
-    if (!ValidTheme(value->theme)) value->theme = "night";
-    value->hotkey_modifiers = j.value(
-        "hotkey_modifiers", static_cast<unsigned>(MOD_CONTROL | MOD_ALT));
-    value->hotkey_key = j.value("hotkey_key", static_cast<unsigned>('B'));
-    if (!ValidSettings(*value))
+    // Do not expose partial or invalid values to startup hotkey registration.
+    // A failed read retains the caller's previous trusted configuration.
+    Settings candidate;
+    candidate.revision = j.value("revision", 1ULL);
+    candidate.schema = j.value("schema", "rime_ice");
+    candidate.base_url = j.value("base_url", "");
+    candidate.model = j.value("model", "");
+    candidate.target_language = j.value("target_language", "English");
+    candidate.ascii = j.value("ascii", false);
+    candidate.traditional = j.value("traditional", false);
+    candidate.ascii_punctuation = j.value("ascii_punctuation", false);
+    candidate.font_size = j.value("font_size", 16U);
+    candidate.candidate_count = j.value("candidate_count", 9U);
+    candidate.vertical_candidates = j.value("vertical_candidates", false);
+    candidate.theme = j.value("theme", "night");
+    if (!ValidTheme(candidate.theme)) candidate.theme = "night";
+    // Preserve every explicitly saved legacy chord, even Ctrl+Alt+B: an old
+    // default and a deliberate user choice cannot be distinguished. Early
+    // files with only a letter also used Ctrl+Alt. New/absent shortcut fields
+    // use the macOS-aligned Ctrl+Shift default without rewriting on load.
+    const unsigned default_modifiers =
+        j.contains("hotkey_key") && j.value("version", 1U) < 2U
+            ? MOD_CONTROL | MOD_ALT
+            : MOD_CONTROL | MOD_SHIFT;
+    candidate.hotkey_modifiers = j.value("hotkey_modifiers", default_modifiers);
+    candidate.hotkey_key = j.value("hotkey_key", static_cast<unsigned>('B'));
+    if (!ValidSettings(candidate))
       throw std::runtime_error("Invalid settings values");
+    *value = std::move(candidate);
     return true;
   } catch (...) {
     Fail(error, "Settings unreadable; original file preserved.");
@@ -127,7 +139,7 @@ bool SaveSettings(const Settings& value, std::string* error) {
     if (!ValidSettings(value)) throw std::runtime_error("invalid settings");
     auto path = ConfigPath();
     std::filesystem::create_directories(path.parent_path());
-    Json j = {{"version", 1},
+    Json j = {{"version", 2},
               {"revision", value.revision},
               {"schema", value.schema},
               {"ascii", value.ascii},

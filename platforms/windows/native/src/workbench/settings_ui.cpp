@@ -72,6 +72,7 @@ void SettingsUiHost::SyncDraftFromConfig(const Settings& config) {
   draft_.font_size = config.font_size;
   draft_.candidate_count = config.candidate_count;
   draft_.vertical_candidates = config.vertical_candidates;
+  draft_.hotkey_modifiers = config.hotkey_modifiers;
   draft_.hotkey = static_cast<wchar_t>(config.hotkey_key);
   draft_.base_url = Wide(config.base_url);
   draft_.model = Wide(config.model);
@@ -144,6 +145,10 @@ bool SettingsUiHost::HandleDialogMessage(MSG* message) {
   if (message->message == WM_KEYDOWN) {
     draft_.keyboard_focus = true;
     const auto key = message->wParam;
+    if (message->hwnd == combo_hotkey_modifiers_ &&
+        (key == VK_RETURN || key == VK_ESCAPE) &&
+        SendMessageW(combo_hotkey_modifiers_, CB_GETDROPPEDSTATE, 0, 0))
+      return false;  // Confirm/cancel the native popup before Save/Close.
     if (key == VK_ESCAPE ||
         (key >= '1' && key <= '6' && (GetKeyState(VK_CONTROL) & 0x8000))) {
       SendMessageW(hwnd_, WM_KEYDOWN, key, message->lParam);
@@ -163,7 +168,7 @@ bool SettingsUiHost::HandleDialogMessage(MSG* message) {
     if (key == VK_TAB) {
       std::vector<HWND> controls;
       for (const auto control : {check_ascii_, check_trad_, check_punct_,
-                                edit_font_, edit_candidate_count_, check_vertical_, edit_hotkey_, edit_base_,
+                                edit_font_, edit_candidate_count_, check_vertical_, combo_hotkey_modifiers_, edit_hotkey_, edit_base_,
                                 edit_model_, edit_key_, edit_lang_})
         if (control && IsWindowVisible(control)) controls.push_back(control);
       const bool back = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
@@ -228,6 +233,16 @@ void SettingsUiHost::CreateOrUpdateChildren() {
   make_edit(&edit_font_, false);
   make_edit(&edit_candidate_count_, false);
   make_edit(&edit_hotkey_, false);
+  if (!combo_hotkey_modifiers_) {
+    combo_hotkey_modifiers_ = CreateWindowExW(
+        0, L"COMBOBOX", L"", WS_CHILD | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST,
+        0, 0, 130, 130, hwnd_, reinterpret_cast<HMENU>(405),
+        GetModuleHandleW(nullptr), nullptr);
+    SendMessageW(combo_hotkey_modifiers_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(L"Ctrl+Shift+"));
+    SendMessageW(combo_hotkey_modifiers_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(L"Ctrl+Alt+"));
+  }
   make_edit(&edit_base_, false);
   make_edit(&edit_model_, false);
   make_edit(&edit_key_, true);
@@ -239,6 +254,8 @@ void SettingsUiHost::CreateOrUpdateChildren() {
   SetWindowTextW(edit_font_, std::to_wstring(draft_.font_size).c_str());
   SetWindowTextW(edit_candidate_count_, std::to_wstring(draft_.candidate_count).c_str());
   SetWindowTextW(edit_hotkey_, std::wstring(1, draft_.hotkey).c_str());
+  SendMessageW(combo_hotkey_modifiers_, CB_SETCURSEL,
+               draft_.hotkey_modifiers == (MOD_CONTROL | MOD_ALT) ? 1 : 0, 0);
   SetWindowTextW(edit_base_, draft_.base_url.c_str());
   SetWindowTextW(edit_model_, draft_.model.c_str());
   SetWindowTextW(edit_key_, L"");
@@ -285,7 +302,7 @@ void SettingsUiHost::ThemeEdits() {
   DwmSetWindowAttribute(hwnd_, DWMWA_TEXT_COLOR, &text, sizeof(text));
   if (edit_brush_) DeleteObject(edit_brush_);
   edit_brush_ = CreateSolidBrush(ui::ToColorRef(p.surface));
-  HWND edits[] = {edit_font_, edit_candidate_count_, check_vertical_, edit_hotkey_, edit_base_,
+  HWND edits[] = {edit_font_, edit_candidate_count_, check_vertical_, combo_hotkey_modifiers_, edit_hotkey_, edit_base_,
                   edit_model_, edit_key_,   edit_lang_};
   for (HWND edit : edits) {
     if (!edit) continue;
@@ -336,6 +353,9 @@ void SettingsUiHost::Relayout() {
 
   place_edit(edit_font_, layout_.font_edit, appearance);
   place_edit(edit_candidate_count_, layout_.candidate_count_edit, appearance);
+  auto hotkey_dropdown = layout_.hotkey_modifiers;
+  hotkey_dropdown.bottom += 96.0f;  // Native combo's height also owns its popup.
+  Place(combo_hotkey_modifiers_, hotkey_dropdown, dpi_, buffer);
   place_edit(edit_hotkey_, layout_.hotkey_edit, buffer);
   place_edit(edit_base_, layout_.base_edit, api);
   place_edit(edit_model_, layout_.model_edit, api);
@@ -383,7 +403,11 @@ bool SettingsUiHost::CommitSave() {
         config.font_size > 40 || hotkey.size() != 1)
       throw std::runtime_error("range");
     config.hotkey_key = static_cast<unsigned>(towupper(hotkey[0]));
-    config.hotkey_modifiers = MOD_CONTROL | MOD_ALT;
+    const auto modifier_choice = SendMessageW(combo_hotkey_modifiers_, CB_GETCURSEL, 0, 0);
+    if (modifier_choice != 0 && modifier_choice != 1)
+      throw std::runtime_error("hotkey modifier choice");
+    config.hotkey_modifiers = modifier_choice == 0
+        ? MOD_CONTROL | MOD_SHIFT : MOD_CONTROL | MOD_ALT;
     config.ascii = draft_.ascii;
     config.traditional = draft_.traditional;
     config.ascii_punctuation = draft_.ascii_punctuation;
@@ -514,6 +538,13 @@ LRESULT CALLBACK SettingsUiHost::Procedure(HWND hwnd, UINT message,
       if (wparam == 11 && self->draft_.page == ui::SettingsPage::kPlugins) self->UpdatePlugins();
       return 0;
     case WM_COMMAND:
+      if (LOWORD(wparam) == 405 && HIWORD(wparam) == CBN_SELCHANGE) {
+        self->draft_.hotkey_modifiers =
+            SendMessageW(self->combo_hotkey_modifiers_, CB_GETCURSEL, 0, 0) == 1
+                ? MOD_CONTROL | MOD_ALT : MOD_CONTROL | MOD_SHIFT;
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+      }
       if (HIWORD(wparam) == BN_CLICKED && LOWORD(wparam) >= 5100 && LOWORD(wparam) < 5109) {
         const auto index = static_cast<std::size_t>((LOWORD(wparam) - 5100) / 3);
         const int action = (LOWORD(wparam) - 5100) % 3;
@@ -738,6 +769,7 @@ LRESULT CALLBACK SettingsUiHost::Procedure(HWND hwnd, UINT message,
       KillTimer(hwnd, 11);
       self->hwnd_ = nullptr;
       self->edit_font_ = self->edit_candidate_count_ = self->edit_hotkey_ = self->edit_base_ = nullptr;
+      self->combo_hotkey_modifiers_ = nullptr;
       self->edit_model_ = self->edit_key_ = self->edit_lang_ = nullptr;
       self->check_vertical_ = self->check_ascii_ = self->check_trad_ = self->check_punct_ = nullptr;
       if (!self->saved_ && self->callbacks_.on_theme_preview)
