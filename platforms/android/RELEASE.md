@@ -1,6 +1,6 @@
-# Android 1.1.0 发布
+# Android 1.1.1 发布准备
 
-产品版本由 `VERSION` 提供，当前为 **1.1.0**，`versionCode=12`。每次对外提供新构建继续递增 code，不改变产品版本。正式身份为 `org.scholay.rimes.android`、名称 RIMES；开发包仍为 `.debug`、名称 RIMES Dev / RIMES 开发版。
+产品版本由 `VERSION` 提供，本轮目标为 **1.1.1**，`versionCode=15`。构建号递增，已发布的版本与文件不覆盖。正式身份仍为 `org.scholay.rimes.android`；开发包使用独立的 `.debug` 身份。
 
 ## 本地构建
 
@@ -9,7 +9,7 @@
 - `RIMES_ANDROID_KEYSTORE`：长期保管的正式 keystore 的绝对路径。
 - `RIMES_ANDROID_STORE_PASSWORD`、`RIMES_ANDROID_KEY_ALIAS`、`RIMES_ANDROID_KEY_PASSWORD`。
 
-配置完成后执行 `bash scripts/build-release.sh`。脚本运行核心测试、Release lint、APK/AAB 构建、APK 签名验证及 16 KB 对齐验证，在 `dist/1.1.0/` 保存产物与 SHA256SUMS。没有签名时直接停止，不回退到 debug keystore，不安装或上传。
+配置完成后执行 `bash scripts/build-release.sh`。脚本运行核心测试、Release lint、APK/AAB 构建、APK 签名验证及 16 KB 对齐验证，在 `dist/1.1.1/` 保存产物与 SHA256SUMS。没有签名时直接停止，不回退到 debug keystore，不安装或上传。
 
 ## 当前交付证据
 

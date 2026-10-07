@@ -69,6 +69,8 @@ python3 scripts/prepare-official-plugins.py
 
 ## 版本与构建
 
+2026-10-07 公开包更新目标：macOS / iOS / Android 1.1.1、Windows 1.1.2；iOS 本地构建号 50、Android code15。使用主线确切提交重新构建并记录签名、安装与公开下载读回；目标版本不代表已经发布。此前包审计保留为更新前的状态记录。
+
 | 平台/渠道 | 版本来源 | 构建/发布入口 | 当前边界 |
 |---|---|---|---|
 | macOS | `VERSION` 与 `Info.plist`；正式 tag 匹配，本地开发版附提交身份 | `CI` / `Release macOS`，`scripts/release.sh` | 正式包需签名、公证、同包真机验收与批准 |

@@ -6,7 +6,7 @@
 
 **合并到 main → macOS CI 全绿 → `./scripts/release.sh <渠道>` → tag → 签名暂存 → 真机同路验收 → 第二次批准 → GitHub Release。**
 
-本轮 macOS、iOS、Android、Windows 统一以 **1.1.0** 为发布目标，Linux 不纳入本轮。
+2026-10-07 的更新目标为 macOS、iOS、Android **1.1.1**，Windows **1.1.2**；Linux 不纳入正式包更新。
 目标与验收记录见 [1.1.0 发布计划](docs/releases/1.1.0-plan.md)；[1.0 发布准备](RELEASE-1.0.0.md)保留作历史记录。macOS 的 `VERSION`、`Info.plist` 与正式 tag 必须一致。发布脚本不修改、不提交任何文件，只在 `origin/main` 上创建并推送一个 tag；
 构建、验证、发布说明和 Release 由 GitHub Actions 完成。macOS 与数据预览的发布中心是
 [`scholay/rimes`](https://github.com/scholay/rimes/releases)；iOS 独立走 App Store Connect。
