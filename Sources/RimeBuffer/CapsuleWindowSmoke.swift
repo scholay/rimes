@@ -3,8 +3,10 @@ import Foundation
 
 func runCapsuleWindowSmokeTest() -> Bool {
     print("== RIMES Capsule window smoke ==")
+    // Paths are searchable. CI once generated an ADA5 UUID segment, so force
+    // that collision rather than assuming a short author token is unique.
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-        "rimes-capsule-window-smoke-\(UUID().uuidString)",
+        "rimes-capsule-window-smoke-Ada-\(UUID().uuidString)",
         isDirectory: true
     )
     defer { try? FileManager.default.removeItem(at: root) }
@@ -810,7 +812,8 @@ func runCapsuleWindowSmokeTest() -> Bool {
         let citedRow = try repository.save(citedDraft)
         citedDraft = try repository.draft(for: citedRow)
         let storedReference = try contentStore.record(id: citedRow.id).reference
-        let searchedIDs = try repository.list(kind: .pdf, query: "Ada").map(\.id)
+        let pathMatchedIDs = try repository.list(kind: .pdf, query: "Ada").map(\.id)
+        let searchedIDs = try repository.list(kind: .pdf, query: "Ada Lovelace").map(\.id)
         let indexedReference = try CapsuleRailLibrary.load(contentStore: contentStore,
             passwordStore: passwordStore).content.get().first(where: { $0.id == citedRow.id })
         let formattedReference = CapsuleReferenceFormatter.bibliography(
@@ -821,6 +824,8 @@ func runCapsuleWindowSmokeTest() -> Bool {
         }
         guard citedDraft.reference == reference,
               storedReference == reference,
+              pathMatchedIDs.count == 2,
+              Set(pathMatchedIDs) == Set([pdfRow.id, citedRow.id]),
               searchedIDs == [citedRow.id],
               indexedReference?.searchText.contains("Journal of Test Fixtures") == true,
               formattedReference?.contains("Journal of Test Fixtures") == true,
@@ -830,7 +835,8 @@ func runCapsuleWindowSmokeTest() -> Bool {
                   reference: CapsuleReference(), style: .apa7) == nil else {
             return capsuleWindowSmokeFail("structured reference round trip and style "
                 + "draft=\(citedDraft.reference == reference) stored=\(storedReference == reference) "
-                + "search=\(searchedIDs) index=\(indexedReference?.searchText ?? "nil") "
+                + "pathSearch=\(pathMatchedIDs) search=\(searchedIDs) "
+                + "index=\(indexedReference?.searchText ?? "nil") "
                 + "format=\(formattedReference ?? "nil")")
         }
         try repository.remove(citedRow, expectedRevision: citedRow.revision)
