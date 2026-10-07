@@ -79,10 +79,10 @@
 
 ## インストール
 
-macOS、iOS、Android、Windows は次の正式版 **1.0.0** に向けて準備中です。Linux は現状を維持します。iOS の [TestFlight 公開招待](https://testflight.apple.com/join/Kdj9RB4q)を利用でき、現在の外部テスト版は **0.1.0 (32)** です。Windows 1.0.0 は未署名の EXE インストーラを使用し、他のプラットフォームでは所定の署名を行います。正式版は最終検証後に公開します。ソースからのローカルビルドも可能です。
+公開版は [macOS 1.1.0](https://github.com/scholay/rimes/releases/tag/v1.1.0)、[Android 1.1.0](https://github.com/scholay/rimes/releases/tag/android-v1.1.0)、[Windows 1.1.1](https://github.com/scholay/rimes/releases/tag/windows-v1.1.1)、[iOS App Store 1.1.0](https://apps.apple.com/us/app/lingxi-ime/id6814620242) です。macOS は署名・公証済み、Android は長期署名鍵を使用し、Windows EXE は未署名です。iOS は [TestFlight 公開招待](https://testflight.apple.com/join/Kdj9RB4q)も提供し、インストール可能なビルドは TestFlight に表示されます。Linux は現在、入力スキームのデータプレビューを公開しています。最新ソースとの差分は[パッケージ監査](validation/release-audit-20261007.md)を参照してください。ソースからローカルビルドも可能です。
 
 ```bash
-git clone https://github.com/scholay/rimes.git
+git clone --recurse-submodules https://github.com/scholay/rimes.git
 cd rimes
 ```
 
@@ -90,8 +90,8 @@ cd rimes
 |---|---|---|
 | macOS | 入力メソッドに加え、Buffer、Capsule、Mailbox | `./build_install.sh` |
 | iOS | キーボードと本体アプリ（iOS 17+）。オフラインの拼音、自然碼、五筆、英語、および Buffer | Xcode で [`platforms/ios/RIMES.xcodeproj`](platforms/ios/README.md) を開く |
-| Windows | ネイティブ TSF 入力メソッド。未確定文字列、候補、確定。Buffer、Capsule、Mailbox はまだなく、署名付きインストーラもない | [`platforms/windows/native/README.md`](platforms/windows/native/README.md) を参照 |
-| Android | 開発中 | ソースはまだこのリポジトリにない |
+| Windows | ネイティブ TSF 入力メソッド、Buffer、並打、公式プラグイン設定。x64 / x86 対応 | [`platforms/windows/native/README.md`](platforms/windows/native/README.md) を参照 |
+| Android | ネイティブ InputConnection キーボード、Buffer、6つの公式プラグイン、設定可能な AI サービス | [`platforms/android/README.md`](platforms/android/README.md) を参照 |
 | Linux | Fcitx5 入力メソッド、Buffer、Capsule。Mailbox はまだない | [`platforms/linux/ime/README.md`](platforms/linux/ime/README.md) を参照 |
 
 ## ドキュメント

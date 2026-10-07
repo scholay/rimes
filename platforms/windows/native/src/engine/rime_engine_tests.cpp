@@ -135,6 +135,25 @@ void TestUnhandledInputIsMutationFree() {
         "unhandled snapshot must be empty");
 }
 
+void TestModifierSnapshotPreservesHostOwnership() {
+  RawSnapshotView raw;
+  raw.modifier_snapshot = true;
+  raw.commit_text = "ni";
+  EngineSnapshot snapshot;
+  Check(BuildEngineSnapshot(raw, &snapshot), "modifier commit is a valid snapshot");
+  Check(!snapshot.handled && snapshot.modifier_snapshot && snapshot.commit_text == "ni",
+        "modifier commit never claims the host key");
+  core::InputState wire;
+  Check(MapSnapshotToInputState(7, 8, 9, snapshot, &wire),
+        "modifier commit maps to the negotiated wire state");
+  Check((wire.state_flags & static_cast<unsigned>(core::InputStateFlags::kHandled)) == 0 &&
+            (wire.state_flags & static_cast<unsigned>(core::InputStateFlags::kModifierSnapshot)) != 0,
+        "wire state separates a modifier snapshot from eaten keys");
+  raw.commit_text = std::string_view("\xFF", 1);
+  Check(!BuildEngineSnapshot(raw, &snapshot),
+        "pass-through modifier commits still reject malformed text");
+}
+
 #ifdef _WIN32
 void TestDllPathGate() {
   RimeEngine engine;
@@ -161,6 +180,7 @@ int main() {
   TestMidScalarOffsetFailsClosed();
   TestCandidateLimitsFailClosed();
   TestUnhandledInputIsMutationFree();
+  TestModifierSnapshotPreservesHostOwnership();
 #ifdef _WIN32
   TestDllPathGate();
 #endif

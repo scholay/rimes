@@ -42,11 +42,13 @@ struct BrokerCandidate {
   std::wstring label;
 };
 
-// Text mutations returned atomically with one handled Broker snapshot.  Wire
+// Text mutations returned atomically with one authoritative Broker snapshot. Wire
 // strings are decoded and validated by the pipe client before they reach TSF.
 // `has_snapshot` is false when the key was eaten without a new authoritative
 // mutation (most KeyUp events). Applying an empty default state in that case
 // would cancel an in-progress composition.
+// A negotiated modifier snapshot may accompany kPassThrough: apply its actual
+// text changes while preserving the host's physical modifier event.
 struct BrokerInputState {
   bool has_snapshot = false;
   bool buffer_capture = false;

@@ -77,6 +77,7 @@ class BrokerConnection final {
   DWORD broker_session_id_;
   engine::RimeEngine* engine_;
   bool hello_received_ = false;
+  bool modifier_snapshots_ = false;
   workbench::Runtime* runtime_;
   std::function<bool()> open_settings_;
   DWORD peer_process_ = 0;

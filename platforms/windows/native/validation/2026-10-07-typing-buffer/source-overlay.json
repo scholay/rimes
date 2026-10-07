@@ -1,0 +1,5 @@
+{
+  "platforms/windows/native/src/broker/broker_connection.cpp": "1d367ad5cd245be3d47a162fe6e71c75313eb2fce4e00962f6c68afa5a8738b8",
+  "platforms/windows/native/src/engine/product_probe.cpp": "9c086430053b7aaa076aa5a152d7b3b44b4bdf0bd6985934665d2ae862afeb95",
+  "platforms/windows/native/src/workbench/runtime_tests.cpp": "94165f17089ce861445be59263b3069fc09697d004b108b6e7b89ad17af8c05f"
+}

@@ -444,6 +444,17 @@ class RimeEngine::Impl final {
       }
 
       const bool handled = api_->process_key(session, keycode, modifiers) != 0;
+      // ascii_composer records Shift down, and can commit raw code or toggle
+      // ASCII on release while process_key still returns false. Collect only
+      // this explicit modifier path; ordinary unhandled keys keep their
+      // existing no-mutation/pass-through contract.
+      const bool shift = keycode == 0xffe1 || keycode == 0xffe2;
+      if (shift) {
+        if (!CollectSnapshotLocked(session, output, error)) return false;
+        output->handled = false;
+        output->modifier_snapshot = true;
+        return true;
+      }
       if (!handled) {
         RawSnapshotView raw;
         raw.handled = false;
@@ -453,6 +464,31 @@ class RimeEngine::Impl final {
     } catch (...) {
       *output = EngineSnapshot{};
       SetError(error, "exception while processing a librime key event");
+      return false;
+    }
+  }
+
+  bool ProcessShiftTap(SessionId session, std::int32_t keycode,
+                       std::int32_t modifiers, EngineSnapshot* output,
+                       std::string* error) noexcept {
+    if (output) *output = {};
+    constexpr int release = 1 << 30;
+    constexpr int commands = (1 << 2) | (1 << 3) | (1 << 6);
+    if (!output || (keycode != 0xffe1 && keycode != 0xffe2) ||
+        (modifiers & commands) != 0) return false;
+    try {
+      std::lock_guard lock(mutex_);
+      if (!healthy_ || !api_ || !sessions_.contains(session)) return false;
+      // Preserve the schema's own switch style. This is a qualified gesture,
+      // never a retry of a failed physical key or an injected host shortcut.
+      api_->process_key(session, keycode, (modifiers & ~release) | 1);
+      api_->process_key(session, keycode, modifiers | release);
+      if (!CollectSnapshotLocked(session, output, error)) return false;
+      output->handled = false;
+      output->modifier_snapshot = true;
+      return true;
+    } catch (...) {
+      SetError(error, "exception while processing a Shift tap");
       return false;
     }
   }
@@ -765,6 +801,12 @@ bool RimeEngine::ProcessKey(SessionId session, std::int32_t keycode,
                             std::int32_t modifiers, EngineSnapshot* output,
                             std::string* error) noexcept {
   return impl_->ProcessKey(session, keycode, modifiers, output, error);
+}
+
+bool RimeEngine::ProcessShiftTap(SessionId session, std::int32_t keycode,
+                                 std::int32_t modifiers, EngineSnapshot* output,
+                                 std::string* error) noexcept {
+  return impl_->ProcessShiftTap(session, keycode, modifiers, output, error);
 }
 
 bool RimeEngine::Configure(SessionId session, const std::string& schema,

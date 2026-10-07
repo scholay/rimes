@@ -319,11 +319,8 @@ inline void PaintSettingsShell(HDC dc, const SettingsLayout& layout,
     SetTextColor(dc, ToColorRef(p.text_secondary));
     RECT help = px(layout.body);
     help.bottom = help.top + MulDiv(48, static_cast<int>(dpi), 96);
-    DrawTextW(dc, L"使用 Ctrl+Alt+字母 打开或绑定 Buffer。", -1, &help,
+    DrawTextW(dc, L"选择快捷键组合与字母。默认 Ctrl+Shift+B；旧自定义组合会保留。", -1, &help,
               DT_LEFT | DT_WORDBREAK);
-    RECT fl = px({layout.body.left, layout.hotkey_edit.top,
-                  layout.hotkey_edit.left - 8.0f, layout.hotkey_edit.bottom});
-    DrawTextW(dc, L"Ctrl+Alt+", -1, &fl, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
   } else if (draft.page == SettingsPage::kBuffer) {
     SelectObject(dc, fonts.body);
     SetTextColor(dc, ToColorRef(p.text_secondary));
@@ -331,6 +328,7 @@ inline void PaintSettingsShell(HDC dc, const SettingsLayout& layout,
     DrawTextW(dc, L"输入先进入缓冲区，再由你发送到已绑定的输入框。\n\n"
                  L"Return 轻按发送下一块，长按 1.2 秒发送全部。\n"
                  L"切换输入框后暂停输入和发送。先点宿主输入框，再点 Buffer 原文区重新绑定；也可按快捷键。\n"
+                 L"切换处理模式会停止旧自动翻译；已完成待发结果保留，仍可显式发送。\n"
                  L"关闭窗口保留本次内容，退出后不恢复正文。", -1, &help,
               DT_LEFT | DT_WORDBREAK);
   } else if (draft.page == SettingsPage::kApi) {

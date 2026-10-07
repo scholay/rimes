@@ -2,9 +2,12 @@
 
 Current Windows release: **[1.1.1](https://github.com/scholay/rimes/releases/tag/windows-v1.1.1)**. Download the EXE installer for a data-preserving upgrade, including discoverable Settings and system uninstall entries. See the [release notes](RELEASE-1.1.1.md); package verification and actual desktop acceptance are recorded separately in the release BUILD-INFO.json.
 
-Post-release damaged-install recovery, candidate settings and caret placement
-changes have [separate source/native test evidence](validation/2026-10-07-community-repair.md).
-They still require a new packaged candidate and real desktop acceptance.
+The published 1.1.1 package includes damaged-install recovery, candidate settings
+and caret-placement fixes. Its BUILD-INFO.json distinguishes automated checks,
+the actual upgrade, and remaining host/uninstall acceptance. The current Shift
+and Buffer shortcut repairs still require a new package and ordinary desktop
+typing acceptance; see the [acceptance record](validation/2026-10-07-typing-buffer.md) and
+[maintenance checklist](MANUAL-TEST.md).
 
 This directory contains the native Windows implementation of RIMES. It is
 separate from the Weasel data preview in the parent directory.
@@ -39,6 +42,10 @@ Where the TSF host cooperates, typing matches the macOS RIMES controller:
 - `1`–`9` select by label.
 - PageDown / PageUp page the menu.
 - Escape cancels and commits nothing.
+- A short independent Shift tap uses the scheme's Chinese/English switch.
+  Its raw-code commit is collected immediately while Shift remains a host
+  modifier. Other key combinations, long holds and focus changes cancel the
+  tap; unavailable or older Brokers do not receive deferred input.
 
 The candidate panel is a `WS_EX_NOACTIVATE` topmost tool window so it cannot
 steal focus from the host.
@@ -49,6 +56,18 @@ Vertical candidates use additional columns when the current monitor is too
 short to fit the page. If the host temporarily cannot resolve its caret, the
 panel keeps the last position within the current focus context; with no valid
 position it stays hidden until a caret is available.
+
+New Buffer shortcut settings default to **Ctrl+Shift+B**, corresponding to
+macOS Cmd+Shift+B. Saved Ctrl+Alt shortcuts are retained; Settings can select
+either combination and another letter. A conflicting shortcut is reported,
+and a failed change keeps the previous shortcut active. Buffer remains
+accessible from the tray when registration fails.
+
+Ctrl/Alt/Win/AltGr combinations with Return, Backspace or Escape are host
+commands, even while Buffer captures ordinary input. Switching the workbench
+back to Input stops automatic translation and queued processing; source and
+completed results remain available for explicit sending. These changes describe
+the current source, not a replacement of the published 1.1.1 installer.
 
 ## Build
 
@@ -83,7 +102,7 @@ does not load `rime.dll`.
 `testdata/e2e` table schema and drives the real `TextService` through a Fake
 TSF stack (`ITfThreadMgr` / `ITfContext` / `ITfComposition`). It asserts
 preedit, candidate contents, `nihao`+Space → `你好`, number selection, paging,
-and Escape.
+Escape, Shift switching, ordinary editing and host-command pass-through.
 
 Hosted GitHub `windows-2022` runners usually have a logon session and can
 launch Notepad, but they are **not** a reliable interactive IME desktop: no

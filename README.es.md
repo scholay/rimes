@@ -79,10 +79,10 @@ Todos los complementos de la tabla vienen con RIMES y quedan activados en una in
 
 ## Instalación
 
-macOS, iOS, Android y Windows se preparan para la versión estable **1.0.0**; Linux mantiene su versión actual. Ya está disponible la [invitación pública de TestFlight para iOS](https://testflight.apple.com/join/Kdj9RB4q), que actualmente ofrece **0.1.0 (32)**. Windows 1.0.0 se distribuirá mediante un instalador EXE sin firmar; las demás plataformas mantienen sus requisitos de firma. Las descargas estables llegarán tras la validación final. También puedes obtener el código y compilarlo en tu equipo:
+Versiones públicas: [macOS 1.1.0](https://github.com/scholay/rimes/releases/tag/v1.1.0), [Android 1.1.0](https://github.com/scholay/rimes/releases/tag/android-v1.1.0), [Windows 1.1.1](https://github.com/scholay/rimes/releases/tag/windows-v1.1.1) e [iOS App Store 1.1.0](https://apps.apple.com/us/app/lingxi-ime/id6814620242). El paquete de macOS está firmado y notarizado; Android usa la clave de firma de larga duración; el EXE de Windows no está firmado. iOS también ofrece una [invitación pública de TestFlight](https://testflight.apple.com/join/Kdj9RB4q); allí se muestran los builds disponibles. Linux ofrece actualmente una vista previa de los datos de esquemas. Consulta la [auditoría de paquetes](validation/release-audit-20261007.md) para conocer las diferencias con el código actual. También puedes compilar el código localmente:
 
 ```bash
-git clone https://github.com/scholay/rimes.git
+git clone --recurse-submodules https://github.com/scholay/rimes.git
 cd rimes
 ```
 
@@ -90,8 +90,8 @@ cd rimes
 |---|---|---|
 | macOS | Método de entrada, además de Buffer, Capsule y Mailbox | `./build_install.sh` |
 | iOS | Teclado y app principal (iOS 17+): pinyin, Natural Code, Wubi e inglés sin conexión, y Buffer | Abre [`platforms/ios/RIMES.xcodeproj`](platforms/ios/README.md) en Xcode |
-| Windows | Método de entrada TSF nativo: preedición, candidatos y confirmación. Aún no hay Buffer, Capsule ni Mailbox, ni un instalador firmado | Véase [`platforms/windows/native/README.md`](platforms/windows/native/README.md) |
-| Android | En desarrollo | El código aún no está en este repositorio |
+| Windows | Método de entrada TSF nativo, Buffer, acordes y ajustes de plugins oficiales; x64 / x86 | Véase [`platforms/windows/native/README.md`](platforms/windows/native/README.md) |
+| Android | Teclado InputConnection nativo, Buffer, seis plugins oficiales y servicios de IA configurables | Véase [`platforms/android/README.md`](platforms/android/README.md) |
 | Linux | Método de entrada Fcitx5, Buffer y Capsule. Aún no hay Mailbox | Véase [`platforms/linux/ime/README.md`](platforms/linux/ime/README.md) |
 
 ## Documentación

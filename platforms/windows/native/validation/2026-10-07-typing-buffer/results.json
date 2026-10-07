@@ -1,0 +1,152 @@
+{
+  "sourceBase": "57c2151207a09667b02b9d2317dfd3567212a7b8",
+  "sourceSnapshot": "7e0d434b7b47925fbf84fc9b4db327672caa48185f2a4a25e8302d46a75081fb",
+  "build": {
+    "archiveSha256": "3a778c6dfb6d79e1aa3d51f3d910614e8d64788aa022f221051c1d18f2dad3de",
+    "sourceSnapshot": "7e0d434b7b47925fbf84fc9b4db327672caa48185f2a4a25e8302d46a75081fb",
+    "results": [
+      {
+        "architecture": "x64",
+        "built": true,
+        "artifacts": [
+          {
+            "file": "RimesTsf.dll",
+            "sha256": "a611e499391c69b36a56950065cf10ea44b0d7c78bdf1c0049009f7d650b4d89"
+          },
+          {
+            "file": "RimesBroker.exe",
+            "sha256": "b49adcebc398c727feba7f5ea79d42065d5bb7d1f4093a1819b6909355b0a5f6"
+          },
+          {
+            "file": "RimesTsfE2E.exe",
+            "sha256": "0b04f37aa3725efd0b29b55f6c2c0309f63b9e8322b618f99a5482e8bd5f08a0"
+          },
+          {
+            "file": "RimesProductProbe.exe",
+            "sha256": "3ea685a10772b635d12c8864462951d0af8249965e4dade981881369a74f11d2"
+          }
+        ]
+      },
+      {
+        "architecture": "x86",
+        "built": true,
+        "artifacts": [
+          {
+            "file": "RimesTsf.dll",
+            "sha256": "04a41d5bf3849e4fbb3032e03b51b5c755be59548398c958b2bed97878bc010b"
+          },
+          {
+            "file": "RimesBroker.exe",
+            "sha256": "7459eb0efa8b981b0bb015326ca86eba856f8dd27f6d50fe38236582b3a209dd"
+          },
+          {
+            "file": "RimesTsfE2E.exe",
+            "sha256": "2845d3301812d73bdf8860a8387caa398d1095064101349e909fc78b4ac8a907"
+          },
+          {
+            "file": "RimesProductProbe.exe",
+            "sha256": "71019a3fb2331ea604dc7c72758cd2a04446427190ddf861256d7d74e59ac809"
+          }
+        ]
+      }
+    ],
+    "installedBrokerUnchangedDuringThisRun": true
+  },
+  "typing": {
+    "sourceSnapshot": "7e0d434b7b47925fbf84fc9b4db327672caa48185f2a4a25e8302d46a75081fb",
+    "productDataVerified": true,
+    "sharedManifestSha256": "b6141790275ab54b582ddd9752ad33cc43cdac4569a035e56801b66f588c07d0",
+    "results": [
+      {
+        "architecture": "x64",
+        "brokerArchitecture": "x64",
+        "peer": "current",
+        "passed": true,
+        "fakeTsf": true,
+        "desktopSession": 0,
+        "librimeTag": "1.17.0",
+        "librimeArchiveSha256": "7478c7caa4ff6b37de86daba1f7ce4a994a4f5ba24872a820fb2b3a9b01fed15",
+        "brokerSha256": "b49adcebc398c727feba7f5ea79d42065d5bb7d1f4093a1819b6909355b0a5f6"
+      },
+      {
+        "architecture": "x64",
+        "brokerArchitecture": "x64",
+        "peer": "legacy",
+        "passed": true,
+        "fakeTsf": true,
+        "desktopSession": 0,
+        "librimeTag": "1.17.0",
+        "librimeArchiveSha256": "7478c7caa4ff6b37de86daba1f7ce4a994a4f5ba24872a820fb2b3a9b01fed15",
+        "brokerSha256": "ddbfa04490eddb916645d7d815854202f958b29412938cad38dad87fe7360d5a"
+      },
+      {
+        "architecture": "x86",
+        "brokerArchitecture": "x86",
+        "peer": "current",
+        "passed": true,
+        "fakeTsf": true,
+        "desktopSession": 0,
+        "librimeTag": "1.17.0",
+        "librimeArchiveSha256": "af235c26c06152ce09ceb8fe9d9ab9fba7ab43ce30aa952b40174d806f5cc3d9",
+        "brokerSha256": "7459eb0efa8b981b0bb015326ca86eba856f8dd27f6d50fe38236582b3a209dd"
+      },
+      {
+        "architecture": "x86",
+        "brokerArchitecture": "x64",
+        "peer": "legacy",
+        "passed": true,
+        "fakeTsf": true,
+        "desktopSession": 0,
+        "librimeTag": "1.17.0",
+        "librimeArchiveSha256": "7478c7caa4ff6b37de86daba1f7ce4a994a4f5ba24872a820fb2b3a9b01fed15",
+        "brokerSha256": "ddbfa04490eddb916645d7d815854202f958b29412938cad38dad87fe7360d5a"
+      }
+    ],
+    "realDesktopAcceptance": false,
+    "installedBrokerUnchangedDuringThisRun": true
+  },
+  "ctest": {
+    "status": "passed",
+    "session": 3,
+    "results": [
+      {
+        "architecture": "x64",
+        "exitCode": 0,
+        "tests": "18",
+        "failures": "0"
+      },
+      {
+        "architecture": "x86",
+        "exitCode": 0,
+        "tests": "18",
+        "failures": "0"
+      }
+    ],
+    "error": null,
+    "finishedAt": "2026-10-07T16:15:14.3198791+08:00"
+  },
+  "pausedShift": {
+    "positiveArchitectures": [
+      "x64",
+      "x86"
+    ],
+    "capabilities": [
+      0,
+      2
+    ],
+    "states": [
+      "full draft",
+      "issued pending result"
+    ],
+    "responsesPerArchitecture": 48,
+    "originalAckAndDuplicateAck": true,
+    "originalPreeditResumed": true,
+    "preFixNegative": {
+      "base": "57c2151207a09667b02b9d2317dfd3567212a7b8",
+      "exitCode": 1,
+      "expectedFailure": true,
+      "reason": "Paused Buffer Shift failed: paused Shift acquired host ownership or emitted a snapshot capabilities=0 pending_result=0"
+    }
+  },
+  "newPackagePublished": false
+}

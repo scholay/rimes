@@ -46,7 +46,7 @@ ascii_composer:
   good_old_caps_lock: true
   switch_key:
     Caps_Lock: clear
-    Shift_L: noop
+    Shift_L: commit_code
     Shift_R: noop
     Control_L: noop
     Control_R: noop

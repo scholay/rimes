@@ -57,10 +57,16 @@ class RimeEngine final {
                  std::string* error = nullptr, unsigned candidate_count = 9) noexcept;
 
   // Applies one key and atomically drains its commit/context into output. An
-  // unhandled key yields an empty snapshot so callers can pass it through.
+  // ordinary unhandled key yields an empty snapshot; explicit Shift snapshots
+  // report state changes independently of host key ownership.
   bool ProcessKey(SessionId session, std::int32_t keycode,
-                  std::int32_t modifiers, EngineSnapshot* output,
-                  std::string* error = nullptr) noexcept;
+                 std::int32_t modifiers, EngineSnapshot* output,
+                 std::string* error = nullptr) noexcept;
+  // One qualified physical tap; process both legal Rime phases under one
+  // engine lock. Canceled host shortcuts never create Rime modifier state.
+  bool ProcessShiftTap(SessionId session, std::int32_t keycode,
+                       std::int32_t modifiers, EngineSnapshot* output,
+                       std::string* error = nullptr) noexcept;
 
  private:
   class Impl;

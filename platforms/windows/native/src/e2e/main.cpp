@@ -49,6 +49,54 @@ void ClearCapsLockIfLatched() {
   keybd_event(VK_CAPITAL, 0x45, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0);
 }
 
+// Change only this test thread's logical state. Never synthesize desktop input
+// or change the user's hardware modifiers when exercising TSF callbacks.
+class LogicalKeyboardState {
+ public:
+  LogicalKeyboardState() { GetKeyboardState(saved_); }
+  ~LogicalKeyboardState() { SetKeyboardState(saved_); }
+  void Shift(bool down) {
+    BYTE state[256]{};
+    GetKeyboardState(state);
+    state[VK_SHIFT] = state[VK_LSHIFT] = down ? 0x80 : 0;
+    SetKeyboardState(state);
+  }
+  void RightShift(bool down) {
+    BYTE state[256]{};
+    GetKeyboardState(state);
+    state[VK_RSHIFT] = down ? 0x80 : 0;
+    state[VK_SHIFT] = (down || (state[VK_LSHIFT] & 0x80)) ? 0x80 : 0;
+    SetKeyboardState(state);
+  }
+  void Command(int key, bool down) {
+    BYTE state[256]{};
+    GetKeyboardState(state);
+    state[key] = down ? 0x80 : 0;
+    SetKeyboardState(state);
+  }
+ private:
+  BYTE saved_[256]{};
+};
+
+void TapLeftShift(rimes::windows::tsf::TextService* service, ITfContext* context) {
+  LogicalKeyboardState keyboard;
+  keyboard.Shift(true);
+  BOOL eaten = FALSE;
+  service->OnTestKeyDown(context, VK_SHIFT, 0x2a0000, &eaten);
+  Expect(eaten, "Shift test callback offers the real event to the engine");
+  if (eaten) {
+    service->OnKeyDown(context, VK_SHIFT, 0x2a0000, &eaten);
+    Expect(!eaten, "unhandled Shift down remains a host modifier");
+  }
+  keyboard.Shift(false);
+  service->OnTestKeyUp(context, VK_SHIFT, 0x2a0000, &eaten);
+  Expect(eaten, "unconsumed Shift down still receives its real release");
+  if (eaten) {
+    service->OnKeyUp(context, VK_SHIFT, 0x2a0000, &eaten);
+    Expect(!eaten, "Shift release mutation never consumes the host modifier");
+  }
+}
+
 void TypeVirtualKey(rimes::windows::tsf::TextService* service,
                     ITfContext* context, WPARAM virtual_key, bool require_eaten,
                     rimes::windows::e2e::FakeDocument* document = nullptr,
@@ -140,7 +188,7 @@ bool WaitForContext(rimes::windows::tsf::BrokerClient* client,
 // Documents the intentional cold/unavailable contract: keys before the Broker
 // is ready fail open immediately, are never marked consumed without processing,
 // and are never replayed after a later successful connect.
-void CheckUnavailablePassThroughAndNoReplay() {
+void CheckUnavailablePassThroughAndNoReplay(bool legacy_broker) {
   using namespace rimes::windows::tsf;
   auto client = CreateBrokerClient();
   Expect(client != nullptr, "unavailable-contract client created");
@@ -188,7 +236,17 @@ void CheckUnavailablePassThroughAndNoReplay() {
   client->HandleKey({BrokerKeyPhase::kKeyDown, VK_ESCAPE, 1}, &cancelled);
   client->HandleKey({BrokerKeyPhase::kKeyUp, VK_ESCAPE, 0}, &cancelled);
 
+  LogicalKeyboardState keyboard;
+  keyboard.Shift(true);
+  Expect(client->HandleKey({BrokerKeyPhase::kTestKeyDown, VK_SHIFT, 0x2a0001}, nullptr) ==
+             (legacy_broker ? BrokerKeyResult::kPassThrough : BrokerKeyResult::kConsumed),
+         "independent Shift observation follows the peer capability");
+  BrokerInputState armed_shift;
+  Expect(client->HandleKey({BrokerKeyPhase::kKeyDown, VK_SHIFT, 0x2a0001}, &armed_shift) ==
+             BrokerKeyResult::kPassThrough && !armed_shift.has_snapshot,
+         "physical Shift down remains local and never owns a host key");
   client->Disconnect();
+  keyboard.Shift(false);
   Expect(!client->IsConnected(), "Disconnect returns to unavailable");
 
   BrokerInputState dropped;
@@ -212,6 +270,13 @@ void CheckUnavailablePassThroughAndNoReplay() {
     return;
   }
   Expect(client->SetContext(1002), "fresh context after reconnect");
+  BrokerInputState old_shift;
+  Expect(client->HandleKey({BrokerKeyPhase::kTestKeyUp, VK_SHIFT, 0x2a0000}, nullptr) ==
+             BrokerKeyResult::kPassThrough,
+         "reconnected client never offers the previous session's Shift release");
+  Expect(client->HandleKey({BrokerKeyPhase::kKeyUp, VK_SHIFT, 0x2a0000}, &old_shift) ==
+             BrokerKeyResult::kPassThrough && !old_shift.has_snapshot,
+         "armed Shift retired by disconnect is never replayed on its late release");
 
   BrokerInputState after;
   Expect(client->HandleKey({BrokerKeyPhase::kKeyDown, 'N', 1}, &after) ==
@@ -277,7 +342,7 @@ void CheckCandidateGuardAfterKeyRelease() {
   client->Disconnect();
 }
 
-int RunTypingScenarios() {
+int RunTypingScenarios(bool legacy_broker) {
   using rimes::windows::e2e::FakeContext;
   using rimes::windows::e2e::FakeDocument;
   using rimes::windows::e2e::FakeThreadMgr;
@@ -327,8 +392,193 @@ int RunTypingScenarios() {
   std::cerr << "caps_lock=" << ((GetKeyState(VK_CAPITAL) & 1) != 0)
             << " shift=" << ((GetKeyState(VK_SHIFT) & 0x8000) != 0) << '\n';
 
-  CheckUnavailablePassThroughAndNoReplay();
+  CheckUnavailablePassThroughAndNoReplay(legacy_broker);
   CheckCandidateGuardAfterKeyRelease();
+
+  if (legacy_broker) {
+    TypeLatin(service, context, "ni");
+    const auto old_preedit = document.composition;
+    LogicalKeyboardState keyboard;
+    keyboard.Shift(true);
+    BOOL eaten = TRUE;
+    service->OnTestKeyDown(context, VK_SHIFT, 0x2a0000, &eaten);
+    Expect(!eaten, "legacy Broker does not offer Shift down");
+    service->OnKeyDown(context, VK_SHIFT, 0x2a0000, &eaten);
+    Expect(!eaten, "legacy Broker does not consume physical Shift down");
+    keyboard.Shift(false);
+    service->OnTestKeyUp(context, VK_SHIFT, 0x2a0000, &eaten);
+    Expect(!eaten, "legacy Broker does not offer Shift up");
+    service->OnKeyUp(context, VK_SHIFT, 0x2a0000, &eaten);
+    Expect(!eaten && document.text.empty() && document.composing &&
+               document.composition == old_preedit,
+           "legacy Broker keeps preedit and never receives new modifier requests");
+    TypeLatin(service, context, "hao");
+    TypeVirtualKey(service, context, VK_SPACE, true);
+    Expect(document.text == L"你好" && !document.composing,
+           "legacy peer commits subsequent Chinese input without a late Shift response");
+    ResetDocument(&document);
+    std::cout << "New TSF client / legacy Broker Shift compatibility passed\n";
+  } else {
+    // Product defaults intentionally configure right Shift as noop; preserve
+    // the scheme's style rather than forcing both sides to toggle ASCII.
+    TypeLatin(service, context, "ni");
+    const auto right_preedit = document.composition;
+    {
+      LogicalKeyboardState keyboard;
+      keyboard.RightShift(true);
+      BOOL eaten = FALSE;
+      service->OnTestKeyDown(context, VK_SHIFT, 0x360000, &eaten);
+      Expect(eaten, "right Shift scan code observes a qualified physical tap");
+      service->OnKeyDown(context, VK_SHIFT, 0x360000, &eaten);
+      Expect(!eaten, "right Shift down remains a host modifier");
+      keyboard.RightShift(false);
+      service->OnTestKeyUp(context, VK_SHIFT, 0x360000, &eaten);
+      Expect(eaten, "right Shift observes its matching unconsumed release");
+      service->OnKeyUp(context, VK_SHIFT, 0x360000, &eaten);
+      Expect(!eaten && document.text.empty() && document.composing &&
+                 document.composition == right_preedit,
+             "right Shift noop style preserves preedit without committing or toggling ASCII");
+    }
+    TypeLatin(service, context, "hao");
+    TypeVirtualKey(service, context, VK_SPACE, true);
+    Expect(document.text == L"你好", "right Shift noop preserves subsequent Chinese typing");
+    ResetDocument(&document);
+    TypeLatin(service, context, "ni");
+    TapLeftShift(service, context);
+    Expect(document.text == L"ni" && !document.composing,
+           "Shift release commits existing raw code immediately, exactly once");
+    CandidateSnapshot shifted;
+    CandidateWindow::GetLastSnapshot(&shifted);
+    Expect(!shifted.visible, "Shift raw-code commit retires candidates");
+    BOOL ascii_eaten = TRUE;
+    service->OnKeyDown(context, 'A', 0, &ascii_eaten);
+    Expect(!ascii_eaten && document.text == L"ni",
+           "ASCII mode passes the next letter through without delayed raw-code commit");
+    service->OnKeyUp(context, 'A', 0, &ascii_eaten);
+    TapLeftShift(service, context);
+    ResetDocument(&document);
+  }
+
+  if (!legacy_broker) {
+    // OnTest=false can suppress the real callback. Filtered F1/commands must
+    // cancel locally without sending those host shortcuts or a neutral key.
+    for (const auto& [command, key] : std::vector<std::pair<int, WPARAM>>{
+             {0, VK_F1}, {VK_CONTROL, 'A'}, {VK_CONTROL, VK_RETURN}}) {
+      TypeLatin(service, context, "ni");
+      const auto before = document.composition;
+      LogicalKeyboardState keyboard;
+      keyboard.Shift(true);
+      BOOL eaten = FALSE;
+      service->OnTestKeyDown(context, VK_SHIFT, 0x2a0000, &eaten);
+      Expect(eaten, "Shift observation begins before a host shortcut");
+      service->OnKeyDown(context, VK_SHIFT, 0x2a0000, &eaten);
+      if (command) keyboard.Command(command, true);
+      service->OnTestKeyDown(context, key, 0, &eaten);
+      Expect(!eaten, "Shift host shortcut test passes through without IPC");
+      if (command) keyboard.Command(command, false);
+      keyboard.Shift(false);
+      service->OnTestKeyUp(context, VK_SHIFT, 0x2a0000, &eaten);
+      Expect(eaten, "canceled Shift still observes its matching release");
+      service->OnKeyUp(context, VK_SHIFT, 0x2a0000, &eaten);
+      Expect(!eaten && document.text.empty() && document.composing &&
+                 document.composition == before,
+             "canceled Shift shortcut cannot commit raw text or toggle ASCII");
+      TypeLatin(service, context, "hao");
+      TypeVirtualKey(service, context, VK_SPACE, true);
+      Expect(document.text == L"你好", "typing continues after canceled Shift shortcut");
+      ResetDocument(&document);
+    }
+    for (const int cancellation : {0, 1, 2}) {
+      TypeLatin(service, context, "ni");
+      const auto before = document.composition;
+      LogicalKeyboardState keyboard;
+      keyboard.Shift(true);
+      BOOL eaten = FALSE;
+      service->OnTestKeyDown(context, VK_SHIFT, 0x2a0000, &eaten);
+      service->OnKeyDown(context, VK_SHIFT, 0x2a0000, &eaten);
+      if (cancellation == 0) {
+        // Only this test waits: physical holds must not become synthetic taps.
+        Sleep(510);
+      } else if (cancellation == 1) {
+        service->OnTestKeyDown(context, VK_SHIFT, 0x402a0001, &eaten);
+        service->OnKeyDown(context, VK_SHIFT, 0x402a0001, &eaten);
+      } else {
+        keyboard.RightShift(true);
+        service->OnTestKeyDown(context, VK_SHIFT, 0x360000, &eaten);
+        service->OnKeyDown(context, VK_SHIFT, 0x360000, &eaten);
+        keyboard.RightShift(false);
+        service->OnTestKeyUp(context, VK_SHIFT, 0x360000, &eaten);
+        service->OnKeyUp(context, VK_SHIFT, 0x360000, &eaten);
+      }
+      keyboard.Shift(false);
+      service->OnTestKeyUp(context, VK_SHIFT, 0x2a0000, &eaten);
+      service->OnKeyUp(context, VK_SHIFT, 0x2a0000, &eaten);
+      Expect(!eaten && document.text.empty() && document.composition == before,
+             "held, repeated or dual Shift cannot become an ASCII tap");
+      TypeLatin(service, context, "hao");
+      TypeVirtualKey(service, context, VK_SPACE, true);
+      Expect(document.text == L"你好", "typing continues after held/repeated/dual Shift");
+      ResetDocument(&document);
+    }
+    {
+      TypeLatin(service, context, "ni");
+      LogicalKeyboardState keyboard;
+      keyboard.Shift(true);
+      BOOL eaten = FALSE;
+      service->OnTestKeyDown(context, VK_SHIFT, 0x2a0000, &eaten);
+      service->OnKeyDown(context, VK_SHIFT, 0x2a0000, &eaten);
+      service->OnSetFocus(FALSE);
+      ResetDocument(&document);
+      service->OnSetFocus(TRUE);
+      keyboard.Shift(false);
+      TypeLatin(service, context, "nihao");
+      service->OnTestKeyUp(context, VK_SHIFT, 0x2a0000, &eaten);
+      Expect(!eaten, "retired context never owns the old Shift release");
+      service->OnKeyUp(context, VK_SHIFT, 0x2a0000, &eaten);
+      Expect(!eaten && document.text.empty(), "focus retirement never replays Shift into a new session");
+      TypeVirtualKey(service, context, VK_SPACE, true);
+      Expect(document.text == L"你好", "new context preserves normal Chinese input after old Shift release");
+      ResetDocument(&document);
+    }
+    std::cout << "Qualified Shift gesture cancellation assertions passed\n";
+  }
+
+  TypeLatin(service, context, "nihao");
+  const auto before_backspace = document.composition;
+  TypeVirtualKey(service, context, VK_BACK, true);
+  Expect(document.composing && document.composition != before_backspace &&
+             document.text.empty(), "Backspace edits preedit without committing");
+  TypeVirtualKey(service, context, VK_ESCAPE, true);
+  ResetDocument(&document);
+  TypeLatin(service, context, "nihao");
+  TypeVirtualKey(service, context, VK_RETURN, true);
+  Expect(document.text == L"nihao" && !document.composing,
+         "fixture Return binding commits raw input once");
+  ResetDocument(&document);
+  for (const WPARAM key : {VK_BACK, VK_RETURN, VK_SPACE}) {
+    BOOL idle_eaten = TRUE;
+    service->OnTestKeyDown(context, key, 0, &idle_eaten);
+    if (key != VK_SPACE)
+      Expect(!idle_eaten, "idle Backspace/Return stays with the host");
+    service->OnKeyDown(context, key, 0, &idle_eaten);
+    Expect(!idle_eaten && document.text.empty(),
+           "idle host key produces no IME insertion");
+  }
+  {
+    LogicalKeyboardState keyboard;
+    for (const int modifier : {VK_CONTROL, VK_MENU, VK_LWIN}) {
+      keyboard.Command(modifier, true);
+      for (const WPARAM key : std::vector<WPARAM>{'A', 'C', 'V', VK_RETURN, VK_BACK, VK_ESCAPE}) {
+        BOOL command_eaten = TRUE;
+        service->OnTestKeyDown(context, key, 0, &command_eaten);
+        Expect(!command_eaten, "host command is not claimed by OnTestKeyDown");
+        service->OnKeyDown(context, key, 0, &command_eaten);
+        Expect(!command_eaten && document.text.empty(),
+               "host command cannot insert or delete IME text");
+      }
+      keyboard.Command(modifier, false);
+    }
+  }
 
   TypeLatin(service, context, "nihao", &document);
   DumpDocument("after nihao", document);
@@ -572,4 +822,8 @@ int RunTypingScenarios() {
 
 }  // namespace
 
-int wmain() { return RunTypingScenarios(); }
+int wmain(int argc, wchar_t** argv) {
+  const bool legacy = argc == 2 && std::wstring_view(argv[1]) == L"--legacy-broker";
+  if (argc != 1 && !legacy) return EXIT_FAILURE;
+  return RunTypingScenarios(legacy);
+}
