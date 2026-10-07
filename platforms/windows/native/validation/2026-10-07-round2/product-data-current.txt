@@ -1,0 +1,1 @@
+{"ok": true, "files": 60, "bytes": 65662811, "productSchemas": ["rime_ice", "double_pinyin", "double_pinyin_flypy", "wubi86", "english", "my_combo"]}

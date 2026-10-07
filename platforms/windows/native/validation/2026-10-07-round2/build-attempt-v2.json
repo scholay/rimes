@@ -1,0 +1,68 @@
+{
+    "status":  "failed",
+    "startedAt":  "2026-10-07T19:26:20.7150934+08:00",
+    "architectures":  [
+                          {
+                              "architecture":  "x64",
+                              "buildExitCode":  0,
+                              "artifacts":  [
+                                                {
+                                                    "name":  "RimesTsf.dll",
+                                                    "sha256":  "319e60b6a8ca3636cc6c002b3f004d82e36a58353a1b1f6ba4a75b8a2a0fa38b"
+                                                },
+                                                {
+                                                    "name":  "RimesBroker.exe",
+                                                    "sha256":  "f7067694d51cdc79f12d054755e7d0671a85eaf70062aa6649c1e342274e197a"
+                                                },
+                                                {
+                                                    "name":  "RimesRecoveryTsf.dll",
+                                                    "sha256":  "18266d2e8fdf14daab025cf69d5abef97db55fbdd174d97927cabde1c17d3e7f"
+                                                },
+                                                {
+                                                    "name":  "RimesTsfRuntimeTests.exe",
+                                                    "sha256":  "353480d81f4d457a21d00ec35c754950c0d2de00658c7bad879b75012015c413"
+                                                },
+                                                {
+                                                    "name":  "RimesCaretRegressionTests.exe",
+                                                    "sha256":  "e5077d5761f4f048c75c6c4ddc3555470b10d1a1b837d71a06966f95c6c4a9fc"
+                                                }
+                                            ]
+                          },
+                          {
+                              "architecture":  "x86",
+                              "buildExitCode":  0,
+                              "artifacts":  [
+                                                {
+                                                    "name":  "RimesTsf.dll",
+                                                    "sha256":  "c340abc1108172ca651eb1d8313b5d5897dccc0abe15cf6b0425eca0b4a853e5"
+                                                },
+                                                {
+                                                    "name":  "RimesBroker.exe",
+                                                    "sha256":  "20d1599acb0faa6083ab4e1e8cb3955f18de01f7900c8ac111adeb9218969098"
+                                                },
+                                                {
+                                                    "name":  "RimesRecoveryTsf.dll",
+                                                    "sha256":  "4d2fae9924a6d37a0f384747f307cc6134a3a91c9d282900629d80651f5104cf"
+                                                },
+                                                {
+                                                    "name":  "RimesTsfRuntimeTests.exe",
+                                                    "sha256":  "52a33c9cb9f2d3fa7098f2d4a8044b6fed26c3828cadb6832f6652d7cdabf524"
+                                                },
+                                                {
+                                                    "name":  "RimesCaretRegressionTests.exe",
+                                                    "sha256":  "edd8de97d061e3b8be16c0542302a33b31cd98a1d5ddf7a5644bbf9b8335dc85"
+                                                }
+                                            ]
+                          }
+                      ],
+    "phases":  [
+
+               ],
+    "sourceBase":  "2dafbdac55b561220d1546c2cfbbd79bf535391e",
+    "pendingMerge":  "eb10c6652889dea94e5cdac3ca18409d554d5f47",
+    "snapshot":  "4917df3cda9eed689edc2d9702010fd0f855eb9b466a7b615e66a9f0467a5a7d",
+    "archiveSha256":  "ce6803549b73d61805383ba7f73d9c265cd0cbeea75a9b2757d8ddcc236d56c3",
+    "phase":  "product-data",
+    "error":  "native-data error: native-data manifest belongs to a different official plugin pin or schema set",
+    "finishedAt":  "2026-10-07T19:29:28.1780621+08:00"
+}

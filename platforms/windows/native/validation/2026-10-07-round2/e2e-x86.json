@@ -1,0 +1,22 @@
+{
+  "Passed": true,
+  "Architecture": "x86",
+  "RimeDll": "D:\\AI\\rimes-windows-issues-20261007-round2\\e2e-x86\\librime\\rime.dll",
+  "LibrimeSource": "https://github.com/rime/librime/releases/tag/1.17.0",
+  "LibrimeTag": "1.17.0",
+  "LibrimeSha256": "af235c26c06152ce09ceb8fe9d9ab9fba7ab43ce30aa952b40174d806f5cc3d9",
+  "DesktopProbe": {
+    "SessionId": 0,
+    "SessionName": null,
+    "ExplorerProcessCount": 2,
+    "InteractiveSession": false,
+    "Notepad": {
+      "Attempted": false,
+      "Succeeded": false,
+      "Detail": "not attempted"
+    },
+    "Gap": [
+      "Static Invoke-RimesImeE2E.ps1 hosted-CI explanation omitted from this normalized evidence; it is not a diagnosis of Young. Fake TSF validation is separate from real-host acceptance."
+    ]
+  }
+}

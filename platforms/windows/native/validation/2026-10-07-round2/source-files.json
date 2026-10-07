@@ -1,0 +1,1144 @@
+{
+  "sourceBase": "2dafbdac55b561220d1546c2cfbbd79bf535391e",
+  "pendingMerge": "eb10c6652889dea94e5cdac3ca18409d554d5f47",
+  "officialPlugins": "aecf9c1f505ac83934b01c28c59a29f99707d199",
+  "snapshot": "4917df3cda9eed689edc2d9702010fd0f855eb9b466a7b615e66a9f0467a5a7d",
+  "files": [
+    {
+      "path": ".gitattributes",
+      "sha256": "732799966056ee452c8321d348d2e6b550d461ce5394fd19ad461f1a85146d74"
+    },
+    {
+      "path": "platforms/windows/.gitignore",
+      "sha256": "c93e0fe374b44d1d3199a0a1eef6bb806f33d0e76f681a00ed57a712681bd088"
+    },
+    {
+      "path": "platforms/windows/README.md",
+      "sha256": "c70efaa15c0a7b6c0b764319556999fd40ad199a27294ad90ab147acb865d498"
+    },
+    {
+      "path": "platforms/windows/installer/Install.ps1",
+      "sha256": "67a7278382de986aab6d617feed169f572ac2e11cbdd7952c0eee4ce6e7d70e0"
+    },
+    {
+      "path": "platforms/windows/installer/Package.Common.ps1",
+      "sha256": "1f84c07844f7f2c451c27976a64b8fb580607152f53f72abb8ba48860beaf764"
+    },
+    {
+      "path": "platforms/windows/installer/README.md",
+      "sha256": "513a4b759d75b0906e2f30fb2590def57d603a2b5b0ea111e58616740886e83b"
+    },
+    {
+      "path": "platforms/windows/installer/Restore-Legacy.ps1",
+      "sha256": "845fe2419113ade3b2766a5db09721a7853905a12e1ce16a0ff9926bae446bb1"
+    },
+    {
+      "path": "platforms/windows/installer/Rollback.ps1",
+      "sha256": "9656bb83c487de7daa6a6d3caf91cfaad15f97063160cae53519c67334782b03"
+    },
+    {
+      "path": "platforms/windows/installer/Setup.ps1",
+      "sha256": "0df2afdc92f5750d9bf2b6efdfd4cd91cdffe6ab39adbc287fe682f03b6c58ee"
+    },
+    {
+      "path": "platforms/windows/installer/Uninstall-App.ps1",
+      "sha256": "db89676235b42a8f28954046bf78faae58c621d8f2cffdca397f925f98db54f5"
+    },
+    {
+      "path": "platforms/windows/installer/Uninstall.ps1",
+      "sha256": "0bc575eab23d031e8a694fd72337ff643de7088000a908a40b046108fd7dba02"
+    },
+    {
+      "path": "platforms/windows/installer/Verify.ps1",
+      "sha256": "a35241bb866af6622f3a69943140d4392205516273d2bb38a7e56164f4c3bc24"
+    },
+    {
+      "path": "platforms/windows/native/ACCEPTANCE-20261001.md",
+      "sha256": "380e0bb96fd53c483e3e285870fb70b00077f4c8721a7793b910c9b6615ca282"
+    },
+    {
+      "path": "platforms/windows/native/ACCEPTANCE-20261002.md",
+      "sha256": "77f6d334d7ec5f890c3c5ec7a30098223eb77652ca94adc0aa843d89a810c9d2"
+    },
+    {
+      "path": "platforms/windows/native/BUFFER-BINDING-ACCEPTANCE-20261003.md",
+      "sha256": "136277907bc274ddf1b1329e9ac38835c7afe59732a94bd78cb5582112fa0249"
+    },
+    {
+      "path": "platforms/windows/native/CMakeLists.txt",
+      "sha256": "1a4eb9fdb87b356f23d76723fb4cf8d9a66b83a320c17134a8f4002a31487300"
+    },
+    {
+      "path": "platforms/windows/native/CMakePresets.json",
+      "sha256": "115ce18b12523017c317447664282af6973b84e3713a8cfa7ee5f283a81c083a"
+    },
+    {
+      "path": "platforms/windows/native/DAILY-PREVIEW.md",
+      "sha256": "bc1e26a62ccc2f1688d8168c29f13156a1fc7e8e275550613c23204f1eb15c66"
+    },
+    {
+      "path": "platforms/windows/native/MACOS-VISUAL-PARITY.md",
+      "sha256": "f3fc85faedb2c41a52cd773553ef5dc13c00d1d02a10478251f8e5ebfe8873f1"
+    },
+    {
+      "path": "platforms/windows/native/MANUAL-TEST.md",
+      "sha256": "7d7909ea6856cd73fb6ef94edd6bd45f1a27e08e0cb5076d0c45495c0d86cd07"
+    },
+    {
+      "path": "platforms/windows/native/README.md",
+      "sha256": "608e61aa4c6e31b614072237fbcc8c840e392b2c159e5740ca197773f6f102d1"
+    },
+    {
+      "path": "platforms/windows/native/RELEASE-1.0.0.md",
+      "sha256": "2ed6a09931f800f77dd16f5ef715b72ed7eebdb5b3c311b7a9b71204e4c96df4"
+    },
+    {
+      "path": "platforms/windows/native/RELEASE-1.1.1.md",
+      "sha256": "c7f0d7c071e9d7e2defd6b06172ac842fda8d228ab6132382bd1835fe324fb71"
+    },
+    {
+      "path": "platforms/windows/native/RELEASE-1.1.2.md",
+      "sha256": "b981cf2991fa9a08fee032d23f2644204afaf78ca505305a8e739f8f6f462f50"
+    },
+    {
+      "path": "platforms/windows/native/STYLE-ACCEPTANCE-20261002.md",
+      "sha256": "a5db81bdf4234d5f3d678d3b30ab49c79db1bd6989d42ed3a306b172997a2cb6"
+    },
+    {
+      "path": "platforms/windows/native/STYLE-ACCEPTANCE-20261003.md",
+      "sha256": "b3cae5b7d20dd9e743bb580152f4d768b4681be7cdf0e512d712195abf058362"
+    },
+    {
+      "path": "platforms/windows/native/VALIDATION.md",
+      "sha256": "34aa6e07a189ee3febbd91b3b967153cb79cbfcf32972b19ca2f73a73c611827"
+    },
+    {
+      "path": "platforms/windows/native/VERSION",
+      "sha256": "77123b8e4bdbd54505bf6e8021527ac60281602a06fe307564532c4dba39dbca"
+    },
+    {
+      "path": "platforms/windows/native/librime/README.md",
+      "sha256": "fb34c0627e8af5d3d5dd9075a59bb8a552262cf69fb6c53ac62c5ff0daed9878"
+    },
+    {
+      "path": "platforms/windows/native/librime/librime-windows.lock.json",
+      "sha256": "54b4bd221675f438a7c4435138cb48cd9b229728cad861f5e89ea5041e183b45"
+    },
+    {
+      "path": "platforms/windows/native/resources/my_combo.schema.yaml",
+      "sha256": "d2937f55ac93fe746bf2e854aa523d8488d426392e0e6d8b63f96966c8ec6bc9"
+    },
+    {
+      "path": "platforms/windows/native/resources/official-plugin-catalog.json",
+      "sha256": "0b2218fd16cf6f4cad5f6d6e29fa5c90f332800e8617f5f5293617ae458dd6c0"
+    },
+    {
+      "path": "platforms/windows/native/resources/rimes.ico",
+      "sha256": "e6b7a5c4d845b7c7b591af51fde96a90448a324dbd8c07bf088659979389b5a3"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/autostart.cpp",
+      "sha256": "fc687b3f41ac417352727f426f496d24a4ea5e360e4bb5e608db932c38741f25"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/autostart.hpp",
+      "sha256": "e37d41bb9c7fdd6a9d7a3ed6aa86c64b6c7a211978b863f6b8f659930a8d6029"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/broker_connection.cpp",
+      "sha256": "1d367ad5cd245be3d47a162fe6e71c75313eb2fce4e00962f6c68afa5a8738b8"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/broker_connection.hpp",
+      "sha256": "e812fa2c47f2d4461b02c44068caaacb16f70b65ebe2daf6c953235f2865c516"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/broker_options.cpp",
+      "sha256": "66abb5181008b155e2b11fc30e083d5538641d1a390c7e0c91baf3fb5c92aac8"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/broker_options.hpp",
+      "sha256": "35480ac33467ac70da57183bf1f6bc34d1a2470341e85a35062c52650d9131ec"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/broker_options_tests.cpp",
+      "sha256": "ab233b5ca4e32e258b92efd0d4b77a55e8fa3070f74b6b220e9e903448bbe919"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/default_paths.cpp",
+      "sha256": "88637a196ada9dca9504ea537200a8072971b85557f09c7401bccb0d9d016635"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/default_paths.hpp",
+      "sha256": "88ec07386e130efaad603bd6ec0dae3f785638d68975cc6d8e813c02ebe45718"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/key_translation.cpp",
+      "sha256": "57884a7cf93396c439233794aa0f206e7d6125f57ed4e65f174ec428f5b6b67c"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/key_translation.hpp",
+      "sha256": "379783c57e1b95930daa1602dd0a4acfd15e25c76cd54ab2f56786610058a733"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/key_translation_tests.cpp",
+      "sha256": "6dda3972cbd47f1cef9b9c065427b81a0674369b31c972808c86d83eba0ff80d"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/main.cpp",
+      "sha256": "534a13ef1682355d4d14b11e7474dddd49327aac280592be2742a093e483dac0"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/named_pipe_server.cpp",
+      "sha256": "97c9ac87b81b5c2e121495b68ca091037c70db92c3e12c58da6ed05eaf1a9b8c"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/named_pipe_server.hpp",
+      "sha256": "ea09f1c140b7c320e45a51aed0482ccd70c803a5125caf0a6e2b2bcae026ab7e"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/single_instance.cpp",
+      "sha256": "901d8ee9f4cf452663551071dce18e3df60d1838c6d7ef46908b2564a96a4c1d"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/single_instance.hpp",
+      "sha256": "0fdf5e91d6dc14efa83366c7b3a0a2da905d3030fd26121c4ceeac83db333c9c"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/ui_command.cpp",
+      "sha256": "6eafe6a7e49c33e52e7b63b62c1c7c505d7741f3979173945c8f4101b4f3b020"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/ui_command.hpp",
+      "sha256": "be284a5eb2bd7f35a33eb2d313cf5ceb7ca66810443c42ece3fe61326123d989"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/ui_command_tests.cpp",
+      "sha256": "71c882b644270a2db9b777eca2ecd176ad19ac998b856358ae5b2f034b0b227f"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/win32_security.cpp",
+      "sha256": "5f0653ae077b2fbdfbfb23fff8ce685b5d75a9d21f56800188daa17bf6de3275"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/win32_security.hpp",
+      "sha256": "cf85e6645beaf5f8abc2a4523a4811cf9296cf24e38571ceef67aa09f43b167d"
+    },
+    {
+      "path": "platforms/windows/native/src/broker/wire_smoke.cpp",
+      "sha256": "3e188a5c039ff8c9c72a8e3ae2d314c920b86bad6238d042659012be48d4521b"
+    },
+    {
+      "path": "platforms/windows/native/src/core/broker_protocol.cpp",
+      "sha256": "fe1bcaa5da5ad1bb19cc1f8a3da1c45258c9c74aa925d84c8165bad65726b259"
+    },
+    {
+      "path": "platforms/windows/native/src/core/broker_protocol.hpp",
+      "sha256": "827e9ae6ab2cd1c969c9b2eefd12e431fdad5d573258032e9a79a88c5af6a74f"
+    },
+    {
+      "path": "platforms/windows/native/src/core/broker_protocol_tests.cpp",
+      "sha256": "503eb74c55e8186f59b4ce73140d263a393193287dd146fd5fc6a3c03626d204"
+    },
+    {
+      "path": "platforms/windows/native/src/core/control.hpp",
+      "sha256": "87e2f590380d4ff428392ab480a38b63bb2b332d8c9ba5d52f0b993e96b23b2a"
+    },
+    {
+      "path": "platforms/windows/native/src/e2e/caret_regression.cpp",
+      "sha256": "2140a8a57e9fc5b704b570a41ea40074be01ee37a95b092d19728bad4e0708f9"
+    },
+    {
+      "path": "platforms/windows/native/src/e2e/fake_tsf.cpp",
+      "sha256": "0ac5aecc3a75ff6935c1636f7b5fd94d037ffc3b0e9e4dcb770f476eb0e0895f"
+    },
+    {
+      "path": "platforms/windows/native/src/e2e/fake_tsf.hpp",
+      "sha256": "ab7a51edd9bcda32da54789c5f5a6f8b771fd3c55b914a313604dfa755c17123"
+    },
+    {
+      "path": "platforms/windows/native/src/e2e/focus_tests.hpp",
+      "sha256": "bfee58aaba4305d79fac5aab51c60a3adcb157412d950a8735f4b5c98fdd448b"
+    },
+    {
+      "path": "platforms/windows/native/src/e2e/main.cpp",
+      "sha256": "fec1fd5dda7ba8c354a26536aa7ba82d61261f1882c8e9165f435e89b07ef476"
+    },
+    {
+      "path": "platforms/windows/native/src/engine/product_probe.cpp",
+      "sha256": "9c086430053b7aaa076aa5a152d7b3b44b4bdf0bd6985934665d2ae862afeb95"
+    },
+    {
+      "path": "platforms/windows/native/src/engine/rime_abi.hpp",
+      "sha256": "0d71bc06fbac531de917f3aedbc9e42e4ac87f8863ed4aa2777ca05fd1cee61f"
+    },
+    {
+      "path": "platforms/windows/native/src/engine/rime_engine.cpp",
+      "sha256": "4189807ded8d4baa0d086ef3f81080dc10cd201d04bf4f94cf16f5c9a7e0e09a"
+    },
+    {
+      "path": "platforms/windows/native/src/engine/rime_engine.hpp",
+      "sha256": "3db0bdfc83c6d7861550801052eb876e4540a8a0641691d800348fc194bd5d73"
+    },
+    {
+      "path": "platforms/windows/native/src/engine/rime_engine_smoke.cpp",
+      "sha256": "9776b6f47b7261b3c18addc7d12e180469e45bb4b3294c0309ba0428c9181bf2"
+    },
+    {
+      "path": "platforms/windows/native/src/engine/rime_engine_tests.cpp",
+      "sha256": "cf131fce424e4cbeef66c44d9ee412ae68cbe7fa3289121affd37a70e6046d71"
+    },
+    {
+      "path": "platforms/windows/native/src/engine/rime_snapshot.cpp",
+      "sha256": "8b27920831403fcc57b87ef48e5d9a4095d7fbbd7d0faecee474a5e3bc00ea47"
+    },
+    {
+      "path": "platforms/windows/native/src/engine/rime_snapshot.hpp",
+      "sha256": "240d6d8d9726d8bcb3f24435f01a6c6d7ce1c360ac31184abbd7bb7d755ea227"
+    },
+    {
+      "path": "platforms/windows/native/src/product_version.hpp.in",
+      "sha256": "494a82011efcf1020cc0ec8ad0ccc5af5a6eb016d2da40f80d4a9440d52005ef"
+    },
+    {
+      "path": "platforms/windows/native/src/product_version.rc.in",
+      "sha256": "a917f63267f3381dd30948609b57219ad9b35d7154512c1cf203a6d52e539b0c"
+    },
+    {
+      "path": "platforms/windows/native/src/registrar/CMakeLists.txt",
+      "sha256": "e0eb6316c88f34498ef73c64031bc3b8d4acd413f345ecf52c292f02668f7e71"
+    },
+    {
+      "path": "platforms/windows/native/src/registrar/main.cpp",
+      "sha256": "58d8b6854ec8caaae7e5f0eca83a89ffe182a465c456ad5db75ca78770c5f12b"
+    },
+    {
+      "path": "platforms/windows/native/src/test_host/main.cpp",
+      "sha256": "76b1e9090a7f0317717d3d7211fa9737bfcb7d269c51fa92b0822840865dd62a"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/BrokerClient.cpp",
+      "sha256": "243255c91f540719fe4e8628eef65e5b5c894ce85a94c032ff388dc5b2108c12"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/BrokerClient.h",
+      "sha256": "00d49862a25487abc3820f1a7c6db0bc6a8dd2f16d8b3f9d28ce1500bc4e54af"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/CandidateWindow.cpp",
+      "sha256": "b73d05ca9444f8ded635ada86f03026b70adcf06265fd5fd663d81139ce729cb"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/CandidateWindow.h",
+      "sha256": "919c864e0a17783a614743603a6a76ab2cc31871d4500e5c297e4260cef988c8"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/ClassFactory.cpp",
+      "sha256": "279daa4953eae34f9bac692ce2cde932596ccaac3f802312431162996cd98d81"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/ClassFactory.h",
+      "sha256": "7f50352d4a198fb281dff55f377d56d390272b8e4056c8faaeffa43aab48812a"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/Diagnostics.cpp",
+      "sha256": "c1df1db45a6efc4f8fe0daecc44efd66fd5f285e1872c342a590f35b81d0bc66"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/Diagnostics.h",
+      "sha256": "3ee3d622f751785efd2dbde60751cccde9132e3431ff0bf1aa2bf9fa12a0d0fb"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/DisplayAttribute.cpp",
+      "sha256": "edc897bf497271fdb88d8d634bee0e579192e6e52173f14726e2d82d91e43bdc"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/DisplayAttribute.h",
+      "sha256": "91d269e8809c504963dfd9f8566ed870a97c09b62284c10e3150a3ece8f92074"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/DllMain.cpp",
+      "sha256": "13ac1b3c869d283b482def463e4c30959ccac394b1c3211d4da61451daa52fc0"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/Exports.cpp",
+      "sha256": "38eaccda8defe48e65f5641a784cd90c7808178e9990e9f432e35cc588a88d7f"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/Guids.h",
+      "sha256": "f6e331e58c8ed03b4b3e8d94a561f559c891174e00c2e27b34125e5ca18c432f"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/ModuleState.cpp",
+      "sha256": "86021f35730cf30c4c5e904df085ebb06213d69aa1576a2ad43f72b35390e7d6"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/ModuleState.h",
+      "sha256": "ae0e9ae9b0bec9c10afad24a1d0e6dc9899a0e9b957443bdef6c0040ac242334"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/RimesTsf.def",
+      "sha256": "8d7e490d540b1f7a234b2cc86d637f2afdb11156e636516560476b6b1fb51b5b"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/TextService.cpp",
+      "sha256": "887738b3b4f1641d134c2d2fc1f092049cc80bcaa8f7130f70c1721c0c701cf0"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/TextService.h",
+      "sha256": "7c6335bc909b48423df67991f900731e70bee2befdf94c35ce320d085b4bfbe2"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/TsfInterfaces.h",
+      "sha256": "b13798f9288e892a922ba5d7d51a6ac9a72618d7f01caf4b1a6a2ad99e65b686"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/broker_client_contract_tests.cpp",
+      "sha256": "273ed6062bb1a91c12785f55e7efb6019ccf5e6d0c529ce8eb480667ea892e8c"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/candidate_layout.hpp",
+      "sha256": "9be3476e184fc642a543b818f47de08d64bb122bfc741d52ca922e8bfdefdf08"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/candidate_layout_tests.cpp",
+      "sha256": "d0b482b3d6a6113440985be00cfd53f257f57b6a98ffc8fbd0981b60d8235b58"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/candidate_window_tests.cpp",
+      "sha256": "d04eab05a20c8caabdd2559579754c2ade65eee18f793fc139c15ee80e33d29c"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/runtime_compatibility_tests.cpp",
+      "sha256": "5fa12b04c89513a2f8e1928e41c3ae155029f95985a465e774ace18bd5e32644"
+    },
+    {
+      "path": "platforms/windows/native/src/tsf/runtime_shared_crt_fixture.cpp",
+      "sha256": "f41a82200879ab022befdfc9629c9edadba7fbbfcdd9ecb0d0becf48db949e65"
+    },
+    {
+      "path": "platforms/windows/native/src/ui/buffer_layout.hpp",
+      "sha256": "b9ad963fac59958d3a21b0dadc2352558001a2f33794d7e50103af762b01d3cd"
+    },
+    {
+      "path": "platforms/windows/native/src/ui/buffer_paint.hpp",
+      "sha256": "d93bfb15ef69fdfd867e2a0562e42c26729a1535f6aa458a5766bba4fa00c4ac"
+    },
+    {
+      "path": "platforms/windows/native/src/ui/candidate_strip.hpp",
+      "sha256": "bc4372aa35b947e2dd17700c0873a5560bb9ef24ea24392047ff9ef4f9a84c59"
+    },
+    {
+      "path": "platforms/windows/native/src/ui/icons.hpp",
+      "sha256": "ef564fa14e19fd1e1d1359e75a553ee36755f3454d8e4f3b714abbba2afbedf1"
+    },
+    {
+      "path": "platforms/windows/native/src/ui/menu_draw.hpp",
+      "sha256": "9b73fc93f66126b6622d7562bfda59b5f966d7bc07bc6460d427ab5b097e3fa6"
+    },
+    {
+      "path": "platforms/windows/native/src/ui/product_icon.h",
+      "sha256": "8e1d4f9a1122151a13b62fc1c09ddd631f505d859d5cc06dcde1f6cb0a0e0e0d"
+    },
+    {
+      "path": "platforms/windows/native/src/ui/settings_layout.hpp",
+      "sha256": "9026168eb8f1271788490796d3f35b301517832db675e981e2b27fac51c31439"
+    },
+    {
+      "path": "platforms/windows/native/src/ui/settings_paint.hpp",
+      "sha256": "4a6f164a091a97b600b261cf397416bb6dcf2b1f2d3446244fb671f2dd884f62"
+    },
+    {
+      "path": "platforms/windows/native/src/ui/theme.hpp",
+      "sha256": "ec9327eca59537a51cb627910edfd190db2b57c088ce12171f85fcb61899ad22"
+    },
+    {
+      "path": "platforms/windows/native/src/visual_preview/main.cpp",
+      "sha256": "31f62f19642e8e90bb98bdcb49588d7ae4c7b9491166b0101b39c1affbbcf935"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/buffer_hotkey.hpp",
+      "sha256": "6bacbc88abefec95b9460434b658bfb2011b32e9ec6e58d47f503af7e2e8975b"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/buffer_layout_tests.cpp",
+      "sha256": "a07fe6597e9a251278b0929167eedd8f88c8d6111d1cf2e684147ca268d106f1"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/model.cpp",
+      "sha256": "333487f8b225e679e738def11e4ce85614537c0acf8d5b019c3bd9b4f8a716f2"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/model.hpp",
+      "sha256": "11d312b22fc6ce292c149d259456dbe5a989a5cf09226c6486c9e8542890e8b2"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/model_tests.cpp",
+      "sha256": "26fb9bf253bb94ed5ab47f910775e5cf070ee01968d2ed6df82aa292c627c55b"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/official_features.hpp",
+      "sha256": "af487e0eca72540b0dac039f92382f640c846bc703b7120c7ca3f4c560b1ff82"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/official_plugin_catalog.generated.hpp",
+      "sha256": "3cf180c979b1b589b9abb6e66281a744ec51d4b10ada9464e5597e09fe5af2c3"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/official_plugins.cpp",
+      "sha256": "d911f038a1e94c577240185ed940521f171f5c60cb4ade614455e3f49ef859a4"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/official_plugins.hpp",
+      "sha256": "6493c0526122a36dba761c5e2dc87d423e1208a23b16bbbd1cd9bd76cb9ea541"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/official_plugins_tests.cpp",
+      "sha256": "7d918eb7e62cfa901058b20ad32c28e64c110d854b942c3748e8410c38c45699"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/provider.cpp",
+      "sha256": "90659f121d30f851229a7ff73c04b326266527180974e1e54232ab8e2097bf9b"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/provider.hpp",
+      "sha256": "8a64face01669365b2b96991a5f006dbb8c50029dc110be6f2d5bac44ef776ff"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/provider_probe.cpp",
+      "sha256": "843d2ffb15281aa07a2c77a79399ff2e7f35c89561efd74b3b9e9369b6363853"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/runtime.cpp",
+      "sha256": "56ac974c5c0d9fe96f2f690e1497a89d64fa888b0dd5bc1230daf81612daec4b"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/runtime.hpp",
+      "sha256": "632e820143dfdca959ed7759691e1ed56141e0bc66298a409e683aa91de1b59f"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/runtime_tests.cpp",
+      "sha256": "94165f17089ce861445be59263b3069fc09697d004b108b6e7b89ad17af8c05f"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/settings_tests.cpp",
+      "sha256": "36eccd8bd38c3f61f24e5298ed91719f242d0c7f38bfdf5569166e7c4527102e"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/settings_ui.cpp",
+      "sha256": "58e4be2173ad381dd7214effc94927f0924eff11fe1f84cb1445f787b2e663f4"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/settings_ui.hpp",
+      "sha256": "d39558fe1fe368b666730bcb0bc23f2ac34488f5bfcfa5175dbd16c368e9b1ff"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/settings_ui_tests.cpp",
+      "sha256": "77fd637933ff655a3b0899e7e254cf517a7bc7a70e2688e9b5c80e888fc7f95f"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/sse.hpp",
+      "sha256": "2e523e56c4e9bd6a311fc66085913473f1905abdd34df4eb9b54e7b74c906deb"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/sse_tests.cpp",
+      "sha256": "c1d1c1a7fc90448a78ea98497bbe6fda87f3b59fcf0e9544c3cfb0260270d5b2"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/window.cpp",
+      "sha256": "99cd8c8f960f83e56777b7f56eef0d04be102b06eac8288935a7f83140c9cbca"
+    },
+    {
+      "path": "platforms/windows/native/src/workbench/window.hpp",
+      "sha256": "e859fed7ee52849122708da13fa69542c4915cab6d869d251ab25fdfc33154dd"
+    },
+    {
+      "path": "platforms/windows/native/testdata/e2e/default.yaml",
+      "sha256": "b55c7792dbefe1d61ac628045e3b6df8105027995cc770fa879572008a482342"
+    },
+    {
+      "path": "platforms/windows/native/testdata/e2e/rime_ice.schema.yaml",
+      "sha256": "047a7f5d09e027dc6d692f48c1ed50e223ff932627514addb77c925be0aa6e1b"
+    },
+    {
+      "path": "platforms/windows/native/testdata/e2e/rimes_e2e.dict.yaml",
+      "sha256": "2704f45258321e069af797da526ad2062105079b6fe1104adb90082be1343466"
+    },
+    {
+      "path": "platforms/windows/native/third_party/licenses/Boost-license.txt",
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+    },
+    {
+      "path": "platforms/windows/native/third_party/licenses/LevelDB-BSD.txt",
+      "sha256": "ccc19f1da0798ed666609b65a5b44dd8b3abe6fc08b9c0592eb76e82e174db19"
+    },
+    {
+      "path": "platforms/windows/native/third_party/licenses/Lua-license.html",
+      "sha256": "9fa02db000d8178643a592032fab2e1d2ba6d9e2f609f149fc113d30d32dbea2"
+    },
+    {
+      "path": "platforms/windows/native/third_party/licenses/OpenCC-Apache.txt",
+      "sha256": "b534e465949558eec2597b04f5092b5e161236a68dfbfd04d547592ac3964308"
+    },
+    {
+      "path": "platforms/windows/native/third_party/licenses/SOURCES.json",
+      "sha256": "e88e5ee15df568c82e28cb2d09882b1ffed5c82d0d9d274f53bdbe8263370ac4"
+    },
+    {
+      "path": "platforms/windows/native/third_party/licenses/glog-BSD.txt",
+      "sha256": "136d48dea7a681413691f3db3098f6cf5ffaa3119d96d97bb83b8cff3ce38c4a"
+    },
+    {
+      "path": "platforms/windows/native/third_party/licenses/librime-BSD.txt",
+      "sha256": "f67d27a6d2d586fcfed4b4c886a83747095396a39b6641e18e855086be2ec400"
+    },
+    {
+      "path": "platforms/windows/native/third_party/licenses/librime-lua-BSD.txt",
+      "sha256": "c6bd4f58b13ae9d45c5e53adddeea5049114a25862797c6c6f64920431eea249"
+    },
+    {
+      "path": "platforms/windows/native/third_party/licenses/librime-octagram-LICENSE",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    {
+      "path": "platforms/windows/native/third_party/licenses/librime-predict-LICENSE",
+      "sha256": "9b1bbdf15a381884b47dfd9422e68f6382170b2841c476afc076f2d448c7a59f"
+    },
+    {
+      "path": "platforms/windows/native/third_party/licenses/marisa-BSD.txt",
+      "sha256": "edf58dab34c3dc239ba4ba2d5d3d844d8c5b442aa4dd1149fac81b2d8c6cb8d1"
+    },
+    {
+      "path": "platforms/windows/native/third_party/licenses/yaml-cpp-MIT.txt",
+      "sha256": "aa6fcc27be034e41e21dd832f9175bfe694a48491d9e14ff0fa278e19ad14f1b"
+    },
+    {
+      "path": "platforms/windows/native/third_party/nlohmann/LICENSE.MIT",
+      "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
+    },
+    {
+      "path": "platforms/windows/native/third_party/nlohmann/README.md",
+      "sha256": "4e8b68798909b88ab8ed064611c4357d3d88e7187d65822849c771fc34a1ee3f"
+    },
+    {
+      "path": "platforms/windows/native/third_party/nlohmann/json.hpp",
+      "sha256": "aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63"
+    },
+    {
+      "path": "platforms/windows/scripts/Build-RimesWindows.ps1",
+      "sha256": "50fe2317f0991fbab79161790bc9ddc7c7e158ff225874a5afcee794894e9dd7"
+    },
+    {
+      "path": "platforms/windows/scripts/Fetch-RimesLibrime.ps1",
+      "sha256": "0851e6f6c03e8a103d63942e5d37e7158a106bb6f2bf490ca454b24185d94a6d"
+    },
+    {
+      "path": "platforms/windows/scripts/Install-RimesDataPreview.ps1",
+      "sha256": "e9db0e81f7f3c676d9057b3fbaf46619e2e1e2ecda7efe3ca570d5323fe8348a"
+    },
+    {
+      "path": "platforms/windows/scripts/New-RimesDataPreviewPackage.ps1",
+      "sha256": "3874eba79febf1da2cdec01d14899b76fc7062bb1945b99a2d908ee2d281186e"
+    },
+    {
+      "path": "platforms/windows/scripts/New-RimesNativePackage.ps1",
+      "sha256": "312db7b4e42c97b911dba04bef892ec43f9249b6531e54f14e68892bf81eed23"
+    },
+    {
+      "path": "platforms/windows/scripts/New-RimesSetupExe.ps1",
+      "sha256": "876356b23bf81392b720395296aef07434b59fd60cb34a55ce20346868fd2a31"
+    },
+    {
+      "path": "platforms/windows/scripts/Register-RimesWindows.ps1",
+      "sha256": "ddfffa219e11f079e92659a8ff365e2ac24b1593644ba85cca3ec67693d61cfd"
+    },
+    {
+      "path": "platforms/windows/scripts/Uninstall-RimesDataPreview.ps1",
+      "sha256": "7ce0cc98c4e27f221ab297739a75fe3fa5c8d97f4fdcf937b9307ee87a7e73fd"
+    },
+    {
+      "path": "platforms/windows/scripts/Unregister-RimesWindows.ps1",
+      "sha256": "a6c6a4e95a9cd24c6141b3fd22bbb8a832fabbe4b8ddda974341bd68898d7c05"
+    },
+    {
+      "path": "platforms/windows/scripts/Verify-RimesDataPreview.ps1",
+      "sha256": "4d0d1054cb2183e9fd65ee702fc0f81be4c85697ade47e76bbbd0d0f2b4111e0"
+    },
+    {
+      "path": "platforms/windows/scripts/Verify-RimesWindows.ps1",
+      "sha256": "6eb85f093ae466f2fc452ffcf9adf839573e65bd55ffa896b6079bdce4de0f57"
+    },
+    {
+      "path": "platforms/windows/scripts/lib/RimesDataPreview.Common.ps1",
+      "sha256": "d4cd133d3c6cc0d464cc5fd8b80abffb5a6784f19e0f38135778d38916245c4f"
+    },
+    {
+      "path": "platforms/windows/scripts/prepare-native-data.py",
+      "sha256": "4d938f5e37ad8cc6e70d9c65dc40a28d886872224af8d4c429ed43d435ee41c4"
+    },
+    {
+      "path": "platforms/windows/setup/Setup.cs",
+      "sha256": "de97c8ce02845b195f5c1dbdeac20d16d8e5d5dc5085b61762ec5c93e5e1894b"
+    },
+    {
+      "path": "platforms/windows/setup/Setup.manifest",
+      "sha256": "0099cc0eb92de0ca943d5fd0690149d5e4a5d35b902d993759e272bb2f8edcc0"
+    },
+    {
+      "path": "platforms/windows/tests/Invoke-RimesImeE2E.ps1",
+      "sha256": "c1f4f15eb2b6c95518fb891ba6918149af1016b089a36cfdece8f2413a80f211"
+    },
+    {
+      "path": "platforms/windows/tests/Run-RimesBrokerWireSmoke.ps1",
+      "sha256": "0185faf80f1565e6dd0d844328c13a4d8e683707ce8cdcb81780c4c48d07f613"
+    },
+    {
+      "path": "platforms/windows/tests/SetupPayloadTests.cs",
+      "sha256": "14d6b0c0794c39aacb999873dd203bec6bf942af5a28c50ea5c18253000ef4b9"
+    },
+    {
+      "path": "platforms/windows/tests/Smoke-RimesDataPreview.ps1",
+      "sha256": "791470c47acb81960876b8190fc2e92a71206d7ba1a07a8d23eec96577f9d479"
+    },
+    {
+      "path": "platforms/windows/tests/Smoke-RimesWindowsFoundation.ps1",
+      "sha256": "d8dcbcb2fbc78754f6e7461bc16bc32f6a195ef448b0ea5cc7238daaea0eae7d"
+    },
+    {
+      "path": "platforms/windows/tests/Test-InstallLifecycle.ps1",
+      "sha256": "fec4a33490135e8d28e9639a78d87be39bcddbcf9ee3eb62b92d8ef9dd6ff572"
+    },
+    {
+      "path": "platforms/windows/tests/Test-InstalledAppsLifecycle.ps1",
+      "sha256": "a8a755475a584c61e8abc77c7e2dc5ee81d5ee5088f5b5f6802fa0e205d6d70a"
+    },
+    {
+      "path": "platforms/windows/tests/Test-RegistrarRecovery.ps1",
+      "sha256": "20b4fb61d98972d8f0d3555becc816dd32c71890e2257aed9796a7c5f8f3f7f2"
+    },
+    {
+      "path": "platforms/windows/tests/Test-SetupPayload.ps1",
+      "sha256": "0e6ae6fe4201a95f9d9f69977f6752c9a064e82d56b049959ef7376f80ffa8ea"
+    },
+    {
+      "path": "platforms/windows/tests/Test-SetupResult.ps1",
+      "sha256": "1785bbaa550cea59f358eec351bb2ba559108173fa37b9cc426759a042b5f12f"
+    },
+    {
+      "path": "platforms/windows/tests/test_native_data.py",
+      "sha256": "a3b4ea96edfc59b8bbef5e0285a6be0469c455008088b142f8afc17a22f1830c"
+    },
+    {
+      "path": "platforms/windows/tests/test_provider_transport.py",
+      "sha256": "17eff988a917b76f5e1d1a6c37d38819868d3034e7ca5fb0ce0ada93402f452d"
+    },
+    {
+      "path": "plugins.lock.json",
+      "sha256": "944258e9fb143a85c9411cd44d0ca4c05e69b9b77d38c37e7fafb8c68ef82665"
+    },
+    {
+      "path": "rime-data/cn_dicts/41448.dict.yaml",
+      "sha256": "8ab8cb1f709002994937e9ae1e5819d67bb0369259742a3673d7411228cf4cb5"
+    },
+    {
+      "path": "rime-data/cn_dicts/8105.dict.yaml",
+      "sha256": "76217459727c5ae26acfa40c3ee511bb9b4b3ba20c52a8fa04f4f6f9e9165740"
+    },
+    {
+      "path": "rime-data/cn_dicts/base.dict.yaml",
+      "sha256": "233cd431070cf33ee7710dc6c1421e381f8930009c2536c6c240917cf2e33338"
+    },
+    {
+      "path": "rime-data/cn_dicts/ext.dict.yaml",
+      "sha256": "b7dcea09cf7c1fae59d0568ea814ab0dd70e227706417fbbc53ed01a806971f8"
+    },
+    {
+      "path": "rime-data/cn_dicts/others.dict.yaml",
+      "sha256": "f17cffdbdd6e42d35131ab1cdeff3028fbc430f28ae1d3d45c85865b885b9a26"
+    },
+    {
+      "path": "rime-data/cn_dicts/tencent.dict.yaml",
+      "sha256": "3473a0582868d31b0d9112f3d653f91229ed6434e17123af3630ae95c6af2407"
+    },
+    {
+      "path": "rime-data/custom_phrase.txt",
+      "sha256": "dd344d785f7244c79fee1a1601cd7f928fb3cce8dad66d3e1dfa4962ba59b0d7"
+    },
+    {
+      "path": "rime-data/default.custom.yaml",
+      "sha256": "ac29c100024c566e1d94e55d1b2cc27c80c8812917d448a271e3a9b17eaa99dd"
+    },
+    {
+      "path": "rime-data/default.yaml",
+      "sha256": "59408e8de2ec196357e40c775fbd4993defbe649ed82243944fb16e2597e526a"
+    },
+    {
+      "path": "rime-data/double_pinyin.schema.yaml",
+      "sha256": "2d454018c2457f12df9d2454b43710e55df41cd66cda088ffb45275d1cf9d32e"
+    },
+    {
+      "path": "rime-data/double_pinyin_flypy.schema.yaml",
+      "sha256": "3bc68712c8b9590169dd5f03c37f7d9a7bb5a071d9f8f792703ecb7970f973fb"
+    },
+    {
+      "path": "rime-data/easy_en.dict.yaml",
+      "sha256": "4f039026b2746fa9b0d4d7a248cdf866b64609dca2317708f04e9e68ac7d868a"
+    },
+    {
+      "path": "rime-data/en_dicts/cn_en.txt",
+      "sha256": "b5e80d5a176b8a8b4dcfab99524c1a2c416e7b935b6a5dcd833697582e8436e4"
+    },
+    {
+      "path": "rime-data/en_dicts/cn_en_abc.txt",
+      "sha256": "d86362a19c6b32037026c6f15e04a9a3ecf6296b15248f89c8fba4d8680ae486"
+    },
+    {
+      "path": "rime-data/en_dicts/cn_en_double_pinyin.txt",
+      "sha256": "e6b894855155dd151f345702ad18b0d12c2708531f964671ce5f8bfbe7e2477e"
+    },
+    {
+      "path": "rime-data/en_dicts/cn_en_flypy.txt",
+      "sha256": "edeee1d7a84b378a248a3ea1384f22dcfde64694caee87fe05901a09a90cfc6f"
+    },
+    {
+      "path": "rime-data/en_dicts/cn_en_jiajia.txt",
+      "sha256": "195778ee8d65fe5177b910657b524f8c71a8fa1dc9ba701b2dbe4aafa61ef461"
+    },
+    {
+      "path": "rime-data/en_dicts/cn_en_mspy.txt",
+      "sha256": "e5dc747aa0eb14427417304dfb3fdf73e9480ee04e676174f80302512feffed7"
+    },
+    {
+      "path": "rime-data/en_dicts/cn_en_sogou.txt",
+      "sha256": "c9a521b1815a54f498e1121a5e69f85a1b45d2fed7a95b8ed375f7fdf89901cd"
+    },
+    {
+      "path": "rime-data/en_dicts/cn_en_ziguang.txt",
+      "sha256": "c7d1af2b88e9c9cfdaa49d050b620458e82c71a964736c83da74ea9a06483894"
+    },
+    {
+      "path": "rime-data/en_dicts/en.dict.yaml",
+      "sha256": "48a9f73cf9c07ad92319ac441410a5665815490b623b4a238f1947ab083927a9"
+    },
+    {
+      "path": "rime-data/en_dicts/en_ext.dict.yaml",
+      "sha256": "2cfe39efcda36749f75b6f23f194219c039e551d44f885b6807e2f53b34ccba1"
+    },
+    {
+      "path": "rime-data/english.schema.yaml",
+      "sha256": "aaac5bdbccc765292e22aea371cb47586dcb49ced7c94595bb97818174cad3fa"
+    },
+    {
+      "path": "rime-data/grammar.yaml",
+      "sha256": "a58ce9ef1dc8106634ed305565a832c06ddec9c01796501b1a4adaeb77264129"
+    },
+    {
+      "path": "rime-data/licenses/GPL-3.0.txt",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "path": "rime-data/licenses/rime-easy-en-LICENSE",
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+    },
+    {
+      "path": "rime-data/licenses/rime-easy-en-SOURCE.md",
+      "sha256": "5d45506bd5f808e6816dbcc80aac12ce2bbaa8a2318ea2cf3b760acc75a1246d"
+    },
+    {
+      "path": "rime-data/licenses/rime-ice-SOURCE.md",
+      "sha256": "b7868339143dddf920deb47963d913a5efe149cc86285bd6f8acba9f60e1d682"
+    },
+    {
+      "path": "rime-data/licenses/rime-octagram-data-SOURCE.md",
+      "sha256": "51881a8e147fcb9f745e29c4c7dec74856500aa087e41d9df3c123c346818ef1"
+    },
+    {
+      "path": "rime-data/licenses/rime-wubi-LICENSE",
+      "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+    },
+    {
+      "path": "rime-data/licenses/rime-wubi-SOURCE.md",
+      "sha256": "578f977843aaf825f2f298525ef26b6d1ff3eb2af26f49ddcb20a012d899372b"
+    },
+    {
+      "path": "rime-data/licenses/yoyo-SOURCE.md",
+      "sha256": "5a33dc05f2a52a2313830135d378e08f1635c188d9c2ed156697f445bce80b79"
+    },
+    {
+      "path": "rime-data/lua/ai_box_actions.lua",
+      "sha256": "25d1d11312c66a280eec2e42baccb3d9b70d005374a7bfe8155a753be062cb10"
+    },
+    {
+      "path": "rime-data/lua/ai_box_filter.lua",
+      "sha256": "24458dc749c6192afdfe71e4d21765e669cb9df8a4806696cdcd85ad3d311846"
+    },
+    {
+      "path": "rime-data/lua/ai_box_processor.lua",
+      "sha256": "79bff9e1cadbd7560892f4a3ae56696134320ca4d175e62bf528022a8ba2d007"
+    },
+    {
+      "path": "rime-data/lua/ai_box_status_translator.lua",
+      "sha256": "1d7ed9fe812c662de065bdd951d81ab082e1c458ab44c3f33b4ee9ba03558830"
+    },
+    {
+      "path": "rime-data/lua/ai_box_trigger_processor.lua",
+      "sha256": "887f72dbb3ebb0c5de9c230f90d4ba1a0658b1d8d5e3d87cc14dab23385bebff"
+    },
+    {
+      "path": "rime-data/lua/ai_box_view.lua",
+      "sha256": "35ca1b95ac64dd6d3ba6dea3a91b5a80400b07561e4642adb5adb39f956a0f2e"
+    },
+    {
+      "path": "rime-data/lua/ai_clipboard_processor.lua",
+      "sha256": "a11de86678bb4ff64b259aeacc98842af1eaf58588154ba24d3bd9f4da5636e5"
+    },
+    {
+      "path": "rime-data/lua/ai_translator.lua",
+      "sha256": "e82435f401ba09f3517f6ea9cdf13f7869594a757589c36b0a5e8d14a79a6d40"
+    },
+    {
+      "path": "rime-data/lua/autocap_filter.lua",
+      "sha256": "8b1cb8d836d0e544cc63278f31ab0c6e32a877083972535aa88049b4a6b37663"
+    },
+    {
+      "path": "rime-data/lua/calc_translator.lua",
+      "sha256": "e772a2b152d4d031b0c92967f1689596c176dc14b3edb6193a7152afa11eeb09"
+    },
+    {
+      "path": "rime-data/lua/cn_en_spacer.lua",
+      "sha256": "63dc8d9f598c6f366b400cbcd08d1f1857a3cc7dcaf701d437d5a3a9ed566adb"
+    },
+    {
+      "path": "rime-data/lua/cold_word_drop/drop_words.lua",
+      "sha256": "c54cc787cf23a28321b42e256a094c4aadbf27a836f9852ea7b8a48e433ee591"
+    },
+    {
+      "path": "rime-data/lua/cold_word_drop/filter.lua",
+      "sha256": "f16f603539f3b011070e454e236a634243c261b180618e7f58555f70026fe317"
+    },
+    {
+      "path": "rime-data/lua/cold_word_drop/hide_words.lua",
+      "sha256": "26df6ed82bbc646e29aa647be35df9076f6195e520489ccd9022dc081a02cb30"
+    },
+    {
+      "path": "rime-data/lua/cold_word_drop/logger.lua",
+      "sha256": "50873222fb3bb095aba423b36b70cf6285958293073a7b097b292ac3ac25e8fc"
+    },
+    {
+      "path": "rime-data/lua/cold_word_drop/metatable.lua",
+      "sha256": "66d88f4d9dc0bf7c37e8f5ca9ab3c237ca995a28468c53f57cc3aa3937b798cb"
+    },
+    {
+      "path": "rime-data/lua/cold_word_drop/processor.lua",
+      "sha256": "fc8b9e4e62a3a63fa8502d2456fb03aeb4d9f61b6eca63cf98389dff68d5a589"
+    },
+    {
+      "path": "rime-data/lua/cold_word_drop/reduce_freq_words.lua",
+      "sha256": "2124f57446510ceae3ed5f8383237fdcaec68e54cfd0d66218b14f4f011872ca"
+    },
+    {
+      "path": "rime-data/lua/cold_word_drop/string.lua",
+      "sha256": "a84155b7fe1e6f3f1eed6cfa89efa3b72536d37d37f8b47674cdc4472a44ab16"
+    },
+    {
+      "path": "rime-data/lua/corrector.lua",
+      "sha256": "f3919cd35eee8c73fed3fec27ecf5115ceddb8d96c7dad1bb3db6c79f083fe77"
+    },
+    {
+      "path": "rime-data/lua/date_translator.lua",
+      "sha256": "e618d7ff9ef4cb1262b44e31904dcd3bc712884e4f6e5daac5d38114e6351884"
+    },
+    {
+      "path": "rime-data/lua/debuger.lua",
+      "sha256": "833af467f40a6c84332788ae0e8ab18b761da5d81972b6f35492f5ec6ce15a65"
+    },
+    {
+      "path": "rime-data/lua/en_spacer.lua",
+      "sha256": "a4e5ae8001e5136cecefc385e5adaa9e06215a870ced7e7178cf1c0e588b95d6"
+    },
+    {
+      "path": "rime-data/lua/force_gc.lua",
+      "sha256": "bdffdf8342eb2167343de3a3cc5529ccfdde13afc0ea0dac3f917419eba0f382"
+    },
+    {
+      "path": "rime-data/lua/is_in_user_dict.lua",
+      "sha256": "5d9d1ad7a7245a247a77795db620888589eadb59fd1950c5a2d1ae04ebb1d714"
+    },
+    {
+      "path": "rime-data/lua/long_word_filter.lua",
+      "sha256": "f024cec6fe1a0e3396eac7450dc41f8e6df13c6735ba64615778e3416dcfcd81"
+    },
+    {
+      "path": "rime-data/lua/lunar.lua",
+      "sha256": "2514261d603945212540d112ad1a3caac78beef59126244cfa6534f594c44dc9"
+    },
+    {
+      "path": "rime-data/lua/mode_switch_processor.lua",
+      "sha256": "48a247e5419dd55588d0c2f3f3a30b142ebe50d55d57500bb2dcfb35d0aed566"
+    },
+    {
+      "path": "rime-data/lua/number_translator.lua",
+      "sha256": "3baa0bc8cad962e31f1d453c69b096fdeca62027c71f7c1b7585a5e5a2698aca"
+    },
+    {
+      "path": "rime-data/lua/pin_cand_filter.lua",
+      "sha256": "a24f2a6fd3109ec2a8c7f9fc652d8585add3567f1922ac2447ebfe79ae5ab831"
+    },
+    {
+      "path": "rime-data/lua/reduce_english_filter.lua",
+      "sha256": "999e14f07eef004b359f54375ed346e3c3538e9058e6cf456c2c8f585ef6b69f"
+    },
+    {
+      "path": "rime-data/lua/search.lua",
+      "sha256": "e35e4aa1bb051c953a5b98d9b63c40e3bae3ee98deb58dd15d296fef63da51b9"
+    },
+    {
+      "path": "rime-data/lua/select_character.lua",
+      "sha256": "455e79092e9e829b40aa0686879fc24e47a8a18ceefa3445138505ed24300d80"
+    },
+    {
+      "path": "rime-data/lua/t9_preedit.lua",
+      "sha256": "5cc4b77f35f2aee89edb3c28ccd8249225f7938f88066b7f2e5f1b1db3f70849"
+    },
+    {
+      "path": "rime-data/lua/unicode.lua",
+      "sha256": "d5ab0cfe8a168054ccb4c83d72b4b111a70fe5f93d58f69f9079b9ab010ee0d7"
+    },
+    {
+      "path": "rime-data/lua/v_filter.lua",
+      "sha256": "3d1f9a1cda532e0c0eab9b774d727ab37c2a9e468e1219407c5c8fadb964b2e5"
+    },
+    {
+      "path": "rime-data/lua/yoyo/commit_raw.lua",
+      "sha256": "7cde8b1052eab5b7b4cad89f3da8a6bf752593df4ef02c12c4d15b0fa06a5ad3"
+    },
+    {
+      "path": "rime-data/lua/yoyo/popping.lua",
+      "sha256": "f895cb3baa686f32a6fabdaf0b703f43102a0f452eaa8f932cbe88a495d56a01"
+    },
+    {
+      "path": "rime-data/lua/yoyo/yoyo.lua",
+      "sha256": "b34c156d39f43277e7cc2a61bbc3139984d2104b4f786401717acd63e013cd72"
+    },
+    {
+      "path": "rime-data/melt_eng.dict.yaml",
+      "sha256": "e23bd4ea294d5e04e7b50fbd160fb253e489f44f28c2b8911af276d96db04973"
+    },
+    {
+      "path": "rime-data/melt_eng.schema.yaml",
+      "sha256": "be2cf9f196e23e65d678a8a240d3d705db0328949b7745a28b89e881e936a10b"
+    },
+    {
+      "path": "rime-data/my_combo.schema.yaml",
+      "sha256": "acb4d3fe7b77bdf58df4da8a2e070d93dbd2971095af51a9133d9b4d5d93c102"
+    },
+    {
+      "path": "rime-data/opencc/emoji.json",
+      "sha256": "79fe3b878625d8f96d70aeb6c4d1929ab2a582f8b935d309125b6ccffd799602"
+    },
+    {
+      "path": "rime-data/opencc/emoji.txt",
+      "sha256": "6c729c1442e42ec86a24b7f37a970990150e008b6d4a1d9a0ccea09de9c09997"
+    },
+    {
+      "path": "rime-data/opencc/others.txt",
+      "sha256": "5d992eb98ad548eb3943503c9b13028d3842b600527774dd0e2ac0b4ee3fb53f"
+    },
+    {
+      "path": "rime-data/radical_pinyin.dict.yaml",
+      "sha256": "acc03e2e26d89082e580f8516e66b9553587b3866586a681dc9a833a975698fc"
+    },
+    {
+      "path": "rime-data/radical_pinyin.schema.yaml",
+      "sha256": "4f080d704dbc092b848dc7a260006ff8c8319b56554643db7c886163f1398998"
+    },
+    {
+      "path": "rime-data/rime_ai.example.json",
+      "sha256": "40a9ede87845e806a61f424fbf9aff2764fd0a298211b1630bed4e94b72d0150"
+    },
+    {
+      "path": "rime-data/rime_ice.dict.yaml",
+      "sha256": "5914ec2eb9b2fbd4c175a7cc3c59410fd17d3ace3a3164b45be4cb65ca2d344f"
+    },
+    {
+      "path": "rime-data/rime_ice.schema.yaml",
+      "sha256": "9fb4315431efbb08240a8541e03dcc7dc0b4787a1f6c36b5fe538c2843c5376c"
+    },
+    {
+      "path": "rime-data/stream_input_local.schema.yaml",
+      "sha256": "50135896c1a1810505f8aa6e3d02f6c7f29bbf3942186cc7aae3cbfc96b2a2d1"
+    },
+    {
+      "path": "rime-data/symbols_caps_v.yaml",
+      "sha256": "97229e6da1eb33f3a5ed823a22878b6a7524334a58f8041f8644d52e389fab92"
+    },
+    {
+      "path": "rime-data/symbols_v.yaml",
+      "sha256": "dc17077de71b5dafbbcbd479db770207ea58b73f97e3badd08e8fe4a206ad82c"
+    },
+    {
+      "path": "rime-data/wubi86.dict.yaml",
+      "sha256": "f833d86b72341fe82e069a425b6625f29ef85f1bc0f34f6fb7975fe514888b5a"
+    },
+    {
+      "path": "rime-data/wubi86.schema.yaml",
+      "sha256": "cfc987d641ff625b89de9903202e464841019d12e533168c300d4cb51b17431c"
+    },
+    {
+      "path": "rime-data/yoyo-yx-char.dict.yaml",
+      "sha256": "14ae9b2c1e9e0a4b0257a777d9d7df95ad826576efbbcefc6d24ecbefc8eb71e"
+    },
+    {
+      "path": "rime-data/yoyo-yx-hm.dict.yaml",
+      "sha256": "986733db582206f37046aeeff0376a9b43a74137f9bb257586af7f537cfdaf49"
+    },
+    {
+      "path": "rime-data/yoyo-yx-hm.schema.yaml",
+      "sha256": "c3c036501bad66e54729d93449ea4d6bfb881d2cb87bedb3c17300f26f178d58"
+    },
+    {
+      "path": "rime-data/yoyo-yx-word.dict.yaml",
+      "sha256": "703b60c094f9acebfaa31fc252d8809ed0af8a05a0b94edfc94866bcd9548284"
+    },
+    {
+      "path": "rime-data/yoyo-yx.dict.yaml",
+      "sha256": "d16e2395655132b8fc00ab3a05023ad46e6bbdaa517f20a7017a2f22067339e5"
+    },
+    {
+      "path": "rime-data/yoyo-yx.schema.yaml",
+      "sha256": "4e77d96fdf6bc87a7b4610b2c59e244b1ba5e385aae4e7d2f1eae1c4245c6751"
+    },
+    {
+      "path": "rime-data/yoyo.yaml",
+      "sha256": "c1df2b6e519503c3f5e9e12cd2615de10b9790308b71a10c4ad11aa0a3809361"
+    },
+    {
+      "path": "rime-data/yoyo_kf.dict.yaml",
+      "sha256": "304d5f170e35c4a4f3b385bd9e48690356085f38a06e7ec45d4ac6fc7183bb36"
+    },
+    {
+      "path": "scripts/platform-preview/.gitignore",
+      "sha256": "6feaded4e28ea86e001a6751b4e3d960e8b7c31b9616ff9936b79297086e809b"
+    },
+    {
+      "path": "scripts/platform-preview/policy.json",
+      "sha256": "f9b89d470a6e00247270788187c0e2f9f1eed1535be3d92ed5e2fc57c0959f79"
+    },
+    {
+      "path": "scripts/platform-preview/preview.py",
+      "sha256": "b61f79a18d9c6e82a817bd8bceb86444dd3d325d9bb40c1f1756a9f89051baa9"
+    },
+    {
+      "path": "scripts/platform-preview/test_preview.py",
+      "sha256": "dfee50db91144ff7b6fabbb553511d69d81046417cb5cd94a6097961a1038150"
+    },
+    {
+      "path": "scripts/platform-preview/test_verify_release_assets.py",
+      "sha256": "daa8157aa97992d652b438d73dd461473bc0a090a25994fc343cb7eb28933502"
+    },
+    {
+      "path": "scripts/platform-preview/verify_release_assets.py",
+      "sha256": "9248e37122608b4d9c727d78f755dec4ba0cc7492660bb3bbe5f1acc3783e414"
+    }
+  ]
+}
