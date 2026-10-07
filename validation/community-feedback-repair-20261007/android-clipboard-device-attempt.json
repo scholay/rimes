@@ -1,0 +1,36 @@
+{
+  "date": "2026-10-07",
+  "source_commit": "427aa71c1753a8d2bd18d49a3d041eeaabe23268",
+  "device": {
+    "model": "25098PN5AC",
+    "android_release": "16",
+    "api": 36
+  },
+  "test_host_package": "org.scholay.rimes.clipboardvalidation",
+  "instrumentation_package": "org.scholay.rimes.clipboardvalidation.test",
+  "source_sha256": {
+    "platforms/android/app/src/main/java/org/scholay/rimes/android/TextClipboardStore.java": "8900de1286b86a671aa177f66515500295349bb613b82c94cd18ac4dc8579144",
+    "platforms/android/core/src/main/java/org/scholay/rimes/core/TextClipboardHistory.java": "488736fe739dc9a5eaff7bc01d2514398ce1b07e64138fe8066ebd988255b89a",
+    "platforms/android/app/src/androidTest/java/org/scholay/rimes/android/TextClipboardStoreContract.java": "f0b12899b49c58178f0b1675ad56896e69a9145816ad1b9cbe384283de5d1388"
+  },
+  "artifact_sha256": {
+    "build/outputs/apk/androidTest/debug/RIMESClipboardValidation-debug-androidTest.apk": "9c4eda5c526236f50503eff212b458072a351ff851a6cc209b1b4d8a989d877b",
+    "build/outputs/apk/debug/RIMESClipboardValidation-debug.apk": "d3305ce0f14e54fc1a7fc207d7c2b7633192d780e6f353b031d4a74ba25c9733"
+  },
+  "build": "assembleDebug and assembleDebugAndroidTest passed",
+  "host_install_result": "INSTALL_FAILED_USER_RESTRICTED: Install canceled by user",
+  "host_installed_after_attempt": false,
+  "test_apk_install_attempted": false,
+  "instrumentation_executed": false,
+  "contract_assertions_executed": 0,
+  "default_ime_before_and_after": "org.scholay.rimes.android.debug/org.scholay.rimes.android.RimesInputMethodService",
+  "daily_package_after": {
+    "versionCode": "14 minSdk=26 targetSdk=37",
+    "versionName": "1.1.0",
+    "lastUpdateTime": "2026-10-07 08:49:24"
+  },
+  "daily_package_version_and_update_unchanged": true,
+  "real_clipboard_read": false,
+  "user_history_read_or_written": false,
+  "ime_switch_attempted": false
+}
