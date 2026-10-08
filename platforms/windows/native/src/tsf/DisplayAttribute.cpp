@@ -95,6 +95,10 @@ HRESULT STDMETHODCALLTYPE DisplayAttributeInfo::Reset() {
   return S_OK;
 }
 
+EnumDisplayAttributeInfo::EnumDisplayAttributeInfo() noexcept {
+  module::AddObject();
+}
+
 HRESULT STDMETHODCALLTYPE EnumDisplayAttributeInfo::QueryInterface(
     REFIID interface_id, void** object) {
   if (object == nullptr) {
@@ -118,6 +122,7 @@ ULONG STDMETHODCALLTYPE EnumDisplayAttributeInfo::Release() {
   const ULONG remaining =
       reference_count_.fetch_sub(1, std::memory_order_acq_rel) - 1;
   if (remaining == 0) {
+    module::ReleaseObject();
     delete this;
   }
   return remaining;

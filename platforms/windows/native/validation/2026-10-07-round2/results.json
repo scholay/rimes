@@ -1,0 +1,143 @@
+{
+  "compiledSourceCommit": "be34f80e799bb8ba5037bb476885a345973bb8b3",
+  "sourceSnapshot": "4917df3cda9eed689edc2d9702010fd0f855eb9b466a7b615e66a9f0467a5a7d",
+  "sourceArchiveSha256": "ce6803549b73d61805383ba7f73d9c265cd0cbeea75a9b2757d8ddcc236d56c3",
+  "nativeBuilds": [
+    {
+      "architecture": "x64",
+      "buildExitCode": 0,
+      "artifacts": [
+        {
+          "name": "RimesTsf.dll",
+          "sha256": "319e60b6a8ca3636cc6c002b3f004d82e36a58353a1b1f6ba4a75b8a2a0fa38b"
+        },
+        {
+          "name": "RimesBroker.exe",
+          "sha256": "f7067694d51cdc79f12d054755e7d0671a85eaf70062aa6649c1e342274e197a"
+        },
+        {
+          "name": "RimesRecoveryTsf.dll",
+          "sha256": "18266d2e8fdf14daab025cf69d5abef97db55fbdd174d97927cabde1c17d3e7f"
+        },
+        {
+          "name": "RimesTsfRuntimeTests.exe",
+          "sha256": "353480d81f4d457a21d00ec35c754950c0d2de00658c7bad879b75012015c413"
+        },
+        {
+          "name": "RimesCaretRegressionTests.exe",
+          "sha256": "e5077d5761f4f048c75c6c4ddc3555470b10d1a1b837d71a06966f95c6c4a9fc"
+        }
+      ]
+    },
+    {
+      "architecture": "x86",
+      "buildExitCode": 0,
+      "artifacts": [
+        {
+          "name": "RimesTsf.dll",
+          "sha256": "c340abc1108172ca651eb1d8313b5d5897dccc0abe15cf6b0425eca0b4a853e5"
+        },
+        {
+          "name": "RimesBroker.exe",
+          "sha256": "20d1599acb0faa6083ab4e1e8cb3955f18de01f7900c8ac111adeb9218969098"
+        },
+        {
+          "name": "RimesRecoveryTsf.dll",
+          "sha256": "4d2fae9924a6d37a0f384747f307cc6134a3a91c9d282900629d80651f5104cf"
+        },
+        {
+          "name": "RimesTsfRuntimeTests.exe",
+          "sha256": "52a33c9cb9f2d3fa7098f2d4a8044b6fed26c3828cadb6832f6652d7cdabf524"
+        },
+        {
+          "name": "RimesCaretRegressionTests.exe",
+          "sha256": "edd8de97d061e3b8be16c0542302a33b31cd98a1d5ddf7a5644bbf9b8335dc85"
+        }
+      ]
+    }
+  ],
+  "ctest": {
+    "status": "passed",
+    "startedAt": "2026-10-07T19:30:21.3852194+08:00",
+    "session": 4,
+    "results": [
+      {
+        "architecture": "x64",
+        "exitCode": 0
+      },
+      {
+        "architecture": "x86",
+        "exitCode": 0
+      }
+    ],
+    "finishedAt": "2026-10-07T19:30:30.0525510+08:00"
+  },
+  "runtime": {
+    "status": "passed",
+    "startedAt": "2026-10-07T19:31:08.2578125+08:00",
+    "isolatedProcesses": true,
+    "installedSoftwareModified": false,
+    "results": [
+      {
+        "architecture": "x64",
+        "test": "old-runtime-isolation",
+        "exitCode": 0,
+        "runtimeVersion": "14.16.27039.0 built by: vcwrkspc",
+        "runtimeSha256": "35bde7a4aed57f0872c969ef8d2763b1aca1082104098de8df9f8b7a9baa43fd"
+      },
+      {
+        "architecture": "x64",
+        "test": "baseline-enumerator-negative",
+        "exitCode": 1,
+        "expectedFailure": true,
+        "baselineCommit": "6d2227335c0ffd2a0240f10db406410cab2fe86f"
+      },
+      {
+        "architecture": "x64",
+        "test": "baseline-shared-crt-detected",
+        "exitCode": 0,
+        "baselineCommit": "6d2227335c0ffd2a0240f10db406410cab2fe86f"
+      },
+      {
+        "architecture": "x86",
+        "test": "old-runtime-isolation",
+        "exitCode": 0,
+        "runtimeVersion": "14.16.27024.1 built by: vcwrkspc",
+        "runtimeSha256": "442a2be47abe84f9cc6ef6e55c611271fdafee48e1b7e980c5188c53f6356f41"
+      },
+      {
+        "architecture": "x86",
+        "test": "baseline-enumerator-negative",
+        "exitCode": 1,
+        "expectedFailure": true,
+        "baselineCommit": "6d2227335c0ffd2a0240f10db406410cab2fe86f"
+      },
+      {
+        "architecture": "x86",
+        "test": "baseline-shared-crt-detected",
+        "exitCode": 0,
+        "baselineCommit": "6d2227335c0ffd2a0240f10db406410cab2fe86f"
+      }
+    ],
+    "finishedAt": "2026-10-07T19:31:08.4615655+08:00"
+  },
+  "product": {
+    "status": "passed",
+    "startedAt": "2026-10-07T19:31:45.8005509+08:00",
+    "snapshot": "4917df3cda9eed689edc2d9702010fd0f855eb9b466a7b615e66a9f0467a5a7d",
+    "phases": [
+      "product-x64",
+      "e2e-x64",
+      "product-x86",
+      "e2e-x86"
+    ],
+    "isolatedUserData": true,
+    "installedSoftwareModified": false,
+    "manifestSha256": "b6141790275ab54b582ddd9752ad33cc43cdac4569a035e56801b66f588c07d0",
+    "dataSourceCommit": "6d2227335c0ffd2a0240f10db406410cab2fe86f",
+    "finishedAt": "2026-10-07T19:32:47.6913481+08:00"
+  },
+  "downloadedDllHashesMatch": true,
+  "all284CompiledSourceFilesMatchBranch": true,
+  "installedDailyBrokerReplaced": false
+}

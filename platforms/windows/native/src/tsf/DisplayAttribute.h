@@ -37,7 +37,7 @@ class DisplayAttributeInfo final : public ITfDisplayAttributeInfo {
 
 class EnumDisplayAttributeInfo final : public IEnumTfDisplayAttributeInfo {
  public:
-  EnumDisplayAttributeInfo() noexcept = default;
+  EnumDisplayAttributeInfo() noexcept;
 
   EnumDisplayAttributeInfo(const EnumDisplayAttributeInfo&) = delete;
   EnumDisplayAttributeInfo& operator=(const EnumDisplayAttributeInfo&) =

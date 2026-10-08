@@ -31,6 +31,7 @@ namespace rimes::windows::workbench {
 namespace {
 constexpr UINT kChanged = WM_APP + 80, kTray = WM_APP + 81;
 constexpr UINT kOpenSettings = WM_APP + 82;
+constexpr UINT kUpdateBufferZOrder = WM_APP + 83;
 constexpr int kToggle = 100, kSettings = 101, kDeploy = 102, kStartup = 103,
               kAbout = 105, kExit = 104, kPasteMenu = 106;
 constexpr int kModeInput = 110, kModeGenerate = 111, kModeTranslate = 112;
@@ -53,6 +54,7 @@ struct Window {
   UiCommands* commands = nullptr;
   UINT taskbar_created = RegisterWindowMessageW(L"TaskbarCreated");
   HWND window = nullptr;
+  bool destroying = false;
   std::unique_ptr<SettingsUiHost> settings;
   std::atomic<HWND> notification{nullptr};
   ID2D1Factory* factory = nullptr;
@@ -96,6 +98,7 @@ struct Window {
   }
   void EnsureSettings();
   void OpenSettings();
+  void UpdateBufferZOrder();
   void Paint();
   void Update();
   void Action(int index);
@@ -212,6 +215,13 @@ void Window::EnsureSettings() {
     theme = preview;
     InvalidateRect(window, nullptr, FALSE);
   };
+  cb.on_closed = [this] {
+    // Settings' WM_DESTROY callback runs before DestroyWindow has finished.
+    // Defer native placement until that operation has unwound; a reentrant
+    // SetWindowPos can succeed without applying the topmost style change.
+    if (!destroying && window)
+      PostMessageW(window, kUpdateBufferZOrder, 0, 0);
+  };
   cb.about_text = std::wstring(L"RIMES Windows ") + kProductVersionWide + L"\nCommit: " + Wide(RIMES_BUILD_COMMIT) +
                   L"\n协议 v2\n词库：%APPDATA%\\RIMES\n设置与日志：%LOCALAPPDATA%"
                   L"\\RIMES";
@@ -223,7 +233,27 @@ void Window::OpenSettings() {
   // Buffer, consume its blocks, or cancel its source/configuration-frozen job.
   runtime.PauseCapture();
   EnsureSettings();
+  // The host retains Settings' lifetime; this HWND is only a placement anchor.
   settings->Open(window);
+  UpdateBufferZOrder();
+}
+
+void Window::UpdateBufferZOrder() {
+  if (destroying || !window) return;
+  constexpr UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+  const bool topmost =
+      (GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+  if (settings && settings->IsOpen()) {
+    // A retained Buffer must not cover the ordinary Settings window. Repeat
+    // its relative placement after ShowWindow/stream updates, without making
+    // Settings topmost or moving either window above other applications.
+    if (topmost) SetWindowPos(window, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+    SetWindowPos(window, settings->hwnd(), 0, 0, 0, 0, flags);
+  } else if (!topmost) {
+    // The deferred close message also restores a hidden Buffer without showing
+    // it, activating it, or resuming its revoked capture authority.
+    SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0, flags);
+  }
 }
 
 void Window::AddTrayIcon() {
@@ -337,6 +367,10 @@ void Window::PopupTrayMenu() {
       TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, cursor.x, cursor.y, 0,
                      window, nullptr);
   DestroyMenu(menu);
+  // The tray's foreground requirement can raise a demoted Buffer. Restore
+  // its relative order even when the menu is cancelled and no action updates
+  // the Runtime; never force Settings back above another application.
+  UpdateBufferZOrder();
   PostMessageW(window, WM_COMMAND, command, 0);
 }
 
@@ -524,6 +558,7 @@ void Window::Update() {
                    SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
   }
+  UpdateBufferZOrder();
   InvalidateRect(window, nullptr, FALSE);
 }
 
@@ -589,6 +624,19 @@ LRESULT CALLBACK Window::Procedure(HWND hwnd, UINT message, WPARAM wparam,
         return 0;
       case WM_MOUSEACTIVATE:
         return MA_NOACTIVATE;
+      case WM_WINDOWPOSCHANGING: {
+        auto* position = reinterpret_cast<WINDOWPOS*>(lparam);
+        if (position && !(position->flags & SWP_NOZORDER) &&
+            !self->destroying && self->settings && self->settings->IsOpen()) {
+          // Constrain native Z-order raises before Windows applies
+          // them, including paths that produce no Runtime notification. Keep
+          // coordinates and sizing flags intact; DefWindowProc still enforces
+          // native thickframe constraints below. NOACTIVATE cannot be changed
+          // here: Windows ignores changes to that flag in this message.
+          position->hwndInsertAfter = self->settings->hwnd();
+        }
+        break;
+      }
       case WM_PAINT:
         self->Paint();
         return 0;
@@ -603,6 +651,11 @@ LRESULT CALLBACK Window::Procedure(HWND hwnd, UINT message, WPARAM wparam,
         return 0;
       case kOpenSettings:
         self->OpenSettings();
+        return 0;
+      case kUpdateBufferZOrder:
+        // Recheck the current lifetime: Settings may have reopened while this
+        // close notification was queued, and shutdown must not restore it.
+        self->UpdateBufferZOrder();
         return 0;
       case WM_TIMER:
         self->runtime.Tick();
@@ -856,6 +909,7 @@ LRESULT CALLBACK Window::Procedure(HWND hwnd, UINT message, WPARAM wparam,
         DestroyWindow(hwnd);
         return 0;
       case WM_DESTROY:
+        self->destroying = true;
         if (self->commands) self->commands->Attach(nullptr);
         self->notification.store(nullptr);
         self->runtime.SetNotify({});

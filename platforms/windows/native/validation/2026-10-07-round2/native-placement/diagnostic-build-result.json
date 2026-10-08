@@ -1,0 +1,7 @@
+﻿{
+    "status":  "built",
+    "variant":  "122febd with bounded temporary semantic placement trace",
+    "originalWindowSha256":  "63fb5bf75a9876ace4caca95c0f49b0b890f282e4c3e752d89c8373ba8533530",
+    "temporaryWindowSha256":  "deea0bcbeb10a7388a8db331ba3adc462a2412d6898258d0bcdff35426850035",
+    "binarySha256":  "fb5e007b7f35f356d5af4cbf0f8a7240cc674427e0478fa8cd1a1b1f930a5cd6"
+}

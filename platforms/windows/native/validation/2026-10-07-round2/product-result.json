@@ -1,0 +1,16 @@
+{
+    "status":  "passed",
+    "startedAt":  "2026-10-07T19:31:45.8005509+08:00",
+    "snapshot":  "4917df3cda9eed689edc2d9702010fd0f855eb9b466a7b615e66a9f0467a5a7d",
+    "phases":  [
+                   "product-x64",
+                   "e2e-x64",
+                   "product-x86",
+                   "e2e-x86"
+               ],
+    "isolatedUserData":  true,
+    "installedSoftwareModified":  false,
+    "manifestSha256":  "b6141790275ab54b582ddd9752ad33cc43cdac4569a035e56801b66f588c07d0",
+    "dataSourceCommit":  "6d2227335c0ffd2a0240f10db406410cab2fe86f",
+    "finishedAt":  "2026-10-07T19:32:47.6913481+08:00"
+}

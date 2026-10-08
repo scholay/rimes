@@ -122,7 +122,10 @@ void SettingsUiHost::Open(HWND owner) {
   hwnd_ = CreateWindowExW(
       0, wc.lpszClassName, L"RIMES 设置", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
       left, top, width, height,
-      owner, nullptr, wc.hInstance, this);
+      // Use the Buffer only to select initial placement. A native owner would
+      // make Settings inherit its topmost state. SettingsUiHost owns this
+      // ordinary top-level window and destroys it when the Broker closes.
+      nullptr, nullptr, wc.hInstance, this);
   if (!hwnd_) return;
   CreateOrUpdateChildren();
   SetTimer(hwnd_, 11, 500, nullptr);

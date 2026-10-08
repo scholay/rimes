@@ -1,0 +1,49 @@
+{
+    "status":  "passed",
+    "startedAt":  "2026-10-07T19:31:08.2578125+08:00",
+    "isolatedProcesses":  true,
+    "installedSoftwareModified":  false,
+    "results":  [
+                    {
+                        "architecture":  "x64",
+                        "test":  "old-runtime-isolation",
+                        "exitCode":  0,
+                        "runtimeVersion":  "14.16.27039.0 built by: vcwrkspc",
+                        "runtimeSha256":  "35bde7a4aed57f0872c969ef8d2763b1aca1082104098de8df9f8b7a9baa43fd"
+                    },
+                    {
+                        "architecture":  "x64",
+                        "test":  "baseline-enumerator-negative",
+                        "exitCode":  1,
+                        "expectedFailure":  true,
+                        "baselineCommit":  "6d2227335c0ffd2a0240f10db406410cab2fe86f"
+                    },
+                    {
+                        "architecture":  "x64",
+                        "test":  "baseline-shared-crt-detected",
+                        "exitCode":  0,
+                        "baselineCommit":  "6d2227335c0ffd2a0240f10db406410cab2fe86f"
+                    },
+                    {
+                        "architecture":  "x86",
+                        "test":  "old-runtime-isolation",
+                        "exitCode":  0,
+                        "runtimeVersion":  "14.16.27024.1 built by: vcwrkspc",
+                        "runtimeSha256":  "442a2be47abe84f9cc6ef6e55c611271fdafee48e1b7e980c5188c53f6356f41"
+                    },
+                    {
+                        "architecture":  "x86",
+                        "test":  "baseline-enumerator-negative",
+                        "exitCode":  1,
+                        "expectedFailure":  true,
+                        "baselineCommit":  "6d2227335c0ffd2a0240f10db406410cab2fe86f"
+                    },
+                    {
+                        "architecture":  "x86",
+                        "test":  "baseline-shared-crt-detected",
+                        "exitCode":  0,
+                        "baselineCommit":  "6d2227335c0ffd2a0240f10db406410cab2fe86f"
+                    }
+                ],
+    "finishedAt":  "2026-10-07T19:31:08.4615655+08:00"
+}

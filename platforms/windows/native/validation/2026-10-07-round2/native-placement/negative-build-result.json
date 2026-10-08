@@ -1,0 +1,9 @@
+﻿{
+    "status":  "built",
+    "architecture":  "x64",
+    "productionCommit":  "0478e08329e6da382e3b9cc254b846f3d7370ac1",
+    "productionSnapshot":  "fcae231e7e29988fceb4d2e48209c67d83d34a90e495c5bf35b51f6eb381897b",
+    "newTestCommit":  "122febda876a547e3c4883b3e9dde4dc67686474",
+    "variant":  "Previous production Window with new regression only",
+    "newTestSha256":  "a4e0bffaebe474b62732c3a7cc033bd933e0fd60c618db3dc931aa102618e592"
+}

@@ -1,0 +1,16 @@
+﻿{
+    "status":  "passed",
+    "startedAt":  "2026-10-07T21:03:18.5322117+08:00",
+    "session":  4,
+    "results":  [
+                    {
+                        "architecture":  "x64",
+                        "exitCode":  0
+                    },
+                    {
+                        "architecture":  "x86",
+                        "exitCode":  0
+                    }
+                ],
+    "finishedAt":  "2026-10-07T21:03:26.0730213+08:00"
+}

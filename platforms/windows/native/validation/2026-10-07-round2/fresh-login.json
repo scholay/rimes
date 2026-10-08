@@ -1,0 +1,30 @@
+{
+  "observedAt": "2026-10-07T19:24:07.0944020+08:00",
+  "computer": "YOUNG-HOME",
+  "readOnly": true,
+  "bootTime": "2026-08-30T15:55:53.5000000+08:00",
+  "brokerCount": 1,
+  "brokers": [
+    {
+      "processId": 79612,
+      "sessionId": 4,
+      "created": "2026-10-07T19:01:39.1878230+08:00",
+      "path": "C:\\Program Files\\RIMES\\versions\\1.1.2-6d2227335c0f-60ced8d18e17\\x64\\RimesBroker.exe",
+      "fileSHA256": "3a412616bc2aced5e546a58ab85aed13416a67c147b748557ada703ba61af843"
+    }
+  ],
+  "runValue": "\"C:\\Program Files\\RIMES\\versions\\1.1.2-6d2227335c0f-60ced8d18e17\\x64\\RimesBroker.exe\"",
+  "installedVersion": "1.1.2",
+  "installedCommit": "6d2227335c0ffd2a0240f10db406410cab2fe86f",
+  "active": "C:\\Program Files\\RIMES\\versions\\1.1.2-6d2227335c0f-60ced8d18e17",
+  "requiresSignOut": true,
+  "windowOrInputContentRead": false,
+  "processesStartedOrStopped": false,
+  "desktopObservation": {
+    "method": "Windows App/RDP via CUA",
+    "persistentRimesConsoleVisible": false,
+    "desktopClicksValidated": false,
+    "limitation": "CUA native coordinate input failed with windowNotFoundAtPosition; host typing acceptance was not run."
+  },
+  "freshLoginEvidence": "User reports sign-out/restart; Session 4 Broker was created before this task connected over RDP. OS boot timestamp does not independently prove a kernel restart."
+}

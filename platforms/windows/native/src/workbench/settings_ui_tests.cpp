@@ -76,6 +76,242 @@ FixtureWindows WindowsOnFixtureThread(DWORD thread) {
   return windows;
 }
 
+bool SettingsPrecedesBuffer(const FixtureWindows& windows) {
+  if (!windows.settings || !windows.buffer) return false;
+  for (HWND next = GetWindow(windows.settings, GW_HWNDNEXT); next;
+       next = GetWindow(next, GW_HWNDNEXT))
+    if (next == windows.buffer) return true;
+  return false;
+}
+
+constexpr UINT kFixturePosition = WM_APP + 1;
+constexpr UINT kFixtureSettingsClose = WM_APP + 2;
+constexpr UINT kFixtureSettingsCloseBarrier = WM_APP + 3;
+struct NativePositionRequest {
+  FixtureWindows windows;
+  HWND insert_after = HWND_TOP;
+  int x = 0, y = 0, width = 0, height = 0;
+  UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+  bool positioned = false, ordered = false, inspected = false;
+  HWND active = nullptr;
+  LONG_PTR buffer_style = 0;
+  RECT rectangle{};
+};
+struct NativeSettingsCloseRequest {
+  FixtureWindows windows, observed;
+  workbench::UiCommands* commands = nullptr;
+  bool reopen = false, reopen_queued = false, closed = false;
+  bool barrier_posted = false, ordered = false, inspected = false;
+  LONG_PTR buffer_style = 0;
+  HWND active = nullptr;
+  std::atomic<bool> completed{false};
+};
+LRESULT CALLBACK FixturePositionProcedure(HWND window, UINT message,
+                                          WPARAM wparam, LPARAM lparam) {
+  if (message == kFixtureSettingsClose) {
+    auto* request = reinterpret_cast<NativeSettingsCloseRequest*>(lparam);
+    if (!request) return FALSE;
+    if (GetWindowThreadProcessId(request->windows.buffer, nullptr) != GetCurrentThreadId() ||
+        GetWindowThreadProcessId(request->windows.settings, nullptr) != GetCurrentThreadId()) {
+      request->completed = true;
+      return FALSE;
+    }
+    // Both actions run in this dispatch. Queue reopen before closing so it
+    // executes before the close callback's deferred Buffer-order message.
+    if (request->reopen && request->commands)
+      request->reopen_queued = request->commands->RequestSettings();
+    SendMessageW(request->windows.settings, WM_CLOSE, 0, 0);
+    request->closed = !IsWindow(request->windows.settings);
+    request->barrier_posted =
+        PostMessageW(window, kFixtureSettingsCloseBarrier, 0, lparam) != FALSE;
+    if (!request->barrier_posted) request->completed = true;
+    return TRUE;
+  }
+  if (message == kFixtureSettingsCloseBarrier) {
+    auto* request = reinterpret_cast<NativeSettingsCloseRequest*>(lparam);
+    if (!request) return FALSE;
+    // Posted FIFO places this observation after the deferred restore. In the
+    // reopen case, its Runtime notification is appended after this barrier;
+    // it cannot repair an incorrect stale restoration before we observe it.
+    request->observed = WindowsOnFixtureThread(GetCurrentThreadId());
+    request->ordered = SettingsPrecedesBuffer(request->observed);
+    request->buffer_style = GetWindowLongPtrW(request->observed.buffer, GWL_EXSTYLE);
+    GUITHREADINFO state{sizeof(state)};
+    request->inspected = GetGUIThreadInfo(GetCurrentThreadId(), &state) != FALSE;
+    request->active = state.hwndActive;
+    request->completed = true;
+    return TRUE;
+  }
+  if (message == kFixturePosition) {
+    auto* request = reinterpret_cast<NativePositionRequest*>(lparam);
+    if (!request ||
+        GetWindowThreadProcessId(request->windows.buffer, nullptr) != GetCurrentThreadId() ||
+        GetWindowThreadProcessId(request->windows.settings, nullptr) != GetCurrentThreadId())
+      return FALSE;
+    request->positioned = SetWindowPos(request->windows.buffer, request->insert_after,
+        request->x, request->y, request->width, request->height, request->flags) != FALSE;
+    // Sample in the same UI dispatch as SetWindowPos. A later queued Runtime
+    // update cannot repair an incorrect native order before this observation.
+    request->ordered = SettingsPrecedesBuffer(request->windows);
+    request->buffer_style = GetWindowLongPtrW(request->windows.buffer, GWL_EXSTYLE);
+    GetWindowRect(request->windows.buffer, &request->rectangle);
+    GUITHREADINFO state{sizeof(state)};
+    request->inspected = GetGUIThreadInfo(GetCurrentThreadId(), &state) != FALSE;
+    request->active = state.hwndActive;
+    return TRUE;
+  }
+  return DefWindowProcW(window, message, wparam, lparam);
+}
+
+void CloseSettingsAtUiBarrier(HWND driver, const FixtureWindows& windows,
+                              workbench::UiCommands& commands,
+                              NativeSettingsCloseRequest& request, bool reopen) {
+  request.windows = windows;
+  request.commands = &commands;
+  request.reopen = reopen;
+  // Posting the action first drains preexisting Runtime notifications before
+  // closing. No Runtime method is called between a plain close and its barrier.
+  const bool posted = driver &&
+      PostMessageW(driver, kFixtureSettingsClose, 0,
+                   reinterpret_cast<LPARAM>(&request));
+  Check(posted, "owned UI driver queues the settings-close lifecycle action");
+  if (!posted || !WaitUntil([&] { return request.completed.load(); },
+          "settings close reaches its posted UI queue barrier")) return;
+  Check(request.closed && request.barrier_posted,
+        "settings destruction completes before the deferred-placement barrier");
+  if (reopen) {
+    Check(request.reopen_queued && request.observed.settings && request.ordered &&
+              !(request.buffer_style & WS_EX_TOPMOST),
+          "stale close restoration keeps reopened Settings above the Buffer before a Runtime update");
+  } else {
+    Check(!request.observed.settings && (request.buffer_style & WS_EX_TOPMOST),
+          "settings close restores Buffer topmost at the UI barrier without a Runtime update");
+  }
+  Check(request.inspected && request.active != windows.buffer &&
+            (request.buffer_style & WS_EX_NOACTIVATE),
+        "deferred settings placement preserves Buffer no-activation");
+}
+
+void CheckSynchronousBufferPosition(HWND driver, const FixtureWindows& windows) {
+  NativePositionRequest request;
+  request.windows = windows;
+  for (const HWND placement : {HWND_TOP, HWND_TOPMOST}) {
+    request.insert_after = placement;
+    Check(driver && SendMessageW(driver, kFixturePosition, 0,
+                                 reinterpret_cast<LPARAM>(&request)) && request.positioned,
+          "owned UI driver executes a native Buffer raise synchronously");
+    Check(request.ordered && !(request.buffer_style & WS_EX_TOPMOST),
+          "native Buffer raise remains behind Settings before any Runtime update");
+    Check(request.inspected && request.active != windows.buffer &&
+              (request.buffer_style & WS_EX_NOACTIVATE),
+          "native no-activation raise keeps Buffer inactive");
+  }
+
+  const RECT original = request.rectangle;
+  request.x = original.left + 12;
+  request.y = original.top + 8;
+  request.width = original.right - original.left + 16;
+  request.height = original.bottom - original.top + 10;
+  request.flags = SWP_NOZORDER | SWP_NOACTIVATE;
+  Check(driver && SendMessageW(driver, kFixturePosition, 0,
+                               reinterpret_cast<LPARAM>(&request)) && request.positioned &&
+            request.rectangle.left == request.x && request.rectangle.top == request.y &&
+            request.rectangle.right - request.rectangle.left == request.width &&
+            request.rectangle.bottom - request.rectangle.top == request.height &&
+            request.ordered && !(request.buffer_style & WS_EX_TOPMOST),
+        "Buffer movement and no-Z-order resizing retain requested geometry and Settings order");
+  request.x = original.left;
+  request.y = original.top;
+  request.width = original.right - original.left;
+  request.height = original.bottom - original.top;
+  Check(driver && SendMessageW(driver, kFixturePosition, 0,
+                               reinterpret_cast<LPARAM>(&request)) && request.positioned,
+        "owned UI driver restores the Buffer geometry without changing its order");
+}
+
+void CheckBufferRestored(const FixtureWindows& windows, bool visible) {
+  WaitUntil([&] {
+    return windows.buffer &&
+        (GetWindowLongPtrW(windows.buffer, GWL_EXSTYLE) &
+         (WS_EX_TOPMOST | WS_EX_NOACTIVATE)) ==
+            (WS_EX_TOPMOST | WS_EX_NOACTIVATE);
+  }, "closing settings restores the Buffer's topmost and no-activation styles");
+  Check(windows.buffer &&
+            IsVisibleWithinFixture(windows.buffer, windows.buffer) == visible,
+        "restoring Buffer topmost preserves its previous visibility");
+  GUITHREADINFO state{sizeof(state)};
+  Check(windows.buffer &&
+            GetGUIThreadInfo(GetWindowThreadProcessId(windows.buffer, nullptr), &state) &&
+            state.hwndActive != windows.buffer,
+        "restoring Buffer topmost does not activate the Buffer");
+}
+
+void CheckProductionWindowPlacement(const FixtureWindows& windows) {
+  if (!windows.buffer || !windows.settings) {
+    Check(false, "production Buffer and settings windows exist for placement checks");
+    return;
+  }
+  WaitUntil([&] {
+    return IsVisibleWithinFixture(windows.settings, windows.settings);
+  }, "settings finishes showing before its native placement is checked");
+  WaitUntil([&] {
+    return !(GetWindowLongPtrW(windows.buffer, GWL_EXSTYLE) & WS_EX_TOPMOST) &&
+           SettingsPrecedesBuffer(windows);
+  }, "settings appears above the retained Buffer in the normal window band");
+  const auto buffer_style = GetWindowLongPtrW(windows.buffer, GWL_EXSTYLE);
+  Check((buffer_style & (WS_EX_TOPMOST | WS_EX_NOACTIVATE)) ==
+            WS_EX_NOACTIVATE,
+        "opening settings temporarily demotes Buffer while retaining no-activation");
+  Check((GetWindowLongPtrW(windows.settings, GWL_EXSTYLE) &
+         (WS_EX_TOPMOST | WS_EX_NOACTIVATE)) == 0 &&
+            GetWindow(windows.settings, GW_OWNER) == nullptr,
+        "production settings is a normal activatable top-level window without a topmost owner");
+  Check((GetWindowLongPtrW(windows.settings, GWL_STYLE) &
+         (WS_CAPTION | WS_THICKFRAME)) == (WS_CAPTION | WS_THICKFRAME),
+        "settings retains native caption dragging and resizing");
+
+  RECT original{}, client{};
+  GetWindowRect(windows.settings, &original);
+  RECT original_buffer{}, overlap{}, overlapped_buffer{};
+  GetWindowRect(windows.buffer, &original_buffer);
+  Check(MoveWindow(windows.buffer, original.left + 20, original.top + 100,
+                   original_buffer.right - original_buffer.left,
+                   original_buffer.bottom - original_buffer.top, TRUE) != FALSE,
+        "fixture positions the retained Buffer over settings content");
+  GetWindowRect(windows.buffer, &overlapped_buffer);
+  Check(IntersectRect(&overlap, &original, &overlapped_buffer) &&
+            SettingsPrecedesBuffer(windows),
+        "settings remains above the Buffer when their native rectangles overlap");
+  GUITHREADINFO state{sizeof(state)};
+  Check(GetGUIThreadInfo(GetWindowThreadProcessId(windows.buffer, nullptr), &state) &&
+            state.hwndActive != windows.buffer,
+        "temporary Buffer demotion and placement do not activate it");
+  MoveWindow(windows.buffer, original_buffer.left, original_buffer.top,
+             original_buffer.right - original_buffer.left,
+             original_buffer.bottom - original_buffer.top, TRUE);
+  GetClientRect(windows.settings, &client);
+  POINT client_origin{client.left, client.top};
+  ClientToScreen(windows.settings, &client_origin);
+  const LONG x = original.left + (original.right - original.left) / 2;
+  const LONG y = original.top + (client_origin.y - original.top) / 2;
+  Check(SendMessageW(windows.settings, WM_NCHITTEST, 0,
+                    MAKELPARAM(static_cast<WORD>(x), static_cast<WORD>(y))) == HTCAPTION,
+        "the settings title bar delegates native dragging to Windows");
+
+  // Own disposable windows only. This exercises normal OS positioning in
+  // headless CTest; it does not claim an interactive multi-monitor drag.
+  Check(MoveWindow(windows.settings, original.left + 20, original.top + 20,
+                   original.right - original.left, original.bottom - original.top,
+                   TRUE) != FALSE,
+        "production settings accepts an ordinary window move");
+  RECT moved{};
+  GetWindowRect(windows.settings, &moved);
+  Check(moved.left == original.left + 20 && moved.top == original.top + 20,
+        "settings does not clamp an ordinary move to its initial placement");
+  MoveWindow(windows.settings, original.left, original.top,
+             original.right - original.left, original.bottom - original.top, TRUE);
+}
+
 void TestNestedHitTargets() {
   ui::SettingsDraft draft;
   draft.page = ui::SettingsPage::kAppearance;
@@ -607,17 +843,49 @@ void TestSettingsPreserveRuntimeAndStreaming() {
       return accepted.load();
     });
     workbench::UiCommands commands;
+    // Posted request pointers remain valid until the UI thread is joined,
+    // including timeout/error paths; each request is used only once.
+    NativeSettingsCloseRequest close_requests[3];
     std::atomic<DWORD> ui_thread{0};
+    std::atomic<HWND> position_driver{nullptr};
     std::jthread ui([&] {
       ui_thread = GetCurrentThreadId();
+      SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+      WNDCLASSW driver_class{};
+      driver_class.lpfnWndProc = FixturePositionProcedure;
+      driver_class.hInstance = GetModuleHandleW(nullptr);
+      driver_class.lpszClassName = L"Rimes.SettingsPositionFixture";
+      RegisterClassW(&driver_class);
+      const HWND driver = CreateWindowExW(0, driver_class.lpszClassName, L"", 0,
+          0, 0, 0, 0, HWND_MESSAGE, nullptr, driver_class.hInstance, nullptr);
+      position_driver = driver;
       workbench::RunWindow(runtime, [] {}, [] {}, &commands);
+      position_driver = nullptr;
+      if (driver) DestroyWindow(driver);
+      UnregisterClassW(driver_class.lpszClassName, driver_class.hInstance);
     });
     const auto windows = [&] { return WindowsOnFixtureThread(ui_thread.load()); };
     WaitUntil([&] { return commands.RequestSettings(); }, "production settings dispatcher becomes ready");
     WaitUntil([&] { return windows().settings != nullptr; }, "settings command opens the production settings host");
+    CheckProductionWindowPlacement(windows());
     Check(!runtime.Snapshot().value("visible", true), "settings do not open a closed Buffer");
-    if (const HWND settings = windows().settings) PostMessageW(settings, WM_CLOSE, 0, 0);
+    Check(!IsVisibleWithinFixture(windows().buffer, windows().buffer),
+          "opening settings leaves a closed Buffer physically hidden");
+    runtime.Toggle(0);  // Own tray/hotkey behavior with no authorized host.
+    WaitUntil([&] {
+      const auto current = windows();
+      return IsVisibleWithinFixture(current.buffer, current.buffer) &&
+             SettingsPrecedesBuffer(current);
+    }, "Buffer opened after settings remains below it without a capture target");
+    Check(!runtime.Snapshot().value("capture", true),
+          "opening the Buffer behind settings does not authorize host capture");
+    runtime.Close();
+    WaitUntil([&] { return !IsVisibleWithinFixture(windows().buffer, windows().buffer); },
+              "closing Buffer while settings is open preserves its hidden state");
+    CloseSettingsAtUiBarrier(position_driver.load(), windows(), commands,
+                             close_requests[0], false);
     WaitUntil([&] { return windows().settings == nullptr; }, "closing settings retires its own window");
+    CheckBufferRestored(windows(), false);
 
     const auto peer = GetCurrentProcessId() + 1;
     const auto target = runtime.Register(peer, 9001, 9001);
@@ -635,6 +903,7 @@ void TestSettingsPreserveRuntimeAndStreaming() {
     Check(commands.RequestSettings(), "settings request posts while Buffer is active");
     WaitUntil([&] { return windows().settings && !runtime.Capturing(target); },
               "settings opens and pauses the previous host capture");
+    CheckProductionWindowPlacement(windows());
     auto after = runtime.Snapshot();
     Check(after["visible"] == before["visible"] &&
               after["source_blocks"] == before["source_blocks"] &&
@@ -648,16 +917,30 @@ void TestSettingsPreserveRuntimeAndStreaming() {
     WaitUntil([&] { return IsVisibleWithinFixture(windows().buffer, windows().buffer); },
               "production Buffer window remains shown while settings are open");
 
+    CheckSynchronousBufferPosition(position_driver.load(), windows());
     runtime.Focus({});  // The real host can report focus loss after activation.
+    WaitUntil([&] { return SettingsPrecedesBuffer(windows()); },
+              "streaming runtime refresh restores settings above the retained Buffer");
     Check(runtime.Snapshot().value("busy", false) &&
               runtime.Snapshot().value("preview", std::string()) == "Stream",
           "following host focus loss preserves the already-paused request");
     const HWND first_settings = windows().settings;
+    SetWindowPos(windows().buffer, HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     Check(commands.RequestSettings(), "repeated settings command posts");
-    WaitUntil([&] { return windows().settings == first_settings; },
-              "repeated settings request reuses the existing host");
-    if (first_settings) PostMessageW(first_settings, WM_CLOSE, 0, 0);
+    WaitUntil([&] {
+      return windows().settings == first_settings && SettingsPrecedesBuffer(windows());
+    }, "repeated settings request reuses the host and restores its order above Buffer");
+    CloseSettingsAtUiBarrier(position_driver.load(), windows(), commands,
+                             close_requests[1], true);
+    Check(runtime.Snapshot().value("busy", false) &&
+              runtime.Snapshot().value("preview", std::string()) == "Stream" &&
+              runtime.Snapshot()["source_blocks"] == before["source_blocks"],
+          "closing and reopening settings preserves the in-flight Buffer request");
+    CloseSettingsAtUiBarrier(position_driver.load(), windows(), commands,
+                             close_requests[2], false);
     WaitUntil([&] { return windows().settings == nullptr; }, "settings can dismiss while streaming continues");
+    CheckBufferRestored(windows(), true);
     Check(runtime.Snapshot().value("visible", false) &&
               runtime.Snapshot().value("busy", false) &&
               runtime.Snapshot()["source_blocks"] == before["source_blocks"],
@@ -682,6 +965,7 @@ void TestSettingsPreserveRuntimeAndStreaming() {
     Check(commands.RequestSettings(), "settings request posts while composing");
     WaitUntil([&] { return windows().settings && !runtime.Capturing(target); },
               "settings pauses an explicitly rebound input context");
+    CheckProductionWindowPlacement(windows());
     Check(runtime.Snapshot().value("preedit", std::string()) == "" &&
               runtime.Snapshot().value("result", std::string()) == "Stream done." &&
               runtime.Snapshot()["source_blocks"] == before["source_blocks"],
@@ -708,6 +992,8 @@ void TestSettingsPreserveRuntimeAndStreaming() {
     runtime.Stop();
     if (const HWND buffer = windows().buffer) PostMessageW(buffer, WM_CLOSE, 0, 0);
     ui.join();
+    Check(!windows().buffer && !windows().settings,
+          "Broker window shutdown also destroys its independent settings window");
   }
   Check(SetEnvironmentVariableW(L"LOCALAPPDATA", original_size ? original.c_str() : nullptr) != 0,
         "runtime fixture restores the original preferences path after joining its workers");

@@ -10,6 +10,7 @@ Core maintainer / 核心维护者: [学术海](https://pm.scholay.com) ([GitHub:
 - pengjiebo
 - [Kindred5210](https://github.com/Kindred5210) — Liquid Glass theme design and implementation adapted from [PR #46](https://github.com/scholay/rimes/pull/46).
 - [XyTT2N2bTc](https://github.com/XyTT2N2bTc) — Windows candidate-window placement via [PR #82](https://github.com/scholay/rimes/pull/82).
+- [Sparky579](https://github.com/Sparky579) — Windows candidate-window caret fallback and regression coverage via [PR #105](https://github.com/scholay/rimes/pull/105).
 
 ## AI coding assistants
 
