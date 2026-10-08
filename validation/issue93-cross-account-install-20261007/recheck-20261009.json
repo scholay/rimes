@@ -1,0 +1,17 @@
+{
+  "baseCommit": "ea24bb7c64dc38626b42636e3c04fd059cc6d0bb",
+  "sourceFilesVerified": 14,
+  "host": "YOUNG-HOME",
+  "status": "passed",
+  "startedAt": "2026-10-09T06:38:12.8399874+08:00",
+  "parse": "passed",
+  "payload": "passed",
+  "result": "passed",
+  "lifecycle": "passed",
+  "finishedAt": "2026-10-09T06:38:31.1757358+08:00",
+  "payloadCount": 17,
+  "sourceFingerprints": "source-sha256.json",
+  "realCrossAccountUAC": "pending",
+  "dailyInstallationChanged": false,
+  "lifecycleCount": 64
+}

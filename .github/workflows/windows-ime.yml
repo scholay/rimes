@@ -73,6 +73,14 @@ jobs:
             -OutputDirectory (Join-Path $env:RUNNER_TEMP ('rimes-setup-result-' + [guid]::NewGuid().ToString('N')))
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Test installer ownership and cross-account lifecycle
+        if: matrix.architecture == 'x64'
+        shell: powershell
+        run: |
+          ./platforms/windows/tests/Test-InstalledAppsLifecycle.ps1 `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP ('rimes-installer-lifecycle-' + [guid]::NewGuid().ToString('N')))
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Run static checks, build, and CTest
         shell: pwsh
         run: |

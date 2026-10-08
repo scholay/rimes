@@ -13,6 +13,7 @@ $global:RimesInstallerTestKey='SOFTWARE\Scholay\RIMES-Installer-Tests\'+[guid]::
 $global:RimesInstallerTestShortcut=Join-Path $OutputDirectory 'Start Menu\RIMES Settings.lnk'
 $global:RimesInstallerTestNative=@{}
 $global:RimesInstallerTestAutostart=$null
+$global:RimesInstallerTestMachinePhase=$false
 $global:RimesInstallerTestLock=$false
 $global:RimesInstallerTestFailRegister=$false
 $global:RimesInstallerTestFailEntry=$false
@@ -27,9 +28,9 @@ $global:RimesInstallerTestWriteEntry=${function:Write-InstalledAppRegistration}
 $global:RimesInstallerTestRestoreEntry=${function:Restore-InstalledAppRegistration}
 $global:RimesInstallerTestWriteShortcut=${function:Write-SettingsShortcut}
 function Get-InstalledAppKey {return $global:RimesInstallerTestKey}
-function Get-SettingsShortcutPath {return $global:RimesInstallerTestShortcut}
-function Get-BrokerAutostart {return $global:RimesInstallerTestAutostart}
-function Restore-BrokerAutostart($Value){$global:RimesInstallerTestAutostart=$Value}
+function Get-SettingsShortcutPath {if($global:RimesInstallerTestMachinePhase){throw 'Machine phase accessed administrator Start Menu'};return $global:RimesInstallerTestShortcut}
+function Get-BrokerAutostart {if($global:RimesInstallerTestMachinePhase){throw 'Machine phase read the administrator startup'};return $global:RimesInstallerTestAutostart}
+function Restore-BrokerAutostart($Value){if($global:RimesInstallerTestMachinePhase){throw 'Machine phase changed the administrator startup'};$global:RimesInstallerTestAutostart=$Value}
 function Get-LegacyViews([string]$InstallRoot=''){return @()}
 function Get-RegisteredRimesViews {
     return @($global:RimesInstallerTestNative.GetEnumerator() | ForEach-Object {[pscustomobject]@{architecture=$_.Key;dll=(Join-Path $_.Value "$($_.Key)\RimesTsf.dll")}})
@@ -46,8 +47,8 @@ function Invoke-Registrar([string]$Directory,[string]$Architecture,[string]$Oper
     elseif($Operation -eq 'verify'){if($global:RimesInstallerTestNative[$Architecture] -ne $Directory){throw 'Fixture registration mismatch'}}
     elseif($Operation -eq 'verify-absent'){if($global:RimesInstallerTestNative.ContainsKey($Architecture)){throw 'Fixture registration remains'}}
 }
-function Write-InstalledAppRegistration([string]$Root,[string]$Directory,$Manifest,[string]$LauncherDirectory=$Directory){
-    & $global:RimesInstallerTestWriteEntry $Root $Directory $Manifest $LauncherDirectory
+function Write-InstalledAppRegistration([string]$Root,[string]$Directory,$Manifest,[string]$LauncherDirectory=$Directory,[string]$UserSid=([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)){
+    & $global:RimesInstallerTestWriteEntry $Root $Directory $Manifest $LauncherDirectory $UserSid
     if($global:RimesInstallerTestFailEntry){$global:RimesInstallerTestFailEntry=$false;throw 'Fixture failure after Installed Apps write'}
 }
 function Restore-InstalledAppRegistration($Values){
@@ -63,7 +64,20 @@ $fixtureCommon=$fixtureCommon.Replace('__COMMON_SOURCE__',("$installer\Package.C
 # Only these no-op executables run. Actual TSF registration, dictionaries,
 # credentials, login startup and current-user Start Menu are never touched.
 $source=Join-Path $OutputDirectory 'FixtureNative.cs'
-'public static class FixtureNative { public static int Main(string[] args) { return 0; } }' | Set-Content -LiteralPath $source -Encoding UTF8
+@'
+public static class FixtureNative {
+    public static int Main(string[] args) {
+        if (System.IO.Path.GetFileNameWithoutExtension(System.Reflection.Assembly.GetExecutingAssembly().Location) == "RimesBroker") {
+            if (args.Length > 0 && args[0] == "--print-endpoint")
+                System.Console.WriteLine(@"\\.\pipe\RIMES.Broker.v2.session-" + System.Diagnostics.Process.GetCurrentProcess().SessionId + ".user-0000000000000093");
+            var log = System.Environment.GetEnvironmentVariable("RIMES_INSTALLER_FIXTURE_BROKER_LOG");
+            if (!string.IsNullOrEmpty(log)) System.IO.File.AppendAllText(log, string.Join(" ", args) + "\n");
+            if (System.Environment.GetEnvironmentVariable("RIMES_INSTALLER_FIXTURE_DEPLOY_FAIL") == "1" && args.Length > 0 && args[0] == "--deploy-only") return 5;
+        }
+        return 0;
+    }
+}
+'@ | Set-Content -LiteralPath $source -Encoding UTF8
 $binary=Join-Path $OutputDirectory 'FixtureNative.exe'
 $compiler=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 & $compiler /nologo /target:exe "/out:$binary" $source | Out-Host
@@ -239,11 +253,92 @@ try {
     Remove-Item -LiteralPath "$actual\x86" -Recurse
     $result=& "$new\Uninstall.ps1" -InstallRoot $root
     Check 'external-uninstaller remnants can be removed using exact registered managed paths after manifest deletion' ($result.Uninstalled -and $global:RimesInstallerTestNative.Count -eq 0)
+    # Machine/user split: all real registry writes still use the isolated test
+    # key; fake native programs record whether the administrator ran a Broker.
+    $callerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $otherSid='S-1-5-21-111111111-222222222-333333333-1001'
+    # The preceding scenario deliberately kept a user-edited shortcut. Give
+    # this independent ownership scenario its own empty Start Menu fixture.
+    Restore-SettingsShortcut $null
+    $splitRoot=Join-Path $OutputDirectory 'Split Install'
+    $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG=Join-Path $OutputDirectory 'broker-calls.log'
+    $global:RimesInstallerTestAutostart='administrator-startup-sentinel'
+    $global:RimesInstallerTestMachinePhase=$true
+    $snapshot=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((@{userSid=$callerSid;autostart='original-user-startup-snapshot'} | ConvertTo-Json -Compress)))
+    $wrongSnapshot=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((@{userSid=$otherSid;autostart='wrong-account'} | ConvertTo-Json -Compress)))
+    Expect-Failure 'machine phase rejects a startup snapshot for a different account' {& "$new\Install.ps1" -InstallRoot $splitRoot -MachineOnly -UserSid $callerSid -UserAutostartSnapshot $wrongSnapshot}
+    & "$new\Install.ps1" -InstallRoot $splitRoot -MachineOnly -UserSid $callerSid -UserAutostartSnapshot $snapshot | Out-Host
+    Check 'original-user startup snapshot is retained for rollback without reading administrator HKCU' ((Get-State $splitRoot).previousAutostart -eq 'original-user-startup-snapshot')
+    $splitState=Get-State $splitRoot
+    Check 'machine-only install never runs the administrator Broker or touches user settings' (-not (Test-Path -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG) -and $global:RimesInstallerTestAutostart -eq 'administrator-startup-sentinel')
+    & "$new\Install.ps1" -InstallRoot $splitRoot -MachineOnly -UserSid $callerSid | Out-Host
+    Check 'same-version machine repair keeps user configuration out of the elevated process' (-not (Test-Path -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG))
+    $global:RimesInstallerTestMachinePhase=$false
+    $global:RimesInstallerTestAutostart='original-user-startup-sentinel'
+    $env:RIMES_INSTALLER_FIXTURE_DEPLOY_FAIL='1'
+    $userFailure=''
+    try{& "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $new -NoAutostart}catch{$userFailure=$_.Exception.Message}
+    Check 'user deployment failure preserves prior startup and reports incomplete setup' ($userFailure.Contains('setup for this Windows user is incomplete') -and $global:RimesInstallerTestAutostart -eq 'original-user-startup-sentinel')
+    $env:RIMES_INSTALLER_FIXTURE_DEPLOY_FAIL=$null
+    $fixtureMutexName='Local\RIMES.Broker.v2.session-'+[Diagnostics.Process]::GetCurrentProcess().SessionId+'.user-0000000000000093'
+    $held=[Threading.Mutex]::new($false,$fixtureMutexName)
+    try {
+        $callsBefore=(Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw)
+        Expect-Failure 'user deployment refuses an already-running Broker' {& "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $new -NoAutostart}
+        $callsAfter=(Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw)
+        Check 'held Broker lock prevents a second dictionary engine' ($callsAfter.Substring($callsBefore.Length) -notmatch '--deploy-only')
+    } finally {$held.Dispose()}
+    & "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $new -NoAutostart | Out-Host
+    Check 'original-user retry completes deployment and respects disabled autostart' ($null -eq $global:RimesInstallerTestAutostart -and (Test-Path -LiteralPath $global:RimesInstallerTestShortcut))
+    $callsBefore=(Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw)
+    Expect-Failure 'user completion rejects a different installed payload before running it' {& "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $upgrade}
+    Check 'mismatched completion did not execute the Broker' ((Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw) -eq $callsBefore)
+    $global:RimesInstallerTestAutostart='"'+(Join-Path $splitState.active 'x64\RimesBroker.exe')+'"'
+    $startupBefore=$global:RimesInstallerTestAutostart
+    $shortcutBefore=[IO.File]::ReadAllBytes($global:RimesInstallerTestShortcut)
+    Expect-Failure 'UAC cancellation is reported' {Invoke-UserUninstall $splitRoot $splitState.active {return 1223}}
+    Check 'cancelled uninstall restores original-user startup and exact shortcut bytes' ($global:RimesInstallerTestAutostart -eq $startupBefore -and [Convert]::ToBase64String([IO.File]::ReadAllBytes($global:RimesInstallerTestShortcut)) -eq [Convert]::ToBase64String($shortcutBefore))
+    Expect-Failure 'machine uninstall error is reported' {Invoke-UserUninstall $splitRoot $splitState.active {throw 'fixture elevated failure'}}
+    Check 'failed uninstall restores user launch entries' ($global:RimesInstallerTestAutostart -eq $startupBefore -and (Test-Path -LiteralPath $global:RimesInstallerTestShortcut))
+    $code=Invoke-UserUninstall $splitRoot $splitState.active {return 3010}
+    Check 'successful user uninstall clears owned entries and retains sign-out status' ($code -eq 3010 -and $null -eq $global:RimesInstallerTestAutostart -and -not (Test-Path -LiteralPath $global:RimesInstallerTestShortcut))
+    Write-SettingsShortcut $splitRoot $splitState.active
+    $global:RimesInstallerTestMachinePhase=$true
+    $result=& "$new\Uninstall.ps1" -InstallRoot $splitRoot -MachineOnly -UserSid $callerSid
+    Check 'machine-only uninstall leaves original-user cleanup for the initiating process' ($result.Uninstalled -and (Test-Path -LiteralPath $global:RimesInstallerTestShortcut))
+    $global:RimesInstallerTestMachinePhase=$false
+    Remove-OwnedSettingsShortcut $splitRoot
+
+    # Model the initiating standard SID being different from the worker SID.
+    $global:RimesInstallerTestMachinePhase=$true
+    & "$new\Install.ps1" -InstallRoot $splitRoot -MachineOnly -UserSid $otherSid | Out-Host
+    $before=Read-InstalledAppRegistration
+    Check 'cross-account installation records the original SID in state and Installed Apps' ($before.RIMESUserSid.value -eq $otherSid -and (Get-State $splitRoot).userSid -eq $otherSid)
+    $global:RimesInstallerTestMachinePhase=$false
+    Expect-Failure 'administrator cannot initialize another user profile' {& "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $new}
+    Expect-Failure 'direct elevated upgrade cannot steal installation ownership' {& "$upgrade\Install.ps1" -InstallRoot $splitRoot -NoAutostart}
+    Expect-Failure 'direct elevated uninstall cannot clean the wrong account' {& "$new\Uninstall.ps1" -InstallRoot $splitRoot}
+    Expect-Failure 'direct rollback cannot write another administrator profile' {& "$new\Rollback.ps1" -InstallRoot $splitRoot}
+    Check 'rejected account changes preserve Installed Apps ownership' (Same-Entry $before (Read-InstalledAppRegistration))
+    $global:RimesInstallerTestMachinePhase=$true
+    $global:RimesInstallerTestFailRegister=$true
+    Expect-Failure 'cross-account partial registration failure is reported' {& "$upgrade\Install.ps1" -InstallRoot $splitRoot -MachineOnly -UserSid $otherSid}
+    Check 'cross-account failed upgrade restores the original owner and both registrations' ((Same-Entry $before (Read-InstalledAppRegistration)) -and $global:RimesInstallerTestNative.x64 -eq $splitState.active -and $global:RimesInstallerTestNative.x86 -eq $splitState.active)
+    & "$upgrade\Install.ps1" -InstallRoot $splitRoot -MachineOnly -UserSid $otherSid | Out-Host
+    & "$upgrade\Rollback.ps1" -InstallRoot $splitRoot -MachineOnly -UserSid $otherSid | Out-Host
+    Check 'machine rollback to a retained package preserves the initiating account' ((Get-State $splitRoot).active -eq $splitState.active -and (Read-InstalledAppRegistration).RIMESUserSid.value -eq $otherSid)
+    Remove-Item -LiteralPath "$splitRoot\state.json"
+    $result=& "$new\Uninstall.ps1" -InstallRoot $splitRoot -MachineOnly -UserSid $otherSid
+    Check 'cross-account damaged-state uninstall cleans machine registration without user access' ($result.Uninstalled -and $global:RimesInstallerTestNative.Count -eq 0)
+    $global:RimesInstallerTestMachinePhase=$false
     $report.status='passed'
 } catch {$report.status='failed';$report.error=$_.ToString();throw}
 finally {
     # This key is outside the real Windows Uninstall key. Native registration
     # was mocked; cleanup cannot unregister the user's installed RIMES.
+    $global:RimesInstallerTestMachinePhase=$false
+    $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG=$null
+    $env:RIMES_INSTALLER_FIXTURE_DEPLOY_FAIL=$null
     if($new){
         . "$new\Package.Common.ps1"
         $global:RimesInstallerTestFailRemove=$false

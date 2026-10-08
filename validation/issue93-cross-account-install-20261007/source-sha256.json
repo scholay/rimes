@@ -1,0 +1,16 @@
+{
+  "platforms/windows/installer/Initialize-User.ps1": "1ece60898577db5e7596dc62338b4b81c04abc95befd348d09209db6781ef99e",
+  "platforms/windows/installer/Install.ps1": "4494892c394e6662541837a3f1b5179848407bbf91f49db83e40ccc703e8a71a",
+  "platforms/windows/installer/Package.Common.ps1": "72890eb1bba2b7ae57372ff507c7d9a641a024cac93b9ae2f3d09c3518e06223",
+  "platforms/windows/installer/Restore-Legacy.ps1": "f00e4e978ade0573a74d805d229dbf94ed5f673352f9b08f39982f6aa0350a82",
+  "platforms/windows/installer/Rollback.ps1": "b6351778fce1e20203642998fa0696d93fea56e2f38c5269821641713b5f3041",
+  "platforms/windows/installer/Setup.ps1": "f14d2d9fe1560bd430085cea45b23bd3fb07132b6b1494cd3f13af4d9e7677df",
+  "platforms/windows/installer/Uninstall-App.ps1": "c779787291114b62c8632951cbd06db3c2bbc78a80144779ae983f43a28fc850",
+  "platforms/windows/installer/Uninstall.ps1": "fdcb567019c3a7b51de1fbceebc2c688ff33d11f3f9c4f969a58b5d88c462c43",
+  "platforms/windows/installer/Verify.ps1": "1cd8a449d238261cf60fb7cec4cfd59674aff09f544c8524b99a73d85bd2581c",
+  "platforms/windows/setup/Setup.cs": "db77990195dfef37c9fdd6838bf7ebcdf5ef08f5a3b11ca1ccfc327044a5b019",
+  "platforms/windows/tests/SetupPayloadTests.cs": "a74031b2f7384f73ce81a9f1b845fcc0594cfd46120ddb68d3660eb2459a7611",
+  "platforms/windows/tests/Test-InstalledAppsLifecycle.ps1": "06dc3c483223b4a1d576311f16bca8658917419fecb430e07af23d8b6e343e72",
+  "platforms/windows/tests/Test-SetupPayload.ps1": "0e6ae6fe4201a95f9d9f69977f6752c9a064e82d56b049959ef7376f80ffa8ea",
+  "platforms/windows/tests/Test-SetupResult.ps1": "1785bbaa550cea59f358eec351bb2ba559108173fa37b9cc426759a042b5f12f"
+}
