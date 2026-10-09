@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Security.Cryptography;
@@ -57,6 +58,33 @@ internal static class SetupPayloadTests
             Case(root, false, false, "folder./file.txt");
             Case(root, false, false, "folder /file.txt");
             if (File.Exists(Path.Combine(root, "escape.txt"))) throw new Exception("Extraction escaped its destination");
+            foreach (var exitCode in new[] { 1, 1602, 1223, 1603 })
+            {
+                bool called = false, rejected = false;
+                try { SetupProgram.CompleteUserAfterMachine(exitCode, delegate { called = true; return null; }); }
+                catch (InvalidOperationException) { rejected = true; }
+                if (called || !rejected) throw new Exception("User setup ran after a failed/cancelled machine phase");
+                checks++;
+            }
+            foreach (var exitCode in new[] { 0, 3010 })
+            {
+                var callerThread = System.Threading.Thread.CurrentThread.ManagedThreadId;
+                bool called = false;
+                var result = SetupProgram.CompleteUserAfterMachine(exitCode, delegate {
+                    if (System.Threading.Thread.CurrentThread.ManagedThreadId != callerThread)
+                        throw new Exception("User setup left the initiating execution context");
+                    called = true;
+                    return new Dictionary<string, object> { { "requiresRestart", false }, { "installed", true } };
+                });
+                if (!called || (bool)result["requiresRestart"] != (exitCode == 3010))
+                    throw new Exception("Completion lost the runtime restart requirement");
+                checks++;
+            }
+            bool userFailureReported = false;
+            try { SetupProgram.CompleteUserAfterMachine(3010, delegate { throw new IOException("fixture user initialization failure"); }); }
+            catch (InvalidOperationException error) { userFailureReported = error.Message.Contains("restart") && error.InnerException is IOException; }
+            if (!userFailureReported) throw new Exception("User setup failure lost the pending restart");
+            checks++;
             Console.WriteLine("PASS: " + checks + " installer payload cases");
             return 0;
         }

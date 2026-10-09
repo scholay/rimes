@@ -8,6 +8,19 @@
 
 namespace rimes::windows::tsf {
 struct CaretRegressionProbe {
+  static bool Bind(TextService& service, ITfContext* context) {
+    service.client_id_ = 1;
+    return service.BindContext(context);
+  }
+  static HRESULT Apply(TextService& service, ITfContext* context,
+                       const BrokerInputState& state) {
+    return service.ApplyDocumentState(context, state);
+  }
+  static bool Retains(TextService& service, ITfContext* context,
+                      std::uint64_t revision) {
+    return service.active_context_ == context && service.edit_valid_ &&
+           service.edit_valid_->load() && service.last_state_.revision == revision;
+  }
   static RECT Query(TextService& service, ITfContext* context) {
     return service.QueryCaretRect(context, 0);
   }
@@ -91,9 +104,56 @@ int main() {
          "valid TSF geometry at the screen origin still works");
   DestroyCaret();
   DestroyWindow(frame);
+
+  // An idle Shift tap returns an authoritative modifier snapshot but has no
+  // document mutation. Hosts can refuse write locks at this point; this must
+  // not revoke the context (which would reset the just-toggled ASCII session).
+  e2e::FakeDocument idle_document;
+  auto* idle_context = new e2e::FakeContext(&idle_document);
+  auto* idle_service = new tsf::TextService(nullptr);
+  expect(tsf::CaretRegressionProbe::Bind(*idle_service, idle_context),
+         "idle modifier fixture binds without a live Broker");
+  idle_context->refuse_write_edits = true;
+  tsf::BrokerInputState idle;
+  idle.has_snapshot = true;
+  idle.revision = 7;
+  expect(SUCCEEDED(tsf::CaretRegressionProbe::Apply(
+             *idle_service, idle_context, idle)),
+         "idle modifier snapshot needs no host write lock");
+  expect(idle_context->write_requests == 0 && idle_document.text.empty(),
+         "idle modifier snapshot cannot request or queue a document edit");
+  expect(tsf::CaretRegressionProbe::Retains(*idle_service, idle_context, 7),
+         "idle modifier snapshot retains its context and authoritative revision");
+
+  idle_context->refuse_write_edits = false;
+  tsf::CaretRegressionProbe::Bind(*idle_service, idle_context);
+  tsf::BrokerInputState preedit;
+  preedit.has_snapshot = true;
+  preedit.composing = true;
+  preedit.composition = L"ni";
+  preedit.caret_utf16 = 2;
+  expect(SUCCEEDED(tsf::CaretRegressionProbe::Apply(
+             *idle_service, idle_context, preedit)) && idle_document.composing,
+         "nonempty preedit still obtains a write session");
+  const auto before_cancel = idle_context->write_requests;
+  expect(SUCCEEDED(tsf::CaretRegressionProbe::Apply(
+             *idle_service, idle_context, idle)) && !idle_document.composing &&
+             idle_document.text.empty() &&
+             idle_context->write_requests > before_cancel,
+         "empty state still clears an existing host composition under a write lock");
+  tsf::BrokerInputState commit;
+  commit.has_snapshot = true;
+  commit.commit_text = L"123";
+  const auto before_commit = idle_context->write_requests;
+  expect(SUCCEEDED(tsf::CaretRegressionProbe::Apply(
+             *idle_service, idle_context, commit)) && idle_document.text == L"123" &&
+             idle_context->write_requests > before_commit,
+         "an idle commit still writes text exactly once");
+  idle_service->Release();
+  idle_context->Release();
   service->Release();
   context->Release();
   if (SUCCEEDED(com)) CoUninitialize();
-  if (!failures) std::cout << "Caret source and cached placement regression passed\n";
+  if (!failures) std::cout << "Caret placement and idle modifier snapshot regression passed\n";
   return failures ? 1 : 0;
 }

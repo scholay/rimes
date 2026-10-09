@@ -441,7 +441,7 @@ void TestBufferHotkeyRegistrationLifecycle() {
   std::vector<Chord> chords;
   for (unsigned key = 'A'; key <= 'Z' && chords.size() < 3; ++key) {
     const unsigned modifiers = chords.empty() ? MOD_CONTROL | MOD_ALT
-                                              : MOD_CONTROL | MOD_SHIFT;
+        : chords.size() == 1 ? MOD_CONTROL | MOD_SHIFT : MOD_ALT | MOD_SHIFT;
     const int id = 100 + static_cast<int>(chords.size());
     if (RegisterHotKey(fixture.contender, id, modifiers | MOD_NOREPEAT, key))
       chords.push_back({modifiers, key});
@@ -485,6 +485,9 @@ void TestBufferHotkeyRegistrationLifecycle() {
   const auto conflict = hotkey.Update(busy.modifiers, busy.key, [&] { ++saves; return true; });
   Check(conflict == workbench::HotkeyUpdate::kUnavailable && saves == 0 && !can_claim(old),
         "new chord conflict skips Save and leaves the old chord registered");
+  Check(hotkey.Update(next.modifiers, next.key, [&] { ++saves; return true; }) ==
+            workbench::HotkeyUpdate::kUnavailable && saves == 0 && !can_claim(old),
+        "Alt+Shift conflict also preserves the old registration and saved settings");
   UnregisterHotKey(fixture.contender, 102);
   const auto failed = hotkey.Update(next.modifiers, next.key, [&] {
     ++saves;
@@ -515,7 +518,8 @@ void TestBufferHotkeyRegistrationLifecycle() {
 
 void TestBufferHotkeyModifierControl() {
   for (const unsigned modifiers : {MOD_CONTROL | MOD_SHIFT,
-                                   MOD_CONTROL | MOD_ALT}) {
+                                   MOD_CONTROL | MOD_ALT,
+                                   MOD_ALT | MOD_SHIFT}) {
     workbench::Settings current;
     current.hotkey_modifiers = modifiers;
     current.hotkey_key = 'J';
@@ -541,9 +545,9 @@ void TestBufferHotkeyModifierControl() {
       const HWND choices = GetDlgItem(window, 405);
       Check(IsVisibleWithinFixture(choices, window),
             "native modifier selector is exposed only on the shortcut page");
-      Check(SendMessageW(choices, CB_GETCOUNT, 0, 0) == 2 &&
+      Check(SendMessageW(choices, CB_GETCOUNT, 0, 0) == 3 &&
                 SendMessageW(choices, CB_GETCURSEL, 0, 0) ==
-                    (modifiers == (MOD_CONTROL | MOD_ALT) ? 1 : 0),
+                    workbench::BufferHotkeyChoiceIndex(modifiers),
             "selector displays the complete configured chord without migration");
       return choices;
     };
@@ -574,7 +578,7 @@ void TestBufferHotkeyModifierControl() {
           "ordinary Save preserves an explicitly configured complete shortcut");
     choices = open_buffer_page();
     if (!choices) continue;
-    const auto selected = modifiers == (MOD_CONTROL | MOD_ALT) ? 0 : 1;
+    const auto selected = (workbench::BufferHotkeyChoiceIndex(modifiers) + 1) % 3;
     SendMessageW(choices, CB_SETCURSEL, selected, 0);
     SendMessageW(host.hwnd(), WM_COMMAND, MAKEWPARAM(405, CBN_SELCHANGE),
                  reinterpret_cast<LPARAM>(choices));
@@ -588,7 +592,7 @@ void TestBufferHotkeyModifierControl() {
                  reinterpret_cast<LPARAM>(choices));
     host.Close(true);
     Check(saves == 2 && saved.hotkey_modifiers ==
-              static_cast<unsigned>(selected == 0 ? MOD_CONTROL | MOD_SHIFT : MOD_CONTROL | MOD_ALT) &&
+              workbench::kBufferHotkeyChoices[static_cast<std::size_t>(selected)].modifiers &&
               saved.hotkey_key == 'J',
           "explicit modifier migration keeps the user's custom letter");
   }

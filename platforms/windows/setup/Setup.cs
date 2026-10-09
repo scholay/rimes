@@ -76,7 +76,7 @@ internal static class Payload
         }
     }
 
-    internal static Dictionary<string, object> Run(bool install, bool autostart)
+    internal static Dictionary<string, object> Run(bool install, bool autostart, string machineUserSid = null, string startupSnapshot = null)
     {
         var directory = Path.Combine(Path.GetTempPath(), "RIMES-Setup-" + Guid.NewGuid().ToString("N"));
         try
@@ -89,7 +89,10 @@ internal static class Payload
             var script = Path.Combine(directory, "Setup.ps1").Replace("'", "''");
             var command = "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; " +
                 "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); try { & '" + script + "' -Action " +
-                (install ? "Install" : "Verify") + (autostart ? "" : " -NoAutostart") +
+                (install ? (machineUserSid == null ? "CompleteUser" : "Install") : "Verify") +
+                (machineUserSid == null ? "" : " -MachineOnly -UserSid '" + new SecurityIdentifier(machineUserSid).Value + "'") +
+                (startupSnapshot == null ? "" : " -UserAutostartSnapshot '" + startupSnapshot + "'") +
+                (autostart ? "" : " -NoAutostart") +
                 " } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }; exit 0";
             var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
                 @"System32\WindowsPowerShell\v1.0\powershell.exe"),
@@ -187,7 +190,7 @@ internal sealed class SetupWindow : Form
             "Verifying the package, installing runtimes, and deploying RIMES. The initial dictionary deployment may take several minutes.");
         var startAtLogin = autostart.Checked;
         var worker = new BackgroundWorker();
-        worker.DoWork += delegate(object s, DoWorkEventArgs e) { e.Result = Payload.Run(true, startAtLogin); };
+        worker.DoWork += delegate(object s, DoWorkEventArgs e) { e.Result = SetupProgram.InstallForCurrentUser(startAtLogin); };
         worker.RunWorkerCompleted += delegate(object s, RunWorkerCompletedEventArgs e)
         {
             busy = false;
@@ -233,18 +236,21 @@ internal static class SetupProgram
             }
             if (!Environment.Is64BitOperatingSystem || !Environment.Is64BitProcess)
                 throw new PlatformNotSupportedException("RIMES requires Windows x64.");
-            var identity = WindowsIdentity.GetCurrent();
-            if (args.Length != 0 && !(args.Length == 2 && args[0] == "--user"))
-                throw new ArgumentException("Unsupported installer arguments.");
-            if (args.Length == 2 && identity.User.Value != args[1])
-                throw new InvalidOperationException("Run setup with the same Windows user account. Installing as a different administrator would use that administrator's dictionaries and startup settings.");
-            if (!(new WindowsPrincipal(identity)).IsInRole(WindowsBuiltInRole.Administrator))
+            // The UI stays under the initiating token even when RunAs uses a
+            // different administrator. Only this explicit worker is elevated.
+            if (args.Length == 3 && args[0] == "--install-machine")
             {
-                var start = new ProcessStartInfo(Assembly.GetExecutingAssembly().Location, "--user " + identity.User.Value);
-                start.UseShellExecute = true;
-                start.Verb = "runas";
-                using (var process = Process.Start(start)) { process.WaitForExit(); return process.ExitCode; }
+                var sid = new SecurityIdentifier(args[1]).Value;
+                using (var identity = WindowsIdentity.GetCurrent())
+                    if (!(new WindowsPrincipal(identity)).IsInRole(WindowsBuiltInRole.Administrator))
+                        throw new InvalidOperationException("The system installation phase requires administrator approval.");
+                // Validate the transport before including it in the PowerShell command.
+                var snapshot = Convert.ToBase64String(Convert.FromBase64String(args[2]));
+                if (args[2].Length > 8192) throw new ArgumentException("Startup snapshot is too large.");
+                var result = Payload.Run(true, false, sid, snapshot);
+                return (bool)result["requiresRestart"] ? 3010 : 0;
             }
+            if (args.Length != 0) throw new ArgumentException("Unsupported installer arguments.");
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             using (var window = new SetupWindow())
@@ -260,6 +266,47 @@ internal static class SetupProgram
                 MessageBox.Show(error.Message, "RIMES Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
+    }
+
+    internal static Dictionary<string, object> InstallForCurrentUser(bool autostart)
+    {
+        string sid;
+        using (var identity = WindowsIdentity.GetCurrent()) sid = identity.User.Value;
+        object previousAutostart = null;
+        using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run"))
+            if (key != null) previousAutostart = key.GetValue("RimesBroker", null);
+        if (previousAutostart != null && !(previousAutostart is string))
+            throw new InvalidOperationException("The existing RIMES startup entry is not a text command.");
+        var snapshot = Convert.ToBase64String(Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(
+            new Dictionary<string, object> { { "userSid", sid }, { "autostart", previousAutostart } })));
+        if (snapshot.Length > 8192) throw new InvalidOperationException("The existing RIMES startup entry is too large.");
+        var start = new ProcessStartInfo(Assembly.GetExecutingAssembly().Location, "--install-machine " + sid + " " + snapshot);
+        start.UseShellExecute = true;
+        start.Verb = "runas";
+        int exitCode;
+        using (var process = Process.Start(start)) { process.WaitForExit(); exitCode = process.ExitCode; }
+        return CompleteUserAfterMachine(exitCode, delegate { return Payload.Run(true, autostart); });
+    }
+
+    // Completion is deliberately executed by the original process, never by
+    // the elevated worker or an account selected from a profile path.
+    internal static Dictionary<string, object> CompleteUserAfterMachine(int exitCode,
+        Func<Dictionary<string, object>> completeUser)
+    {
+        if (exitCode == 1223 || exitCode == 1602)
+            throw new InvalidOperationException("Administrator approval was cancelled. Setup was not completed.");
+        if (exitCode != 0 && exitCode != 3010)
+            throw new InvalidOperationException("The system installation phase failed. User setup was not started.");
+        Dictionary<string, object> result;
+        try { result = completeUser(); }
+        catch (Exception error)
+        {
+            if (exitCode == 3010)
+                throw new InvalidOperationException("System changes require a Windows restart. User setup was not completed; restart and run Setup again from your account. " + error.Message, error);
+            throw;
+        }
+        result["requiresRestart"] = (bool)result["requiresRestart"] || exitCode == 3010;
+        return result;
     }
 
     private static string HashFile(string path)

@@ -23,6 +23,7 @@
 #include "../ui/menu_draw.hpp"
 #include "../ui/theme.hpp"
 #include "buffer_hotkey.hpp"
+#include "buffer_anchor.hpp"
 #include "settings_ui.hpp"
 
 #pragma comment(lib, "comctl32.lib")
@@ -37,8 +38,8 @@ constexpr int kToggle = 100, kSettings = 101, kDeploy = 102, kStartup = 103,
 constexpr int kModeInput = 110, kModeGenerate = 111, kModeTranslate = 112;
 
 std::wstring BufferHotkeyTitle(const Settings& settings) {
-  return std::wstring(settings.hotkey_modifiers == (MOD_CONTROL | MOD_ALT)
-                          ? L"Ctrl+Alt+" : L"Ctrl+Shift+") +
+  const auto choice = BufferHotkeyChoiceIndex(settings.hotkey_modifiers);
+  return std::wstring(choice >= 0 ? kBufferHotkeyChoices[static_cast<std::size_t>(choice)].label : L"") +
          static_cast<wchar_t>(settings.hotkey_key);
 }
 
@@ -46,6 +47,53 @@ DWORD ForegroundProcess() {
   DWORD process = 0;
   GetWindowThreadProcessId(GetForegroundWindow(), &process);
   return process;
+}
+
+BufferRect DipFrame(const RECT& rect, double scale) {
+  return {rect.left / scale, rect.top / scale,
+          (static_cast<double>(rect.right) - rect.left) / scale,
+          (static_cast<double>(rect.bottom) - rect.top) / scale};
+}
+BufferRect DipFrame(BufferRect rect, double scale) {
+  return {rect.x / scale, rect.y / scale, rect.width / scale, rect.height / scale};
+}
+struct BufferMonitor {
+  RECT work{};
+  double scale = 1;
+};
+RECT BufferMonitorWorkArea(HMONITOR monitor) {
+  MONITORINFO info{sizeof(info)};
+  RECT work{};
+  if (monitor && GetMonitorInfoW(monitor, &info)) work = info.rcWork;
+  else SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+  return work;
+}
+BufferMonitor BufferMonitorInfo(HMONITOR monitor) {
+  BufferMonitor result;
+  result.work = BufferMonitorWorkArea(monitor);
+  // GetDpiForWindow on our own invisible PMv2 window measures the destination
+  // display, even when the host or previous Buffer is on a different DPI.
+  const HWND probe = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+      L"STATIC", L"", WS_POPUP, result.work.left, result.work.top, 1, 1,
+      nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+  if (probe) {
+    const auto dpi = GetDpiForWindow(probe);
+    if (dpi) result.scale = static_cast<double>(dpi) / 96;
+    DestroyWindow(probe);
+  }
+  return result;
+}
+HMONITOR BufferFallbackMonitor() {
+  POINT mouse{};
+  GetCursorPos(&mouse);
+  return MonitorFromPoint(mouse, MONITOR_DEFAULTTOPRIMARY);
+}
+ui::BufferLayout WorkbenchLayout(const ui::BufferPaintState& paint, float width) {
+  ui::BufferMetrics metrics;
+  // Match macOS on work areas narrower than the normal readable minimum.
+  metrics.min_width_dip = (std::min)(metrics.min_width_dip,
+                                    (std::max)(1, static_cast<int>(width)));
+  return ui::LayoutBuffer(paint, width, metrics);
 }
 
 struct Window {
@@ -77,6 +125,11 @@ struct Window {
   HFONT menu_font = nullptr;
   std::map<UINT, std::wstring> menu_labels;
   std::unique_ptr<BufferHotkeyRegistration> buffer_hotkey;
+  std::uint64_t placed_opening_revision = 0;
+  BufferOpeningSide opening_side = BufferOpeningSide::kBottomFallback;
+  bool positioning = false;
+  double positioning_scale = 1;
+  RECT positioning_work{};
 
   Window(Runtime& r, std::function<void()> s, std::function<void()> d,
          UiCommands* c)
@@ -101,6 +154,7 @@ struct Window {
   void UpdateBufferZOrder();
   void Paint();
   void Update();
+  void PositionForOpening(const core::Json& state);
   void Action(int index);
   void Copy();
   void Paste();
@@ -184,7 +238,7 @@ void Window::EnsureSettings() {
         value.hotkey_modifiers, value.hotkey_key,
         [&] { return runtime.Configure(value, key, replace, error); });
     if (result == HotkeyUpdate::kInvalid) {
-      if (error) *error = "快捷键必须为 Ctrl+Shift 或 Ctrl+Alt 加 A–Z 字母；设置未保存。";
+      if (error) *error = "快捷键必须为 Ctrl+Shift、Ctrl+Alt 或 Alt+Shift 加 A–Z 字母；设置未保存。";
       return false;
     }
     if (result == HotkeyUpdate::kUnavailable) {
@@ -524,6 +578,51 @@ void Window::ApplyHit(ui::BufferHitKind hit) {
   }
 }
 
+void Window::PositionForOpening(const core::Json& state) {
+  const auto revision = state.value("opening_revision", 0ULL);
+  const auto target = runtime.PlacementTarget();
+  auto anchor = ProbeBufferInputAnchor(target.process);
+  if (target != runtime.PlacementTarget()) anchor = {};
+  HMONITOR monitor = BufferFallbackMonitor();
+  if (anchor.caret && FiniteBufferRect(*anchor.caret) &&
+      anchor.caret->x >= LONG_MIN && anchor.caret->x <= LONG_MAX &&
+      anchor.caret->y >= LONG_MIN && anchor.caret->y <= LONG_MAX) {
+    const POINT point{static_cast<LONG>(anchor.caret->x),
+                       static_cast<LONG>(anchor.caret->y)};
+    const auto candidate = MonitorFromPoint(point, MONITOR_DEFAULTTONULL);
+    if (candidate) monitor = candidate;
+  }
+  auto display = BufferMonitorInfo(monitor);
+  auto work = DipFrame(display.work, display.scale);
+  if (anchor.caret && !PlausibleBufferCaret(DipFrame(*anchor.caret, display.scale), work)) {
+    anchor = {};
+    display = BufferMonitorInfo(BufferFallbackMonitor());
+    work = DipFrame(display.work, display.scale);
+  }
+  RECT current_pixels{};
+  GetWindowRect(window, &current_pixels);
+  const double old_scale = static_cast<double>(GetDpiForWindow(window)) / 96;
+  auto current = DipFrame(current_pixels, old_scale > 0 ? old_scale : 1);
+  auto paint = MakePaintState(state);
+  current.height = WorkbenchLayout(paint, static_cast<float>(current.width)).height_dip;
+  const auto placement = BufferOpeningPlacement(current,
+      anchor.caret ? std::optional(DipFrame(*anchor.caret, display.scale)) : std::nullopt,
+      anchor.box ? std::optional(DipFrame(*anchor.box, display.scale)) : std::nullopt,
+      work);
+  positioning = true;
+  positioning_scale = display.scale;
+  positioning_work = display.work;
+  SetWindowPos(window, nullptr,
+      static_cast<int>(std::lround(placement.frame.x * display.scale)),
+      static_cast<int>(std::lround(placement.frame.y * display.scale)),
+      static_cast<int>(std::lround(placement.frame.width * display.scale)),
+      static_cast<int>(std::lround(placement.frame.height * display.scale)),
+      SWP_NOZORDER | SWP_NOACTIVATE);
+  positioning = false;
+  opening_side = placement.side;
+  placed_opening_revision = revision;
+}
+
 void Window::Update() {
   if (runtime.Stopping()) {
     PostMessageW(window, WM_CLOSE, 0, 0);
@@ -532,6 +631,9 @@ void Window::Update() {
   // Keep unsaved settings theme preview while the settings host is open.
   if (!settings || !settings->IsOpen()) theme = ActiveTheme();
   auto state = runtime.Snapshot();
+  if (state.value("visible", false) &&
+      placed_opening_revision != state.value("opening_revision", 0ULL))
+    PositionForOpening(state);
   ShowWindow(window,
              state.value("visible", false) ? SW_SHOWNOACTIVATE : SW_HIDE);
   if (state.value("visible", false)) {
@@ -539,7 +641,7 @@ void Window::Update() {
     GetClientRect(window, &rect);
     const float dpi = static_cast<float>(GetDpiForWindow(window)) / 96.0f;
     auto paint = MakePaintState(state);
-    last_layout = ui::LayoutBuffer(paint, static_cast<float>(rect.right) / dpi);
+    last_layout = WorkbenchLayout(paint, static_cast<float>(rect.right) / dpi);
     const float source_content = ui::MeasureBufferContent(
         write, format, paint.source_blocks, paint.preedit);
     const float result_content = ui::MeasureBufferContent(
@@ -554,8 +656,14 @@ void Window::Update() {
         static_cast<int>(last_layout.height_dip * dpi + 0.5f);
     const int width = window_rect.right - window_rect.left;
     if (std::abs((window_rect.bottom - window_rect.top) - height) > 2) {
-      SetWindowPos(window, nullptr, 0, 0, width, height,
-                   SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+      const auto work = BufferMonitorWorkArea(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST));
+      const auto frame = BufferResizedOutward(DipFrame(window_rect, dpi),
+          static_cast<double>(height) / dpi, opening_side,
+          DipFrame(work, dpi));
+      SetWindowPos(window, nullptr, window_rect.left,
+                   static_cast<int>(std::lround(frame.y * dpi)), width,
+                   static_cast<int>(std::lround(frame.height * dpi)),
+                   SWP_NOZORDER | SWP_NOACTIVATE);
     }
   }
   UpdateBufferZOrder();
@@ -585,7 +693,7 @@ void Window::Paint() {
     const float width = static_cast<float>(rect.right) * 96.0f / dpi;
     auto state = runtime.Snapshot();
     auto paint_state = MakePaintState(state);
-    last_layout = ui::LayoutBuffer(paint_state, width);
+    last_layout = WorkbenchLayout(paint_state, width);
     render->BeginDraw();
     render->Clear(ui::ColorF(0, 0));
     ui::DrawBufferWorkbench(
@@ -689,7 +797,7 @@ LRESULT CALLBACK Window::Procedure(HWND hwnd, UINT message, WPARAM wparam,
           self->render->SetDpi(static_cast<float>(HIWORD(wparam)),
                                static_cast<float>(HIWORD(wparam)));
         auto* rect = reinterpret_cast<RECT*>(lparam);
-        SetWindowPos(hwnd, nullptr, rect->left, rect->top,
+        if (!self->positioning) SetWindowPos(hwnd, nullptr, rect->left, rect->top,
                      rect->right - rect->left, rect->bottom - rect->top,
                      SWP_NOZORDER | SWP_NOACTIVATE);
         if (self->menu_font) DeleteObject(self->menu_font);
@@ -699,6 +807,10 @@ LRESULT CALLBACK Window::Procedure(HWND hwnd, UINT message, WPARAM wparam,
             CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
         return 0;
       }
+      case WM_ENTERSIZEMOVE:
+        // Manual placement takes precedence until the next explicit opening.
+        self->opening_side = BufferOpeningSide::kBottomFallback;
+        return 0;
       case WM_MOUSEMOVE: {
         const float dpi = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
         const float x =
@@ -793,8 +905,14 @@ LRESULT CALLBACK Window::Procedure(HWND hwnd, UINT message, WPARAM wparam,
       }
       case WM_GETMINMAXINFO: {
         auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
-        const int dpi = static_cast<int>(GetDpiForWindow(hwnd));
-        limits->ptMinTrackSize = {MulDiv(520, dpi, 96), MulDiv(35, dpi, 96)};
+        const int dpi = self->positioning
+            ? static_cast<int>(std::lround(self->positioning_scale * 96))
+            : static_cast<int>(GetDpiForWindow(hwnd));
+        const auto work = self->positioning ? self->positioning_work
+            : BufferMonitorWorkArea(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST));
+        const int available = static_cast<int>(BufferSafeWorkArea(
+            DipFrame(work, static_cast<double>(dpi) / 96)).width);
+        limits->ptMinTrackSize = {MulDiv((std::min)(520, available), dpi, 96), MulDiv(35, dpi, 96)};
         limits->ptMaxTrackSize = {MulDiv(1100, dpi, 96), MulDiv(400, dpi, 96)};
         return 0;
       }
@@ -993,8 +1111,9 @@ void RunWindow(Runtime& runtime, const std::function<void()>& stop,
                   CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
   HWND window = CreateWindowExW(
       WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST, wc.lpszClassName,
-      L"RIMES Buffer", WS_POPUP | WS_THICKFRAME, area.left + 40,
-      area.bottom - MulDiv(120, dpi, 96), MulDiv(760, dpi, 96),
+      L"RIMES Buffer", WS_POPUP | WS_THICKFRAME,
+      area.left + ((area.right - area.left) - MulDiv(680, dpi, 96)) / 2,
+      area.bottom - MulDiv(120 + 73, dpi, 96), MulDiv(680, dpi, 96),
       MulDiv(73, dpi, 96), nullptr, nullptr, wc.hInstance, &ui);
   if (!window) {
     runtime.Stop();

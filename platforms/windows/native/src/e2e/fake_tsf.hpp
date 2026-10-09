@@ -123,6 +123,8 @@ class FakeContext final : public ITfContext,
  public:
   explicit FakeContext(FakeDocument* document) noexcept;
   bool defer_edits = false, read_only = false;
+  bool refuse_write_edits = false;
+  unsigned write_requests = 0;
   void DrainEdits();
   void TerminateComposition();
   std::vector<ITfEditSession*> delayed_edits;

@@ -424,6 +424,14 @@ class RimeEngine::Impl final {
     }
   }
 
+  bool IsAsciiMode(SessionId session) const noexcept {
+    try {
+      std::lock_guard lock(mutex_);
+      return healthy_ && api_ && api_->get_option && sessions_.contains(session) &&
+             api_->get_option(session, "ascii_mode") != 0;
+    } catch (...) { return false; }
+  }
+
   bool ProcessKey(SessionId session, std::int32_t keycode,
                   std::int32_t modifiers, EngineSnapshot* output,
                   std::string* error) noexcept {
@@ -814,6 +822,10 @@ bool RimeEngine::Configure(SessionId session, const std::string& schema,
                            std::string* error, unsigned candidate_count) noexcept {
   return impl_->Configure(session, schema, ascii, traditional, punctuation,
                           error, candidate_count);
+}
+
+bool RimeEngine::IsAsciiMode(SessionId session) const noexcept {
+  return impl_->IsAsciiMode(session);
 }
 
 }  // namespace rimes::windows::engine

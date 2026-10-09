@@ -50,6 +50,16 @@ Where the TSF host cooperates, typing matches the macOS RIMES controller:
 The candidate panel is a `WS_EX_NOACTIVATE` topmost tool window so it cannot
 steal focus from the host.
 
+For the six product schemas, idle unshifted number keys (including the numeric
+keypad) pass directly to the host; composing candidate selection and Buffer
+capture still go through the engine. Idle ASCII-mode keys also pass through.
+The initial mode and subsequent mode flags are exchanged only when both TSF
+and Broker negotiate the key-routing capability, preserving the legacy wire
+format. A modifier-only state update with no composition or committed text
+does not request a document write edit. This avoids losing the context when
+a host denies an unnecessary write during an idle Shift tap. Custom schemas
+with idle digit bindings and real desktop hosts need separate acceptance.
+
 Settings → Appearance → Size controls the candidate font, page size (1–9),
 and vertical arrangement. Page size changes the real librime menu pagination.
 Vertical candidates use additional columns when the current monitor is too
@@ -59,9 +69,25 @@ position it stays hidden until a caret is available.
 
 New Buffer shortcut settings default to **Ctrl+Shift+B**, corresponding to
 macOS Cmd+Shift+B. Saved Ctrl+Alt shortcuts are retained; Settings can select
-either combination and another letter. A conflicting shortcut is reported,
+Ctrl+Shift, Ctrl+Alt or Alt+Shift with another letter. A conflicting shortcut is reported,
 and a failed change keeps the previous shortcut active. Buffer remains
 accessible from the tray when registration fails.
+
+Buffer's initial geometry follows macOS `BufferWindowGeometry`: align the
+left edge and width to the current input field, clamp width to 520–1100 DIPs
+(or the smaller monitor work area), and prefer opening below the field with
+a 10-DIP gap. Short fields use their outer edge; tall documents use the caret
+line for vertical placement. Insufficient space flips the panel above. If a
+fresh, trustworthy caret is unavailable, use the current width (680 DIPs on
+first launch) and center near the bottom of the mouse's monitor. Work-area
+edges retain an 8-DIP margin. Expansion goes away from the input.
+
+Only an explicit opening/rebinding recalculates this geometry; typing does
+not reset a manually dragged panel. Windows probes only geometry, never
+field text, through native EDIT caret bounds or bounded UI Automation
+TextPattern2 queries. Password, stale-focus and inaccessible providers are
+rejected. Actual coverage of browser/Electron/Office providers still needs
+the manual host pass; fallback positioning is intentional.
 
 Ctrl/Alt/Win/AltGr combinations with Return, Backspace or Escape are host
 commands, even while Buffer captures ordinary input. Switching the workbench

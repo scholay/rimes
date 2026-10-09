@@ -224,6 +224,13 @@ HRESULT STDMETHODCALLTYPE FakeContext::RequestEditSession(
   if (session == nullptr || result == nullptr) {
     return E_POINTER;
   }
+  if ((flags & TF_ES_READWRITE) == TF_ES_READWRITE) {
+    ++write_requests;
+    if (refuse_write_edits) {
+      *result = TF_E_LOCKED;
+      return S_OK;
+    }
+  }
   if (defer_edits && ((flags & TF_ES_READWRITE) == TF_ES_READWRITE)) {
     if (flags & TF_ES_SYNC) {
       *result = TF_E_SYNCHRONOUS;

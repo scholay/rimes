@@ -11,7 +11,7 @@
 namespace rimes::windows::ui {
 
 struct BufferMetrics {
-  int default_width_dip = 760;
+  int default_width_dip = 680;
   int min_width_dip = 520;
   int max_width_dip = 1100;
   int ordinary_height_dip = 73;
@@ -78,7 +78,7 @@ enum class BufferHitKind {
 };
 
 struct BufferLayout {
-  float width_dip = 760;
+  float width_dip = 680;
   float height_dip = 73;
   DipRect chrome{};
   DipRect toolbar{};

@@ -27,6 +27,7 @@ class Runtime {
   void Capture(Target target, engine::EngineSnapshot* snapshot);
   core::Json Control(const core::Json& message, std::uint32_t process);
   core::Json Snapshot();
+  Target PlacementTarget();
   Settings Configuration();
   bool Configure(Settings value, const std::wstring& key, bool replace_key,
                  std::string* error);
@@ -74,6 +75,7 @@ class Runtime {
   std::optional<std::pair<Settings, Generation>> api_job_;
   std::uint64_t pressed_at_ = 0, pending_since_ = 0, edited_at_ = 0;
   Target return_target_;
+  std::uint64_t opening_revision_ = 0;
   bool return_held_ = false, return_sent_ = false;
   void Changed();
   void CheckPluginAuthorization();

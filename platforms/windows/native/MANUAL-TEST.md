@@ -44,6 +44,12 @@ Mark each row pass / fail / n/a. Attach host, DPI, and schema.
 ## Composition and candidates
 
 - [ ] Buffer is closed and capture is off throughout the ordinary-input pass
+- [ ] Settings Connector API URL/model fields accept idle `0123456789` and
+      numeric-keypad digits with the product schemas, without losing characters
+- [ ] An idle left-Shift tap switches Chinese/English in the same focus context;
+      the next English letter reaches the host even if it refuses a write edit
+- [ ] A configured initial ASCII mode, shifted punctuation, composing number
+      selection and Buffer ASCII capture still follow their respective routes
 - [ ] `nihao` shows preedit and a candidate page; Space commits `你好`
 - [ ] Number keys 1–5 select the matching candidate
 - [ ] PageDown / PageUp (and `,` / `.` if the schema binds them) change pages
@@ -91,8 +97,23 @@ Mark each row pass / fail / n/a. Attach host, DPI, and schema.
 
 ## Existing Buffer interactions
 
+- [ ] Short field: Buffer opens aligned with the field's left edge and width
+      (520–1100 DIPs), 10 DIPs below its outer bottom edge
+- [ ] Tall document: width still follows the field, but vertical placement
+      follows the current caret line rather than the document's bottom
+- [ ] Field near screen bottom: Buffer opens above; adding source/result rows
+      keeps the input-facing edge fixed and expands away from the field
+- [ ] No trustworthy caret / inaccessible provider: center near the bottom of
+      the mouse's monitor, preserving prior width or using 680 DIPs initially
+- [ ] Drag Buffer, then type: the manually chosen position is not reset;
+      close/reopen or explicitly rebind to recalculate initial geometry
+- [ ] Negative-coordinate monitor, mixed 100%/150%/200% DPI, narrow work area:
+      geometry remains inside the work area without unreadable clipping
 - [ ] New settings default to Ctrl+Shift+B (macOS Cmd+Shift+B equivalent);
       saved Ctrl+Alt shortcuts remain unchanged and can be switched in settings
+- [ ] Alt+Shift+B can be explicitly selected, saved and reopened; its tray
+      label matches the real chord, and a conflict/failed save preserves the
+      previous working shortcut rather than silently claiming success
 - [ ] Shortcut conflicts are visible; the tray still opens Buffer, and failed
       shortcut changes or failed settings saves keep the previous chord working
 - [ ] Toggle/bind to a real editable target; type, cancel preedit and deliver
@@ -111,7 +132,8 @@ Mark each row pass / fail / n/a. Attach host, DPI, and schema.
       leave the previously working installation usable
 - [ ] Standard-user login with another administrator's UAC credentials:
       installation and uninstall keep dictionaries/startup in the original
-      user's account (currently an unresolved restriction, tracked by #93)
+      user's account (split-token implementation present; real two-account
+      acceptance still required for #93)
 - [ ] Missing/corrupt state, missing DLL and reinstall after uninstall;
       user dictionaries survive and other IMEs keep their registrations
 - [ ] Unregister x86, x64 remains usable

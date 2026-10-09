@@ -96,7 +96,8 @@ int main() {
             "legacy and unknown themes fall back safely");
     }
     for (const unsigned modifiers : {MOD_CONTROL | MOD_ALT,
-                                     MOD_CONTROL | MOD_SHIFT}) {
+                                     MOD_CONTROL | MOD_SHIFT,
+                                     MOD_ALT | MOD_SHIFT}) {
       for (const unsigned key : {'B', 'J'}) {
         std::ofstream(test.path(), std::ios::trunc)
             << "{\"version\":1,\"hotkey_modifiers\":" << modifiers
@@ -140,7 +141,7 @@ int main() {
               migrated.hotkey_key == 'J',
           "explicit migration preserves the custom letter");
     const unsigned invalid_modifiers[] = {
-        0U, MOD_CONTROL, MOD_ALT | MOD_SHIFT,
+        0U, MOD_CONTROL, MOD_ALT, MOD_SHIFT,
         MOD_CONTROL | MOD_ALT | MOD_SHIFT};
     for (unsigned modifiers : invalid_modifiers) {
       migrated.hotkey_modifiers = modifiers;

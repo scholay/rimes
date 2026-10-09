@@ -1032,6 +1032,15 @@ HRESULT TextService::ApplyDocumentState(
     UpdateCandidateWindow(context, state, cookie);
     return S_OK;
   }
+  // A modifier-only snapshot (for example an idle Shift ASCII toggle) changes
+  // engine state, not document text. Requesting a write lock here can fail in
+  // a dialog host and revoke the context, resetting the just-toggled session.
+  // Existing compositions and actual commits must still use an edit session.
+  if (!composition_ && !state.composing && state.commit_text.empty()) {
+    last_state_ = state;
+    UpdateCandidateWindow(context, state, cookie);
+    return S_OK;
+  }
   auto* session = new (std::nothrow) CompositionEditSession(
       context, this, &composition_, CompositionEditSession::Action::kApply,
       state.composing ? state.composition : std::wstring(), state.caret_utf16,

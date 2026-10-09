@@ -8,6 +8,7 @@
 
 #include "../ui/icons.hpp"
 #include "../ui/theme.hpp"
+#include "buffer_hotkey_config.hpp"
 
 namespace rimes::windows::workbench {
 namespace {
@@ -241,10 +242,9 @@ void SettingsUiHost::CreateOrUpdateChildren() {
         0, L"COMBOBOX", L"", WS_CHILD | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST,
         0, 0, 130, 130, hwnd_, reinterpret_cast<HMENU>(405),
         GetModuleHandleW(nullptr), nullptr);
-    SendMessageW(combo_hotkey_modifiers_, CB_ADDSTRING, 0,
-                 reinterpret_cast<LPARAM>(L"Ctrl+Shift+"));
-    SendMessageW(combo_hotkey_modifiers_, CB_ADDSTRING, 0,
-                 reinterpret_cast<LPARAM>(L"Ctrl+Alt+"));
+    for (const auto& choice : kBufferHotkeyChoices)
+      SendMessageW(combo_hotkey_modifiers_, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(choice.label));
   }
   make_edit(&edit_base_, false);
   make_edit(&edit_model_, false);
@@ -258,7 +258,7 @@ void SettingsUiHost::CreateOrUpdateChildren() {
   SetWindowTextW(edit_candidate_count_, std::to_wstring(draft_.candidate_count).c_str());
   SetWindowTextW(edit_hotkey_, std::wstring(1, draft_.hotkey).c_str());
   SendMessageW(combo_hotkey_modifiers_, CB_SETCURSEL,
-               draft_.hotkey_modifiers == (MOD_CONTROL | MOD_ALT) ? 1 : 0, 0);
+               BufferHotkeyChoiceIndex(draft_.hotkey_modifiers), 0);
   SetWindowTextW(edit_base_, draft_.base_url.c_str());
   SetWindowTextW(edit_model_, draft_.model.c_str());
   SetWindowTextW(edit_key_, L"");
@@ -407,10 +407,9 @@ bool SettingsUiHost::CommitSave() {
       throw std::runtime_error("range");
     config.hotkey_key = static_cast<unsigned>(towupper(hotkey[0]));
     const auto modifier_choice = SendMessageW(combo_hotkey_modifiers_, CB_GETCURSEL, 0, 0);
-    if (modifier_choice != 0 && modifier_choice != 1)
+    if (modifier_choice < 0 || modifier_choice >= static_cast<LRESULT>(kBufferHotkeyChoices.size()))
       throw std::runtime_error("hotkey modifier choice");
-    config.hotkey_modifiers = modifier_choice == 0
-        ? MOD_CONTROL | MOD_SHIFT : MOD_CONTROL | MOD_ALT;
+    config.hotkey_modifiers = kBufferHotkeyChoices[static_cast<std::size_t>(modifier_choice)].modifiers;
     config.ascii = draft_.ascii;
     config.traditional = draft_.traditional;
     config.ascii_punctuation = draft_.ascii_punctuation;
@@ -542,9 +541,9 @@ LRESULT CALLBACK SettingsUiHost::Procedure(HWND hwnd, UINT message,
       return 0;
     case WM_COMMAND:
       if (LOWORD(wparam) == 405 && HIWORD(wparam) == CBN_SELCHANGE) {
-        self->draft_.hotkey_modifiers =
-            SendMessageW(self->combo_hotkey_modifiers_, CB_GETCURSEL, 0, 0) == 1
-                ? MOD_CONTROL | MOD_ALT : MOD_CONTROL | MOD_SHIFT;
+        const auto choice = SendMessageW(self->combo_hotkey_modifiers_, CB_GETCURSEL, 0, 0);
+        if (choice >= 0 && choice < static_cast<LRESULT>(kBufferHotkeyChoices.size()))
+          self->draft_.hotkey_modifiers = kBufferHotkeyChoices[static_cast<std::size_t>(choice)].modifiers;
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
       }

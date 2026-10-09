@@ -1,4 +1,5 @@
 #include "BrokerClient.h"
+#include "key_routing.hpp"
 
 #include <Windows.h>
 
@@ -55,6 +56,30 @@ void ExpectUnavailable(BrokerClient* client, BrokerKeyPhase phase,
 }
 
 int RunContractTests() {
+  using rimes::windows::tsf::detail::RoutePrintableKey;
+  const auto shift = static_cast<std::uint32_t>(
+      rimes::windows::core::KeyModifiers::kShift);
+  for (const auto key : {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'}) {
+    Expect(!RoutePrintableKey(key, 0, false, false, false),
+           "idle number row is never claimed before engine pass-through");
+    Expect(RoutePrintableKey(key, shift, false, false, false),
+           "Shift+digit retains schema punctuation");
+    Expect(RoutePrintableKey(key, 0, true, false, false),
+           "number selection during composition remains an IME key");
+    Expect(RoutePrintableKey(key, 0, false, true, true),
+           "Buffer still captures idle ASCII numbers");
+  }
+  for (WPARAM key = VK_NUMPAD0; key <= VK_NUMPAD9; ++key)
+    Expect(!RoutePrintableKey(key, 0, false, false, false),
+           "idle numpad digits stay with the native editor");
+  for (const WPARAM key : std::vector<WPARAM>{'A', 'Z', VK_SPACE, VK_OEM_2}) {
+    Expect(!RoutePrintableKey(key, 0, false, false, true),
+           "authoritative ASCII mode does not claim host printable keys");
+    Expect(RoutePrintableKey(key, 0, false, true, true),
+           "Buffer retains ASCII letters and punctuation");
+  }
+  Expect(RoutePrintableKey('N', 0, false, false, false),
+         "Chinese letters still start a composition");
   auto client = CreateBrokerClient();
   Expect(client != nullptr, "CreateBrokerClient returns a client");
   if (!client) {
