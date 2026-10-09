@@ -118,6 +118,7 @@ add_library(RimesWorkbench STATIC
     src/workbench/model.cpp
     src/workbench/official_plugins.cpp
     src/workbench/provider.cpp
+    src/workbench/codex_cli.cpp
     src/workbench/runtime.cpp
     src/workbench/settings_ui.cpp
     src/workbench/window.cpp
@@ -280,11 +281,22 @@ if(RIMES_BUILD_TESTS)
     target_link_libraries(RimesOfficialPluginTests PRIVATE RimesWorkbench)
     rimes_harden_target(RimesOfficialPluginTests)
     add_test(NAME RimesOfficialPlugins COMMAND RimesOfficialPluginTests)
-    add_executable(RimesProviderProbe src/workbench/provider_probe.cpp src/workbench/provider.cpp src/workbench/model.cpp)
+    add_executable(RimesProviderProbe src/workbench/provider_probe.cpp src/workbench/provider.cpp src/workbench/codex_cli.cpp src/workbench/model.cpp)
     target_link_libraries(RimesProviderProbe PRIVATE RimesCore winhttp advapi32)
     rimes_harden_target(RimesProviderProbe)
     rimes_use_unicode_console_entrypoint(RimesProviderProbe)
     add_executable(RimesSseTests src/workbench/sse_tests.cpp)
+    add_executable(RimesCodexTests src/workbench/codex_cli_tests.cpp)
+    target_link_libraries(RimesCodexTests PRIVATE RimesWorkbench)
+    rimes_harden_target(RimesCodexTests)
+    add_executable(RimesCodexFixture src/workbench/codex_cli_fixture.cpp)
+    rimes_harden_target(RimesCodexFixture)
+    rimes_use_unicode_console_entrypoint(RimesCodexFixture)
+    add_test(NAME RimesCodexConnector COMMAND RimesCodexTests $<TARGET_FILE:RimesCodexFixture>)
+    add_executable(RimesCodexProbe src/workbench/codex_cli_probe.cpp)
+    target_link_libraries(RimesCodexProbe PRIVATE RimesWorkbench)
+    rimes_harden_target(RimesCodexProbe)
+    rimes_use_unicode_console_entrypoint(RimesCodexProbe)
     rimes_harden_target(RimesSseTests)
     add_test(NAME RimesSseControl COMMAND RimesSseTests)
     add_executable(RimesWorkbenchTests src/workbench/model.cpp src/workbench/model_tests.cpp)
@@ -376,6 +388,7 @@ if(RIMES_BUILD_TESTS)
     add_executable(RimesSettingsTests
         src/workbench/settings_tests.cpp
         src/workbench/provider.cpp
+        src/workbench/codex_cli.cpp
         src/workbench/model.cpp
     )
     target_link_libraries(RimesSettingsTests PRIVATE RimesCore winhttp advapi32)
@@ -444,6 +457,7 @@ if(RIMES_BUILD_TESTS)
         src/visual_preview/main.cpp
         src/workbench/settings_ui.cpp
         src/workbench/provider.cpp
+        src/workbench/codex_cli.cpp
         src/workbench/model.cpp
         src/tsf/CandidateWindow.cpp
         src/tsf/ModuleState.cpp

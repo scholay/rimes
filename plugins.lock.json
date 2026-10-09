@@ -65,7 +65,7 @@
     "native/shared/ChordEncoding.swift": "b7d16dbd81ed70ea4c005afa62a38f427e97aa7988c5e77b50e17885ecfad0b1",
     "native/shared/TextArt.swift": "b394e467999379d875f7d8e334939ebbbfb8cc319b46bb93c18c51ad1de6e115",
     "native/windows/my_combo.schema.yaml": "d2937f55ac93fe746bf2e854aa523d8488d426392e0e6d8b63f96966c8ec6bc9",
-    "native/windows/official_features.hpp": "af487e0eca72540b0dac039f92382f640c846bc703b7120c7ca3f4c560b1ff82",
+    "native/windows/official_features.hpp": "560de4a57d0b2ab0e6f3724c7cf58884bf8ddb492d4dfd1d39b8ad06dbacc10e",
     "plugins/apple-translation/plugin.json": "f6bc6a6d0bb9cda8617e7c561252518feee1bc7a20b47614e3aa0d0b764541df",
     "plugins/art/plugin.json": "72df9fb903824590512865c435b631ff7aceb66c893b1377907630bdba3ad391",
     "plugins/ask/plugin.json": "875f4c3e400783efd35b169b29c13f9822f6957dbafc53ac1e5458f9f5ef4cd4",
@@ -75,7 +75,7 @@
     "plugins/capsule.resources/plugin.json": "8db35a0e912c431e2338a3aa235d180b603ea9af11482f70a9b23e1fe5c13ac9",
     "plugins/capsule.temporary/plugin.json": "f465c27eed7d27674785cda7e581231ed4a43f0adfaede2baa0c5e27f36d0b20",
     "plugins/claude-code-cli/plugin.json": "d2d514b2dadb14f014b498a54efc3fc8c72dbf4834606581f5caa3e512444e3c",
-    "plugins/codex-cli/plugin.json": "7aa8223fe297db6d50f97b2f7554062119e8b540155e3201df00c7473127d28c",
+    "plugins/codex-cli/plugin.json": "ed57713a52a826f825ac60742c321216184ca39b8ea169c03ca1782805538d0f",
     "plugins/fly-chord-learning/plugin.json": "1c36b6fd323617ae85e159d76e9a1ade41e77c8163320fc882cd1571a257a031",
     "plugins/latex/plugin.json": "8ef6044b827f00dbe876d2c351002804ee5d05603af59d5a8181b99bb69fd8f4",
     "plugins/mailbox.chat/plugin.json": "1c11a7bca6a28dc689fcbc0c4003afb5a3ff2eb9d3a17d0ba946ef6208db3db4",
@@ -93,6 +93,6 @@
     "source-map.json": "5ae358c2fe0c6a5e389dc89dca8bec3f1e7ca7ac0dc8ac2bf43f69af1d464912"
   },
   "repository": "https://github.com/scholay/rimes-plugins",
-  "revision": "aecf9c1f505ac83934b01c28c59a29f99707d199",
+  "revision": "c5743caa63df84dfaa4ff278ec5393284d5803aa",
   "schemaVersion": 1
 }

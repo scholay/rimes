@@ -344,13 +344,20 @@ inline void PaintSettingsShell(HDC dc, const SettingsLayout& layout,
                     edits[i]->bottom});
       DrawTextW(dc, labels[i], -1, &fl, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     }
+    const wchar_t* codex_labels[] = {L"AI 连接器", L"Codex .exe（空=自动）", L"Codex 模型（空=默认）"};
+    const DipRect* codex_fields[] = {&layout.connector_combo, &layout.codex_path_edit, &layout.codex_model_edit};
+    for (int i = 0; i < 3; ++i) {
+      if (codex_fields[i]->width() <= 0) continue;
+      RECT label = px({layout.body.left, codex_fields[i]->top, codex_fields[i]->left - 8.0f, codex_fields[i]->bottom});
+      DrawTextW(dc, codex_labels[i], -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
     const float note_y = draft.subpage == 0 ? layout.lang_edit.bottom
                                             : layout.key_edit.bottom;
     RECT note = px({layout.body.left, note_y + 12.0f,
                     layout.body.right, note_y + 60.0f});
     SelectObject(dc, fonts.family);
     SetTextColor(dc, ToColorRef(p.text_muted));
-    DrawTextW(dc, L"密钥保存在 Windows 凭据管理器。正文只在生成或翻译时发送。",
+    DrawTextW(dc, L"Codex 复用 CLI 登录，忽略用户配置，无本地工具；生成仍发送到云端。\nAPI 密钥保存在 Windows 凭据管理器。正文只在生成或翻译时发送。",
               -1, &note, DT_LEFT | DT_WORDBREAK);
   } else if (draft.page == SettingsPage::kPlugins) {
     SelectObject(dc, fonts.body); SetTextColor(dc, ToColorRef(p.text_secondary));
@@ -371,7 +378,8 @@ inline void PaintSettingsShell(HDC dc, const SettingsLayout& layout,
   }
 
   const DipRect* fields[] = {&layout.font_edit, &layout.candidate_count_edit, &layout.hotkey_edit,
-      &layout.base_edit, &layout.model_edit, &layout.key_edit, &layout.lang_edit};
+      &layout.base_edit, &layout.model_edit, &layout.key_edit, &layout.lang_edit,
+      &layout.codex_path_edit, &layout.codex_model_edit};
   for (const auto* field : fields) {
     if (field->width() <= 0) continue;
     RECT box = px(*field);

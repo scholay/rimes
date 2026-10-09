@@ -208,6 +208,9 @@ ui::BufferPaintState Window::MakePaintState(const core::Json& state) const {
                        !state.value("uncertain", false) &&
                        (has_result || has_source) &&
                        (!paint.busy || has_result) && status != "Sending...";
+  if (mode == ui::BufferMode::kGenerate && !has_result)
+    paint.send_enabled = has_source && !paint.busy &&
+        state.value("preedit", std::string()).empty() && status != "Sending...";
   paint.paste_enabled = status != "Sending...";
   paint.preedit = Wide(state.value("preedit", std::string()));
   paint.preview = Wide(state.value("preview", std::string()));
@@ -352,6 +355,7 @@ void Window::PopupModeMenu() {
     mode = command == kModeInput ? ui::BufferMode::kInput
         : command == kModeGenerate ? ui::BufferMode::kGenerate
                                    : ui::BufferMode::kTranslate;
+    if (mode == ui::BufferMode::kGenerate) runtime.SelectAIMode();
   }
   InvalidateRect(window, nullptr, FALSE);
 }
@@ -571,7 +575,8 @@ void Window::ApplyHit(ui::BufferHitKind hit) {
       Copy();
       break;
     case ui::BufferHitKind::kSend:
-      runtime.Send(false);
+      if (mode == ui::BufferMode::kGenerate && state.result_blocks.empty()) runtime.Generate(false);
+      else runtime.Send(false);
       break;
     default:
       break;

@@ -68,13 +68,14 @@ class SettingsUiHost {
   HWND edit_hotkey_ = nullptr;
   HWND combo_hotkey_modifiers_ = nullptr;
   HWND edit_base_ = nullptr;
+  HWND combo_connector_ = nullptr, edit_codex_path_ = nullptr, edit_codex_model_ = nullptr;
   HWND edit_model_ = nullptr;
   HWND edit_key_ = nullptr;
   HWND edit_lang_ = nullptr;
   HWND check_ascii_ = nullptr;
   HWND check_trad_ = nullptr;
   HWND check_punct_ = nullptr;
-  std::array<HWND,3> plugin_labels_{}, plugin_install_{}, plugin_enable_{}, plugin_remove_{};
+  std::array<HWND,4> plugin_labels_{}, plugin_install_{}, plugin_enable_{}, plugin_remove_{};
   HWND plugin_status_ = nullptr;
   std::vector<PluginView> plugin_rows_;
   HBRUSH edit_brush_ = nullptr;

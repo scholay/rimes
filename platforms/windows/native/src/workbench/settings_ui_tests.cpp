@@ -736,6 +736,39 @@ void TestHoverRepaintScopeAndResources() {
   DeleteDC(capture);
   host.Close(false);
 }
+void TestCodexConnectorSelector() {
+  workbench::Settings original, saved;
+  original.ai_connector = "codex-cli";
+  original.codex_path = "C:/Program Files/Codex/codex.exe";
+  original.codex_model = "fixture-model";
+  original.model = "keep-api-model";
+  original.hotkey_modifiers = MOD_ALT | MOD_SHIFT;
+  int saves = 0;
+  workbench::SettingsUiCallbacks callbacks;
+  callbacks.load = [&] { return original; };
+  callbacks.save = [&](workbench::Settings value, const std::wstring&, bool replace_key, std::string*) {
+    Check(!replace_key, "CLI selection never changes API credentials");
+    saved = value; ++saves; return true;
+  };
+  workbench::SettingsUiHost host(std::move(callbacks));
+  host.Open(nullptr);
+  const auto window = host.hwnd();
+  ui::SettingsDraft draft;
+  Click(window, Layout(window, draft).nav[3]);
+  const HWND selector = GetDlgItem(window, 406);
+  Check(IsVisibleWithinFixture(selector, window) && SendMessageW(selector, CB_GETCOUNT, 0, 0) == 2 &&
+      SendMessageW(selector, CB_GETCURSEL, 0, 0) == 1, "Codex selector reflects saved connector");
+  for (const WPARAM key : {VK_RETURN, VK_ESCAPE}) {
+    SendMessageW(selector, CB_SHOWDROPDOWN, TRUE, 0);
+    MSG message{}; message.hwnd = selector; message.message = WM_KEYDOWN; message.wParam = key;
+    Check(!host.HandleDialogMessage(&message) && saves == 0 && host.IsOpen(), "Codex popup does not accidentally Save or Close");
+    SendMessageW(selector, CB_SHOWDROPDOWN, FALSE, 0);
+  }
+  host.Close(true);
+  Check(saves == 1 && saved.ai_connector == "codex-cli" && saved.codex_path == original.codex_path &&
+      saved.codex_model == original.codex_model && saved.model == original.model &&
+      saved.hotkey_modifiers == original.hotkey_modifiers, "UI save preserves independent CLI/API options and shortcut");
+}
 
 void TestPluginManagementAndChordSelection() {
   Check(std::wstring(ui::kSettingsSchemeTitles[5]) == L"isaac2026",
@@ -1011,6 +1044,7 @@ int main() {
   TestCandidateSettingsControls();
   TestBufferHotkeyRegistrationLifecycle();
   TestBufferHotkeyModifierControl();
+  TestCodexConnectorSelector();
   TestHoverRepaintScopeAndResources();
   TestPluginManagementAndChordSelection();
   TestSettingsPreserveRuntimeAndStreaming();
