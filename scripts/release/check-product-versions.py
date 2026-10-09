@@ -38,13 +38,18 @@ def check(root, android=None, windows=None, require_all=False):
               'linux': 'excluded; unchanged'}
     if android:
         base = android / 'platforms/android'
-        require((base / 'VERSION').read_text().strip() == version, 'Android version drift')
+        android_version = (base / 'VERSION').read_text().strip()
+        android_parts = parse_product_version(android_version, 'Android VERSION')
+        require(android_parts[:2] == root_version[:2],
+                'Android VERSION must stay on the root major/minor line')
+        require(android_parts[2] >= root_version[2],
+                'Android patch version must not be lower than root VERSION')
         gradle = (base / 'app/build.gradle.kts').read_text()
         require('versionName = rimesVersion' in gradle and 'rootProject.file("VERSION")' in gradle,
                 'Android must consume its VERSION anchor')
         codes = re.findall(r'versionCode = ([0-9]+)', gradle)
         require(len(codes) == 1, 'Android build code missing or ambiguous')
-        result['android'] = {'version': version, 'versionCode': int(codes[0])}
+        result['android'] = {'version': android_version, 'versionCode': int(codes[0])}
     if windows:
         base = windows / 'platforms/windows/native'
         windows_version = (base / 'VERSION').read_text().strip()

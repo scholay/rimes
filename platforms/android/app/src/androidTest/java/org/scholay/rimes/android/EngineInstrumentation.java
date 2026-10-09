@@ -11,6 +11,15 @@ public final class EngineInstrumentation extends Instrumentation {
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
+            if(arguments!=null && "upgrade-retain-baseline".equals(arguments.getString("mode"))) {
+                result.putString("stream",UpgradeDataContract.retainBaseline(this)); finish(-1,result); return;
+            }
+            if(arguments!=null && ("upgrade-baseline".equals(arguments.getString("mode")) || "upgrade-verify".equals(arguments.getString("mode")))) {
+                result.putString("stream",UpgradeDataContract.run(this,"upgrade-verify".equals(arguments.getString("mode")))); finish(-1,result); return;
+            }
+            if(arguments!=null && "layout-preferences".equals(arguments.getString("mode"))) {
+                result.putString("stream","PASS layout preference checks="+KeyboardSettingsLayoutContract.run(this)+"\n"); finish(-1,result); return;
+            }
             if(arguments!=null && "clipboard-store".equals(arguments.getString("mode"))) {
                 result.putString("stream","PASS clipboard store checks="+TextClipboardStoreContract.run(this)+"\n"); finish(-1,result); return;
             }
@@ -85,46 +94,59 @@ public final class EngineInstrumentation extends Instrumentation {
             if(arguments!=null && "plugins".equals(arguments.getString("mode"))) {
                 result.putString("stream","PASS plugin backend checks="+PluginBackendContract.run(this)+"\n"); finish(-1,result); return;
             }
+            boolean renderingOnly=arguments!=null && "rendering".equals(arguments.getString("mode"));
+            final NativeRimeEngine isolatedEngine;
+            if(renderingOnly) isolatedEngine=null;
+            else {
+                String selectedIme=android.provider.Settings.Secure.getString(getTargetContext().getContentResolver(),
+                        android.provider.Settings.Secure.DEFAULT_INPUT_METHOD);
+                if(selectedIme!=null && selectedIme.startsWith(getTargetContext().getPackageName()+"/"))
+                    throw new IllegalStateException("Select another IME before the isolated JNI contract.");
+                java.io.File data=EngineResources.prepare(getTargetContext());
+                if(!data.isDirectory()) throw new AssertionError("packaged resources");
+                java.io.File user=new java.io.File(getTargetContext().getNoBackupFilesDir(),"engine-contract-user-"+java.util.UUID.randomUUID());
+                if(!user.mkdirs()) throw new java.io.IOException("Cannot create isolated engine contract directory");
+                // librime is a process singleton. Initialize its synthetic user directory before
+                // any Activity/UI fixture can bind the IME service and claim the real directory.
+                isolatedEngine=EngineWorker.QUEUE.submit(() -> {
+                    NativeRimeEngine engine=new NativeRimeEngine();
+                    engine.initialize(data.getAbsolutePath(),user.getAbsolutePath()); return engine;
+                }).get(10,java.util.concurrent.TimeUnit.SECONDS);
+            }
             touchChecks=NativeTouchContract.run(this);
             java.util.concurrent.atomic.AtomicReference<Throwable> renderingError=new java.util.concurrent.atomic.AtomicReference<>();
             runOnMainSync(() -> {
                 try { iconChecks=KeyboardIconContract.run(getTargetContext()); keycapRendering(); chordChecks=ChordSurfaceContract.run(getTargetContext()); chordReadoutRetirement(); renderBufferRail();
-                    bufferRenderingResult+="HEIGHT_FIT checks="+KeyboardHeightContract.run(getTargetContext())+"\n"; }
+                    bufferRenderingResult+="HEIGHT_FIT checks="+KeyboardHeightContract.run(getTargetContext())+"\n";
+                    bufferRenderingResult+="PET_APPEARANCE checks="+KeyboardAppearanceContract.run(getTargetContext())+"\n"; }
                 catch(Throwable error) { renderingError.set(error); }
             });
             if(renderingError.get()!=null) throw renderingError.get();
             Bundle rendering=new Bundle(); rendering.putString("stream","NATIVE_TOUCH checks="+touchChecks+"\nVECTOR_ICONS checks="+iconChecks+"\nCHORD_SURFACE checks="+chordChecks+"\n"+bufferRenderingResult); sendStatus(0,rendering);
-            if(arguments!=null && "rendering".equals(arguments.getString("mode"))) {
+            if(renderingOnly) {
                 result.putString("stream","PASS native keycaps, chord and Buffer rail rendering\n"+bufferRenderingResult); finish(-1,result); return;
             }
             for(String value:new String[]{"中文","A𠮷😀Z","\u0000","你好\u0000𠮷"}) {
                 if(!value.equals(NativeRimeEngine.roundTripNative(value))) throw new AssertionError("JNI Unicode round trip");
             }
-            java.io.File data=EngineResources.prepare(getTargetContext());
-            if(!data.isDirectory()) throw new AssertionError("packaged resources");
             EngineWorker.QUEUE.submit(() -> {
-                NativeRimeEngine engine=new NativeRimeEngine();
-                try {
-                    java.io.File user=new java.io.File(getTargetContext().getNoBackupFilesDir(),"engine-contract-user-"+java.util.UUID.randomUUID());
-                    if(!user.mkdirs()) throw new java.io.IOException("Cannot create isolated engine contract directory");
-                    engine.initialize(data.getAbsolutePath(),user.getAbsolutePath());
-                    long session=engine.createSession();
-                    if(!engine.selectSchema(session,"rimes_pinyin_private")) throw new AssertionError("private schema");
-                    for(char key:"nihao".toCharArray()) engine.processKey(session,key);
-                    org.scholay.rimes.core.RimeEngine.Snapshot partial=engine.selectCandidate(session,1);
-                    if(!partial.preedit.contains("你") || partial.caret!=partial.preedit.length())
-                        throw new AssertionError("UTF-8 byte caret to UTF-16: "+partial.preedit+" caret="+partial.caret);
+                NativeRimeEngine engine=isolatedEngine;
+                long session=engine.createSession();
+                if(!engine.selectSchema(session,"rimes_pinyin_private")) throw new AssertionError("private schema");
+                for(char key:"nihao".toCharArray()) engine.processKey(session,key);
+                org.scholay.rimes.core.RimeEngine.Snapshot partial=engine.selectCandidate(session,1);
+                if(!partial.preedit.contains("你") || partial.caret!=partial.preedit.length())
+                    throw new AssertionError("UTF-8 byte caret to UTF-16: "+partial.preedit+" caret="+partial.caret);
+                engine.clearComposition(session);
+                for(String schema:new String[]{"rimes_pinyin9","rimes_pinyin9_private"}) {
+                    if(!engine.selectSchema(session,schema)) throw new AssertionError("nine-key schema");
+                    org.scholay.rimes.core.RimeEngine.Snapshot nine=org.scholay.rimes.core.RimeEngine.Snapshot.EMPTY;
+                    for(char key:"64426".toCharArray()) nine=engine.processKey(session,key);
+                    if(nine.candidates.isEmpty() || !nine.candidates.get(0).equals("你好")) throw new AssertionError("nine-key candidates: "+nine.candidates);
+                    if(!engine.selectCandidate(session,0).commit.equals("你好")) throw new AssertionError("nine-key commit");
                     engine.clearComposition(session);
-                    for(String schema:new String[]{"rimes_pinyin9","rimes_pinyin9_private"}) {
-                        if(!engine.selectSchema(session,schema)) throw new AssertionError("nine-key schema");
-                        org.scholay.rimes.core.RimeEngine.Snapshot nine=org.scholay.rimes.core.RimeEngine.Snapshot.EMPTY;
-                        for(char key:"64426".toCharArray()) nine=engine.processKey(session,key);
-                        if(nine.candidates.isEmpty() || !nine.candidates.get(0).equals("你好")) throw new AssertionError("nine-key candidates: "+nine.candidates);
-                        if(!engine.selectCandidate(session,0).commit.equals("你好")) throw new AssertionError("nine-key commit");
-                        engine.clearComposition(session);
-                    }
-                    engine.destroySession(session);
-                } catch(java.io.IOException error) { throw new RuntimeException(error); }
+                }
+                engine.destroySession(session);
             }).get(10,java.util.concurrent.TimeUnit.SECONDS);
             android.view.inputmethod.EditorInfo info=new android.view.inputmethod.EditorInfo();
             for(int type:new int[]{android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD,

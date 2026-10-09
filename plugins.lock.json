@@ -10,7 +10,7 @@
     "native/android-core/ChordLayout.java": "b919fcba68087a3dff166865e60abb2ee680d1ea4f53dbbe3c4e7ec8897c3372",
     "native/android-core/ChordProfile.java": "cbed5f34c04545f48d12a946d02d1157cd406f937728a26a0c6773839f02bef4",
     "native/android/BufferPluginExecutor.java": "2466ac8a21034b12a9c0cbb6783c1da5b3776adc0216eadd86d4715900cc36e2",
-    "native/android/BufferPluginPanel.java": "dca9c178963eb499c25522ea4a3852e66950a2261e5f50fc2334e97dc194edd7",
+    "native/android/BufferPluginPanel.java": "8048c8d2f4ba887e86f2f159e100eee2114f4cbf66679ee6f4e20051fd3cda8e",
     "native/android/ChordPreview.java": "5fb23faae5a7e67ed736f5671fcf35ed6b06666c884147d313970c57e7032ff9",
     "native/android/ChordSurface.java": "ff2a460cd844c54167c0b80163a168c77f4083a6da73916077c5494e21bb23cc",
     "native/android/OfflineDictionary.java": "f1f5fd399243f22bd78fef82e023161bb3f97484521c4dbbba38914d664a8d87",
@@ -93,6 +93,6 @@
     "source-map.json": "5ae358c2fe0c6a5e389dc89dca8bec3f1e7ca7ac0dc8ac2bf43f69af1d464912"
   },
   "repository": "https://github.com/scholay/rimes-plugins",
-  "revision": "aecf9c1f505ac83934b01c28c59a29f99707d199",
+  "revision": "2c94508f1a88f351b01b384b4f54a39f6ebcb742",
   "schemaVersion": 1
 }

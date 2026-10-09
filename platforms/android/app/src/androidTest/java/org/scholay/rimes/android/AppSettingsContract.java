@@ -52,6 +52,10 @@ final class AppSettingsContract {
     static int run(Instrumentation instrumentation) {
         if(Looper.myLooper()==Looper.getMainLooper()) throw new IllegalStateException("AppSettingsContract must run off main");
         AppSettingsContract contract=new AppSettingsContract(instrumentation);
+        String selected=android.provider.Settings.Secure.getString(contract.context.getContentResolver(),
+                android.provider.Settings.Secure.DEFAULT_INPUT_METHOD);
+        if(selected!=null && selected.startsWith(contract.context.getPackageName()+"/"))
+            throw new IllegalStateException("Select another IME before the isolated settings contract");
         Map<String,Object> original=new LinkedHashMap<>();
         Map<String,?> stored=contract.preferences.getAll();
         for(String key:KEYS) if(stored.containsKey(key)) original.put(key,stored.get(key));
