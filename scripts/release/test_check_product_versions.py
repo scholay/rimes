@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify independent Windows patch releases preserve the shared product baseline."""
+"""Verify independent Android/Windows patches preserve the shared product baseline."""
 import importlib.util
 import plistlib
 import tempfile
@@ -48,6 +48,7 @@ class ProductVersionTests(unittest.TestCase):
 
     def test_matching_versions_pass(self):
         result = self.check()
+        self.assertEqual(result['android'], {'version': '1.1.0', 'versionCode': 48})
         self.assertEqual(result['windows'], {'version': '1.1.0', 'fileVersion': '1.1.0.0'})
 
     def test_windows_patch_advance_preserves_other_product_versions(self):
@@ -99,10 +100,64 @@ class ProductVersionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'Windows must consume its VERSION'):
                     self.check()
 
-    def test_android_still_requires_the_shared_baseline(self):
+    def test_android_patch_advance_preserves_other_product_versions(self):
+        self.write_baseline('1.1.1')
+        self.write(self.windows_base / 'VERSION', '1.1.1\n')
+        self.write(self.root / 'platforms/android/VERSION', '1.1.2\n')
+        result = self.check()
+        self.assertEqual(result['target'], '1.1.1')
+        self.assertEqual(result['macos']['version'], '1.1.1')
+        self.assertEqual(result['ios']['version'], '1.1.1')
+        self.assertEqual(result['windows']['version'], '1.1.1')
+        self.assertEqual(result['android'], {'version': '1.1.2', 'versionCode': 48})
+
+    def test_android_patch_versions_compare_numerically(self):
+        self.write_baseline('1.1.9')
+        self.write(self.windows_base / 'VERSION', '1.1.9\n')
+        self.write(self.root / 'platforms/android/VERSION', '1.1.10\n')
+        self.assertEqual(self.check()['android']['version'], '1.1.10')
+
+    def test_android_and_windows_patches_can_advance_independently(self):
+        self.write(self.root / 'platforms/android/VERSION', '1.1.2\n')
+        self.write(self.windows_base / 'VERSION', '1.1.3\n')
+        result = self.check()
+        self.assertEqual(result['target'], '1.1.0')
+        self.assertEqual(result['android']['version'], '1.1.2')
+        self.assertEqual(result['windows']['version'], '1.1.3')
+
+    def test_android_patch_rollback_is_rejected(self):
+        self.write_baseline('1.1.2')
         self.write(self.root / 'platforms/android/VERSION', '1.1.1\n')
-        with self.assertRaisesRegex(ValueError, 'Android version drift'):
+        with self.assertRaisesRegex(ValueError, 'Android patch version must not be lower'):
             self.check()
+
+    def test_android_cannot_change_major_or_minor_line(self):
+        for version in ('1.2.0', '1.0.99', '2.1.0', '0.1.99'):
+            with self.subTest(version=version):
+                self.write(self.root / 'platforms/android/VERSION', version + '\n')
+                with self.assertRaisesRegex(ValueError, 'Android VERSION must stay'):
+                    self.check()
+
+    def test_android_requires_strict_product_semver(self):
+        for version in ('01.1.0', '1.01.0', '1.1.01', '1.1', '1.1.1.0',
+                        '1.1.1-preview.1', '1.1.1+build', 'v1.1.1', '-1.1.1',
+                        '1.1.1\n1.1.2', ''):
+            with self.subTest(version=version):
+                self.write(self.root / 'platforms/android/VERSION', version + '\n')
+                with self.assertRaisesRegex(ValueError, 'Android VERSION must be'):
+                    self.check()
+
+    def test_gradle_must_read_and_consume_android_version(self):
+        for gradle in (
+            'versionName = "1.1.1"\nversionCode = 48\n',
+            'val rimesVersion = "1.1.1"\nversionName = rimesVersion\nversionCode = 48\n',
+            'val rimesVersion = rootProject.file("VERSION").readText().trim()\n'
+            'versionName = "1.1.1"\nversionCode = 48\n',
+        ):
+            with self.subTest(gradle=gradle):
+                self.write(self.root / 'platforms/android/app/build.gradle.kts', gradle)
+                with self.assertRaisesRegex(ValueError, 'Android must consume its VERSION'):
+                    self.check()
 
     def test_macos_and_ios_still_require_the_shared_baseline(self):
         (self.root / 'Info.plist').write_bytes(plistlib.dumps(

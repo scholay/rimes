@@ -66,6 +66,9 @@ public final class RimesInputMethodService extends InputMethodService {
         resetEngine(); render();
     });
     private BufferPluginExecutor.Job pluginJob;
+    private Runnable translationPending;
+    private BufferSession.Capture translationSource;
+    private String translationSourceDirection;
     private ChordSurface chords;
     private TextView metrics;
     private final List<KeyButton> spellingButtons=new ArrayList<>();
@@ -85,7 +88,7 @@ public final class RimesInputMethodService extends InputMethodService {
     private String pluginResultAuthorization;
     private boolean pluginSettingsOpen, renderedPluginMode;
     private LinearLayout bufferTop,bufferBottom;
-    private KeyButton bufferSettings,bufferClear,bufferPaste,pluginButton,pluginRunButton;
+    private KeyButton bufferSettings,pluginButton,pluginRunButton;
     private FrameLayout surfaceContainer;
     private KeyButton themeButton,layoutButton;
     private final List<KeyButton> chromeButtons=new ArrayList<>();
@@ -577,7 +580,7 @@ public final class RimesInputMethodService extends InputMethodService {
     }
     private void returnHostOrBuffer() {
         if(!ownsTarget()) return;
-        if(buffer.isEnabled()) { if(activePlugin!=null) { if(pluginSession.snapshot(buffer).status==PluginSession.Status.READY) insertPluginResult(); else runPlugin(); } else insertNow(false); }
+        if(buffer.isEnabled()) { if(activePlugin!=null) { if(pluginSession.snapshot(buffer).status==PluginSession.Status.READY) insertPluginResult(); else if(!"translate".equals(activePlugin)) runPlugin(); } else insertNow(false); }
         else if(!sendDefaultEditorAction(true)) deliver("\n",false);
     }
     private void settleAndSwitch(Runnable change) {
@@ -649,11 +652,15 @@ public final class RimesInputMethodService extends InputMethodService {
         return emoji?KeyboardLayout.Mode.EMOJI:numeric?(symbols?KeyboardLayout.Mode.SYMBOLS:KeyboardLayout.Mode.NUMERIC)
                 :nineKeyVisible()?KeyboardLayout.Mode.NINE_KEY:KeyboardLayout.Mode.QWERTY;
     }
+    private void cycleTheme() {
+        cancelChord();
+        settings.setTheme(KeyboardTheme.next(settings.getTheme()).id);
+    }
     private void toggleAppearance() {
         closeClipboard();
         cancelChord();
         pluginSettingsOpen=false; appearanceOpen=!appearanceOpen;
-        if(appearanceOpen) appearancePanel.scrollTo(0,0);
+        if(appearanceOpen) appearancePanel.showPets();
         render();
     }
     private final KeyboardSurface.Handler keyHandler=new KeyboardSurface.Handler() {
@@ -752,7 +759,7 @@ public final class RimesInputMethodService extends InputMethodService {
     }
     private String returnLabel() {
         if(snapshot.composing()) return "原码";
-        if(buffer.isEnabled()) return activePlugin==null?"插入":pluginSession.snapshot(buffer).status==PluginSession.Status.READY?"发送":pluginSession.snapshot(buffer).status==PluginSession.Status.RUNNING?"处理中":"执行";
+        if(buffer.isEnabled()) return activePlugin==null?"插入":pluginSession.snapshot(buffer).status==PluginSession.Status.READY?"发送":pluginSession.snapshot(buffer).status==PluginSession.Status.RUNNING?"处理中":"translate".equals(activePlugin)?"翻译":"执行";
         EditorInfo info=getCurrentInputEditorInfo();
         if(info==null || (info.imeOptions&EditorInfo.IME_FLAG_NO_ENTER_ACTION)!=0) return "换行";
         switch(info.imeOptions&EditorInfo.IME_MASK_ACTION) {
@@ -784,24 +791,20 @@ public final class RimesInputMethodService extends InputMethodService {
         LinearLayout.LayoutParams bufferParams=new LinearLayout.LayoutParams(-1,dp(landscape()?60:76)); bufferParams.bottomMargin=dp(4); keyboard.addView(bufferRow,bufferParams);
         int railHeight=landscape()?28:36;
         LinearLayout input=row(bufferRow,railHeight); bufferTop=input;
-        themeButton=button(input,theme.glyph,this::toggleAppearance,0); fixedWidth(themeButton,32); gapRight(themeButton,4);
-        themeButton.setContentDescription("布局与配色"); themeButton.icon(KeyboardIcon.APPEARANCE);
+        themeButton=button(input,theme.glyph,this::cycleTheme,0); fixedWidth(themeButton,32); gapRight(themeButton,4);
+        themeButton.setTag("keyboard.pet.buffer"); KeyboardPetButton.configure(themeButton,this::cycleTheme,this::toggleAppearance);
         bufferRail=new BufferRail(this); input.addView(bufferRail,new LinearLayout.LayoutParams(0,-1,1));
-        bufferPaste=button(input,"粘贴",this::pasteClipboard,0); fixedWidth(bufferPaste,32); gapLeft(bufferPaste,4);
-        bufferPaste.icon(KeyboardIcon.WRITE); bufferPaste.setContentDescription(getString(R.string.clipboard_paste));
-        bufferPaste.setOnLongClickListener(v -> { openClipboard(); return true; });
         insertNext=button(input,"↑",() -> insert(false),0); fixedWidth(insertNext,32); gapLeft(insertNext,4);
         ((KeyButton)insertNext).icon(KeyboardIcon.PAPER_PLANE); ((KeyButton)insertNext).appearance(false,false,true); insertNext.setContentDescription(getString(R.string.insert_next)); insertNext.setOnLongClickListener(v -> { insert(true); return true; });
         LinearLayout details=new LinearLayout(this); bufferBottom=details; bufferRow.addView(details,new LinearLayout.LayoutParams(-1,dp(railHeight)));
         bufferSettings=button(details,"设置",() -> openPluginSettings(activePlugin),0); fixedWidth(bufferSettings,32); gapRight(bufferSettings,4); bufferSettings.icon(KeyboardIcon.SLIDERS); bufferSettings.setContentDescription("Buffer 设置");
         metrics=new TextView(this); metrics.setGravity(Gravity.CENTER); metrics.setTextSize(landscape()?14:16);
         metrics.setTypeface(android.graphics.Typeface.create("sans-serif-medium",android.graphics.Typeface.NORMAL)); details.addView(metrics,new LinearLayout.LayoutParams(0,-1,1));
-        bufferClear=button(details,"清空",this::clearBuffer,0); fixedWidth(bufferClear,32); gapLeft(bufferClear,4);
-        bufferClear.icon(KeyboardIcon.CLEAR); bufferClear.setContentDescription("清空 Buffer");
         pluginRunButton=button(details,"执行",this::runOrCancelPlugin,0); fixedWidth(pluginRunButton,32); gapLeft(pluginRunButton,4); pluginRunButton.icon(KeyboardIcon.PLAY);
         pluginButton=button(details,"插件",() -> openPluginSettings(activePlugin),0); fixedWidth(pluginButton,32); gapLeft(pluginButton,4); pluginButton.icon(KeyboardIcon.GRID_9); pluginButton.setContentDescription("Buffer 插件设置");
         candidateRow=row(keyboard,32);
-        layoutButton=button(candidateRow,"⚙",this::toggleAppearance,0); fixedWidth(layoutButton,32); gapRight(layoutButton,4); layoutButton.setContentDescription("键位布局"); layoutButton.icon(KeyboardIcon.SETTINGS);
+        layoutButton=button(candidateRow,theme.glyph,this::cycleTheme,0); fixedWidth(layoutButton,32); gapRight(layoutButton,4);
+        layoutButton.setTag("keyboard.pet.candidate"); KeyboardPetButton.configure(layoutButton,this::cycleTheme,this::toggleAppearance);
         previous=button(candidateRow,"‹",() -> candidatePage(false),0); fixedWidth(previous,32); ((KeyButton)previous).plain(true); previous.setContentDescription("上一页候选"); ((KeyButton)previous).icon(KeyboardIcon.CHEVRON_LEFT,16);
         candidateScroll=new HorizontalScrollView(this); candidateScroll.setFillViewport(false); candidateScroll.setHorizontalScrollBarEnabled(false);
         LinearLayout strip=new LinearLayout(this); candidateScroll.addView(strip,new HorizontalScrollView.LayoutParams(-2,-1));
@@ -839,7 +842,7 @@ public final class RimesInputMethodService extends InputMethodService {
         }); surfaceContainer.addView(chords,new FrameLayout.LayoutParams(-1,-1));
         DeleteRepeatTouch chordDelete=new DeleteRepeatTouch(chords.utilityButton(ChordLayout.Action.DELETE),chords::canRepeatDelete);
         chords.setUtilityRetirementListener(chordDelete::cancel);
-        appearancePanel=new KeyboardAppearancePanel(this,this::chooseLayout,settings::setTheme);
+        appearancePanel=new KeyboardAppearancePanel(this,this::chooseLayout,settings::setTheme,this::toggleAppearance);
         appearancePanel.schemes(schema,this::chooseSchema);
         appearancePanel.action("全部插入",getString(R.string.insert_all),() -> insert(true));
         appearancePanel.action("清空 Buffer",getString(R.string.clear),this::clearBuffer);
@@ -894,21 +897,58 @@ public final class RimesInputMethodService extends InputMethodService {
         appearanceOpen=false; pluginSettingsOpen=true; render();
     }
     private void cancelPlugin() {
+        if(translationPending!=null) { main.removeCallbacks(translationPending); translationPending=null; }
         if(pluginJob!=null) { pluginJob.cancel(); pluginJob=null; }
     }
-    private void invalidatePlugin() { cancelPlugin(); pluginSession.invalidate(); }
+    private void invalidatePlugin() { cancelPlugin(); pluginSession.invalidate(); translationSource=null; }
+    /** Debounce confirmed Buffer edits; the worker still checks source revision and editor lease. */
+    private void scheduleTranslation() {
+        if(!"translate".equals(activePlugin) || !buffer.isEnabled() || !ownsTarget()
+                || privateField || !isInputViewShown() || !pluginAllowed()) {
+            if(translationPending!=null) { main.removeCallbacks(translationPending); translationPending=null; }
+            translationSource=null; return;
+        }
+        if(pending!=0 || snapshot.composing() || !retained.isEmpty() || chords.isChordActive()
+                || appearanceOpen || clipboardOpen || pluginSettingsOpen) return;
+        BufferSession.Capture source=buffer.capture();
+        if(source==null || buffer.isCurrent(translationSource)
+                && translationDirection.equals(translationSourceDirection)) return;
+        cancelPlugin(); pluginSession.invalidate();
+        translationSource=source; translationSourceDirection=translationDirection;
+        InputEpoch.Ticket ticket=epoch.issue(); InputConnection connection=target;
+        String direction=translationDirection;
+        translationPending=() -> {
+            translationPending=null;
+            if(!epoch.current(ticket) || connection!=target || !buffer.isCurrent(source)
+                    || !direction.equals(translationDirection) || !"translate".equals(activePlugin)
+                    || !isInputViewShown()) return;
+            // A mode/learning operation may be busy without changing this Buffer revision.
+            // Let its next idle render schedule the same source instead of losing the request.
+            if(!canSelectPlugin() || !pluginAllowed() || appearanceOpen || clipboardOpen || pluginSettingsOpen) {
+                if(translationSource==source) translationSource=null;
+                return;
+            }
+            runPlugin();
+        };
+        main.postDelayed(translationPending,400);
+    }
     private String pluginStatus(PluginSession.Snapshot state) {
         if(cometProfile.remote(activePlugin)) {
             if(state.status==PluginSession.Status.ERROR) return state.message;
-            return state.status==PluginSession.Status.RUNNING?"AI 生成中… · 点停止可取消":"AI · "+cometProfile.model+" · 点执行";
+            return state.status==PluginSession.Status.RUNNING?"AI 生成中… · 点停止可取消":"AI · "+cometProfile.model+("translate".equals(activePlugin)?" · 输入后自动翻译":" · 点执行");
         }
         if(state.status==PluginSession.Status.RUNNING) return activePlugin.equals("translate")?"本机词典查译中…":"Mock 生成中…";
         if(state.status==PluginSession.Status.ERROR) return state.message;
         if(!"translate".equals(activePlugin) && !aiMockEnabled) return "AI Mock 已关闭 · 在 RIMES 主应用中启用";
-        return activePlugin.equals("translate")?"本机中英词典 · 点执行查译":"OpenAI 格式 Mock · 点执行生成";
+        return activePlugin.equals("translate")?"本机中英词典 · 输入后自动翻译":"OpenAI 格式 Mock · 点执行生成";
     }
     private void runOrCancelPlugin() {
-        if(pluginSession.snapshot(buffer).status==PluginSession.Status.RUNNING) { invalidatePlugin(); render(); }
+        if(pluginSession.snapshot(buffer).status==PluginSession.Status.RUNNING) {
+            invalidatePlugin();
+            // Stop stays stopped for this revision; the next ordinary edit starts a new timer.
+            if("translate".equals(activePlugin)) { translationSource=buffer.capture(); translationSourceDirection=translationDirection; }
+            render();
+        }
         else runPlugin();
     }
     private void runPlugin() {
@@ -964,11 +1004,13 @@ public final class RimesInputMethodService extends InputMethodService {
     }
     private void render() {
         if(keyboard==null) return;
+        scheduleTranslation();
         if(clipboardOpen && !clipboardCurrent()) closeClipboard();
         KeyboardTheme.Palette palette=theme.palette(this); keyboard.setBackgroundColor(palette.background);
         for(KeyButton button:chromeButtons) button.theme(theme);
-        setText(layoutButton,appearanceOpen?"✓":"⚙"); layoutButton.icon(appearanceOpen?KeyboardIcon.CHECK:KeyboardIcon.SETTINGS);
-        layoutButton.setSelected(appearanceOpen);
+        KeyboardPetButton.render(layoutButton,theme,appearanceOpen);
+        layoutButton.setVisibility(buffer.isEnabled()?View.GONE:View.VISIBLE);
+        KeyboardPetButton.render(themeButton,theme,appearanceOpen);
 
         bufferButton.setContentDescription(getString(buffer.isEnabled()?R.string.buffer_on:R.string.buffer_off)); bufferButton.setSelected(buffer.isEnabled());
         bufferButton.setEnabled(buffer.isPermitted() && pending==0 && !snapshot.composing() && retained.isEmpty() && !chords.isChordActive());
@@ -1028,12 +1070,11 @@ public final class RimesInputMethodService extends InputMethodService {
         for(int i=0;i<9;i++) { KeyButton key=spellingButtons.get(i); boolean exists=spellingPage+i<spellingChoices.size(); key.setVisibility(exists?View.VISIBLE:View.GONE);
             if(exists) { String value=spellingChoices.get(spellingPage+i); setText(key,value); key.setContentDescription("拼音 "+value); } key.setEnabled(exists && pending==0); }
         PluginSession.Status pluginState=pluginSession.snapshot(buffer).status;
-        pluginRunButton.setVisibility(plugin?View.VISIBLE:View.GONE); pluginRunButton.setContentDescription(pluginState==PluginSession.Status.RUNNING?"取消执行":"执行"+pluginName(activePlugin));
+        pluginRunButton.setVisibility(plugin && (!"translate".equals(activePlugin) || pluginState==PluginSession.Status.RUNNING || pluginState==PluginSession.Status.ERROR)?View.VISIBLE:View.GONE);
+        pluginRunButton.setContentDescription(pluginState==PluginSession.Status.RUNNING?"取消执行":"translate".equals(activePlugin)?"重试翻译":"执行"+pluginName(activePlugin));
         pluginRunButton.icon(pluginState==PluginSession.Status.RUNNING?KeyboardIcon.STOP:KeyboardIcon.PLAY);
         pluginRunButton.setEnabled(plugin && pluginAllowed() && pending==0 && !snapshot.composing() && !chords.isChordActive() && buffer.blockCount()>0);
         pluginButton.setSelected(plugin);
-        bufferClear.setEnabled(ownsTarget() && buffer.isEnabled() && buffer.isPermitted() && !privateField);
-        bufferPaste.setEnabled(canPasteClipboard());
         insertNext.setEnabled(pending==0 && !snapshot.composing() && buffer.blockCount()>0 && !chords.isChordActive() && (!plugin || pluginState==PluginSession.Status.READY));
         retryButton.setVisibility(failed || !retained.isEmpty()?View.VISIBLE:View.GONE);
         boolean chord=chordVisible();

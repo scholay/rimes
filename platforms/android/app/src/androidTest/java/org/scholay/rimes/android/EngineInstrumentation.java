@@ -11,6 +11,12 @@ public final class EngineInstrumentation extends Instrumentation {
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
+            if(arguments!=null && ("upgrade-baseline".equals(arguments.getString("mode")) || "upgrade-verify".equals(arguments.getString("mode")))) {
+                result.putString("stream",UpgradeDataContract.run(this,"upgrade-verify".equals(arguments.getString("mode")))); finish(-1,result); return;
+            }
+            if(arguments!=null && "layout-preferences".equals(arguments.getString("mode"))) {
+                result.putString("stream","PASS layout preference checks="+KeyboardSettingsLayoutContract.run(this)+"\n"); finish(-1,result); return;
+            }
             if(arguments!=null && "clipboard-store".equals(arguments.getString("mode"))) {
                 result.putString("stream","PASS clipboard store checks="+TextClipboardStoreContract.run(this)+"\n"); finish(-1,result); return;
             }
@@ -89,7 +95,8 @@ public final class EngineInstrumentation extends Instrumentation {
             java.util.concurrent.atomic.AtomicReference<Throwable> renderingError=new java.util.concurrent.atomic.AtomicReference<>();
             runOnMainSync(() -> {
                 try { iconChecks=KeyboardIconContract.run(getTargetContext()); keycapRendering(); chordChecks=ChordSurfaceContract.run(getTargetContext()); chordReadoutRetirement(); renderBufferRail();
-                    bufferRenderingResult+="HEIGHT_FIT checks="+KeyboardHeightContract.run(getTargetContext())+"\n"; }
+                    bufferRenderingResult+="HEIGHT_FIT checks="+KeyboardHeightContract.run(getTargetContext())+"\n";
+                    bufferRenderingResult+="PET_APPEARANCE checks="+KeyboardAppearanceContract.run(getTargetContext())+"\n"; }
                 catch(Throwable error) { renderingError.set(error); }
             });
             if(renderingError.get()!=null) throw renderingError.get();
