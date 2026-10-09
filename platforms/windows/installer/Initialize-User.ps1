@@ -15,7 +15,8 @@ $oldShortcut=Read-SettingsShortcut
 try {
     # Never deploy dictionaries or start a user-data-aware Broker as the UAC
     # administrator. These operations inherit the original user's token.
-    Stop-OwnedBroker $state.active
+    # Deployment acquires the serving mutex before checking other sessions.
+    # Setup.exe retains its unowned reservation across both install phases.
     Invoke-UserDictionaryDeployment $state.active
     if($NoAutostart){Restore-BrokerAutostart $null}
     else{

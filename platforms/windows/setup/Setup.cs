@@ -11,12 +11,33 @@ using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 internal static class Payload
 {
+    internal static ProcessStartInfo PowerShellStartInfo(string command)
+    {
+        var windowsPowerShell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            @"System32\WindowsPowerShell\v1.0");
+        var start = new ProcessStartInfo(Path.Combine(windowsPowerShell, "powershell.exe"),
+            "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " +
+            Convert.ToBase64String(Encoding.Unicode.GetBytes(command)));
+        // A PowerShell 7 parent may export incompatible modules ahead of the
+        // Windows PowerShell modules. Setup only needs Windows built-ins; do
+        // not discover commands from user or caller-controlled module paths.
+        start.EnvironmentVariables["PSModulePath"] = Path.Combine(windowsPowerShell, "Modules");
+        start.UseShellExecute = false;
+        start.CreateNoWindow = true;
+        start.RedirectStandardOutput = true;
+        start.RedirectStandardError = true;
+        start.StandardOutputEncoding = Encoding.UTF8;
+        start.StandardErrorEncoding = Encoding.UTF8;
+        return start;
+    }
+
     internal static void Extract(Stream stream, string expectedHash, string destination)
     {
         using (var sha = SHA256.Create())
@@ -94,16 +115,7 @@ internal static class Payload
                 (startupSnapshot == null ? "" : " -UserAutostartSnapshot '" + startupSnapshot + "'") +
                 (autostart ? "" : " -NoAutostart") +
                 " } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }; exit 0";
-            var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-                @"System32\WindowsPowerShell\v1.0\powershell.exe"),
-                "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " +
-                Convert.ToBase64String(Encoding.Unicode.GetBytes(command)));
-            start.UseShellExecute = false;
-            start.CreateNoWindow = true;
-            start.RedirectStandardOutput = true;
-            start.RedirectStandardError = true;
-            start.StandardOutputEncoding = Encoding.UTF8;
-            start.StandardErrorEncoding = Encoding.UTF8;
+            var start = PowerShellStartInfo(command);
             using (var process = Process.Start(start))
             {
                 var stdout = process.StandardOutput.ReadToEndAsync();
@@ -130,6 +142,57 @@ internal static class Payload
                 catch (IOException) { /* A runtime installer can briefly retain a file. */ }
                 catch (UnauthorizedAccessException) { }
             }
+        }
+    }
+}
+
+// Broker treats the existence of its secured per-session mutex as its startup
+// gate, independently of ownership. Retain an UNOWNED handle across elevation
+// and user completion; the original-user deploy child can then own it without
+// leaving a window in which a cached TSF DLL starts another dictionary engine.
+internal sealed class InstallationGate : IDisposable
+{
+    private Mutex broker;
+    private Mutex setup;
+    private bool ownsSetup;
+
+    internal static string BrokerMutexName(string sid, int session)
+    {
+        ulong hash = 14695981039346656037UL;
+        unchecked { foreach (var unit in sid) { hash ^= unit; hash *= 1099511628211UL; } }
+        return "Local\\RIMES.Broker.v2.session-" + session + ".user-" + hash.ToString("x16");
+    }
+
+    internal InstallationGate(string testName = null)
+    {
+        using (var identity = WindowsIdentity.GetCurrent())
+        {
+            var name = testName ?? BrokerMutexName(identity.User.Value, Process.GetCurrentProcess().SessionId);
+            var security = new MutexSecurity();
+            security.SetAccessRuleProtection(true, false);
+            security.AddAccessRule(new MutexAccessRule(identity.User, MutexRights.FullControl, AccessControlType.Allow));
+            try
+            {
+                bool created;
+                setup = new Mutex(true, name + ".setup", out created, security);
+                ownsSetup = created;
+                if (!created) throw new InvalidOperationException("Another RIMES installation is in progress. Wait for it to finish.");
+                broker = new Mutex(false, name, out created, security);
+                if (!created) throw new InvalidOperationException(SetupWindow.T(
+                    "请先保存 Buffer 内容并从托盘退出 RIMES，然后重试。安装器不会停止正在运行的输入法。",
+                    "Save Buffer text and exit RIMES from the tray, then retry. Setup does not stop a running input method."));
+            }
+            catch { Dispose(); throw; }
+        }
+    }
+
+    public void Dispose()
+    {
+        if (broker != null) { broker.Dispose(); broker = null; }
+        if (setup != null)
+        {
+            if (ownsSetup) setup.ReleaseMutex();
+            setup.Dispose(); setup = null; ownsSetup = false;
         }
     }
 }
@@ -283,9 +346,29 @@ internal static class SetupProgram
         var start = new ProcessStartInfo(Assembly.GetExecutingAssembly().Location, "--install-machine " + sid + " " + snapshot);
         start.UseShellExecute = true;
         start.Verb = "runas";
-        int exitCode;
-        using (var process = Process.Start(start)) { process.WaitForExit(); exitCode = process.ExitCode; }
-        return CompleteUserAfterMachine(exitCode, delegate { return Payload.Run(true, autostart); });
+        using (var gate = new InstallationGate())
+        {
+            int exitCode;
+            try { using (var process = Process.Start(start)) { process.WaitForExit(); exitCode = process.ExitCode; } }
+            catch (Win32Exception error)
+            {
+                if (error.NativeErrorCode != 8235) throw;
+                throw new InvalidOperationException(ElevationFailureMessage(error.NativeErrorCode), error);
+            }
+            return CompleteUserAfterMachine(exitCode, delegate { return Payload.Run(true, autostart); });
+        }
+    }
+
+    internal static string ElevationFailureMessage(int code)
+    {
+        if (code != 8235) return "Windows administrator approval failed (" + code + ").";
+        return SetupWindow.T(
+            "Windows 拒绝了安装程序的管理员提权（8235：从服务器返回了一个参照）。这不是安装器必须联网的提示。\n\n" +
+            "请让管理员核查“仅提升签名并验证的可执行文件”策略及代码签名证书信任链。未签名测试包不能满足要求受信任签名的内网策略；需要 IT 批准的签名安装包及离线证书信任部署。\n\n" +
+            "安装包已内置词库和 VC++ 运行库；安装器不会关闭 UAC、修改安全策略或跳过签名校验。",
+            "Windows rejected administrator elevation (8235: A referral was returned from the server). This does not mean Setup requires an internet connection.\n\n" +
+            "Ask IT to check the signed-and-validated elevation policy and the code-signing certificate trust chain. An unsigned preview cannot satisfy a trusted-signature policy; use an IT-approved signed package and offline certificate trust deployment.\n\n" +
+            "Dictionaries and VC++ runtimes are bundled. Setup will not disable UAC, change security policy, or bypass signature validation.");
     }
 
     // Completion is deliberately executed by the original process, never by

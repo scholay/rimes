@@ -67,6 +67,14 @@ $source=Join-Path $OutputDirectory 'FixtureNative.cs'
 @'
 public static class FixtureNative {
     public static int Main(string[] args) {
+        if (args.Length == 2 && args[0] == "--hold-mutex") {
+            using (var held = new System.Threading.Mutex(true, args[1])) {
+                System.Console.WriteLine("READY");
+                System.Console.ReadLine();
+                held.ReleaseMutex();
+            }
+            return 0;
+        }
         if (System.IO.Path.GetFileNameWithoutExtension(System.Reflection.Assembly.GetExecutingAssembly().Location) == "RimesBroker") {
             if (args.Length > 0 && args[0] == "--print-endpoint")
                 System.Console.WriteLine(@"\\.\pipe\RIMES.Broker.v2.session-" + System.Diagnostics.Process.GetCurrentProcess().SessionId + ".user-0000000000000093");
@@ -288,6 +296,36 @@ try {
         $callsAfter=(Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw)
         Check 'held Broker lock prevents a second dictionary engine' ($callsAfter.Substring($callsBefore.Length) -notmatch '--deploy-only')
     } finally {$held.Dispose()}
+    $holderStart=[Diagnostics.ProcessStartInfo]::new($binary,('--hold-mutex '+$fixtureMutexName))
+    $holderStart.UseShellExecute=$false
+    $holderStart.CreateNoWindow=$true
+    $holderStart.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
+    $holderStart.RedirectStandardInput=$true
+    $holderStart.RedirectStandardOutput=$true
+    $holder=[Diagnostics.Process]::Start($holderStart)
+    $companion=[Threading.Mutex]::new($false,$fixtureMutexName+'.setup')
+    try {
+        $ready=$holder.StandardOutput.ReadLineAsync()
+        if(-not $ready.Wait(5000) -or $ready.Result -ne 'READY'){throw 'Synthetic Broker mutex fixture did not start'}
+        $callsBefore=Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw
+        Expect-Failure 'live Broker ownership is rejected even if a Setup companion exists' {& "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $new -NoAutostart}
+        $callsAfter=Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw
+        Check 'foreign-process ownership never starts a second dictionary engine' ($callsAfter.Substring($callsBefore.Length) -notmatch '--deploy-only')
+    } finally {
+        $companion.Dispose()
+        $holder.StandardInput.WriteLine('exit')
+        if(-not $holder.WaitForExit(5000)){$holder.Kill();$holder.WaitForExit()}
+        $holder.Dispose()
+    }
+    $reservation=[Threading.Mutex]::new($false,$fixtureMutexName)
+    $setupReservation=[Threading.Mutex]::new($true,$fixtureMutexName+'.setup')
+    try {
+        & "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $new -NoAutostart | Out-Host
+        Check 'original-user initialization accepts the unowned Setup lifetime reservation' ($null -eq $global:RimesInstallerTestAutostart -and (Test-Path -LiteralPath $global:RimesInstallerTestShortcut))
+        $createdAfterDeploy=$false
+        $attemptedBroker=[Threading.Mutex]::new($false,$fixtureMutexName,[ref]$createdAfterDeploy)
+        try {Check 'Setup reservation still blocks TSF startup after user deployment' (-not $createdAfterDeploy)}finally{$attemptedBroker.Dispose()}
+    } finally {$setupReservation.ReleaseMutex();$setupReservation.Dispose();$reservation.Dispose()}
     & "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $new -NoAutostart | Out-Host
     Check 'original-user retry completes deployment and respects disabled autostart' ($null -eq $global:RimesInstallerTestAutostart -and (Test-Path -LiteralPath $global:RimesInstallerTestShortcut))
     $callsBefore=(Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw)

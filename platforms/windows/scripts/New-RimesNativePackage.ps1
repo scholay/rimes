@@ -8,7 +8,8 @@ param(
     [Parameter(Mandatory)][string]$VCRedistX64,
     [Parameter(Mandatory)][string]$VCRedistX86,
     [string]$Version,
-    [string]$SigningCertificateThumbprint
+    [string]$SigningCertificateThumbprint,
+    [string]$SigningTimestampServer
 )
 Set-StrictMode -Version 3.0
 $ErrorActionPreference='Stop'
@@ -96,5 +97,5 @@ $zip=$stage+'.zip'
 Compress-Archive -Path "$stage\*" -DestinationPath $zip
 $hash=(Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText($zip+'.sha256',$hash+'  '+[IO.Path]::GetFileName($zip)+[Environment]::NewLine)
-$setup=& "$PSScriptRoot\New-RimesSetupExe.ps1" -PackageArchive $zip -OutputDirectory $OutputDirectory
+$setup=& "$PSScriptRoot\New-RimesSetupExe.ps1" -PackageArchive $zip -OutputDirectory $OutputDirectory -SigningCertificateThumbprint $SigningCertificateThumbprint -SigningTimestampServer $SigningTimestampServer
 [pscustomobject]@{Archive=$zip;SHA256=$hash;Commit=$Commit;Version=$Version;Signing=$signingMode;Staging=$stage;Setup=$setup}

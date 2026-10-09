@@ -95,9 +95,13 @@ function Assert-Unlocked([string]$Directory) {
         catch { throw "A RIMES input method DLL could not be opened exclusively and may still be in use. Switch input methods, close applications using RIMES or sign out, then retry. No files were overwritten: $path" }
     }
 }
-function Stop-OwnedBroker([string]$Directory) {
+function Stop-OwnedBroker([string]$Directory,[int]$DeploymentSession=-1) {
     foreach ($process in Get-Process -Name RimesBroker -ErrorAction SilentlyContinue) {
         if ($process.Path -eq (Join-Path $Directory 'x64\RimesBroker.exe')) {
+            # A held deployment mutex already excludes a serving Broker in this
+            # session. A TSF-launched transient process can still be exiting
+            # after seeing that gate; it has not opened the dictionary engine.
+            if($process.SessionId -eq $DeploymentSession){continue}
             # A pending process-local Buffer is never silently discarded by upgrade.
             throw 'Exit RIMES from its tray after copying or sending Buffer content, then retry the installation.'
         }
@@ -390,12 +394,23 @@ function Invoke-UserDictionaryDeployment([string]$Directory) {
     $security.AddAccessRule($rule)
     $created=$false
     $mutex=[Threading.Mutex]::new($true,$name,[ref]$created,$security)
+    $owned=$created
+    $setupGate=$null
     try {
-        if(-not $created){throw 'Exit RIMES from its tray after preserving Buffer content, then run Setup again.'}
+        if(-not $created){
+            # Only Setup's lifetime reservation is transferable. An ordinary
+            # Broker mutex without its companion remains fail-closed.
+            try {$setupGate=[Threading.Mutex]::OpenExisting($name+'.setup')}
+            catch {throw 'Exit RIMES from its tray after preserving Buffer content, then run Setup again.'}
+            try {$owned=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$owned=$true}
+            if(-not $owned){throw 'Exit RIMES from its tray after preserving Buffer content, then run Setup again.'}
+        }
+        Stop-OwnedBroker $Directory -DeploymentSession ([Diagnostics.Process]::GetCurrentProcess().SessionId)
         & $broker --deploy-only | Out-Host
         if($LASTEXITCODE){throw 'Dictionary deployment failed'}
     } finally {
-        if($created){$mutex.ReleaseMutex()}
+        if($owned){$mutex.ReleaseMutex()}
+        if($setupGate){$setupGate.Dispose()}
         $mutex.Dispose()
     }
 }
