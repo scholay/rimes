@@ -1,6 +1,8 @@
 # Android validation
 
-Current revision: **0.1.0-dev.8**, adding opt-in CometAPI text generation,
+Current release: **1.1.2/code16**. See [the current acceptance record](validation/2026-10-09-1.1.2.md) for automatic checks and production APK/device evidence.
+
+Historical revision: **0.1.0-dev.8**, adding opt-in CometAPI text generation,
 contextual AI translation, encrypted credentials and bounded HTTP/SSE transport.
 Real quick-question/polish/translation requests, explicit Send and cancellation /
 field / privacy gates pass on the recorded Android 16 phone after the maintainer

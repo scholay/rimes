@@ -1,6 +1,6 @@
-# Android 1.1.1 发布与维护
+# Android 1.1.2 发布与维护
 
-产品版本由 `VERSION` 提供，当前发布版本为 **1.1.1**，`versionCode=15`。构建号递增，已发布的版本与文件不覆盖。正式身份仍为 `org.scholay.rimes.android`；开发包使用独立的 `.debug` 身份。
+产品版本由 `VERSION` 提供，当前发布版本为 **1.1.2**，`versionCode=16`。构建号递增，已发布的版本与文件不覆盖。正式身份仍为 `org.scholay.rimes.android`；开发包使用独立的 `.debug` 身份。
 
 ## 本地构建
 
@@ -9,9 +9,11 @@
 - `RIMES_ANDROID_KEYSTORE`：长期保管的正式 keystore 的绝对路径。
 - `RIMES_ANDROID_STORE_PASSWORD`、`RIMES_ANDROID_KEY_ALIAS`、`RIMES_ANDROID_KEY_PASSWORD`。
 
-配置完成后执行 `bash scripts/build-release.sh`。脚本运行核心测试、Release lint、APK/AAB 构建、APK 签名验证及 16 KB 对齐验证，在 `dist/1.1.1/` 保存产物与 SHA256SUMS。没有签名时直接停止，不回退到 debug keystore，不安装或上传。
+配置完成后执行 `bash scripts/build-release.sh`。脚本运行核心测试、Release lint、APK/AAB 构建、APK 签名验证及 16 KB 对齐验证，在 `dist/1.1.2/` 保存产物与 SHA256SUMS。没有签名时直接停止，不回退到 debug keystore，不安装或上传。
 
 ## 当前交付证据
+
+- 本轮 1.1.2/code16 的独立自动检查、正式包升级与真机结果见[本轮验收记录](validation/2026-10-09-1.1.2.md)。使用独立 `android-v1.1.2` 标签，并指定 `--latest=false`，保留 macOS 全局 Latest。Android patch 可独立递增，必须保持与根版本相同 major/minor 且不低于根 patch。
 
 - [1.1.1 code 15 已公开](https://github.com/scholay/rimes/releases/tag/android-v1.1.1)。小米 Android 16 从 code12 保留数据升级通过；正式 APK 的实际候选上屏、Buffer 开关、密码框隔离、主动剪贴板收录与确认上屏均通过。12 项独立存储 contract 补测通过。公开 APK/AAB 与元数据已无登录下载读回，精确 SHA-256 见[此次发布记录](../../validation/release-refresh-20261007.md)。
 

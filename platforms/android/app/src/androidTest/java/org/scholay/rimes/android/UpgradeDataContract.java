@@ -13,6 +13,15 @@ import org.json.JSONObject;
 /** Quiescent production upgrade evidence. Hashes stay private and no dictionary text is logged. */
 final class UpgradeDataContract {
     private static final String BASELINE="upgrade-user-dictionary-baseline.json";
+    static String retainBaseline(Instrumentation instrumentation) throws Exception {
+        Context context=instrumentation.getTargetContext();
+        File source=new File(context.getNoBackupFilesDir(),BASELINE);
+        File retained=new File(context.getNoBackupFilesDir(),BASELINE+".prior");
+        JSONObject saved=new JSONObject(new String(Files.readAllBytes(source.toPath()),StandardCharsets.UTF_8));
+        if(!context.getPackageName().equals(saved.getString("package"))) throw new AssertionError("Upgrade baseline package mismatch");
+        if(retained.exists() || !source.renameTo(retained)) throw new AssertionError("Cannot retain prior upgrade evidence");
+        return "PASS prior upgrade fingerprints retained privately; user dictionary untouched\n";
+    }
     static String run(Instrumentation instrumentation,boolean verify) throws Exception {
         Context context=instrumentation.getTargetContext();
         File baseline=new File(context.getNoBackupFilesDir(),BASELINE);
@@ -29,8 +38,18 @@ final class UpgradeDataContract {
         if(!context.getPackageName().equals(saved.getString("package"))) throw new AssertionError("Upgrade baseline package mismatch");
         JSONObject expected=saved.getJSONObject("files");
         if(actual.size()!=expected.length()) throw new AssertionError("Upgrade dictionary file count changed");
+        java.util.List<String> changed=new java.util.ArrayList<>(),missing=new java.util.ArrayList<>();
         for(Map.Entry<String,String> item:actual.entrySet())
-            if(!item.getValue().equals(expected.optString(item.getKey()))) throw new AssertionError("Upgrade dictionary bytes changed");
+            if(!item.getValue().equals(expected.optString(item.getKey()))) changed.add(item.getKey());
+        java.util.Iterator<String> names=expected.keys();
+        while(names.hasNext()) { String name=names.next(); if(!actual.containsKey(name)) missing.add(name); }
+        if(!changed.isEmpty() || !missing.isEmpty()) {
+            int stableTables=0;
+            for(Map.Entry<String,String> item:actual.entrySet())
+                if(item.getKey().endsWith(".ldb") && item.getValue().equals(expected.optString(item.getKey()))) stableTables++;
+            throw new AssertionError("Upgrade fingerprints differ: new/changed="+changed.size()+", missing="+missing.size()
+                    +", unchanged dictionary tables="+stableTables+". Check before starting Rime: opening LevelDB rotates runtime files.");
+        }
         if(!baseline.delete()) throw new AssertionError("Cannot remove verified private baseline");
         return "PASS upgrade user dictionary bytes preserved files="+actual.size()+"\n";
     }

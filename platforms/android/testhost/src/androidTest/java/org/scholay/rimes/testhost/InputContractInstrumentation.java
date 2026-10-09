@@ -54,6 +54,7 @@ public final class InputContractInstrumentation extends Instrumentation {
             else if("password".equals(arguments.getString("mode"))) { focus(host.first); pinyin(); passwordContract(); }
             else if("benchmark".equals(arguments.getString("mode"))) benchmark();
             else if("layout".equals(arguments.getString("mode"))) layoutContract();
+            else if("appearance".equals(arguments.getString("mode"))) appearanceContract();
             else if("plugins".equals(arguments.getString("mode"))) pluginsContract();
             else if("comet-live".equals(arguments.getString("mode"))) cometLiveContract();
             else if("comet-denied".equals(arguments.getString("mode"))) cometDeniedContract();
@@ -208,8 +209,50 @@ public final class InputContractInstrumentation extends Instrumentation {
     }
     private void petAppearance() {
         AccessibilityNodeInfo pet=petButton();
+        check(pet!=null && pet.isClickable() && pet.isLongClickable()
+                && pet.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
+                && pet.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_LONG_CLICK),
+                "attached pet exposes native tap and long-click accessibility actions");
+        check("轻点切换宠物与皮肤；长按选择".contentEquals(pet.getHintText()==null?"":pet.getHintText()),
+                "attached pet explains its tap and hold actions");
         check(pet!=null && pet.isEnabled() && pet.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK),"hold real pet opens or closes appearance");
         SystemClock.sleep(150);
+    }
+    private int visiblePetCount(AccessibilityNodeInfo node) {
+        if(node==null) return 0;
+        CharSequence label=node.getContentDescription();
+        int count=IME.contentEquals(node.getPackageName()==null?"":node.getPackageName())
+                && node.isVisibleToUser() && label!=null && label.toString().startsWith("宠物与皮肤：")?1:0;
+        for(int i=0;i<node.getChildCount();i++) count+=visiblePetCount(node.getChild(i));
+        return count;
+    }
+    private void checkSinglePet() {
+        int count=0;
+        for(AccessibilityWindowInfo window:getUiAutomation().getWindows()) count+=visiblePetCount(window.getRoot());
+        check(count==1,"exactly one pet control is visible");
+    }
+    private void appearanceContract() throws Exception {
+        focusAny(host.first); layout("26"); pinyin();
+        checkSinglePet();
+        String before=petButton().getContentDescription().toString();
+        check(petButton().performAction(AccessibilityNodeInfo.ACTION_CLICK),"tap visible pet");
+        SystemClock.sleep(200);
+        check(!before.contentEquals(petButton().getContentDescription()),"tap changes pet and skin");
+        check(appearanceChooser()==null,"pet tap keeps the typing keyboard open");
+        petAppearance(); check(appearanceChooser()!=null,"pet hold opens the chooser");
+        waitButton("宠物与皮肤选项"); screenshot("pet-chooser");
+        petAppearance(); check(appearanceChooser()==null,"pet hold returns to keyboard");
+        tap("Buffer off"); checkSinglePet();
+        check(find("清空 Buffer",false)==null && find("粘贴剪贴板文字",false)==null,
+                "Buffer rail has no duplicate clear or paste controls");
+        type("nihao"); tap("Space"); waitLabel("Buffer 你好",true);
+        expect(host.first,"","confirmed Chinese stays in Buffer");
+        screenshot("buffer-chrome");
+        tap("清空 Buffer"); waitLabel("Buffer ",true);
+        check(appearanceChooser()==null,"explicit clear returns to the typing keyboard");
+        expect(host.first,"","panel clear never changes host text");
+        checkSinglePet();
+        report("PASS pet tap/hold accessibility, single Buffer pet and explicit panel clear");
     }
     private void scrollAppearanceTo(String label) {
         for(int attempt=0;find(label,false)==null && attempt<12;attempt++) {

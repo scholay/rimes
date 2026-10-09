@@ -1,9 +1,9 @@
 # RIMES Android
 
-**[1.1.0](https://github.com/scholay/rimes/releases/tag/android-v1.1.0)** is the current release of the native Java Android input method for daily Chinese input and
+**[1.1.2](https://github.com/scholay/rimes/releases/tag/android-v1.1.2)** is the current release of the native Java Android input method for daily Chinese input and
 local dictionary learning. Minimum Android 8.0 / API 26; development package
 `org.scholay.rimes.android.debug`; release identity `org.scholay.rimes.android`.
-The public release uses build code **12**, signed with the existing production key.
+The public release uses build code **16**, signed with the existing production key.
 Its APK supports a data-preserving upgrade from the public 1.0.0 release.
 See the [release guide](RELEASE.md) for signing and upgrade requirements.
 Current evidence and remaining acceptance are in [VALIDATION.md](VALIDATION.md).
@@ -114,11 +114,11 @@ independent of their hit areas. Nine-key Return spans two visible rows (98 / 69 
 - **18 palettes** mirror iOS: native, Rhino, hermit crab, kitten, puppy, piglet,
   dog, poodle, pig, rabbit, crab, penguin, fox, panda, turtle, octopus, frog and
   chick. Every palette has light/dark colors, functional caps and visible press
-  feedback. Palette names and colors are retained; controls use one pinned Lucide vector family. Animated pets are not included.
+  feedback. Palette names and colors are retained; controls use one pinned Lucide vector family. Tap the top-left pet to cycle through the 18 skins; hold it to open the pet chooser, then select Key layout & schema for input options. Animated pets are not included.
 - **Buffer's two rows** match the iOS source/output positions: ordinary Buffer
   has source above statistics; a selected plugin has output above source. Send
   stays at the upper right; settings, the optional Run button and plugin selector
-  occupy the lower row. Long-press Send inserts all ordinary Buffer blocks.
+  occupy the lower row. The duplicate edit and close buttons have been removed; explicit paste and clear remain in the pet panel. Only one pet control is visible while Buffer is open. Long-press Send inserts all ordinary Buffer blocks.
   A confirmed block has its own rounded chip, and preedit stays in the active chip. Visual block gaps never become spaces in delivered text. Near
   the 16,384-unit limit only visible chips are drawn; unchanged confirmed blocks
   are not remeasured when composition changes. Target loss clears both drawing
@@ -131,7 +131,7 @@ independent of their hit areas. Nine-key Return spans two visible rows (98 / 69 
   Buffer. Long-press opens its settings; switching keeps source blocks intact.
   Translation defaults to the bundled local Chinese–English dictionary. Configure
   an OpenAI-compatible provider in the main app for real AI and optional contextual AI translation;
-  otherwise AI entries use a clearly labelled OpenAI-format local Mock. Run executes, Cancel stops work,
+  otherwise AI entries use a clearly labelled OpenAI-format local Mock. Translation runs automatically 400 ms after confirmed Buffer input; further edits cancel the older result. Other AI plugins use Run; Cancel stops work,
   and Send/Return insert only a completed result. Private/password fields have no entries.
   Punctuation remains on the numeric/symbol page and nine-key punctuation control.
   Key labels size within fixed touch cells for system fonts.
@@ -190,8 +190,8 @@ A base URL or full `/chat/completions` URL is accepted. DeepSeek defaults to
 other OpenAI-compatible providers can use their own URL and model. Legacy profiles
 without a URL retain their original CometAPI recipient and encrypted key.
 Changing to another host or port requires entering that provider's key.
-Only an explicit Run sends the current Buffer source. Ordinary typing, local
-lookup, password and private fields do not call the service. Ask, polish and poem
+Ask, polish, poem and art send the current Buffer source only after explicit Run.
+When the user enables AI translation, confirmed input in the selected Translation plugin is sent automatically after the same debounce. Local dictionary lookup, ordinary non-plugin typing, password and private fields do not call the service. Ask, polish and poem
 produce real text; art still produces text prompts, not images. Online AI
 translation translates sentences rather than performing dictionary lookup.
 
@@ -213,7 +213,7 @@ When online AI is off, the optional **Mock** remains an explicitly labelled loca
 demo. Its fragmented UTF-8 SSE frames and 40 ms delays test the same streaming
 interface; they are not real model inference or provider-performance evidence.
 
-Type source into the lower Buffer rail, then tap Run or press a clean Return.
+Type source into the lower Buffer rail. Translation runs automatically after confirmed input; other AI plugins start with Run or a clean Return.
 During execution Run becomes Cancel; preview remains unsendable. Complete output
 appears in the upper scrollable rail. Send, long-press Send or a subsequent Return
 inserts the complete result as **one block**. Only framework acceptance consumes
