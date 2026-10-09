@@ -74,6 +74,23 @@ wait_for_canonical_app_process() {
     return 1
 }
 
+# Runs as root, deliberately outside the console user's bootstrap: this is the
+# local-domain registration, not that user's enable/select. Each TIS call is a
+# short-lived process, and a second process verifies what the first changed.
+rimes_register_input_source_system_wide() {
+    local attempt=0
+
+    while [ "$attempt" -lt 2 ]; do
+        rimes_run_bounded 8 "$EXE" --rimes-tis-register || true
+        if rimes_run_bounded 5 "$EXE" --rimes-tis-verify-installed; then
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        rimes_run_bounded 2 /bin/sleep 1 || return 1
+    done
+    return 1
+}
+
 if [ ! -x "$RIMES_TIMEOUT_HELPER" ] \
     || ! rimes_run_bounded 5 /usr/bin/codesign --verify --strict \
         "$RIMES_TIMEOUT_HELPER"; then
@@ -339,6 +356,19 @@ if ! rimes_run_bounded 15 /bin/bash "$COMPANION_AGENT_HELPER" \
         audit-system-conflicts none; then
     echo "RIMES postinstall: a per-user development install still conflicts with the system package"
     exit 1
+fi
+
+# The login user's --install below only reaches that user's own input-source
+# cache. A sandboxed app (App Store WeChat/QQ, TextEdit, Notes ...) resolves
+# input sources through the system-wide cache, which only root can rebuild and
+# which macOS otherwise refreshes at the next login. Until then RIMES does not
+# exist inside those apps, and switching to it there is reported to crash them
+# (#90), so register the canonical bundle as root as well.
+# Non-fatal: the payload is valid either way and a new login still converges.
+if rimes_register_input_source_system_wide; then
+    echo "RIMES postinstall: input source registered system-wide"
+else
+    echo "RIMES postinstall: system-wide registration did not converge; sandboxed apps may not see RIMES until the next login"
 fi
 
 # Begin the cross-script transaction only after the development agent is absent
