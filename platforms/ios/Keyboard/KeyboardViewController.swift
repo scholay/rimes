@@ -1466,10 +1466,13 @@ final class KeyboardViewController: UIInputViewController {
                      state: preferences.resolvedTheme == theme ? .on : .off) { [weak self] _ in self?.selectKeyboardTheme(theme) }
         }), at: 2)
         if scheme != .chord {
+            // Keep the remembered nine-key preference for built-in Pinyin, but
+            // show QWERTY selected while the current schema cannot use nine-key.
+            let selectedLayout: OrdinaryKeyboardLayout = usesNineKeyEngine ? .nineKey : .qwerty
             items.append(UIMenu(title: L("键位布局", "Key layout"), children: OrdinaryKeyboardLayout.allCases.map { layout in
                 UIAction(title: layout == .qwerty ? "26 键 · QWERTY" : "9 键 · 全拼",
                          attributes: layout == .nineKey && (scheme != .pinyin || importedSchemeSelection != nil) ? .disabled : [],
-                         state: preferences.ordinaryLayout == layout && customLayoutSnapshot == nil ? .on : .off) { [weak self] _ in
+                         state: selectedLayout == layout && customLayoutSnapshot == nil ? .on : .off) { [weak self] _ in
                     guard let self else { return }; self.settle(); self.customLayoutSnapshot = nil
                     self.preferences.overriddenCustomLayoutRevision = CustomLayoutStore().load().revision
                     self.preferences.ordinaryLayout = layout; self.preferencesStore.save(self.preferences)

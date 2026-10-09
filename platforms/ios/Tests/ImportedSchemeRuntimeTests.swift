@@ -5,6 +5,59 @@ import RimesCore
 @testable import RIMES
 
 @MainActor final class ImportedSchemeRuntimeTests: XCTestCase {
+    /// Optional pinned-artifact acceptance. Provision only the task-owned simulator's Documents folder.
+    func testPinnedWanxiangDeliveryPackageUsesQwertyWithNineKeyPreference() async throws {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let archive = documents.appendingPathComponent("wanxiang-layout-acceptance.zip")
+        guard FileManager.default.fileExists(atPath: archive.path) else {
+            throw XCTSkip("Pinned Wanxiang ZIP not provisioned; synthetic import/layout regressions run independently.")
+        }
+        let review = try RimeSchemeImportService.inspect(url: archive)
+        guard review.archiveSHA256 == "91041724bfca27080184abad84506a423a5dc751759e5cc734e7d5f8c7ae08be" else {
+            XCTFail("Acceptance fixture differs from the pinned delivery ZIP.")
+            return
+        }
+        let main = try XCTUnwrap(review.schemes.first { $0.id == "wanxiang" })
+        XCTAssertTrue(main.blockingIssues.isEmpty)
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RimeSchemeStore(root: root)
+        let package = try await RimeSchemeInstaller.install(review: review, selectedSchemaIDs: ["wanxiang"], store: store) { _ in }
+        defer { removeUserData(for: package) }
+        let (window, controller) = host()
+        defer { controller.developmentChoose(.pinyin); window.isHidden = true }
+        controller.developmentOrdinaryAppearance(layout: .nineKey)
+        XCTAssertEqual(controller.layoutViews.keys.standardMode, .nineKey)
+        let selection = RimeSchemeSelection(packageID: package.id, schemaID: "wanxiang")
+        controller.developmentChooseImported(selection, store: store)
+        controller.viewWillAppear(false); window.layoutIfNeeded()
+        XCTAssertEqual(controller.developmentImportedSelection, selection, "Real Wanxiang resources loaded without falling back to built-in Pinyin.")
+        XCTAssertEqual(controller.layoutViews.keys.standardMode, .qwerty)
+        XCTAssertEqual(controller.layoutViews.keys.developmentKeyFrames.count, 26)
+        let menu = try XCTUnwrap(controller.layoutViews.settings.menu)
+        let layout = try XCTUnwrap(menu.children.compactMap { $0 as? UIMenu }.first { menu in
+            menu.children.contains { ($0 as? UIAction)?.title == "26 键 · QWERTY" }
+        })
+        let actions = layout.children.compactMap { $0 as? UIAction }
+        let qwerty = try XCTUnwrap(actions.first { $0.title == "26 键 · QWERTY" })
+        let nine = try XCTUnwrap(actions.first { $0.title == "9 键 · 全拼" })
+        XCTAssertEqual(qwerty.state, .on); XCTAssertFalse(qwerty.attributes.contains(.disabled))
+        XCTAssertEqual(nine.state, .off); XCTAssertTrue(nine.attributes.contains(.disabled))
+        controller.developmentType("nihao")
+        XCTAssertEqual(controller.developmentRaw, "nihao")
+        XCTAssertTrue(descendants(controller.layoutViews.candidates).contains { $0.accessibilityLabel == "你好" })
+        controller.developmentSpaceKey.sendActions(for: .touchUpInside)
+        await controller.developmentWaitForDelivery()
+        XCTAssertEqual(controller.layoutProxy.native.text, "你好")
+        XCTAssertEqual(controller.developmentImportedSelection, selection)
+        controller.view.layoutIfNeeded()
+        let image = UIGraphicsImageRenderer(bounds: controller.view.bounds).image { _ in
+            controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image); attachment.name = "wanxiang-imported-qwerty"; attachment.lifetime = .keepAlways; add(attachment)
+        try image.pngData()?.write(to: documents.appendingPathComponent("wanxiang-imported-qwerty.png"))
+    }
+
     func testInstalledDictionaryProducesCandidatesWithoutActivatingIt() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
