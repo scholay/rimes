@@ -2,10 +2,12 @@
 param([string]$InstallRoot="$env:ProgramFiles\RIMES")
 . "$PSScriptRoot\Package.Common.ps1"
 Assert-Administrator
+Assert-InstallUser $InstallRoot (Get-InstallUserSid '' $false)
 $state=Get-Content -LiteralPath "$InstallRoot\state.json" -Raw | ConvertFrom-Json
 Assert-OwnedVersion $InstallRoot $state.active | Out-Null
 if(-not (Test-Path -LiteralPath "$InstallRoot\legacy-recovery.json")){throw 'No legacy registration is recorded'}
 $recovery=Get-Content -LiteralPath "$InstallRoot\legacy-recovery.json" -Raw | ConvertFrom-Json
+if($recovery.PSObject.Properties['userStartupRecorded'] -and -not $recovery.userStartupRecorded){throw 'The original user startup snapshot was not recorded. Use a current Setup.exe to repair instead; no registration was changed.'}
 $legacy=@($recovery.entries)
 if(-not $legacy.Count){throw 'No legacy registration is recorded'}
 Stop-OwnedBroker $state.active

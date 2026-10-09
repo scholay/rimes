@@ -107,6 +107,9 @@ inline constexpr std::size_t kMaxCandidateCount = 64;
 // Negotiated separately from the original workbench-control capability. A
 // legacy peer never receives pass-through modifier snapshots or offers Shift.
 inline constexpr std::uint64_t kModifierSnapshotsCapability = 1ULL << 1;
+// Separately negotiated: legacy peers must not receive the session-mode
+// extension or kAsciiMode flag they cannot decode.
+inline constexpr std::uint64_t kKeyRoutingCapability = 1ULL << 2;
 
 struct ClientHello {
   std::uint32_t process_id = 0;
@@ -147,6 +150,8 @@ struct OpenInputSession {
 struct InputSessionOpened {
   std::uint64_t session_id = 0;
   std::string active_schema_id;
+  bool has_key_routing = false;
+  bool ascii_mode = false;
 };
 
 struct CloseInputSession {
@@ -228,6 +233,7 @@ enum class InputStateFlags : std::uint32_t {
   // A real modifier may update librime while remaining a host key. Mutually
   // exclusive with kHandled; this is an authoritative snapshot, not an eat.
   kModifierSnapshot = 1U << 4,
+  kAsciiMode = 1U << 5,
 };
 
 inline constexpr std::uint32_t kKnownInputStateFlags =
@@ -235,7 +241,8 @@ inline constexpr std::uint32_t kKnownInputStateFlags =
     static_cast<std::uint32_t>(InputStateFlags::kComposing) |
     static_cast<std::uint32_t>(InputStateFlags::kCandidatesVisible) |
     static_cast<std::uint32_t>(InputStateFlags::kBufferCapture) |
-    static_cast<std::uint32_t>(InputStateFlags::kModifierSnapshot);
+    static_cast<std::uint32_t>(InputStateFlags::kModifierSnapshot) |
+    static_cast<std::uint32_t>(InputStateFlags::kAsciiMode);
 inline constexpr std::uint16_t kNoCandidateSelected = 0xffffU;
 
 // One atomic response contains every text mutation for a key event. Wire text

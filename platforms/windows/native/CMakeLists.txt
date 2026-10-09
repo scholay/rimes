@@ -121,8 +121,9 @@ add_library(RimesWorkbench STATIC
     src/workbench/runtime.cpp
     src/workbench/settings_ui.cpp
     src/workbench/window.cpp
+    src/workbench/buffer_anchor.cpp
 )
-target_link_libraries(RimesWorkbench PUBLIC RimesCore winhttp bcrypt advapi32 user32 d2d1 dwrite shell32 wtsapi32 ole32 comctl32 gdi32 dwmapi)
+target_link_libraries(RimesWorkbench PUBLIC RimesCore winhttp bcrypt advapi32 user32 d2d1 dwrite shell32 wtsapi32 ole32 oleaut32 uuid comctl32 gdi32 dwmapi)
 rimes_harden_target(RimesWorkbench)
 
 add_executable(RimesBroker
@@ -295,6 +296,9 @@ if(RIMES_BUILD_TESTS)
     )
     rimes_harden_target(RimesBufferLayoutTests)
     add_test(NAME RimesBufferLayout COMMAND RimesBufferLayoutTests)
+    add_executable(RimesBufferPlacementTests src/workbench/buffer_placement_tests.cpp)
+    rimes_harden_target(RimesBufferPlacementTests)
+    add_test(NAME RimesBufferPlacement COMMAND RimesBufferPlacementTests)
     add_executable(RimesBrokerProtocolTests
         src/core/broker_protocol_tests.cpp
     )

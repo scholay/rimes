@@ -57,6 +57,31 @@ function Assert-Administrator {
     if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run this script from an elevated 64-bit PowerShell window.' }
     if (-not [Environment]::Is64BitOperatingSystem -or -not [Environment]::Is64BitProcess) { throw 'Windows x64 and 64-bit PowerShell are required.' }
 }
+# A credential-prompt elevation may change the process identity. The elevated
+# phase records the initiating SID, but never opens that user's profile or HKCU.
+function Get-InstallUserSid([string]$UserSid,[bool]$MachineOnly) {
+    if($MachineOnly -and -not $UserSid){throw 'Machine-only operations require the initiating user SID'}
+    $current=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    if(-not $UserSid){return $current}
+    $sid=[Security.Principal.SecurityIdentifier]::new($UserSid)
+    if($sid.Value -ne $UserSid){throw 'Invalid initiating user SID'}
+    if(-not $MachineOnly -and $UserSid -ne $current){throw 'User configuration must run as the initiating Windows account'}
+    return $sid.Value
+}
+function Assert-InstallUser([string]$InstallRoot,[string]$UserSid) {
+    $entry=Read-InstalledAppRegistration
+    if($entry -and $entry.ContainsKey('RIMESUserSid') -and $entry.RIMESUserSid.value -ne $UserSid){
+        throw 'Sign in to the Windows account that installed RIMES before changing this installation.'
+    }
+    # Keep the owner check when Installed Apps registration needs repair.
+    if(Test-Path -LiteralPath "$InstallRoot\state.json"){
+        $state=$null
+        try {$state=Get-Content -LiteralPath "$InstallRoot\state.json" -Raw | ConvertFrom-Json}catch{}
+        if($state -and $state.PSObject.Properties['userSid'] -and $state.userSid -ne $UserSid){
+            throw 'The installation state belongs to another Windows account.'
+        }
+    }
+}
 function Invoke-Registrar([string]$Directory,[string]$Architecture,[string]$Operation) {
     $registrar = Join-Path $Directory "$Architecture\RimesRegistrar.exe"
     & $registrar $Operation --dll (Join-Path $Directory "$Architecture\RimesTsf.dll")
@@ -229,7 +254,7 @@ function Get-UninstallCommand([string]$InstallRoot,[string]$LauncherDirectory) {
     $powershell=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
     return '"'+$powershell+'" -NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+(Join-Path $LauncherDirectory 'Uninstall-App.ps1')+'" -InstallRoot "'+$InstallRoot+'"'
 }
-function Write-InstalledAppRegistration([string]$InstallRoot,[string]$Directory,$Manifest,[string]$LauncherDirectory=$Directory) {
+function Write-InstalledAppRegistration([string]$InstallRoot,[string]$Directory,$Manifest,[string]$LauncherDirectory=$Directory,[string]$UserSid=([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) {
     Assert-OwnedVersion $InstallRoot $LauncherDirectory | Out-Null
     if(-not (Test-Path -LiteralPath (Join-Path $LauncherDirectory 'Uninstall-App.ps1') -PathType Leaf)){throw 'The managed uninstall launcher is missing'}
     $base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64)
@@ -244,7 +269,7 @@ function Write-InstalledAppRegistration([string]$InstallRoot,[string]$Directory,
         $key.SetValue('UninstallString',(Get-UninstallCommand $InstallRoot $LauncherDirectory))
         $key.SetValue('RIMESInstallRoot',$InstallRoot)
         $key.SetValue('RIMESUninstallDirectory',$LauncherDirectory)
-        $key.SetValue('RIMESUserSid',[Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+        $key.SetValue('RIMESUserSid',$UserSid)
         $key.SetValue('URLInfoAbout','https://github.com/scholay/rimes')
         $key.SetValue('InstallDate',(Get-Date -Format 'yyyyMMdd'))
         $key.SetValue('NoModify',1,[Microsoft.Win32.RegistryValueKind]::DWord)
@@ -347,4 +372,51 @@ function Remove-OwnedSettingsShortcut([string]$InstallRoot) {
     $shortcut=$null
     try {$shortcut=$shell.CreateShortcut($path);if(Test-OwnedSettingsShortcut $InstallRoot $shortcut){Remove-Item -LiteralPath $path -Force}}
     finally {if($shortcut){[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) | Out-Null};[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null}
+}
+
+# Deployment shares the serving Broker's single-instance lifetime. Holding its
+# existing per-user/session mutex prevents TSF from starting a second engine
+# after machine registration while original-user setup builds dictionaries.
+function Invoke-UserDictionaryDeployment([string]$Directory) {
+    $broker=Join-Path $Directory 'x64\RimesBroker.exe'
+    $endpoint=(& $broker --print-endpoint | Out-String).Trim()
+    if($LASTEXITCODE -or $endpoint -notmatch '^\\\\\.\\pipe\\RIMES\.Broker\.v2\.session-[0-9]+\.user-[a-f0-9]{16}$'){
+        throw 'Cannot determine the current-user Broker deployment lock'
+    }
+    $name='Local\'+$endpoint.Substring('\\.\pipe\'.Length)
+    $security=[Security.AccessControl.MutexSecurity]::new()
+    $security.SetAccessRuleProtection($true,$false)
+    $rule=[Security.AccessControl.MutexAccessRule]::new([Security.Principal.WindowsIdentity]::GetCurrent().User,[Security.AccessControl.MutexRights]::FullControl,[Security.AccessControl.AccessControlType]::Allow)
+    $security.AddAccessRule($rule)
+    $created=$false
+    $mutex=[Threading.Mutex]::new($true,$name,[ref]$created,$security)
+    try {
+        if(-not $created){throw 'Exit RIMES from its tray after preserving Buffer content, then run Setup again.'}
+        & $broker --deploy-only | Out-Host
+        if($LASTEXITCODE){throw 'Dictionary deployment failed'}
+    } finally {
+        if($created){$mutex.ReleaseMutex()}
+        $mutex.Dispose()
+    }
+}
+function Invoke-UserUninstall([string]$InstallRoot,[string]$Directory,[scriptblock]$UnregisterMachine) {
+    Assert-OwnedBrokerAutostart $Directory
+    $oldAutostart=Get-BrokerAutostart
+    $oldShortcut=Read-SettingsShortcut
+    try {
+        # Remove the initiating user's launch entries first. A cancelled or
+        # failed elevated phase restores them under this same original token.
+        Remove-OwnedBrokerAutostart $Directory
+        Remove-OwnedSettingsShortcut $InstallRoot
+        $code=& $UnregisterMachine
+        if($code -notin @(0,3010)){throw 'System unregistration failed'}
+        return $code
+    } catch {
+        $failure=$_
+        $recoveryFailures=@()
+        try{Restore-BrokerAutostart $oldAutostart}catch{$recoveryFailures+=$_.ToString()}
+        try{Restore-SettingsShortcut $oldShortcut}catch{$recoveryFailures+=$_.ToString()}
+        if($recoveryFailures.Count){throw "Uninstall failed: $failure. User entry recovery is incomplete: $($recoveryFailures -join '; ')"}
+        throw $failure
+    }
 }

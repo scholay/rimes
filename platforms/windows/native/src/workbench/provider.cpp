@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../core/control.hpp"
+#include "buffer_hotkey_config.hpp"
 #include "sse.hpp"
 
 namespace rimes::windows::workbench {
@@ -85,8 +86,7 @@ bool ValidSettings(const Settings& value) {
   return schema && value.candidate_count >= 1 && value.candidate_count <= 9 && ValidTheme(value.theme) && value.font_size >= 10 &&
          value.font_size <= 40 && value.hotkey_key >= 'A' &&
          value.hotkey_key <= 'Z' &&
-         (value.hotkey_modifiers == (MOD_CONTROL | MOD_SHIFT) ||
-          value.hotkey_modifiers == (MOD_CONTROL | MOD_ALT)) &&
+         ValidBufferHotkeyModifiers(value.hotkey_modifiers) &&
          value.base_url.size() <= 2048 && value.model.size() <= 256 &&
          value.target_language.size() <= 128;
 }

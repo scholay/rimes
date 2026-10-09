@@ -173,6 +173,21 @@ int wmain(int argc, wchar_t** argv) {
   }
   auto session = engine.CreateSession(&error);
   if (!session) return 1;
+  for (const auto* schema : {"rime_ice", "double_pinyin", "double_pinyin_flypy",
+                             "wubi86", "english", "my_combo"}) {
+    if (!engine.Configure(session, schema, false, false, false, &error)) return 1;
+    for (const char digit : std::string("0123456789")) {
+      EngineSnapshot idle;
+      if (!engine.ProcessKey(session, digit, 0, &idle, &error) || idle.handled ||
+          idle.composing || !idle.commit_text.empty()) {
+        std::cerr << "Idle digit contract differs for product schema " << schema;
+        return 1;
+      }
+    }
+    if (!engine.Configure(session, schema, true, false, false, &error) ||
+        !engine.IsAsciiMode(session)) return 1;
+    std::cout << "Idle digit / authoritative ASCII mode passed: " << schema << '\n';
+  }
   struct Case {
     const char* schema;
     const char* keys;
@@ -373,7 +388,8 @@ int wmain(int argc, wchar_t** argv) {
   // without modifying pipe authentication or registering an input method.
   if (!engine.Configure(session, "rime_ice", false, false, false, &error)) return 1;
   engine.DestroySession(session);
-  for (const auto capabilities : {0ULL, core::kModifierSnapshotsCapability}) {
+  for (const auto capabilities : {0ULL, core::kModifierSnapshotsCapability,
+         core::kModifierSnapshotsCapability | core::kKeyRoutingCapability}) {
     broker::BrokerConnection connection(0, &engine);
     std::uint32_t request_id = 1;
     auto exchange = [&](core::MessageType type, std::vector<std::byte> payload,
@@ -397,6 +413,8 @@ int wmain(int argc, wchar_t** argv) {
     if (!core::EncodeOpenInputSession({1, {}}, &payload) ||
         !exchange(core::MessageType::kOpenInputSession, std::move(payload), &response) ||
         !core::DecodeInputSessionOpened(response.payload, &opened)) return 1;
+    const bool routing = (capabilities & core::kKeyRoutingCapability) != 0;
+    if (opened.has_key_routing != routing || opened.ascii_mode) return 1;
     std::uint64_t sequence = 1;
     auto key = [&](std::uint32_t vk, std::uint32_t flags, std::uint32_t modifiers,
                    core::InputState* state) {
@@ -413,6 +431,8 @@ int wmain(int argc, wchar_t** argv) {
     constexpr auto down = static_cast<std::uint32_t>(core::KeyEventFlags::kKeyDown);
     constexpr auto tap = static_cast<std::uint32_t>(core::KeyEventFlags::kShiftTap);
     constexpr auto modifier_state = static_cast<std::uint32_t>(core::InputStateFlags::kModifierSnapshot);
+    const auto ascii_state = routing
+        ? static_cast<std::uint32_t>(core::InputStateFlags::kAsciiMode) : 0U;
     core::InputState state;
     if (!key('N', down, 0, &state) || !key('I', down, 0, &state) ||
         state.composition.empty()) return 1;
@@ -432,8 +452,8 @@ int wmain(int argc, wchar_t** argv) {
       }
     } else {
       if (!key(VK_LSHIFT, tap, 0, &state) ||
-          state.state_flags != modifier_state || state.commit_text != "ni" ||
-          !key('A', down, 0, &state) || state.state_flags != 0 ||
+          state.state_flags != (modifier_state | ascii_state) || state.commit_text != "ni" ||
+          !key('A', down, 0, &state) || state.state_flags != ascii_state ||
           !state.commit_text.empty()) {
         std::cerr << "Negotiated Shift tap failed its real Broker snapshot contract"; return 1;
       }

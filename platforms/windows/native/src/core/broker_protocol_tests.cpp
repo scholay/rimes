@@ -265,6 +265,21 @@ void TestInputSessionDtos() {
   EXPECT(DecodeInputSessionOpened(encoded, &decoded_opened));
   EXPECT(decoded_opened.session_id == opened.session_id);
   EXPECT(decoded_opened.active_schema_id == opened.active_schema_id);
+  EXPECT(!decoded_opened.has_key_routing && !decoded_opened.ascii_mode);
+  const auto legacy_size = encoded.size();
+  opened.has_key_routing = true;
+  for (const bool ascii : {false, true}) {
+    opened.ascii_mode = ascii;
+    EXPECT(EncodeInputSessionOpened(opened, &encoded));
+    EXPECT(encoded.size() == legacy_size + 4);
+    EXPECT(DecodeInputSessionOpened(encoded, &decoded_opened));
+    EXPECT(decoded_opened.has_key_routing && decoded_opened.ascii_mode == ascii);
+    auto malformed = encoded;
+    malformed.back() = std::byte{0x80};
+    EXPECT(!DecodeInputSessionOpened(malformed, &decoded_opened));
+    encoded.pop_back();
+    EXPECT(!DecodeInputSessionOpened(encoded, &decoded_opened));
+  }
 
   CloseInputSession close_input{99};
   EXPECT(EncodeCloseInputSession(close_input, &encoded));

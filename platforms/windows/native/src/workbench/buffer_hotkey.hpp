@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.h>
+#include "buffer_hotkey_config.hpp"
 
 namespace rimes::windows::workbench {
 
@@ -25,8 +26,7 @@ class BufferHotkeyRegistration {
   HotkeyUpdate Update(unsigned modifiers, unsigned key, Save save) {
     // A rejected/malformed setting must never reserve an ordinary typing key
     // or a system shortcut. MOD_NOREPEAT is internal, not a user modifier.
-    if ((modifiers != (MOD_CONTROL | MOD_SHIFT) &&
-         modifiers != (MOD_CONTROL | MOD_ALT)) || key < 'A' || key > 'Z')
+    if (!ValidBufferHotkeyModifiers(modifiers) || key < 'A' || key > 'Z')
       return HotkeyUpdate::kInvalid;
     if (Registered() && modifiers == modifiers_ && key == key_)
       return save() ? HotkeyUpdate::kSaved : HotkeyUpdate::kSaveFailed;

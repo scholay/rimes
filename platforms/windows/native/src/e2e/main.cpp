@@ -451,11 +451,27 @@ int RunTypingScenarios(bool legacy_broker) {
     CandidateWindow::GetLastSnapshot(&shifted);
     Expect(!shifted.visible, "Shift raw-code commit retires candidates");
     BOOL ascii_eaten = TRUE;
+    service->OnTestKeyDown(context, 'A', 0, &ascii_eaten);
+    Expect(!ascii_eaten, "ASCII mode does not pre-claim a native edit letter");
     service->OnKeyDown(context, 'A', 0, &ascii_eaten);
     Expect(!ascii_eaten && document.text == L"ni",
            "ASCII mode passes the next letter through without delayed raw-code commit");
     service->OnKeyUp(context, 'A', 0, &ascii_eaten);
     TapLeftShift(service, context);
+    ResetDocument(&document);
+    const auto idle_writes = context->write_requests;
+    context->refuse_write_edits = true;
+    TapLeftShift(service, context);
+    Expect(context->write_requests == idle_writes,
+           "idle Shift mode toggle never asks the native editor for a write lock");
+    service->OnTestKeyDown(context, 'A', 0, &ascii_eaten);
+    Expect(!ascii_eaten, "idle Shift ASCII mode passes letters through at OnTest");
+    TapLeftShift(service, context);
+    context->refuse_write_edits = false;
+    TypeLatin(service, context, "nihao");
+    TypeVirtualKey(service, context, VK_SPACE, true);
+    Expect(document.text == L"你好",
+           "Chinese typing resumes in the same context after an idle Shift toggle");
     ResetDocument(&document);
   }
 
@@ -563,6 +579,15 @@ int RunTypingScenarios(bool legacy_broker) {
     service->OnKeyDown(context, key, 0, &idle_eaten);
     Expect(!idle_eaten && document.text.empty(),
            "idle host key produces no IME insertion");
+  }
+  for (WPARAM key : std::vector<WPARAM>{'0', '1', '2', '3', '4', '5', '6',
+                                      '7', '8', '9', VK_NUMPAD0, VK_NUMPAD9}) {
+    BOOL idle_eaten = TRUE;
+    service->OnTestKeyDown(context, key, 0, &idle_eaten);
+    Expect(!idle_eaten, "idle digits are not claimed by the test callback");
+    service->OnKeyDown(context, key, 0, &idle_eaten);
+    Expect(!idle_eaten && document.text.empty(),
+           "idle digit callback does not mutate the document or engine");
   }
   {
     LogicalKeyboardState keyboard;

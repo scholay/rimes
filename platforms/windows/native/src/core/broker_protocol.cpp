@@ -780,6 +780,7 @@ bool EncodeInputSessionOpened(const InputSessionOpened& dto,
   AppendDtoPrefix(&encoded);
   AppendU64(&encoded, dto.session_id);
   AppendString(&encoded, dto.active_schema_id);
+  if (dto.has_key_routing) AppendU32(&encoded, dto.ascii_mode ? 1U : 0U);
   *payload = std::move(encoded);
   return true;
 }
@@ -802,8 +803,13 @@ bool DecodeInputSessionOpened(std::span<const std::byte> payload,
     return false;
   }
   if (!reader.AtEnd()) {
-    SetError(error, "input-session-opened DTO has trailing bytes");
-    return false;
+    std::uint32_t mode = 0;
+    if (!reader.ReadU32(&mode) || mode > 1 || !reader.AtEnd()) {
+      SetError(error, "invalid input-session-opened mode extension");
+      return false;
+    }
+    decoded.has_key_routing = true;
+    decoded.ascii_mode = mode != 0;
   }
   *dto = std::move(decoded);
   return true;

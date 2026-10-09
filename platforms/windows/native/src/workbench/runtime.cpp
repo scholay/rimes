@@ -216,8 +216,16 @@ Json Runtime::Snapshot() {
           {"preedit", model_.preedit},
           {"status", model_.status},
           {"translate", model_.translate},
+          {"opening_revision", opening_revision_},
           {"target_pid", model_.capture && model_.bound == model_.live
                              ? model_.bound.process : 0}};
+}
+Target Runtime::PlacementTarget() {
+  std::lock_guard lock(mutex_);
+  const auto found = sessions_.find(model_.live.session);
+  if (!model_.visible || !model_.capture || model_.bound != model_.live ||
+      found == sessions_.end() || found->second.target != model_.bound) return {};
+  return model_.bound;
 }
 Settings Runtime::Configuration() {
   std::lock_guard lock(mutex_);
@@ -260,6 +268,7 @@ void Runtime::BindLocked(std::uint32_t foreground_process) {
       found->second.target != model_.live)
     model_.Focus({});
   model_.Open();
+  ++opening_revision_;
 }
 void Runtime::Bind(std::uint32_t foreground_process) {
   std::lock_guard lock(mutex_);

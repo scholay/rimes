@@ -175,9 +175,10 @@ ClientAction BrokerConnection::HandleHello(const core::Frame& request,
   broker_hello.process_id = GetCurrentProcessId();
   broker_hello.session_id = broker_session_id_;
   broker_hello.capabilities = (runtime_ ? 1ULL : 0ULL) |
-      core::kModifierSnapshotsCapability;
+      core::kModifierSnapshotsCapability | core::kKeyRoutingCapability;
   modifier_snapshots_ =
       (hello.capabilities & core::kModifierSnapshotsCapability) != 0;
+  key_routing_ = (hello.capabilities & core::kKeyRoutingCapability) != 0;
   peer_process_ = verified_client_process_id;
   broker_hello.broker_version = std::string(kBrokerVersion);
   std::vector<std::byte> payload;
@@ -265,6 +266,8 @@ ClientAction BrokerConnection::HandleOpenSession(const core::Frame& request,
   // RimeEngine does not yet expose schema selection/query APIs. Empty is an
   // honest "engine default" response; never echo an unverified requested ID.
   opened.active_schema_id = sessions_.at(session_id).schema_id;
+  opened.has_key_routing = key_routing_;
+  opened.ascii_mode = engine_->IsAsciiMode(engine_session);
   std::vector<std::byte> payload;
   if (!core::EncodeInputSessionOpened(opened, &payload)) {
     const auto session = sessions_.find(session_id);
@@ -488,6 +491,12 @@ ClientAction BrokerConnection::HandleKeyEvent(const core::Frame& request,
 ClientAction BrokerConnection::RespondWithInputState(const core::Frame& request,
                                                      core::InputState state,
                                                      core::Frame* response) {
+  if (key_routing_ && engine_) {
+    const auto session = sessions_.find(state.session_id);
+    if (session != sessions_.end() &&
+        engine_->IsAsciiMode(session->second.engine_session_id))
+      state.state_flags |= StateFlag(core::InputStateFlags::kAsciiMode);
+  }
   std::vector<std::byte> payload;
   if (!core::EncodeInputState(state, &payload)) {
     MakeError(request, core::BrokerErrorCode::kInternalError,

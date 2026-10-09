@@ -458,12 +458,37 @@ void TestChordFallback() {
   Check(runtime.ManagePlugin(official::kChord, "enable", &error), "re-enable chord");
   Check(runtime.Configuration().schema == "my_combo", "re-enable preserves the saved choice");
 }
+void TestExplicitOpeningPlacementRevision() {
+  workbench::Runtime runtime;
+  const auto peer = GetCurrentProcessId() + 1;
+  const auto target = runtime.Register(peer, 901, 902);
+  Check(!runtime.PlacementTarget(), "hidden buffer has no geometry authority");
+  runtime.Focus(target);
+  runtime.Bind(peer);
+  const auto first = runtime.Snapshot()["opening_revision"].get<std::uint64_t>();
+  Check(first > 0 && runtime.PlacementTarget() == target,
+        "explicit opening publishes its exact live target");
+  runtime.Paste("Synthetic geometry test.");
+  Check(runtime.Snapshot()["opening_revision"] == first,
+        "ordinary content updates cannot reposition a manually placed buffer");
+  runtime.PauseCapture();
+  Check(!runtime.PlacementTarget(), "paused capture cannot probe an old input target");
+  runtime.Bind(peer);
+  Check(runtime.Snapshot()["opening_revision"] == first + 1,
+        "explicit rebind creates a fresh opening placement");
+  const auto other = runtime.Register(peer, 903, 904);
+  runtime.Focus(other);
+  Check(!runtime.PlacementTarget(), "new context revokes old placement target");
+  runtime.Close();
+  Check(!runtime.PlacementTarget(), "closed buffer has no placement target");
+}
 int main() {
   const auto root = std::filesystem::temp_directory_path() /
       (L"rimes-runtime-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
   std::filesystem::create_directories(root);
   Check(SetEnvironmentVariableW(L"LOCALAPPDATA", root.c_str()) != 0, "isolated runtime preferences");
   TestTargets();
+  TestExplicitOpeningPlacementRevision();
   TestCommandModifiersDoNotBecomeBufferCommands();
   TestUnhandledModifierCommitIsCapturedWithoutChangingKeyOwnership();
   TestFullBufferBlocksShiftWithoutChangingDraft();

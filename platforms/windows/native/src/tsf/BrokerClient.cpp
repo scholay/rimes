@@ -26,6 +26,7 @@
 #include "../core/broker_protocol.hpp"
 #include "Diagnostics.h"
 #include "ModuleState.h"
+#include "key_routing.hpp"
 
 namespace rimes::windows::tsf {
 namespace {
@@ -663,7 +664,7 @@ bool LaunchBrokerProcess() noexcept {
 }
 
 bool ShouldOfferKey(WPARAM virtual_key, std::uint32_t modifiers,
-                    bool composing) noexcept {
+                    bool composing, bool capturing, bool ascii_mode) noexcept {
   if (virtual_key == 0 || virtual_key > 0xffU || IsModifierKey(virtual_key)) {
     return false;
   }
@@ -675,7 +676,8 @@ bool ShouldOfferKey(WPARAM virtual_key, std::uint32_t modifiers,
   if ((modifiers & kShortcutModifiers) != 0) {
     return false;
   }
-  return IsPrintableKey(virtual_key) ||
+  return (IsPrintableKey(virtual_key) && detail::RoutePrintableKey(
+              virtual_key, modifiers, composing, capturing, ascii_mode)) ||
          (composing && IsCompositionCommand(virtual_key));
 }
 
@@ -761,6 +763,7 @@ class NamedPipeBrokerClient final : public BrokerClient {
         notifications_.clear();
       }
       composing_.store(false);
+      ascii_mode_.store(false);
       for (auto& pressed : pressed_keys_) pressed.store(false);
       for (auto& observed : observed_shift_) observed.store(false);
       for (auto& held : held_shift_) held.store(false);
@@ -782,6 +785,11 @@ class NamedPipeBrokerClient final : public BrokerClient {
         return false;
       }
       input_session_id_ = opened.session_id;
+      if (opened.has_key_routing != key_routing_capable_.load()) {
+        FailConnectionLocked();
+        return false;
+      }
+      ascii_mode_.store(opened.has_key_routing && opened.ascii_mode);
       if (control_capable_.load()) {
         protocol::Frame focused;
         if (!RequestResponse(pipe_, protocol::MessageType::kControl,
@@ -888,7 +896,8 @@ class NamedPipeBrokerClient final : public BrokerClient {
       if (!connected_.load(std::memory_order_acquire)) {
         return BrokerKeyResult::kUnavailable;
       }
-      return (observe_shift || ShouldOfferKey(event.virtual_key, modifiers, composing) || capture_key)
+      return (observe_shift || ShouldOfferKey(event.virtual_key, modifiers, composing,
+                                             capturing_.load(), ascii_mode_.load()) || capture_key)
                  ? BrokerKeyResult::kConsumed
                  : BrokerKeyResult::kPassThrough;
     }
@@ -898,7 +907,8 @@ class NamedPipeBrokerClient final : public BrokerClient {
     if (key_down && (!shift || HasCommandModifiers(modifiers))) CancelShiftTap();
     if ((!key_down && !key_up) ||
         (key_down && !observe_shift &&
-         !ShouldOfferKey(event.virtual_key, modifiers, composing) && !capture_key) ||
+         !ShouldOfferKey(event.virtual_key, modifiers, composing,
+                         capturing_.load(), ascii_mode_.load()) && !capture_key) ||
         (key_up && !pressed_keys_[key_index].load(std::memory_order_acquire) &&
          !held_shift_[key_index].load(std::memory_order_acquire))) {
       return BrokerKeyResult::kPassThrough;
@@ -1023,6 +1033,13 @@ class NamedPipeBrokerClient final : public BrokerClient {
         return BrokerKeyResult::kUnavailable;
       }
       last_revision_ = decoded.revision;
+      const bool ascii_mode = (decoded.state_flags & static_cast<std::uint32_t>(
+          protocol::InputStateFlags::kAsciiMode)) != 0;
+      if (ascii_mode && !key_routing_capable_.load()) {
+        FailConnectionLocked();
+        return BrokerKeyResult::kUnavailable;
+      }
+      if (key_routing_capable_.load()) ascii_mode_.store(ascii_mode);
       const bool handled =
           (decoded.state_flags & static_cast<std::uint32_t>(
                                      protocol::InputStateFlags::kHandled)) != 0;
@@ -1242,7 +1259,8 @@ class NamedPipeBrokerClient final : public BrokerClient {
       hello.process_id = GetCurrentProcessId();
       hello.session_id = current_session_id;
       hello.client_name = "RimesTsf";
-      hello.capabilities = protocol::kModifierSnapshotsCapability;
+      hello.capabilities = protocol::kModifierSnapshotsCapability |
+                           protocol::kKeyRoutingCapability;
       std::vector<std::byte> payload;
       protocol::Frame response;
       if (!protocol::EncodeClientHello(hello, &payload)) {
@@ -1281,6 +1299,8 @@ class NamedPipeBrokerClient final : public BrokerClient {
       control_capable_.store((broker_hello.capabilities & 1) != 0);
       modifier_capable_.store((broker_hello.capabilities &
                               protocol::kModifierSnapshotsCapability) != 0);
+      key_routing_capable_.store((broker_hello.capabilities &
+                                 protocol::kKeyRoutingCapability) != 0);
       protocol::OpenInputSession open;
       open.context_id =
           (static_cast<std::uint64_t>(GetCurrentProcessId()) << 32U) ^
@@ -1317,6 +1337,7 @@ class NamedPipeBrokerClient final : public BrokerClient {
         LogDiagnosticStage(DiagnosticStage::kConnectOpenDecodeFailed);
         return;
       }
+      if (opened.has_key_routing != key_routing_capable_.load()) return;
       if (stopping_.load(std::memory_order_acquire)) {
         LogDiagnosticStage(DiagnosticStage::kConnectCancelledBeforePublish);
         return;
@@ -1333,6 +1354,7 @@ class NamedPipeBrokerClient final : public BrokerClient {
       }
       pipe_ = candidate_pipe.release();
       input_session_id_ = opened.session_id;
+      ascii_mode_.store(opened.has_key_routing && opened.ascii_mode);
       next_request_id_ = request_id;
       next_sequence_id_ = 1;
       last_revision_ = 0;
@@ -1494,6 +1516,8 @@ class NamedPipeBrokerClient final : public BrokerClient {
     composing_.store(false, std::memory_order_release);
     connected_.store(false, std::memory_order_release);
     modifier_capable_.store(false);
+    key_routing_capable_.store(false);
+    ascii_mode_.store(false);
     for (auto& pressed : pressed_keys_) {
       pressed.store(false, std::memory_order_release);
     }
@@ -1540,6 +1564,7 @@ class NamedPipeBrokerClient final : public BrokerClient {
   std::atomic<HWND> notification_window_{nullptr};
   std::atomic_bool capturing_{false}, control_capable_{false};
   std::atomic_bool modifier_capable_{false};
+  std::atomic_bool key_routing_capable_{false}, ascii_mode_{false};
   std::atomic<std::uint64_t> connection_generation_{0};
   std::mutex notification_mutex_;
   std::deque<core::Json> notifications_;
