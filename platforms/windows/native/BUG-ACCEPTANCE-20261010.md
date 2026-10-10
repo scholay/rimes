@@ -127,6 +127,8 @@ if ($LASTEXITCODE) { throw '插件目录检查失败' }
 
 本分支需以 Windows IME CI 的新提交结果为准：MSVC x64/x86 构建、CTest、真实 TSF 代码 + FakeTSF 文档的输入回归、安装器 payload/结果/签名和账号生命周期隔离测试。测试已覆盖空闲写锁拒绝、数字和小键盘预判、Shift 取消/重复、候选上下文切换、DLL 静态 CRT 导入及 COM 生命周期。它们不代替上面的 QQ、设置输入框、双屏、跨账号 UAC 和实际卸载复测。
 
+Windows 代码提交 `b1185021909d04a828618ff3482f5c5e83454b42` 的 [Windows IME CI](https://github.com/scholay/rimes/actions/runs/38016994207) 四个任务均已通过：x64/x86 Release 和各自输入回归。后续提交同步插件集成工作流、版本断言和本记录；当前分支的最新 CI 结果见 PR。此处记录自动化结果，桌面复测表仍为待测。
+
 向每个 issue 贴以下简表即可；失败项保留打开并继续修复，通过项按已覆盖的原问题范围关闭：
 
 ```text
