@@ -12,12 +12,18 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /** Drives real RIMES buttons through accessibility, then checks actual host text. No text-injection IME. */
 public final class InputContractInstrumentation extends Instrumentation {
-    private static final String IME="org.scholay.rimes.android.debug";
+    private String IME="org.scholay.rimes.android.debug";
     private HostActivity host;
     private Bundle arguments;
     private int assertions;
     private boolean allowStaleRejection;
-    @Override public void onCreate(Bundle args) { super.onCreate(args); arguments=args; start(); }
+    @Override public void onCreate(Bundle args) {
+        super.onCreate(args); arguments=args;
+        IME=args.getString("ime","org.scholay.rimes.android.debug");
+        if(!IME.equals("org.scholay.rimes.android") && !IME.equals("org.scholay.rimes.android.debug"))
+            throw new IllegalArgumentException("Input contract accepts only the RIMES app packages");
+        start();
+    }
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
@@ -48,6 +54,7 @@ public final class InputContractInstrumentation extends Instrumentation {
             else if("password".equals(arguments.getString("mode"))) { focus(host.first); pinyin(); passwordContract(); }
             else if("benchmark".equals(arguments.getString("mode"))) benchmark();
             else if("layout".equals(arguments.getString("mode"))) layoutContract();
+            else if("appearance".equals(arguments.getString("mode"))) appearanceContract();
             else if("plugins".equals(arguments.getString("mode"))) pluginsContract();
             else if("comet-live".equals(arguments.getString("mode"))) cometLiveContract();
             else if("comet-denied".equals(arguments.getString("mode"))) cometDeniedContract();
@@ -172,7 +179,105 @@ public final class InputContractInstrumentation extends Instrumentation {
         for(int i=0;i<node.getChildCount();i++) if(scrollPluginBar(node.getChild(i),label,action)) return true;
         return false;
     }
+    private AccessibilityNodeInfo searchPet(AccessibilityNodeInfo node) {
+        if(node==null) return null;
+        CharSequence label=node.getContentDescription();
+        if(IME.contentEquals(node.getPackageName()==null?"":node.getPackageName()) && node.isVisibleToUser()
+                && node.isClickable() && label!=null && label.toString().startsWith("宠物与皮肤：")) return node;
+        for(int i=0;i<node.getChildCount();i++) { AccessibilityNodeInfo found=searchPet(node.getChild(i)); if(found!=null) return found; }
+        return null;
+    }
+    private AccessibilityNodeInfo petButton() {
+        for(AccessibilityWindowInfo window:getUiAutomation().getWindows()) {
+            AccessibilityNodeInfo found=searchPet(window.getRoot()); if(found!=null) return found;
+        }
+        return null;
+    }
+    private AccessibilityNodeInfo appearanceChooser(AccessibilityNodeInfo node) {
+        if(node==null) return null;
+        if(IME.contentEquals(node.getPackageName()==null?"":node.getPackageName()) && node.isVisibleToUser()
+                && "android.widget.ScrollView".contentEquals(node.getClassName()==null?"":node.getClassName())
+                && searchLabel(node,"宠物与皮肤选项",true,false)!=null) return node;
+        for(int i=0;i<node.getChildCount();i++) { AccessibilityNodeInfo found=appearanceChooser(node.getChild(i)); if(found!=null) return found; }
+        return null;
+    }
+    private AccessibilityNodeInfo appearanceChooser() {
+        for(AccessibilityWindowInfo window:getUiAutomation().getWindows()) {
+            AccessibilityNodeInfo found=appearanceChooser(window.getRoot()); if(found!=null) return found;
+        }
+        return null;
+    }
+    private void petAppearance() {
+        AccessibilityNodeInfo pet=petButton();
+        check(pet!=null && pet.isClickable() && pet.isLongClickable()
+                && pet.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
+                && pet.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_LONG_CLICK),
+                "attached pet exposes native tap and long-click accessibility actions");
+        check("轻点切换宠物与皮肤；长按选择".contentEquals(pet.getHintText()==null?"":pet.getHintText()),
+                "attached pet explains its tap and hold actions");
+        check(pet!=null && pet.isEnabled() && pet.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK),"hold real pet opens or closes appearance");
+        SystemClock.sleep(150);
+    }
+    private int visiblePetCount(AccessibilityNodeInfo node) {
+        if(node==null) return 0;
+        CharSequence label=node.getContentDescription();
+        int count=IME.contentEquals(node.getPackageName()==null?"":node.getPackageName())
+                && node.isVisibleToUser() && label!=null && label.toString().startsWith("宠物与皮肤：")?1:0;
+        for(int i=0;i<node.getChildCount();i++) count+=visiblePetCount(node.getChild(i));
+        return count;
+    }
+    private void checkSinglePet() {
+        int count=0;
+        for(AccessibilityWindowInfo window:getUiAutomation().getWindows()) count+=visiblePetCount(window.getRoot());
+        check(count==1,"exactly one pet control is visible");
+    }
+    private void appearanceContract() throws Exception {
+        focusAny(host.first); layout("26"); pinyin();
+        checkSinglePet();
+        String before=petButton().getContentDescription().toString();
+        check(petButton().performAction(AccessibilityNodeInfo.ACTION_CLICK),"tap visible pet");
+        SystemClock.sleep(200);
+        check(!before.contentEquals(petButton().getContentDescription()),"tap changes pet and skin");
+        check(appearanceChooser()==null,"pet tap keeps the typing keyboard open");
+        petAppearance(); check(appearanceChooser()!=null,"pet hold opens the chooser");
+        waitButton("宠物与皮肤选项"); screenshot("pet-chooser");
+        petAppearance(); check(appearanceChooser()==null,"pet hold returns to keyboard");
+        tap("Buffer off"); checkSinglePet();
+        check(find("清空 Buffer",false)==null && find("粘贴剪贴板文字",false)==null,
+                "Buffer rail has no duplicate clear or paste controls");
+        type("nihao"); tap("Space"); waitLabel("Buffer 你好",true);
+        expect(host.first,"","confirmed Chinese stays in Buffer");
+        screenshot("buffer-chrome");
+        tap("清空 Buffer"); waitLabel("Buffer ",true);
+        check(appearanceChooser()==null,"explicit clear returns to the typing keyboard");
+        expect(host.first,"","panel clear never changes host text");
+        checkSinglePet();
+        report("PASS pet tap/hold accessibility, single Buffer pet and explicit panel clear");
+    }
+    private void scrollAppearanceTo(String label) {
+        for(int attempt=0;find(label,false)==null && attempt<12;attempt++) {
+            AccessibilityNodeInfo chooser=appearanceChooser();
+            if(chooser==null || !chooser.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) break;
+            SystemClock.sleep(120);
+        }
+    }
+    /** Removed rail controls are explicit panel actions, then return to the same input target. */
+    private void bufferPanelAction(String value) {
+        if(appearanceChooser()==null) petAppearance();
+        click("键位与方案");
+        String label=value.equals("清空 Buffer")?"清空 Buffer":value;
+        scrollAppearanceTo(label); click(label);
+        if(appearanceChooser()!=null) petAppearance();
+    }
     private void tap(String value) {
+        if(value.equals("键位布局") && petButton()!=null) {
+            petAppearance();
+            if(appearanceChooser()!=null) click("键位与方案");
+            return;
+        }
+        if((value.equals("清空 Buffer") || value.equals("粘贴剪贴板文字")) && petButton()!=null && find(value,false)==null) {
+            bufferPanelAction(value); return;
+        }
         if((value.equals("拼音") || value.equals("自然码") || value.equals("五笔")) && modern()) {
             schema(value.equals("拼音")?"自然码":value.equals("自然码")?"五笔":"拼音"); return;
         }
@@ -210,6 +315,7 @@ public final class InputContractInstrumentation extends Instrumentation {
         }
         // The appearance panel scrolls independently; large fonts can place palettes below its viewport.
         if(value.startsWith("配色 ")) {
+            if(appearanceChooser()!=null && find("宠物与皮肤选项",true)!=null) click("宠物与皮肤选项");
             for(int attempt=0;find(value,false)==null && attempt<8;attempt++) {
                 boolean moved=false;
                 for(AccessibilityWindowInfo window:getUiAutomation().getWindows())
@@ -238,7 +344,7 @@ public final class InputContractInstrumentation extends Instrumentation {
         if(find("五笔",false)!=null) tap("五笔");
         waitButton("拼音");
     }
-    private boolean modern() { AccessibilityNodeInfo node=find("键位布局",true); return node!=null && ("⚙".contentEquals(node.getText()) || "✓".contentEquals(node.getText())); }
+    private boolean modern() { AccessibilityNodeInfo node=find("键位布局",true); return petButton()!=null || node!=null && ("⚙".contentEquals(node.getText()) || "✓".contentEquals(node.getText())); }
     private void schema(String name) { tap("键位布局"); tap("中文方案 "+name); tap("键位布局"); }
     private void report(String value) {
         Bundle b=new Bundle(); b.putString("stream",value+"\n"); sendStatus(0,b);
@@ -340,14 +446,21 @@ public final class InputContractInstrumentation extends Instrumentation {
         tap("Buffer off"); type("nihao"); tap("Space"); pluginSource("你好","initial Buffer");
         tap("Buffer 插件：翻译"); translationDirection("自动中英"); tap("Buffer 插件：翻译");
         for(String name:names) {
-            tap("Buffer 插件："+name); pluginOutput(name,"IDLE");
+            tap("Buffer 插件："+name);
             pluginSource("你好",name+" selection");
-            AccessibilityNodeInfo send=pluginSendButton(); check(send!=null && !send.isEnabled(),name+" cannot send source before execution");
-            tap("执行"+name);
+            if(name.equals("翻译")) check(find("执行翻译",false)==null,"live translation has no manual execution button");
+            else {
+                pluginOutput(name,"IDLE");
+                AccessibilityNodeInfo send=pluginSendButton(); check(send!=null && !send.isEnabled(),name+" cannot send source before execution");
+                tap("执行"+name);
+            }
             AccessibilityNodeInfo output=pluginOutput(name,"READY"); String generated=resultText(output,name);
             check(!generated.isEmpty() && !generated.equals("你好"),name+" returns generated output");
             if(!name.equals("翻译")) check(generated.contains("Mock"),name+" visibly labels synthetic AI output");
-            else check(generated.toLowerCase(java.util.Locale.ROOT).contains("hello"),"dictionary hello entry");
+            else {
+                check(generated.toLowerCase(java.util.Locale.ROOT).contains("hello"),"dictionary hello entry arrives automatically");
+                check(find("执行翻译",false)==null,"ready translation has no manual execution button");
+            }
             pluginSource("你好",name+" result keeps captured source until Send");
             android.graphics.Rect top=new android.graphics.Rect(),bottom=new android.graphics.Rect();
             output.getBoundsInScreen(top); waitLabel("Buffer 你好",true).getBoundsInScreen(bottom);
@@ -359,12 +472,27 @@ public final class InputContractInstrumentation extends Instrumentation {
             tap("Buffer 插件："+name); // ordinary Buffer preserves source
         }
         focus(host.first); tap("Buffer 插件：翻译"); tap("中英切换"); type("hello");
-        tap("执行翻译"); String reverse=resultText(pluginOutput("翻译","READY"),"翻译");
+        String reverse=resultText(pluginOutput("翻译","READY"),"翻译");
         check("你好".equals(reverse),"dictionary English to Chinese on real keyboard");
-        translationDirection("英 → 中"); pluginOutput("翻译","IDLE"); pluginSource("hello","direction change keeps source");
-        tap("执行翻译"); reverse=resultText(pluginOutput("翻译","READY"),"翻译"); tapPluginSend(); expect(host.first,reverse,"reverse dictionary Send");
-        focus(host.first); tap("Buffer 插件：翻译"); type("rimeszzunknown"); tap("执行翻译"); pluginOutput("翻译","ERROR");
+        tap("123"); tap("!"); tap("ABC"); pluginSource("hello!","edited live source stays local");
+        reverse=resultText(pluginOutput("翻译","READY"),"翻译");
+        check("你好!".equals(reverse),"new edit replaces the old live output automatically");
+        translationDirection("英 → 中"); pluginSource("hello!","direction change keeps source");
+        reverse=resultText(pluginOutput("翻译","READY"),"翻译"); tapPluginSend(); expect(host.first,reverse,"reverse dictionary Send");
+        focus(host.first); tap("Buffer 插件：翻译"); type("hello"); pluginOutput("翻译","READY");
+        focus(host.second); expectStable(host.second,"","target switch never adopts live translation");
+        check(findLabel("Buffer hello",true)==null,"target switch clears old live source");
+        check(!waitButton("Buffer off").isSelected(),"target switch clears live Buffer authority");
+        focus(host.first); tap("Buffer 插件：翻译"); type("rimeszzunknown"); pluginOutput("翻译","ERROR");
         pluginSource("rimeszzunknown","uncovered source preserved"); check(!pluginSendButton().isEnabled(),"uncovered translation cannot Send");
+        check(waitButton("重试翻译").isEnabled(),"failed live translation has explicit retry");
+        tap("重试翻译"); pluginOutput("翻译","ERROR");
+        pluginSource("rimeszzunknown","retry preserves uncovered source and never sends it");
+        focus(host.first); tap("Buffer 插件：翻译"); type("hello");
+        getUiAutomation().performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK);
+        waitKeyboardHidden(); SystemClock.sleep(650);
+        focus(host.second); expectStable(host.second,"","hiding retires pending live translation");
+        check(!waitButton("Buffer off").isSelected(),"hidden live source is not restored on another field");
         focus(host.first); tap("Buffer 插件：翻译"); translationDirection("自动中英"); focus(host.first); pinyin();
         // Return settles unfinished code first, executes only on a later clean Return.
         focus(host.first); tap("Buffer 插件：快问"); type("ni"); tap("Enter"); pluginSource("ni","raw Return"); pluginOutput("快问","IDLE");
@@ -597,7 +725,9 @@ public final class InputContractInstrumentation extends Instrumentation {
     }
     private void focusAny(EditText field) {
         runOnMainSync(() -> { field.setText(""); host.focus(field); getTargetContext().getSystemService(InputMethodManager.class).restartInput(field); });
-        waitButton("键位布局"); SystemClock.sleep(400);
+        long deadline=SystemClock.uptimeMillis()+5000;
+        while(petButton()==null && find("键位布局",false)==null && SystemClock.uptimeMillis()<deadline) SystemClock.sleep(30);
+        check(petButton()!=null || find("键位布局",false)!=null,"keyboard appearance entry available"); SystemClock.sleep(400);
     }
     private void layout(String value) { tap("键位布局"); tap("布局 "+value+" 键"); tap("键位布局"); }
     private void nine(String code) {
@@ -608,6 +738,7 @@ public final class InputContractInstrumentation extends Instrumentation {
         android.graphics.Rect result=new android.graphics.Rect(); waitButton(label).getBoundsInScreen(result); return result;
     }
     private void touch(String label) {
+        if(label.equals("清空 Buffer") && petButton()!=null && find(label,false)==null) { bufferPanelAction(label); return; }
         android.graphics.Rect rect=bounds(label); long time=SystemClock.uptimeMillis();
         android.view.MotionEvent down=android.view.MotionEvent.obtain(time,time,android.view.MotionEvent.ACTION_DOWN,rect.exactCenterX(),rect.exactCenterY(),0);
         android.view.MotionEvent up=android.view.MotionEvent.obtain(time,time+60,android.view.MotionEvent.ACTION_UP,rect.exactCenterX(),rect.exactCenterY(),0);
@@ -730,12 +861,12 @@ public final class InputContractInstrumentation extends Instrumentation {
         focusAny(host.first); layout("26"); pinyin(); tap("Buffer off");
         type("nihao"); tap("Space"); type("ni"); waitLabel("Buffer 你好ni",true);
         expect(host.first,"","Buffer composing and confirmed text remain isolated");
-        touch("清空 Buffer"); waitLabel("Buffer ",true); expectStable(host.first,"","permanent Clear never mutates the host");
+        touch("清空 Buffer"); waitLabel("Buffer ",true); expectStable(host.first,"","explicit panel Clear never mutates the host");
         check(pluginSendButton()!=null && !pluginSendButton().isEnabled(),"Clear disables delivery of discarded blocks");
         check(find("你好",false)==null,"Clear removes stale composition candidates");
         type("nihao"); tap("Space"); touch("Insert"); expect(host.first,"你好","fresh Buffer sends without discarded old content");
         waitLabel("Buffer ",true); tap("Enter"); expectStable(host.first,"你好","empty Buffer Return cannot replay cleared content");
-        report("COMMUNITY permanent Buffer clear checks="+(assertions-start)); start=assertions;
+        report("COMMUNITY explicit panel Buffer clear checks="+(assertions-start)); start=assertions;
 
         communityHeldDelete(); communityBufferDelete(); communityHeldTarget();
         report("COMMUNITY held native/codepoint/Buffer/target checks="+(assertions-start)); start=assertions;

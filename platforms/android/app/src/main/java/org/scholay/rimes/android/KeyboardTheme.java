@@ -33,6 +33,12 @@ final class KeyboardTheme {
         darkPalette=new Palette(colors[4],colors[5],colors[6],colors[7],0xFFFFFFFF,id.equals("apple"),true);
     }
     static KeyboardTheme named(String id) { for(KeyboardTheme theme:ALL) if(theme.id.equals(id)) return theme; return ALL[0]; }
+    /** The pet and its keyboard palette are one choice, in the chooser's order. */
+    static KeyboardTheme next(String id) {
+        KeyboardTheme current=named(id);
+        for(int i=0;i<ALL.length;i++) if(ALL[i]==current) return ALL[(i+1)%ALL.length];
+        return ALL[0];
+    }
     Palette palette(Context context) {
         boolean dark=(context.getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK)==Configuration.UI_MODE_NIGHT_YES;
         return dark?darkPalette:lightPalette;

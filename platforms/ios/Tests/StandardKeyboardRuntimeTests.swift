@@ -4,6 +4,101 @@ import RimesCore
 @testable import RIMES
 
 @MainActor final class StandardKeyboardRuntimeTests: XCTestCase {
+    func testImportedSchemeWithRememberedNineKeyUsesAndSelectsQwerty() async throws {
+        let defaults = UserDefaults.standard
+        let preferenceKeys = ["keyboard-preferences-v1", "imported-rime-choice-v1"]
+        let saved = preferenceKeys.map { defaults.object(forKey: $0) }
+        let (window, keyboard) = host()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ImportedLayout-\(UUID())", isDirectory: true)
+        let store = RimeSchemeStore(root: root)
+        let package = RimeSchemePackage(id: UUID().uuidString, name: "Synthetic imported Pinyin",
+            schemas: [.init(id: "layout_test_pinyin", name: "Synthetic imported Pinyin")],
+            importedAt: Date(), sourceDigest: String(repeating: "a", count: 64), warnings: [])
+        let user = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("RimeImported/\(package.id)", isDirectory: true)
+        defer {
+            keyboard.developmentChoose(.pinyin); window.isHidden = true
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: user)
+            for (key, value) in zip(preferenceKeys, saved) {
+                if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+            }
+        }
+        // Reuse the already compiled bundled engine, renamed into an isolated imported package.
+        // This verifies import/layout routing without downloading a third-party dictionary.
+        let resources = try XCTUnwrap(Bundle.main.url(forResource: "EngineData", withExtension: nil))
+        let stage = store.stagingRoot.appendingPathComponent(package.id, isDirectory: true)
+        try FileManager.default.createDirectory(at: store.stagingRoot, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: resources, to: stage)
+        let original = try String(contentsOf: stage.appendingPathComponent("build/rimes_pinyin.schema.yaml"), encoding: .utf8)
+        try original.replacingOccurrences(of: "schema_id: rimes_pinyin", with: "schema_id: layout_test_pinyin")
+            .write(to: stage.appendingPathComponent("build/layout_test_pinyin.schema.yaml"), atomically: true, encoding: .utf8)
+        try store.publish(stagedURL: stage, package: package)
+        let selection = RimeSchemeSelection(packageID: package.id, schemaID: package.schemas[0].id)
+
+        keyboard.developmentOrdinaryAppearance(layout: .nineKey)
+        XCTAssertEqual(keyboard.layoutViews.keys.standardMode, .nineKey)
+        keyboard.developmentChooseImported(selection, store: store)
+        XCTAssertEqual(keyboard.developmentImportedSelection, selection, "The imported engine really loaded; no built-in fallback.")
+        XCTAssertEqual(keyboard.layoutViews.keys.standardMode, .qwerty)
+        let actions = try layoutActions(keyboard)
+        XCTAssertEqual(actions.qwerty.state, .on, "The menu must identify the actual imported-scheme layout.")
+        XCTAssertEqual(actions.nineKey.state, .off)
+        XCTAssertFalse(actions.qwerty.attributes.contains(.disabled))
+        XCTAssertTrue(actions.nineKey.attributes.contains(.disabled), "Bundled nine-key decoding does not apply to imported schemas.")
+
+        keyboard.developmentType("ni")
+        XCTAssertEqual(keyboard.developmentRaw, "ni")
+        let confirmed = try XCTUnwrap(keyboard.layoutViews.candidates.buttons.first?.currentTitle)
+        let button = UIButton(); button.addAction(actions.qwerty, for: .touchUpInside)
+        button.sendActions(for: .touchUpInside)
+        await keyboard.developmentWaitForDelivery()
+        XCTAssertEqual(keyboard.layoutProxy.native.text, confirmed, "The layout choice settles the existing candidate exactly once.")
+        XCTAssertEqual(keyboard.developmentImportedSelection, selection, "Selecting QWERTY must keep the imported scheme.")
+        XCTAssertEqual(KeyboardPreferenceStore().load().ordinaryLayout, .qwerty)
+        XCTAssertEqual(keyboard.layoutViews.keys.standardMode, .qwerty)
+        keyboard.developmentType("nihao")
+        XCTAssertEqual(keyboard.developmentRaw, "nihao")
+        keyboard.developmentSpaceKey.sendActions(for: .touchUpInside)
+        await keyboard.developmentWaitForDelivery()
+        XCTAssertEqual(keyboard.layoutProxy.native.text, confirmed + "你好")
+        keyboard.developmentChoose(.pinyin)
+        XCTAssertEqual(keyboard.layoutViews.keys.standardMode, .qwerty, "The explicitly chosen 26-key preference remains after leaving the import.")
+    }
+
+    func testUnsupportedBuiltInNineKeyPreferenceHasQwertyMenuSelection() throws {
+        let (window, keyboard) = host(); defer { window.isHidden = true }
+        for scheme in [InputScheme.ziranma, .wubi86, .english] {
+            keyboard.developmentOrdinaryAppearance(layout: .nineKey)
+            keyboard.developmentChoose(scheme)
+            XCTAssertEqual(keyboard.layoutViews.keys.standardMode, .qwerty)
+            let actions = try layoutActions(keyboard)
+            XCTAssertEqual(actions.qwerty.state, .on)
+            XCTAssertEqual(actions.nineKey.state, .off)
+            XCTAssertTrue(actions.nineKey.attributes.contains(.disabled))
+        }
+        keyboard.developmentChoose(.pinyin)
+        XCTAssertEqual(keyboard.layoutViews.keys.standardMode, .nineKey, "Temporary scheme restrictions preserve the nine-key preference.")
+        let actions = try layoutActions(keyboard)
+        XCTAssertEqual(actions.nineKey.state, .on)
+        XCTAssertEqual(actions.qwerty.state, .off)
+        XCTAssertFalse(actions.nineKey.attributes.contains(.disabled))
+    }
+
+    private func layoutActions(_ keyboard: KeyboardViewController) throws -> (qwerty: UIAction, nineKey: UIAction) {
+        func actions(_ menu: UIMenu) -> [UIAction] {
+            menu.children.flatMap { element in
+                if let action = element as? UIAction { return [action] }
+                if let child = element as? UIMenu { return actions(child) }
+                return []
+            }
+        }
+        let menu = try XCTUnwrap(keyboard.layoutViews.settings.menu)
+        let choices = actions(menu)
+        return (try XCTUnwrap(choices.first { $0.title == "26 键 · QWERTY" }),
+                try XCTUnwrap(choices.first { $0.title == "9 键 · 全拼" }))
+    }
+
     func testKeySoundsRemainIndependentOfHapticsAndDoNotClickForChordPreviewOrCommit() {
         let feedback = KeyboardFeedback()
         var clicks = 0, pulses = 0, time: TimeInterval = 0

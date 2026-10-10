@@ -337,7 +337,7 @@ public final class SetupActivity extends Activity {
             }
             LinearLayout.LayoutParams frame=new LinearLayout.LayoutParams(-1,-2); frame.setMargins(dp(12),0,dp(12),dp(10)); themes.addView(line,frame);
         }
-        note(t("点击键盘的配色图标，在面板中选择配色。Android 当前使用静态宠物图示。","Tap the keyboard’s appearance icon to choose colors in its panel. Android currently uses static pet symbols."));
+        note(t("轻点键盘左上角的宠物轮换 18 套皮肤与配色，长按选择宠物或键位方案。Android 当前使用静态宠物图示。","Tap the top-left pet to cycle through 18 skins and keyboard colors. Hold to choose a pet or keyboard layout. Android currently uses static pet symbols."));
     }
     private void plugins() {
         if(officialPlugins.entries().isEmpty()) { note(t("插件目录不可用，请重新安装应用。","Plugin catalog unavailable. Please reinstall the app.")); return; }
@@ -403,7 +403,7 @@ public final class SetupActivity extends Activity {
         LinearLayout directions=group(t("翻译方向","Translation direction"));
         for(String id:new String[]{"auto","zh-en","en-zh"}) choice(directions,directionName(id),null,"settings.translation."+id,settings.getTranslationDirection().equals(id),() -> { settings.setTranslationDirection(id); render(); });
         LinearLayout dictionary=group(t("本机词典","On-device dictionary")); row(dictionary,KeyboardIcon.BOOK,"CC-CEDICT",t("随应用安装 · 125,166 条原始词条","Bundled · 125,166 source entries"),t("已准备好","Ready"),"settings.translation.dictionary",null);
-        paragraph(dictionary,t("在键盘的 Buffer 快捷入口选择“翻译”，确认原文后点执行。结果可检查后再发送。","Choose Translate from the keyboard’s Buffer shortcuts, confirm the source text, then run. Review the result before inserting it."));
+        paragraph(dictionary,t("在键盘的 Buffer 快捷入口选择“翻译”，输入并确认文字后自动查译。结果可检查后再发送。","Choose Translate from the keyboard’s Buffer shortcuts. Confirmed input is translated automatically. Review the result before inserting it."));
         note(t("支持中英词与词组查译。未覆盖的词保留原文；逐词查译不保证句子语法。","Looks up Chinese–English words and phrases. Unknown words remain unchanged; word lookup does not ensure sentence grammar."));
         LinearLayout legal=group(t("词典许可","Dictionary license")); row(legal,KeyboardIcon.BOOK,"CC BY-SA 4.0",null,null,"settings.translation.license",() -> openLicense("CC-CEDICT-CC-BY-SA-4.0.txt"));
     }
@@ -426,7 +426,7 @@ public final class SetupActivity extends Activity {
         key.setHint(profile.hasKey()?t("已安全保存；留空保留现有密钥","Saved securely; leave blank to keep"):t("输入 API Key","Enter API key"));
         boolean[] enabled={profile.enabled},translation={profile.translation};
         toggle(configuration,t("启用联网 AI","Enable online AI"),"settings.ai.comet.enabled",enabled[0],value -> enabled[0]=value);
-        toggle(configuration,t("翻译也使用 AI","Use AI for translation"),"settings.ai.comet.translation",translation[0],value -> translation[0]=value);
+        toggle(configuration,t("实时翻译也使用 AI","Use AI for live translation"),"settings.ai.comet.translation",translation[0],value -> translation[0]=value);
         TextView status=text("",14,secondary,false); status.setPadding(dp(16),dp(8),dp(16),dp(8)); status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); configuration.addView(status);
         row(configuration,KeyboardIcon.CHECK,t("保存设置","Save settings"),null,null,"settings.ai.comet.save",() -> {
             try {
@@ -464,8 +464,8 @@ public final class SetupActivity extends Activity {
     }
     private void privacy() {
         LinearLayout input=group(t("输入与学习","Typing & learning")); paragraph(input,getString(R.string.privacy)+"\n\n"+getString(R.string.learning_detail));
-        LinearLayout clipboard=group(t("本地剪贴板","Local clipboard")); paragraph(clipboard,t("键盘设置里的“本地剪贴板”只在主动点“收录当前文字”后保存文字，不自动监听。最多 40 条、总共 128 KiB、单条 16 KiB，保存在本机私有且不参与备份的目录。可逐条删除或清空；点条目只加入 Buffer，确认后再插入，不自动执行 AI。密码和私密输入框禁用。长按 Buffer 的粘贴按钮也可打开历史。","Open Local clipboard in the keyboard settings, or hold Buffer’s paste button. Only Collect current text saves a record; there is no monitoring. Up to 40 entries, 128 KiB total and 16 KiB each stay in private device-only storage, excluded from backup. Delete entries or clear history. Tapping an entry only adds it to Buffer without AI execution; insert explicitly when ready. Password and private fields disable this feature."));
-        LinearLayout plugins=group(t("翻译与 AI","Translation & AI")); paragraph(plugins,t("翻译默认查阅本机 CC-CEDICT 词典。联网 AI 需在 AI 服务中配置并启用，点执行后仅发送本次 Buffer 原文给你配置的服务。未启用时可用本机 Mock。只有主动点“粘贴剪贴板文字”才读取当前文字到 Buffer，不监听剪贴板，不读取联系人或完整输入历史。结果只有点发送后进入当前输入框。","Translation defaults to bundled CC-CEDICT lookup. Online AI requires explicit configuration and enabling; Run sends only the current Buffer source to your configured AI service. A local mock is available when online AI is off. An explicit Paste clipboard text tap reads the current text into Buffer; there is no clipboard monitoring, contacts or full typing-history access. Results enter the current field only after you insert them."));
+        LinearLayout clipboard=group(t("本地剪贴板","Local clipboard")); paragraph(clipboard,t("键盘设置里的“本地剪贴板”只在主动点“收录当前文字”后保存文字，不自动监听。最多 40 条、总共 128 KiB、单条 16 KiB，保存在本机私有且不参与备份的目录。可逐条删除或清空；点条目加入 Buffer，结果确认后再插入；当前若启用实时 AI 翻译，会自动翻译已确认的原文。密码和私密输入框禁用。长按左上宠物，在面板中打开“本地剪贴板”。","Hold the top-left pet and open Local clipboard in its panel. Only Collect current text saves a record; there is no monitoring. Up to 40 entries, 128 KiB total and 16 KiB each stay in private device-only storage, excluded from backup. Delete entries or clear history. Tapping an entry adds it to Buffer; enabled live AI translation automatically translates confirmed source. Insert the result explicitly when ready. Password and private fields disable this feature."));
+        LinearLayout plugins=group(t("翻译与 AI","Translation & AI")); paragraph(plugins,t("翻译默认查阅本机 CC-CEDICT 词典。联网 AI 需在 AI 服务中配置并启用。实时翻译自动处理已确认的 Buffer 原文；若开启 AI 翻译，会自动发送本次原文给已配置的服务，其他 AI 插件需点执行。未启用时可用本机 Mock。只有主动点“粘贴剪贴板文字”才读取当前文字到 Buffer，不监听剪贴板，不读取联系人或完整输入历史。结果只有点发送后进入当前输入框。","Translation defaults to bundled CC-CEDICT lookup. Online AI requires explicit configuration and enabling. Live translation runs on confirmed Buffer input; enabling AI translation sends that source automatically to the configured provider. Other AI plugins require Run. A local mock is available when online AI is off. An explicit Paste clipboard text tap reads the current text into Buffer; there is no clipboard monitoring, contacts or full typing-history access. Results enter the current field only after you insert them."));
         LinearLayout legal=group(t("开源软件与资源","Open-source software & resources")); row(legal,KeyboardIcon.BOOK,t("第三方许可","Third-party licenses"),null,null,"settings.privacy.licenses",() -> navigate("licenses"));
     }
     private void differences() {
@@ -475,7 +475,7 @@ public final class SetupActivity extends Activity {
             {t("更多 AI 服务","More AI providers"),t("支持 DeepSeek 与兼容 OpenAI 的文字服务，可自行填写地址、模型和密钥；图像生成尚未接通。","DeepSeek and OpenAI-compatible text services accept a custom URL, model and key. Image generation is not connected yet.")},
             {t("翻译语言包","Translation language packs"),t("Android 使用本机中英词典，不使用苹果翻译语言包。","Android uses a local Chinese–English dictionary rather than Apple Translation packs.")},
             {t("并击与 Rime 方案导入","Chord & Rime profile import"),t("当前仅内置方案，尚未接通自定义导入与编辑。","Built-in profiles only; custom import and editing are not connected.")},
-            {t("宠物轮换与动画","Pet rotation & animation"),t("配色可切换，当前是静态图示，无自选轮换池。","Colors can be selected; symbols are static, with no custom rotation pool.")},
+            {t("宠物轮换与动画","Pet rotation & animation"),t("轻点可轮换 18 套宠物与皮肤，当前是静态图示，无自选轮换池。","Tap to cycle through 18 pets and skins; symbols are static, with no custom rotation pool.")},
             {t("作诗句式与词卡","Poem forms & word cards"),t("作诗支持联网 AI；尚无句式与词卡库配置。","Poems support online AI; forms and word-card configuration are not available.")},
             {t("打字统计卡片","Typing stats cards"),t("尚未实现。","Not implemented yet.")}
         };

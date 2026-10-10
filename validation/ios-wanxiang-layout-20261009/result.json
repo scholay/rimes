@@ -1,0 +1,94 @@
+{
+  "date": "2026-10-09",
+  "base_commit": "ea24bb7c64dc38626b42636e3c04fd059cc6d0bb",
+  "branch": "codex/ios-wanxiang-layout-20261009",
+  "result": "PASS_SCOPED_MENU_REGRESSION",
+  "confirmed_bug": "Stored nine-key preference remained checked while imported and unsupported built-in schemas rendered QWERTY.",
+  "actual_nine_key_lock_reproduced": false,
+  "changes": [
+    "Render menu selection from effective built-in/imported layout",
+    "Preserve ordinary-layout preference and existing action behavior"
+  ],
+  "source_sha256": {
+    "platforms/ios/Keyboard/KeyboardViewController.swift": "1ebbcfdf14c88efbd145073d5f55a7ca0be4b822ff7c1294fc7fe67e47c04d29",
+    "platforms/ios/Tests/StandardKeyboardRuntimeTests.swift": "7ae7d6b00ec398f0056d35028f8436f9f1fcfd795f46e4224a254698152f593b",
+    "platforms/ios/Tests/ImportedSchemeRuntimeTests.swift": "95667856300aafebc9dd8aaf5833016ea95565be7183fcd93468d67d22fe01bb",
+    "validation/ios-wanxiang-layout-20261009/wanxiang-imported-qwerty.png": "9f5ad3380d1895390812f9ce1520da62b7fe6fb905eb28e2a4eb0d299cca656b"
+  },
+  "environment": {
+    "platform": "iOS Simulator",
+    "model": "iPhone 17 Pro",
+    "architecture": "arm64",
+    "runtime": "26.5",
+    "runtime_build": "23F77",
+    "xcode": "27.0",
+    "xcode_build": "27A266a",
+    "sdk": "iPhoneSimulator27.0",
+    "host": "Production UIKit controller in XCTest app; native librime; synthetic UITextView proxy"
+  },
+  "baseline": {
+    "result": "FAIL_EXPECTED",
+    "tests": 2,
+    "failed_tests": 2,
+    "assertion_failures": 8,
+    "failure_scope": "Menu selected states only",
+    "evidence": "platforms/ios/build/wanxiang-layout-baseline-repro.xcresult"
+  },
+  "final": {
+    "result": "PASS",
+    "tests": 27,
+    "passed": 27,
+    "failed": 0,
+    "skipped": 0,
+    "suite_seconds": 21.375,
+    "evidence": "platforms/ios/build/wanxiang-layout-final.xcresult",
+    "runtime_warning": "QoS wait on existing initialization path observed; no performance claim"
+  },
+  "wanxiang_fixture": {
+    "filename": "lingxi-wanxiang-v18.1.1-base-portable.zip",
+    "sha256": "91041724bfca27080184abad84506a423a5dc751759e5cc734e7d5f8c7ae08be",
+    "bytes": 33402176,
+    "schema": "wanxiang",
+    "local_test_result": "PASS",
+    "test_seconds": 12.871,
+    "pipeline": [
+      "inspect",
+      "isolated install",
+      "deploy",
+      "load",
+      "26 letter key frames",
+      "menu states",
+      "nihao candidate",
+      "Space commit to synthetic native host"
+    ],
+    "committed": false,
+    "ci_without_fixture": "Explicit XCTSkip for pinned-artifact test; synthetic regressions remain independent"
+  },
+  "other_checks": {
+    "catalog_sync": "PASS",
+    "log_privacy_lint": "PASS",
+    "git_diff_check": "PASS",
+    "swift_debug_build": {
+      "result": "PASS",
+      "toolchain": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer",
+      "warnings": "Existing warnings observed",
+      "macos_install_or_host_run": false
+    }
+  },
+  "not_verified": [
+    "Physical iPhone",
+    "System keyboard extension launch",
+    "Full Access and App Group persistence",
+    "Original reporter version, package and host",
+    "Original reporter retest",
+    "Actual nine-key touch/menu lock",
+    "App Store or TestFlight publication",
+    "Android release"
+  ],
+  "data_boundary": {
+    "main_dirty_worktree_changed": false,
+    "fixture_and_user_directories": "Task-owned simulator and isolated temporary package paths",
+    "committed_user_content": false,
+    "screenshot": "Synthetic input only"
+  }
+}
