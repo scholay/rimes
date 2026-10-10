@@ -45,7 +45,8 @@ Mark each row pass / fail / n/a. Attach host, DPI, and schema.
 
 - [ ] Buffer is closed and capture is off throughout the ordinary-input pass
 - [ ] Settings Connector API URL/model fields accept idle `0123456789` and
-      numeric-keypad digits with the product schemas, without losing characters
+      numeric-keypad digits, decimal and operators with the product schemas,
+      including Shift held with the keypad, without losing characters
 - [ ] An idle left-Shift tap switches Chinese/English in the same focus context;
       the next English letter reaches the host even if it refuses a write edit
 - [ ] A configured initial ASCII mode, shifted punctuation, composing number

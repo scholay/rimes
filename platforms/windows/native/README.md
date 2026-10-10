@@ -50,8 +50,9 @@ Where the TSF host cooperates, typing matches the macOS RIMES controller:
 The candidate panel is a `WS_EX_NOACTIVATE` topmost tool window so it cannot
 steal focus from the host.
 
-For the six product schemas, idle unshifted number keys (including the numeric
-keypad) pass directly to the host; composing candidate selection and Buffer
+For the six product schemas, idle unshifted number-row keys and numeric-keypad
+digits, decimal and operators (also with Shift) pass directly to the host;
+composing candidate selection and Buffer
 capture still go through the engine. Idle ASCII-mode keys also pass through.
 The initial mode and subsequent mode flags are exchanged only when both TSF
 and Broker negotiate the key-routing capability, preserving the legacy wire

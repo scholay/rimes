@@ -69,9 +69,16 @@ int RunContractTests() {
     Expect(RoutePrintableKey(key, 0, false, true, true),
            "Buffer still captures idle ASCII numbers");
   }
-  for (WPARAM key = VK_NUMPAD0; key <= VK_NUMPAD9; ++key)
-    Expect(!RoutePrintableKey(key, 0, false, false, false),
-           "idle numpad digits stay with the native editor");
+  for (WPARAM key = VK_NUMPAD0; key <= VK_DIVIDE; ++key) {
+    for (const auto modifiers : {std::uint32_t{0}, shift}) {
+      Expect(!RoutePrintableKey(key, modifiers, false, false, false),
+             "idle keypad digits, decimal and operators stay with the native editor, including Shift");
+      Expect(RoutePrintableKey(key, modifiers, true, false, false),
+             "keypad commands during composition remain an IME key");
+      Expect(RoutePrintableKey(key, modifiers, false, true, true),
+             "Buffer still captures keypad input in ASCII mode");
+    }
+  }
   for (const WPARAM key : std::vector<WPARAM>{'A', 'Z', VK_SPACE, VK_OEM_2}) {
     Expect(!RoutePrintableKey(key, 0, false, false, true),
            "authoritative ASCII mode does not claim host printable keys");
