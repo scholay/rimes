@@ -11,9 +11,11 @@
 
 ## 联系与交流
 
-邮箱：[pm@scholay.com](mailto:pm@scholay.com) · 微信 ID：`scholar_hi`，诚邀添加微信进群交流。
+邮箱：[pm@scholay.com](mailto:pm@scholay.com) · 微信 ID：`scholar_hi` · QQ 群：`567629445`，诚邀进群交流。
 
-**前 1000 位为本项目点亮 Star 的用户，可免费预约永久云同步会员。** 欢迎添加微信预约。
+~~前 1000 位为本项目点亮 Star 的用户，可免费预约永久云同步会员。~~
+
+**前 5000 位为本项目点亮 Star 的用户，可免费预约半年会员。** 欢迎添加微信或加入 QQ 群预约。
 
 ## 演示视频
 
