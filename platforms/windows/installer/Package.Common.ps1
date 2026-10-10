@@ -353,6 +353,45 @@ function Assert-SettingsShortcut([string]$InstallRoot,[string]$Directory) {
         # User-edited shortcuts retain their target and arguments.
     } finally {if($shortcut){[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) | Out-Null};[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null}
 }
+function Write-RetainedUninstallState([string]$Root,[string]$Directory,$Result) {
+    $statePath=Join-Path $Root 'state.json'
+    $destination=Join-Path $Root 'uninstalled-state.json'
+    $destinationItem=Get-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue
+    if($destinationItem -and ($destinationItem.PSIsContainer -or ($destinationItem.Attributes -band [IO.FileAttributes]::ReparsePoint))){throw 'The uninstall recovery record path is not a regular file. Preserve it and repair the installation.'}
+    $record=[pscustomobject]@{active=$Directory;recovered=$true}
+    if(Test-Path -LiteralPath $statePath){
+        try {
+            $previous=Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if($previous.PSObject.Properties['active'] -and $previous.active -eq $Directory){$record=$previous}
+        } catch {}
+    }
+    $record | Add-Member -NotePropertyName uninstalled -NotePropertyValue $true -Force
+    $record | Add-Member -NotePropertyName uninstallResult -NotePropertyValue $Result -Force
+    $temporary=Join-Path $Root ('uninstalled.'+[guid]::NewGuid().ToString('N')+'.tmp')
+    try {
+        $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $temporary -Encoding UTF8
+        Move-Item -LiteralPath $temporary -Destination $destination -Force
+        # Keep the old active state intact until the recovery record is safely
+        # published. Failure here lets the caller restore registration.
+        if(Test-Path -LiteralPath $statePath){Remove-Item -LiteralPath $statePath -Force}
+    } finally {if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary -Force}}
+}
+function Get-RecordedUninstallResult([string]$Root,[string]$Directory,[int]$ExitCode) {
+    if($ExitCode -notin @(0,3010)){throw 'Uninstall did not confirm completion'}
+    $pending=$ExitCode -eq 3010
+    $fallback=[pscustomobject]@{Uninstalled=$true;RequiresSignOut=$pending;SignOutReason=$(if($pending){'unknown-installation-state'}else{'none'});UserDataRetained=$true}
+    try {
+        $record=Get-Content -LiteralPath (Join-Path $Root 'uninstalled-state.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $result=$record.uninstallResult
+        $reasons=if($pending){@('locked-dll','missing-registered-dll','previous-signout-required','unknown-installation-state')}else{@('none')}
+        if($record.active -eq $Directory -and $record.uninstalled -is [bool] -and $record.uninstalled -and
+           $result.Uninstalled -is [bool] -and $result.Uninstalled -and $result.UserDataRetained -is [bool] -and $result.UserDataRetained -and
+           $result.RequiresSignOut -is [bool] -and $result.RequiresSignOut -eq $pending -and $result.SignOutReason -in $reasons){return $result}
+    } catch {}
+    # Old, damaged or mismatched records never suppress exit 3010's sign-out
+    # warning or contribute arbitrary text to the original user's dialog.
+    return $fallback
+}
 function Get-UninstallCompletionMessage($Result) {
     $message='RIMES was uninstalled. Your dictionaries, settings and credentials were kept.'
     if($Result.RequiresSignOut){

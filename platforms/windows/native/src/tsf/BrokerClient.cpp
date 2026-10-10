@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "../core/broker_protocol.hpp"
+#include "../core/broker_identity.hpp"
 #include "Diagnostics.h"
 #include "ModuleState.h"
 #include "key_routing.hpp"
@@ -434,7 +435,7 @@ bool BuildEndpoint(std::wstring* endpoint, TokenIdentity* current_identity,
   suffix << L".v2.session-" << *current_session_id << L".user-" << std::hex
          << std::setw(16) << std::setfill(L'0')
          << HashSid(current_identity->sid_string);
-  *endpoint = L"\\\\.\\pipe\\RIMES.Broker" + suffix.str();
+  *endpoint = std::wstring(L"\\\\.\\pipe\\") + core::kBrokerObjectName + suffix.str();
   return true;
 }
 
@@ -626,15 +627,18 @@ bool SiblingBrokerPath(std::wstring* path) noexcept {
   directory.resize(slash + 1);
   auto parent = directory.substr(0, directory.size() - 1);
   parent = parent.substr(0, parent.find_last_of(L"\\/"));
-  *path = parent + L"\\x64\\RimesBroker.exe";
+  *path = parent + L"\\x64\\" + core::kBrokerExecutable;
   if (GetFileAttributesW(path->c_str()) == INVALID_FILE_ATTRIBUTES)
-    *path = directory + L"RimesBroker.exe";
+    *path = directory + core::kBrokerExecutable;
   const DWORD attributes = GetFileAttributesW(path->c_str());
   return attributes != INVALID_FILE_ATTRIBUTES &&
          (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
 bool LaunchBrokerProcess() noexcept {
+  // The test runner owns the isolated Broker's data and lifetime. A failed
+  // test must never launch the installed Broker or leave an untracked child.
+  if (!core::kAllowBrokerAutoLaunch) return false;
   std::wstring broker_path;
   if (!SiblingBrokerPath(&broker_path)) {
     return false;

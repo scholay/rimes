@@ -199,6 +199,19 @@ rimes_harden_target(RimesRegistrar)
 rimes_use_unicode_console_entrypoint(RimesRegistrar)
 
 if(RIMES_BUILD_TESTS)
+    # Same implementation and security checks, but a compile-time endpoint
+    # identity that cannot connect to or retire the user's daily Broker.
+    get_target_property(e2e_broker_sources RimesBroker SOURCES)
+    add_executable(RimesE2EBroker ${e2e_broker_sources})
+    target_include_directories(RimesE2EBroker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/broker")
+    target_compile_definitions(RimesE2EBroker PRIVATE RIMES_E2E_TEST_IDENTITY=1)
+    target_link_libraries(RimesE2EBroker PRIVATE RimesCore RimesEngine RimesWorkbench advapi32)
+    rimes_harden_target(RimesE2EBroker)
+    rimes_use_unicode_console_entrypoint(RimesE2EBroker)
+    add_test(NAME RimesE2EBrokerEndpoint COMMAND RimesE2EBroker --print-endpoint)
+    set_tests_properties(RimesE2EBrokerEndpoint PROPERTIES
+        PASS_REGULAR_EXPRESSION "RIMES[.]E2E[.]Broker[.]v2[.]session-" TIMEOUT 10)
+
     add_executable(RimesCaretRegressionTests
         src/e2e/caret_regression.cpp
         src/e2e/fake_tsf.cpp
@@ -451,6 +464,8 @@ if(RIMES_BUILD_TESTS)
         uuid
     )
     rimes_harden_target(RimesTsfE2E)
+    target_compile_definitions(RimesTsfE2E PRIVATE RIMES_E2E_TEST_IDENTITY=1)
+    add_dependencies(RimesTsfE2E RimesE2EBroker)
     rimes_use_unicode_console_entrypoint(RimesTsfE2E)
 
     add_executable(RimesVisualPreview WIN32

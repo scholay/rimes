@@ -9,6 +9,9 @@
 /THIRD_PARTY_NOTICES.md text eol=lf
 /README.md text eol=lf
 /README.en.md text eol=lf
+/Catalog/buffer-plugins.json text eol=lf
+/Catalog/Plugins/**/manifest.json text eol=lf
+/Sources/RimeBuffer/PresetBufferPluginCatalog.generated.swift text eol=lf
 /RELEASE.md text eol=lf
 /CROSS-PLATFORM-PREVIEW.md text eol=lf
 /.github/workflows/platform-preview.yml text eol=lf

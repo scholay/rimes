@@ -1,4 +1,5 @@
 #include "win32_security.hpp"
+#include "broker_identity.hpp"
 
 #include <sddl.h>
 
@@ -161,8 +162,8 @@ bool UserSecurityContext::Initialize(std::wstring* error) {
   std::wostringstream suffix;
   suffix << L".v2.session-" << session_id_ << L".user-" << std::hex
          << std::setw(16) << std::setfill(L'0') << HashSid(sid_string_);
-  pipe_name_ = L"\\\\.\\pipe\\RIMES.Broker" + suffix.str();
-  mutex_name_ = L"Local\\RIMES.Broker" + suffix.str();
+  pipe_name_ = std::wstring(L"\\\\.\\pipe\\") + core::kBrokerObjectName + suffix.str();
+  mutex_name_ = std::wstring(L"Local\\") + core::kBrokerObjectName + suffix.str();
   return true;
 }
 

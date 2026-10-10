@@ -2,6 +2,9 @@
 [CmdletBinding()]
 param([string]$InstallRoot="$env:ProgramFiles\RIMES",[string]$ExpectedUserSid,[switch]$MachineOnly)
 $ErrorActionPreference='Stop'
+# This launcher uses Windows PowerShell, including when started by a PowerShell
+# 7 host. Do not inherit that host's incompatible bundled module directory.
+$env:PSModulePath=[IO.Path]::Combine($env:WINDIR,'System32\WindowsPowerShell\v1.0\Modules')
 Add-Type -AssemblyName System.Windows.Forms
 $caption='RIMES'
 try {
@@ -25,11 +28,11 @@ try {
     $powershell=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $arguments='-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$PSCommandPath+'" -InstallRoot "'+$InstallRoot+'" -MachineOnly -ExpectedUserSid "'+$userSid+'"'
     $code=Invoke-UserUninstall $InstallRoot $state.active {
-        $child=Start-Process -FilePath $powershell -Verb RunAs -ArgumentList $arguments -Wait -PassThru
+        $child=Start-Process -FilePath $powershell -Verb RunAs -WindowStyle Hidden -ArgumentList $arguments -Wait -PassThru
         return $child.ExitCode
     }
-    $message='RIMES was uninstalled. Your dictionaries, settings and credentials were kept.'
-    if($code -eq 3010){$message+="`n`nSave your work and sign out to finish unloading the previous input method from running applications."}
+    $result=Get-RecordedUninstallResult $InstallRoot $state.active $code
+    $message=Get-UninstallCompletionMessage $result
     [Windows.Forms.MessageBox]::Show($message,$caption,[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Information) | Out-Null
 } catch {
     if($_.Exception -is [ComponentModel.Win32Exception] -and $_.Exception.NativeErrorCode -eq 1223){exit 0}

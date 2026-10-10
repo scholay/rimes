@@ -27,8 +27,7 @@ try {
     foreach($arch in @('x86','x64')){Invoke-RecoveryRegistrar $PSScriptRoot $state.active $arch 'verify-absent'}
     Restore-InstalledAppRegistration $null
     if(-not $MachineOnly){Remove-OwnedSettingsShortcut $InstallRoot}
-    if(Test-Path -LiteralPath "$InstallRoot\state.json"){Move-Item -LiteralPath "$InstallRoot\state.json" -Destination "$InstallRoot\uninstalled-state.json" -Force}
-    else{Write-InstallState $InstallRoot ([ordered]@{active=$state.active;recovered=$true;uninstalled=$true});Move-Item -LiteralPath "$InstallRoot\state.json" -Destination "$InstallRoot\uninstalled-state.json" -Force}
+    Write-RetainedUninstallState $InstallRoot $state.active ([pscustomobject]@{Uninstalled=$true;RequiresSignOut=$requiresSignOut;SignOutReason=$signOutReason;UserDataRetained=$true})
 } catch {
     $failure=$_
     $recoveryFailures=@()

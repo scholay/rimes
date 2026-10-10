@@ -131,6 +131,12 @@ TSF stack (`ITfThreadMgr` / `ITfContext` / `ITfComposition`). It asserts
 preedit, candidate contents, `nihao`+Space → `你好`, number selection, paging,
 Escape, Shift switching, ordinary editing and host-command pass-through.
 
+The test-only `RimesE2EBroker.exe` and `RimesTsfE2E.exe` use a compile-time
+`RIMES.E2E.Broker` pipe/mutex identity, while daily builds keep `RIMES.Broker`.
+The same user/session and pipe access checks apply to both. E2E tests can run
+alongside the installed input method without stopping its Broker or losing
+Buffer contents; their TSF client never auto-launches a daily Broker.
+
 Hosted GitHub `windows-2022` runners usually have a logon session and can
 launch Notepad, but they are **not** a reliable interactive IME desktop: no
 Chinese language pack, no user IME switch, and TSF often never attaches to a

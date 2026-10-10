@@ -91,9 +91,21 @@ if ([string]::IsNullOrWhiteSpace($ArtifactDirectory)) {
     $ArtifactDirectory = Join-Path $nativeRoot "out/build/windows-$Architecture/$Configuration"
 }
 $artifactRoot = Resolve-RimesExistingPath -Path $ArtifactDirectory -PathType Container
-$brokerPath = Resolve-RimesExistingPath -Path (Join-Path $artifactRoot 'RimesBroker.exe') -PathType Leaf
+$brokerPath = Resolve-RimesExistingPath -Path (Join-Path $artifactRoot 'RimesE2EBroker.exe') -PathType Leaf
+$productionBrokerPath = Resolve-RimesExistingPath -Path (Join-Path $artifactRoot 'RimesBroker.exe') -PathType Leaf
 $e2ePath = Resolve-RimesExistingPath -Path (Join-Path $artifactRoot 'RimesTsfE2E.exe') -PathType Leaf
 $schemaRoot = Resolve-RimesExistingPath -Path $schemaRoot -PathType Container
+
+# Check both identities before starting either process. No test may attach to
+# the installed Broker, even when it is already serving this user's session.
+$testEndpoint = (& $brokerPath --print-endpoint | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $testEndpoint -notmatch '^\\\\\.\\pipe\\RIMES\.E2E\.Broker\.v2\.session-') {
+    throw 'The E2E Broker does not have the isolated test endpoint identity.'
+}
+$productionEndpoint = (& $productionBrokerPath --print-endpoint | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $testEndpoint -eq $productionEndpoint) {
+    throw 'The E2E Broker endpoint overlaps the daily input method.'
+}
 
 if ([string]::IsNullOrWhiteSpace($WorkDirectory)) {
     $WorkDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('rimes-ime-e2e-' + [guid]::NewGuid().ToString('N'))
@@ -182,6 +194,8 @@ Write-RimesJson -Path (Join-Path $workRoot 'e2e-result.json') -Object ([ordered]
     LibrimeSource = [string]$runtime.Source
     LibrimeTag = [string]$runtime.Tag
     LibrimeSha256 = [string]$runtime.Sha256
+    Endpoint = $testEndpoint
+    IsolatedFromDailyBroker = $true
     DesktopProbe = $probe
 })
 

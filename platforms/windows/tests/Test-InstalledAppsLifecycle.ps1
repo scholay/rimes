@@ -164,11 +164,18 @@ try {
     $global:RimesInstallerTestFailRemove=$true
     Expect-Failure 'uninstall discovery-entry failure is reported' {& "$active\Uninstall.ps1" -InstallRoot $root}
     Check 'uninstall failure restores both TSF registrations and discovery entry' ((Get-State $root).active -eq $oldActive -and $global:RimesInstallerTestNative.x64 -eq $oldActive -and $global:RimesInstallerTestNative.x86 -eq $oldActive -and (Same-Entry $before (Read-InstalledAppRegistration)))
+    $blockedRecord=Join-Path $root 'uninstalled-state.json'
+    New-Item -ItemType Directory -Path $blockedRecord | Out-Null
+    Expect-Failure 'recovery-record publication failure is reported' {& "$active\Uninstall.ps1" -InstallRoot $root}
+    Check 'recovery-record failure preserves active state and restores registration and discovery' ((Get-State $root).active -eq $oldActive -and $global:RimesInstallerTestNative.x64 -eq $oldActive -and $global:RimesInstallerTestNative.x86 -eq $oldActive -and (Same-Entry $before (Read-InstalledAppRegistration)))
+    Remove-Item -LiteralPath $blockedRecord -Force
     $global:RimesInstallerTestLock=$true
     Expect-Failure 'script uninstall refuses occupied DLLs by default' {& "$active\Uninstall.ps1" -InstallRoot $root}
     $result=& "$active\Uninstall.ps1" -InstallRoot $root -AllowPendingRestart
     Check 'explicit pending-restart uninstall confirms completion and removes discovery entries' ($result.Uninstalled -and $result.RequiresSignOut -and $null -eq (Read-InstalledAppRegistration) -and -not (Test-Path -LiteralPath $global:RimesInstallerTestShortcut) -and -not (Test-Path -LiteralPath "$root\state.json"))
     $message=Get-UninstallCompletionMessage $result
+    $recorded=Get-RecordedUninstallResult $root $oldActive 3010
+    Check 'elevated completion retains the exact DLL-access reason for the original-user dialog' ($recorded.SignOutReason -eq $result.SignOutReason -and (Get-UninstallCompletionMessage $recorded) -eq $message)
     Check 'exclusive DLL access failure completion explains possible use and requests sign out' ($result.SignOutReason -eq 'locked-dll' -and $message.Contains('could not be opened exclusively and may still be in use') -and $message.Contains('sign out') -and -not $message.Contains('could not be confirmed'))
     Check 'uninstall retains version files and synthetic user data unchanged' ((Test-Path -LiteralPath "$oldActive\PACKAGE.json") -and (Get-FileHash -LiteralPath $retained -Algorithm SHA256).Hash -eq $retainedHash)
     $global:RimesInstallerTestLock=$false
@@ -187,6 +194,8 @@ try {
     Check 'user-edited shortcut is preserved on uninstall' ($result.Uninstalled -and (Get-FileHash -LiteralPath $global:RimesInstallerTestShortcut -Algorithm SHA256).Hash -eq $customHash)
     $message=Get-UninstallCompletionMessage $result
     Check 'known unlocked installation completes without a sign-out warning' (-not $result.RequiresSignOut -and $result.SignOutReason -eq 'none' -and -not $message.Contains('sign out') -and -not $message.Contains('still in use'))
+    $recorded=Get-RecordedUninstallResult $root (Get-Content -LiteralPath "$root\uninstalled-state.json" -Raw | ConvertFrom-Json).active 0
+    Check 'unlocked completion is retained without inventing a sign-out requirement' (-not $recorded.RequiresSignOut -and $recorded.SignOutReason -eq 'none')
     & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
     $pending=Get-State $root
     $pending.requiresSignOut=$true
@@ -218,6 +227,8 @@ try {
     Check 'missing state uninstall removes both architectures and records recovery' ($result.Uninstalled -and $global:RimesInstallerTestNative.Count -eq 0 -and (Test-Path -LiteralPath "$root\uninstalled-state.json"))
     $message=Get-UninstallCompletionMessage $result
     Check 'missing state keeps conservative sign out and describes unknown load state' ($result.RequiresSignOut -and $result.SignOutReason -eq 'unknown-installation-state' -and $message.Contains('could not be confirmed') -and $message.Contains('sign out') -and -not $message.Contains('DLL is still in use'))
+    $recorded=Get-RecordedUninstallResult $root $actual 3010
+    Check 'missing-state completion records recovery and its unknown load-state reason' ($recorded.SignOutReason -eq 'unknown-installation-state' -and (Get-Content -LiteralPath "$root\uninstalled-state.json" -Raw | ConvertFrom-Json).recovered)
     & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
     $actual=(Get-State $root).active
     '{broken' | Set-Content -LiteralPath "$root\state.json"
