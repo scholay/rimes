@@ -57,6 +57,7 @@ jobs:
           path: |
             platforms/windows/native/out/build/windows-${{ matrix.architecture }}/Release/RimesTsf.dll
             platforms/windows/native/out/build/windows-${{ matrix.architecture }}/Release/RimesBroker.exe
+            platforms/windows/native/out/build/windows-${{ matrix.architecture }}/Release/RimesE2EBroker.exe
             platforms/windows/native/out/build/windows-${{ matrix.architecture }}/Release/RimesRegistrar.exe
             platforms/windows/native/out/build/windows-${{ matrix.architecture }}/Release/RimesTsfE2E.exe
             platforms/windows/native/out/build/windows-${{ matrix.architecture }}/Release/RimesTsfTestHost.exe

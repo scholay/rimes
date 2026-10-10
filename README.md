@@ -72,7 +72,7 @@
 | 资源 | `builtin.capsule.resources` | 1.1.0 | 随 RIMES 预装 | 启用 |
 | 临时 | `builtin.capsule.temporary` | 1.1.0 | 随 RIMES 预装 | 启用 |
 | Claude | `builtin.claude-code-cli` | 1.1.0 | 设置中按需下载 | 禁用 |
-| ChatGPT | `builtin.codex-cli` | 1.1.0 | 设置中按需下载 | 禁用 |
+| ChatGPT | `builtin.codex-cli` | 1.1.1 | 设置中按需下载 | 禁用 |
 | 并击 | `builtin.fly-chord-learning` | 2.0.0 | 随 RIMES 预装 | 禁用 |
 | LaTeX | `builtin.latex` | 1.1.0 | 设置中按需下载 | 禁用 |
 | 对话 | `builtin.mailbox.chat` | 1.1.0 | 随 RIMES 预装 | 启用 |

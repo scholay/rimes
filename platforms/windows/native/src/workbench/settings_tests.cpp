@@ -13,7 +13,8 @@ void Check(bool ok, const char* reason) {
 }
 bool SameSettings(const Settings& a, const Settings& b) {
   return a.revision == b.revision && a.schema == b.schema &&
-         a.base_url == b.base_url && a.model == b.model &&
+         a.base_url == b.base_url && a.model == b.model && a.ai_connector == b.ai_connector &&
+         a.codex_path == b.codex_path && a.codex_model == b.codex_model &&
          a.target_language == b.target_language && a.theme == b.theme &&
          a.ascii == b.ascii && a.traditional == b.traditional &&
          a.ascii_punctuation == b.ascii_punctuation &&
@@ -72,6 +73,15 @@ int main() {
             "round trip retains theme and unrelated settings");
     }
     settings.candidate_count = 5;
+    settings.ai_connector = "codex-cli";
+    settings.codex_path = "C:/Program Files/Codex/codex.exe";
+    settings.codex_model = "fixture-model";
+    Check(SaveSettings(settings, nullptr), "save Codex connector without API credentials");
+    Settings codex;
+    Check(LoadSettings(&codex, nullptr) && SameSettings(codex, settings), "Codex connector round trip");
+    settings.ai_connector = "unknown";
+    Check(!SaveSettings(settings, nullptr), "reject unknown connector");
+    settings.ai_connector = "codex-cli";
     settings.vertical_candidates = true;
     Check(SaveSettings(settings, nullptr), "save candidate options");
     Settings candidate_options;

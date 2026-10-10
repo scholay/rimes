@@ -118,6 +118,7 @@ add_library(RimesWorkbench STATIC
     src/workbench/model.cpp
     src/workbench/official_plugins.cpp
     src/workbench/provider.cpp
+    src/workbench/codex_cli.cpp
     src/workbench/runtime.cpp
     src/workbench/settings_ui.cpp
     src/workbench/window.cpp
@@ -198,6 +199,19 @@ rimes_harden_target(RimesRegistrar)
 rimes_use_unicode_console_entrypoint(RimesRegistrar)
 
 if(RIMES_BUILD_TESTS)
+    # Same implementation and security checks, but a compile-time endpoint
+    # identity that cannot connect to or retire the user's daily Broker.
+    get_target_property(e2e_broker_sources RimesBroker SOURCES)
+    add_executable(RimesE2EBroker ${e2e_broker_sources})
+    target_include_directories(RimesE2EBroker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/broker")
+    target_compile_definitions(RimesE2EBroker PRIVATE RIMES_E2E_TEST_IDENTITY=1)
+    target_link_libraries(RimesE2EBroker PRIVATE RimesCore RimesEngine RimesWorkbench advapi32)
+    rimes_harden_target(RimesE2EBroker)
+    rimes_use_unicode_console_entrypoint(RimesE2EBroker)
+    add_test(NAME RimesE2EBrokerEndpoint COMMAND RimesE2EBroker --print-endpoint)
+    set_tests_properties(RimesE2EBrokerEndpoint PROPERTIES
+        PASS_REGULAR_EXPRESSION "RIMES[.]E2E[.]Broker[.]v2[.]session-" TIMEOUT 10)
+
     add_executable(RimesCaretRegressionTests
         src/e2e/caret_regression.cpp
         src/e2e/fake_tsf.cpp
@@ -280,11 +294,22 @@ if(RIMES_BUILD_TESTS)
     target_link_libraries(RimesOfficialPluginTests PRIVATE RimesWorkbench)
     rimes_harden_target(RimesOfficialPluginTests)
     add_test(NAME RimesOfficialPlugins COMMAND RimesOfficialPluginTests)
-    add_executable(RimesProviderProbe src/workbench/provider_probe.cpp src/workbench/provider.cpp src/workbench/model.cpp)
+    add_executable(RimesProviderProbe src/workbench/provider_probe.cpp src/workbench/provider.cpp src/workbench/codex_cli.cpp src/workbench/model.cpp)
     target_link_libraries(RimesProviderProbe PRIVATE RimesCore winhttp advapi32)
     rimes_harden_target(RimesProviderProbe)
     rimes_use_unicode_console_entrypoint(RimesProviderProbe)
     add_executable(RimesSseTests src/workbench/sse_tests.cpp)
+    add_executable(RimesCodexTests src/workbench/codex_cli_tests.cpp)
+    target_link_libraries(RimesCodexTests PRIVATE RimesWorkbench)
+    rimes_harden_target(RimesCodexTests)
+    add_executable(RimesCodexFixture src/workbench/codex_cli_fixture.cpp)
+    rimes_harden_target(RimesCodexFixture)
+    rimes_use_unicode_console_entrypoint(RimesCodexFixture)
+    add_test(NAME RimesCodexConnector COMMAND RimesCodexTests $<TARGET_FILE:RimesCodexFixture>)
+    add_executable(RimesCodexProbe src/workbench/codex_cli_probe.cpp)
+    target_link_libraries(RimesCodexProbe PRIVATE RimesWorkbench)
+    rimes_harden_target(RimesCodexProbe)
+    rimes_use_unicode_console_entrypoint(RimesCodexProbe)
     rimes_harden_target(RimesSseTests)
     add_test(NAME RimesSseControl COMMAND RimesSseTests)
     add_executable(RimesWorkbenchTests src/workbench/model.cpp src/workbench/model_tests.cpp)
@@ -376,6 +401,7 @@ if(RIMES_BUILD_TESTS)
     add_executable(RimesSettingsTests
         src/workbench/settings_tests.cpp
         src/workbench/provider.cpp
+        src/workbench/codex_cli.cpp
         src/workbench/model.cpp
     )
     target_link_libraries(RimesSettingsTests PRIVATE RimesCore winhttp advapi32)
@@ -438,12 +464,15 @@ if(RIMES_BUILD_TESTS)
         uuid
     )
     rimes_harden_target(RimesTsfE2E)
+    target_compile_definitions(RimesTsfE2E PRIVATE RIMES_E2E_TEST_IDENTITY=1)
+    add_dependencies(RimesTsfE2E RimesE2EBroker)
     rimes_use_unicode_console_entrypoint(RimesTsfE2E)
 
     add_executable(RimesVisualPreview WIN32
         src/visual_preview/main.cpp
         src/workbench/settings_ui.cpp
         src/workbench/provider.cpp
+        src/workbench/codex_cli.cpp
         src/workbench/model.cpp
         src/tsf/CandidateWindow.cpp
         src/tsf/ModuleState.cpp
@@ -496,6 +525,11 @@ if(RIMES_BUILD_TESTS)
     rimes_harden_target(RimesTsfTestHost)
 
     add_test(NAME RimesBrokerProtocol COMMAND RimesBrokerProtocolTests)
+    add_executable(RimesBrokerLaunchTests src/tsf/broker_launch_tests.cpp)
+    target_link_libraries(RimesBrokerLaunchTests PRIVATE advapi32)
+    rimes_harden_target(RimesBrokerLaunchTests)
+    add_test(NAME RimesBrokerLaunch COMMAND RimesBrokerLaunchTests)
+    set_tests_properties(RimesBrokerLaunch PROPERTIES TIMEOUT 10)
     add_test(NAME RimesEngineUnit COMMAND RimesEngineTests)
     add_test(NAME RimesBrokerKeyTranslation
              COMMAND RimesBrokerKeyTranslationTests)

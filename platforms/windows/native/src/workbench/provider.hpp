@@ -10,6 +10,7 @@ namespace rimes::windows::workbench {
 struct Settings {
   std::uint64_t revision = 1;
   std::string schema = "rime_ice", base_url, model, target_language = "English";
+  std::string ai_connector = "openai-compatible", codex_path, codex_model;
   // Persisted appearance colorway: night|day|quiet|rasta. Default night.
   std::string theme = "night";
   bool ascii = false, traditional = false, ascii_punctuation = false;
@@ -35,4 +36,9 @@ bool GenerateWithKey(const Settings& config, const Generation& job,
 bool GenerateAPI(const Settings& config, const Generation& job,
                  const std::function<bool(const std::string&)>& chunk,
                  const std::function<bool()>& cancelled, std::string* error);
+// Common text-connector seam. Both transports obey the frozen Generation and
+// cancellation contract; only Runtime may publish or deliver their output.
+bool GenerateText(const Settings& config, const Generation& job,
+                  const std::function<bool(const std::string&)>& chunk,
+                  const std::function<bool()>& cancelled, std::string* error);
 }  // namespace rimes::windows::workbench

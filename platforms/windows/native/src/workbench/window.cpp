@@ -33,6 +33,7 @@ namespace {
 constexpr UINT kChanged = WM_APP + 80, kTray = WM_APP + 81;
 constexpr UINT kOpenSettings = WM_APP + 82;
 constexpr UINT kUpdateBufferZOrder = WM_APP + 83;
+constexpr UINT kMaintenanceExit = WM_APP + 84;
 constexpr int kToggle = 100, kSettings = 101, kDeploy = 102, kStartup = 103,
               kAbout = 105, kExit = 104, kPasteMenu = 106;
 constexpr int kModeInput = 110, kModeGenerate = 111, kModeTranslate = 112;
@@ -208,6 +209,9 @@ ui::BufferPaintState Window::MakePaintState(const core::Json& state) const {
                        !state.value("uncertain", false) &&
                        (has_result || has_source) &&
                        (!paint.busy || has_result) && status != "Sending...";
+  if (mode == ui::BufferMode::kGenerate && !has_result)
+    paint.send_enabled = has_source && !paint.busy &&
+        state.value("preedit", std::string()).empty() && status != "Sending...";
   paint.paste_enabled = status != "Sending...";
   paint.preedit = Wide(state.value("preedit", std::string()));
   paint.preview = Wide(state.value("preview", std::string()));
@@ -352,6 +356,7 @@ void Window::PopupModeMenu() {
     mode = command == kModeInput ? ui::BufferMode::kInput
         : command == kModeGenerate ? ui::BufferMode::kGenerate
                                    : ui::BufferMode::kTranslate;
+    if (mode == ui::BufferMode::kGenerate) runtime.SelectAIMode();
   }
   InvalidateRect(window, nullptr, FALSE);
 }
@@ -571,7 +576,8 @@ void Window::ApplyHit(ui::BufferHitKind hit) {
       Copy();
       break;
     case ui::BufferHitKind::kSend:
-      runtime.Send(false);
+      if (mode == ui::BufferMode::kGenerate && state.result_blocks.empty()) runtime.Generate(false);
+      else runtime.Send(false);
       break;
     default:
       break;
@@ -759,6 +765,11 @@ LRESULT CALLBACK Window::Procedure(HWND hwnd, UINT message, WPARAM wparam,
         return 0;
       case kOpenSettings:
         self->OpenSettings();
+        return 0;
+      case kMaintenanceExit:
+        // Buffer is disposable IME UI. Stop transient provider work and the
+        // input engine through the same shutdown path as the tray's Exit.
+        DestroyWindow(hwnd);
         return 0;
       case kUpdateBufferZOrder:
         // Recheck the current lifetime: Settings may have reopened while this
@@ -978,7 +989,7 @@ LRESULT CALLBACK Window::Procedure(HWND hwnd, UINT message, WPARAM wparam,
             break;
           case kDeploy:
             if (!self->deploying.exchange(true)) {
-              self->runtime.Protect();
+              self->runtime.DiscardBuffer();
               self->maintenance = std::jthread([self] {
                 self->deploy();
                 self->deploying.store(false);
@@ -1057,6 +1068,11 @@ void UiCommands::Attach(HWND window) {
 bool UiCommands::RequestSettings() {
   std::lock_guard lock(mutex_);
   return window_ && PostMessageW(window_, kOpenSettings, 0, 0);
+}
+
+bool UiCommands::RequestExit() {
+  std::lock_guard lock(mutex_);
+  return window_ && PostMessageW(window_, kMaintenanceExit, 0, 0);
 }
 
 void RunWindow(Runtime& runtime, const std::function<void()>& stop,

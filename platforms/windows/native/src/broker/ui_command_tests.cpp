@@ -132,6 +132,7 @@ LRESULT CALLBACK FixtureProcedure(HWND window, UINT message, WPARAM wparam,
 void TestUiDispatcherRetiresItsWindow() {
   workbench::UiCommands commands;
   Check(!commands.RequestSettings(), "dispatcher waits for UI creation");
+  Check(!commands.RequestExit(), "maintenance exit waits for UI creation");
   WNDCLASSW fixture{};
   fixture.lpfnWndProc = FixtureProcedure;
   fixture.hInstance = GetModuleHandleW(nullptr);
@@ -148,8 +149,13 @@ void TestUiDispatcherRetiresItsWindow() {
   while (PeekMessageW(&message, window, 0, 0, PM_REMOVE))
     DispatchMessageW(&message);
   Check(posted_commands == 1, "one request reaches the UI thread once");
+  Check(commands.RequestExit(), "maintenance exit posts without saving Buffer");
+  while (PeekMessageW(&message, window, 0, 0, PM_REMOVE))
+    DispatchMessageW(&message);
+  Check(posted_commands == 2, "maintenance exit is handled by the UI thread");
   commands.Attach(nullptr);
   Check(!commands.RequestSettings(), "retired HWND cannot receive a late request");
+  Check(!commands.RequestExit(), "retired HWND cannot receive a late exit");
   DestroyWindow(window);
   UnregisterClassW(fixture.lpszClassName, fixture.hInstance);
 }

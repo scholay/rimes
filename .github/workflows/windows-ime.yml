@@ -11,6 +11,10 @@ on:
       - 'OfficialPlugins'
       - 'plugins.lock.json'
       - 'scripts/prepare-official-plugins.py'
+      - 'scripts/test-official-plugin-import.py'
+      - 'scripts/sync-buffer-plugin-catalog.py'
+      - 'scripts/test-buffer-plugin-catalog.py'
+      - '.gitattributes'
       - '.github/workflows/windows-ime.yml'
       - '.github/workflows/windows-native.yml'
       - 'rime-data/**'
@@ -22,6 +26,10 @@ on:
       - 'OfficialPlugins'
       - 'plugins.lock.json'
       - 'scripts/prepare-official-plugins.py'
+      - 'scripts/test-official-plugin-import.py'
+      - 'scripts/sync-buffer-plugin-catalog.py'
+      - 'scripts/test-buffer-plugin-catalog.py'
+      - '.gitattributes'
       - '.github/workflows/windows-ime.yml'
       - '.github/workflows/windows-native.yml'
       - 'rime-data/**'
@@ -62,6 +70,14 @@ jobs:
           python -m unittest discover -s platforms/windows/tests -p test_native_data.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Test plugin imports and Windows catalog checkout
+        shell: pwsh
+        run: |
+          python scripts/test-official-plugin-import.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/test-buffer-plugin-catalog.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Test isolated installer payload and verification result
         if: matrix.architecture == 'x64'
         shell: powershell
@@ -71,6 +87,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./platforms/windows/tests/Test-SetupResult.ps1 `
             -OutputDirectory (Join-Path $env:RUNNER_TEMP ('rimes-setup-result-' + [guid]::NewGuid().ToString('N')))
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./platforms/windows/tests/Test-SetupSigning.ps1 `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP ('rimes-setup-signing-' + [guid]::NewGuid().ToString('N')))
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./platforms/windows/tests/Test-UninstallApp.ps1 `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP ('rimes-uninstall-app-' + [guid]::NewGuid().ToString('N')))
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./platforms/windows/tests/Test-BrokerMaintenance.ps1 `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP ('rimes-broker-maintenance-' + [guid]::NewGuid().ToString('N')))
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test installer ownership and cross-account lifecycle
@@ -96,6 +121,7 @@ jobs:
           path: |
             platforms/windows/native/out/build/windows-${{ matrix.architecture }}/Release/RimesTsf.dll
             platforms/windows/native/out/build/windows-${{ matrix.architecture }}/Release/RimesBroker.exe
+            platforms/windows/native/out/build/windows-${{ matrix.architecture }}/Release/RimesE2EBroker.exe
             platforms/windows/native/out/build/windows-${{ matrix.architecture }}/Release/RimesRegistrar.exe
             platforms/windows/native/out/build/windows-${{ matrix.architecture }}/Release/RimesTsfE2E.exe
             platforms/windows/native/out/build/windows-${{ matrix.architecture }}/Release/RimesTsfTestHost.exe

@@ -26,7 +26,9 @@ int main() {
   const auto location = root / L"fresh" / L"plugins";
   {
     workbench::OfficialPluginStore store(location);
-    Check(store.Entries().size() == 3, "exact Windows catalog");
+    Check(store.Entries().size() == 4, "exact Windows catalog");
+    Check(!store.Grant(official::kCodex).empty(), "bundled Codex connector available offline");
+    Check(official::Instruction(store.Package(official::kCodex), "English").find("Respond") != std::string::npos, "Codex package supplies text instruction");
     Check(!store.Grant(official::kTranslation).empty() && !store.Grant(official::kChord).empty(), "bundled features available offline");
     Check(store.Grant(official::kAI).empty(), "fresh optional AI not enabled");
     auto absent = GrantFor(store, official::kAI);

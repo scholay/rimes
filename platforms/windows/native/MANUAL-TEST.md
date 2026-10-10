@@ -45,7 +45,8 @@ Mark each row pass / fail / n/a. Attach host, DPI, and schema.
 
 - [ ] Buffer is closed and capture is off throughout the ordinary-input pass
 - [ ] Settings Connector API URL/model fields accept idle `0123456789` and
-      numeric-keypad digits with the product schemas, without losing characters
+      numeric-keypad digits, decimal and operators with the product schemas,
+      including Shift held with the keypad, without losing characters
 - [ ] An idle left-Shift tap switches Chinese/English in the same focus context;
       the next English letter reaches the host even if it refuses a write edit
 - [ ] A configured initial ASCII mode, shifted punctuation, composing number
@@ -96,6 +97,13 @@ Mark each row pass / fail / n/a. Attach host, DPI, and schema.
 - [ ] OpenCC 简↔繁 if the user enables it
 
 ## Existing Buffer interactions
+
+- [ ] Leave temporary Buffer text present and install/update/reinstall/uninstall:
+      no save/copy or manual-exit prerequisite; only the owned IME runtime stops.
+      Dictionaries, settings and credentials remain separate and retained.
+- [ ] During maintenance, cached TSF activation cannot open a second engine.
+      After uninstall/upgrade, a new-build cached retired DLL cannot relaunch its
+      sibling Broker. Never kill the host; record any required sign-out.
 
 - [ ] Short field: Buffer opens aligned with the field's left edge and width
       (520–1100 DIPs), 10 DIPs below its outer bottom edge

@@ -11,6 +11,7 @@ class UiCommands {
  public:
   void Attach(HWND window);
   bool RequestSettings();
+  bool RequestExit();
  private:
   std::mutex mutex_;
   HWND window_ = nullptr;

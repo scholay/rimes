@@ -354,8 +354,9 @@ void TestReturningToInputRejectsLateResultsAndDropsQueuedTranslation() {
         "returning to input retains the draft and binding without restarting requests");
   runtime.Stop();
   runtime.ReturnToInput();
-  Check(runtime.Snapshot()["status"] == "Protected",
-        "mode selection cannot replace the protected lifecycle status");
+  Check(runtime.Snapshot()["status"] == "Buffer reset" &&
+        runtime.Snapshot()["source"] == "" && runtime.Snapshot()["result"] == "",
+        "mode selection cannot revive content discarded by IME shutdown");
 }
 void TestReturningToInputRetainsCompletedResultsAndAnIssuedDelivery() {
   std::atomic<unsigned> calls{0};
@@ -482,12 +483,82 @@ void TestExplicitOpeningPlacementRevision() {
   runtime.Close();
   Check(!runtime.PlacementTarget(), "closed buffer has no placement target");
 }
+void TestCodexConnectorAndReturn() {
+  std::atomic<unsigned> calls{0};
+  std::atomic<bool> release{false}, cancelled_old{false};
+  workbench::Runtime runtime([&](const workbench::Settings& config, const workbench::Generation& job,
+      const std::function<bool(const std::string&)>& chunk,
+      const std::function<bool()>& cancelled, std::string*) {
+    Check(config.ai_connector == "codex-cli" &&
+        job.plugin_id == (job.translation ? official::kTranslation : official::kCodex) &&
+        !job.plugin_grant.empty() && job.connector_id == official::kCodex && !job.connector_grant.empty(), "Codex selected and granted");
+    ++calls;
+    while (!release && !cancelled()) Sleep(2);
+    if (cancelled()) { cancelled_old = true; return false; }
+    return chunk("Generated only.");
+  });
+  auto config = runtime.Configuration(); config.ai_connector = "codex-cli";
+  Check(runtime.Configure(config, {}, false, nullptr), "save Codex configuration");
+  const auto peer = GetCurrentProcessId() + 1;
+  const auto target = runtime.Register(peer, 950, 951);
+  runtime.Focus(target); runtime.Bind(peer); runtime.Paste("Original request."); runtime.SelectAIMode();
+  core::KeyEvent key; key.virtual_key = VK_RETURN;
+  key.event_flags = static_cast<unsigned>(core::KeyEventFlags::kKeyDown);
+  Check(runtime.BeforeKey(target, key, false), "AI Return requests generation");
+  Wait([&] { return calls == 1; }, "first Codex job issued");
+  release = true;
+  Wait([&] { return runtime.Snapshot()["result"] == "Generated only."; }, "fake CLI result ready");
+  key.event_flags = 0; Check(runtime.BeforeKey(target, key, false), "generation key-up owned");
+  Check(runtime.Snapshot()["status"] == "Ready" && runtime.Snapshot()["source"] == "Original request.", "generation press never sends on release");
+  key.event_flags = static_cast<unsigned>(core::KeyEventFlags::kKeyDown); runtime.BeforeKey(target, key, false);
+  key.event_flags = 0; runtime.BeforeKey(target, key, false);
+  auto event = runtime.Control({{"op", "wait"}, {"session", 950}}, peer);
+  if (event["kind"] == "capture") event = runtime.Control({{"op", "wait"}, {"session", 950}}, peer);
+  Check(event["kind"] == "deliver" && event["text"] == "Generated only.", "second Return sends result, not request");
+  runtime.Control({{"op", "ack"}, {"session", 950}, {"request", event["request"]}, {"accepted", true}}, peer);
+  Check(runtime.Snapshot()["source"] == "" && runtime.Snapshot()["result"] == "", "final accepted result consumes frozen source");
+  release = false; runtime.Paste("Another request."); runtime.Generate(false);
+  Wait([&] { return calls == 2; }, "next Codex job started");
+  runtime.Close(); Wait([&] { return cancelled_old.load(); }, "close cancels producer");
+  Check(runtime.Snapshot()["result"] == "" && runtime.Snapshot()["source"] == "Another request.", "close cannot publish stale result or lose request");
+  runtime.Bind(peer);
+  Check(runtime.ManagePlugin(official::kCodex, "disable", nullptr), "disable connector");
+  runtime.Generate(true);
+  Check(!runtime.Snapshot().value("busy", false) && calls == 2, "translation cannot bypass a disabled connector");
+  Check(runtime.ManagePlugin(official::kCodex, "enable", nullptr), "enable connector");
+  release = true; runtime.Generate(true);
+  Wait([&] { return runtime.Snapshot()["result"] == "Generated only."; }, "translation uses selected Codex connector");
+  Check(runtime.ManagePlugin(official::kCodex, "disable", nullptr), "revoke completed connector result");
+  Check(runtime.Snapshot()["result"] == "" && runtime.Snapshot()["source"] == "Another request.", "connector revocation rejects completed results from another plugin owner");
+  runtime.Stop();
+}
+void TestDisposableMaintenanceContent() {
+  workbench::Runtime runtime;
+  const auto peer = GetCurrentProcessId() + 1;
+  const auto target = runtime.Register(peer, 995, 1);
+  runtime.Focus(target); runtime.Bind(peer); runtime.Paste("Disposable Buffer.");
+  runtime.Send(true);
+  runtime.DiscardBuffer();
+  auto state = runtime.Snapshot();
+  Check(state["source"] == "" && state["result"] == "" &&
+            !runtime.Capturing(target),
+        "explicit redeployment reset discards Buffer without a content gate");
+  auto event = runtime.Control({{"op", "wait"}, {"session", 995}}, peer);
+  Check(event.value("kind", "") == "capture",
+        "reset replaces a queued delivery with revoked capture authority");
+  runtime.Focus(target); runtime.Bind(peer); runtime.Paste("Next session.");
+  runtime.Stop();
+  state = runtime.Snapshot();
+  Check(state["source"] == "" && state["result"] == "",
+        "IME shutdown discards temporary UI content instead of preserving it");
+}
 int main() {
   const auto root = std::filesystem::temp_directory_path() /
       (L"rimes-runtime-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
   std::filesystem::create_directories(root);
   Check(SetEnvironmentVariableW(L"LOCALAPPDATA", root.c_str()) != 0, "isolated runtime preferences");
   TestTargets();
+  TestDisposableMaintenanceContent();
   TestExplicitOpeningPlacementRevision();
   TestCommandModifiersDoNotBecomeBufferCommands();
   TestUnhandledModifierCommitIsCapturedWithoutChangingKeyOwnership();
@@ -499,6 +570,7 @@ int main() {
   TestReturningToInputRetainsCompletedResultsAndAnIssuedDelivery();
   TestReturningToInputInvalidatesReadyResultOnRealEdit();
   TestChordFallback();
+  TestCodexConnectorAndReturn();
   std::filesystem::remove_all(root);
   std::cout << "Runtime plugin authority and chord fallback tests passed\n";
 }

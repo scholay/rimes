@@ -13,10 +13,13 @@ inline bool RoutePrintableKey(WPARAM key, std::uint32_t modifiers,
                               bool ascii_mode) noexcept {
   if (composing || capturing) return true;
   if (ascii_mode) return false;
+  // Keypad keys retain their numeric/operator identity with Shift. Unlike
+  // Shift+number-row punctuation, an idle Rime session can decline them after
+  // OnTest has already prevented a native editor from receiving the key.
+  if (key >= VK_NUMPAD0 && key <= VK_DIVIDE) return false;
   const bool shifted = (modifiers & static_cast<std::uint32_t>(
       core::KeyModifiers::kShift)) != 0;
-  const bool digit = (key >= '0' && key <= '9') ||
-                     (key >= VK_NUMPAD0 && key <= VK_NUMPAD9);
+  const bool digit = key >= '0' && key <= '9';
   // Shift+number is punctuation, not an idle digit. Preserve the schema's
   // punctuation mapping, candidate numbers, and Buffer's own text capture.
   return (shifted || !digit) && key != VK_SPACE;

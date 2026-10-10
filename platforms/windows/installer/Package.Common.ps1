@@ -84,7 +84,9 @@ function Assert-InstallUser([string]$InstallRoot,[string]$UserSid) {
 }
 function Invoke-Registrar([string]$Directory,[string]$Architecture,[string]$Operation) {
     $registrar = Join-Path $Directory "$Architecture\RimesRegistrar.exe"
-    & $registrar $Operation --dll (Join-Path $Directory "$Architecture\RimesTsf.dll")
+    # Native diagnostics are not PowerShell result objects. Keep them visible
+    # without contaminating the one structured result consumed by launchers.
+    & $registrar $Operation --dll (Join-Path $Directory "$Architecture\RimesTsf.dll") | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Registrar $Operation $Architecture failed: $LASTEXITCODE" }
 }
 function Assert-Unlocked([string]$Directory) {
@@ -95,13 +97,67 @@ function Assert-Unlocked([string]$Directory) {
         catch { throw "A RIMES input method DLL could not be opened exclusively and may still be in use. Switch input methods, close applications using RIMES or sign out, then retry. No files were overwritten: $path" }
     }
 }
-function Stop-OwnedBroker([string]$Directory) {
-    foreach ($process in Get-Process -Name RimesBroker -ErrorAction SilentlyContinue) {
-        if ($process.Path -eq (Join-Path $Directory 'x64\RimesBroker.exe')) {
-            # A pending process-local Buffer is never silently discarded by upgrade.
-            throw 'Exit RIMES from its tray after copying or sending Buffer content, then retry the installation.'
-        }
+function Get-BrokerMutexName([string]$UserSid,[int]$Session) {
+    if(-not ('RimesMaintenanceNames' -as [type])){
+        Add-Type -TypeDefinition @'
+public static class RimesMaintenanceNames {
+    public static string Mutex(string sid, int session) {
+        ulong hash=14695981039346656037UL;
+        unchecked { foreach(char unit in sid) { hash^=unit; hash*=1099511628211UL; } }
+        return "Local\\RIMES.Broker.v2.session-"+session+".user-"+hash.ToString("x16");
     }
+}
+'@
+    }
+    return [RimesMaintenanceNames]::Mutex(([Security.Principal.SecurityIdentifier]::new($UserSid)).Value,$Session)
+}
+function New-BrokerMaintenanceReservation([string]$UserSid=([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) {
+    # A different UAC administrator does not open original-user kernel objects.
+    # Setup.exe / Invoke-UserUninstall retains that user's reservation instead.
+    if($UserSid -ne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value){return $null}
+    $name=Get-BrokerMutexName $UserSid ([Diagnostics.Process]::GetCurrentProcess().SessionId)
+    $security=[Security.AccessControl.MutexSecurity]::new()
+    $security.SetAccessRuleProtection($true,$false)
+    $security.AddAccessRule([Security.AccessControl.MutexAccessRule]::new([Security.Principal.SecurityIdentifier]::new($UserSid),'FullControl','Allow'))
+    $created=$false
+    # Retain even an existing object's handle before stopping its Broker. Its
+    # existence blocks TSF auto-start; ownership remains available to deploy.
+    return [Threading.Mutex]::new($false,$name,[ref]$created,$security)
+}
+function Stop-OwnedBroker([string]$Directory,[string]$UserSid=([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) {
+    # Callers have already validated the installed path/manifest. Recovery also
+    # supports absent files, so do not require a complete package again here.
+    $expected=[IO.Path]::GetFullPath((Join-Path $Directory 'x64\RimesBroker.exe'))
+    $reservation=New-BrokerMaintenanceReservation $UserSid
+    try {
+        foreach($process in Get-Process -Name RimesBroker -ErrorAction SilentlyContinue){
+            $native=Get-CimInstance Win32_Process -Filter ('ProcessId='+$process.Id)
+            if(-not $native){continue}
+            if(-not $native.ExecutablePath){if($process.WaitForExit(500)){continue};throw 'Cannot verify a Broker executable. Run maintenance with administrator approval.'}
+            if([IO.Path]::GetFullPath($native.ExecutablePath) -ne $expected){continue}
+            $owner=Invoke-CimMethod -InputObject $native -MethodName GetOwnerSid
+            if($owner.ReturnValue -ne 0 -or -not $owner.Sid){throw 'Cannot verify the Broker owner. No process was stopped.'}
+            if($owner.Sid -ne $UserSid){continue}
+            if($native.CommandLine -match '(?i)(^|\s)--(deploy-only|once|print-|install-autostart|remove-autostart|user-data-dir|shared-data-dir|rime-dll|log-dir)'){
+                throw 'Another Rime deployment or diagnostic operation is using this executable. Wait for it to finish, then retry.'
+            }
+            # Bind to the process object and creation time, not a reusable PID.
+            $process.Refresh()
+            if($process.HasExited){continue}
+            if([Math]::Abs(($process.StartTime.ToUniversalTime()-$native.CreationDate.ToUniversalTime()).TotalMilliseconds) -gt 1){throw 'Broker identity changed during maintenance. Retry.'}
+            $stopEvent=$null
+            try {
+                $name=(Get-BrokerMutexName $UserSid $process.SessionId)+'.shutdown-'+$process.Id
+                try {$stopEvent=[Threading.EventWaitHandle]::OpenExisting($name,[Security.AccessControl.EventWaitHandleRights]::Modify)}catch [Threading.WaitHandleCannotBeOpenedException]{}catch [UnauthorizedAccessException]{}
+                if($stopEvent){$stopEvent.Set() | Out-Null;if($process.WaitForExit(5000)){continue}}
+                # Legacy Brokers have no graceful maintenance event. Terminate
+                # only the verified owned executable, never its TSF host app.
+                Stop-Process -InputObject $process -Force -ErrorAction Stop
+                if(-not $process.WaitForExit(5000)){throw 'The owned Broker could not be stopped'}
+            } finally {if($stopEvent){$stopEvent.Dispose()}}
+        }
+        return $reservation
+    } catch {if($reservation){$reservation.Dispose()};throw}
 }
 function Write-InstallState([string]$Root,$State) {
     New-Item -ItemType Directory -Path $Root -Force | Out-Null
@@ -200,11 +256,11 @@ function Invoke-LegacyRegistrar([string]$Package,$Entry,[string]$Operation){
         if($Operation -eq 'register'){throw 'The original DLL was missing; a dangling registration cannot be restored. Recovery record retained.'}
         if(Test-Path -LiteralPath $Entry.dll){throw 'The missing DLL path changed during recovery'}
     } elseif((Get-FileHash -LiteralPath $Entry.dll -Algorithm SHA256).Hash -ne $Entry.sha256){throw 'Previous DLL changed since its recovery record was written'}
-    & (Join-Path $Package "$($Entry.architecture)\RimesRegistrar.exe") $Operation --dll $Entry.dll
+    & (Join-Path $Package "$($Entry.architecture)\RimesRegistrar.exe") $Operation --dll $Entry.dll | Out-Host
     if($LASTEXITCODE){throw "Legacy registration $Operation failed"}
 }
 function Invoke-RecoveryRegistrar([string]$Package,[string]$Directory,[string]$Architecture,[string]$Operation){
-    & (Join-Path $Package "$Architecture\RimesRegistrar.exe") $Operation --dll (Join-Path $Directory "$Architecture\RimesTsf.dll")
+    & (Join-Path $Package "$Architecture\RimesRegistrar.exe") $Operation --dll (Join-Path $Directory "$Architecture\RimesTsf.dll") | Out-Host
     if($LASTEXITCODE){throw "Registrar $Operation $Architecture failed: $LASTEXITCODE"}
 }
 function Assert-OwnedBrokerAutostart([string]$Directory){
@@ -349,6 +405,45 @@ function Assert-SettingsShortcut([string]$InstallRoot,[string]$Directory) {
         # User-edited shortcuts retain their target and arguments.
     } finally {if($shortcut){[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) | Out-Null};[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null}
 }
+function Write-RetainedUninstallState([string]$Root,[string]$Directory,$Result) {
+    $statePath=Join-Path $Root 'state.json'
+    $destination=Join-Path $Root 'uninstalled-state.json'
+    $destinationItem=Get-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue
+    if($destinationItem -and ($destinationItem.PSIsContainer -or ($destinationItem.Attributes -band [IO.FileAttributes]::ReparsePoint))){throw 'The uninstall recovery record path is not a regular file. Preserve it and repair the installation.'}
+    $record=[pscustomobject]@{active=$Directory;recovered=$true}
+    if(Test-Path -LiteralPath $statePath){
+        try {
+            $previous=Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if($previous.PSObject.Properties['active'] -and $previous.active -eq $Directory){$record=$previous}
+        } catch {}
+    }
+    $record | Add-Member -NotePropertyName uninstalled -NotePropertyValue $true -Force
+    $record | Add-Member -NotePropertyName uninstallResult -NotePropertyValue $Result -Force
+    $temporary=Join-Path $Root ('uninstalled.'+[guid]::NewGuid().ToString('N')+'.tmp')
+    try {
+        $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $temporary -Encoding UTF8
+        Move-Item -LiteralPath $temporary -Destination $destination -Force
+        # Keep the old active state intact until the recovery record is safely
+        # published. Failure here lets the caller restore registration.
+        if(Test-Path -LiteralPath $statePath){Remove-Item -LiteralPath $statePath -Force}
+    } finally {if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary -Force}}
+}
+function Get-RecordedUninstallResult([string]$Root,[string]$Directory,[int]$ExitCode) {
+    if($ExitCode -notin @(0,3010)){throw 'Uninstall did not confirm completion'}
+    $pending=$ExitCode -eq 3010
+    $fallback=[pscustomobject]@{Uninstalled=$true;RequiresSignOut=$pending;SignOutReason=$(if($pending){'unknown-installation-state'}else{'none'});UserDataRetained=$true}
+    try {
+        $record=Get-Content -LiteralPath (Join-Path $Root 'uninstalled-state.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $result=$record.uninstallResult
+        $reasons=if($pending){@('locked-dll','missing-registered-dll','previous-signout-required','unknown-installation-state')}else{@('none')}
+        if($record.active -eq $Directory -and $record.uninstalled -is [bool] -and $record.uninstalled -and
+           $result.Uninstalled -is [bool] -and $result.Uninstalled -and $result.UserDataRetained -is [bool] -and $result.UserDataRetained -and
+           $result.RequiresSignOut -is [bool] -and $result.RequiresSignOut -eq $pending -and $result.SignOutReason -in $reasons){return $result}
+    } catch {}
+    # Old, damaged or mismatched records never suppress exit 3010's sign-out
+    # warning or contribute arbitrary text to the original user's dialog.
+    return $fallback
+}
 function Get-UninstallCompletionMessage($Result) {
     $message='RIMES was uninstalled. Your dictionaries, settings and credentials were kept.'
     if($Result.RequiresSignOut){
@@ -373,11 +468,24 @@ function Remove-OwnedSettingsShortcut([string]$InstallRoot) {
     try {$shortcut=$shell.CreateShortcut($path);if(Test-OwnedSettingsShortcut $InstallRoot $shortcut){Remove-Item -LiteralPath $path -Force}}
     finally {if($shortcut){[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) | Out-Null};[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null}
 }
+function Assert-UserUninstallCleanup([string]$InstallRoot) {
+    if($null -ne (Get-BrokerAutostart)){throw 'A RimesBroker startup entry remains. User cleanup is incomplete.'}
+    $path=Get-SettingsShortcutPath
+    if(-not (Test-Path -LiteralPath $path -PathType Leaf)){return}
+    $shell=New-Object -ComObject WScript.Shell
+    $shortcut=$null
+    try {
+        $shortcut=$shell.CreateShortcut($path)
+        if(Test-OwnedSettingsShortcut $InstallRoot $shortcut){throw 'The managed RIMES settings shortcut remains. User cleanup is incomplete.'}
+    } finally {if($shortcut){[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) | Out-Null};[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null}
+}
 
 # Deployment shares the serving Broker's single-instance lifetime. Holding its
 # existing per-user/session mutex prevents TSF from starting a second engine
 # after machine registration while original-user setup builds dictionaries.
 function Invoke-UserDictionaryDeployment([string]$Directory) {
+    $reservation=Stop-OwnedBroker $Directory
+    try {
     $broker=Join-Path $Directory 'x64\RimesBroker.exe'
     $endpoint=(& $broker --print-endpoint | Out-String).Trim()
     if($LASTEXITCODE -or $endpoint -notmatch '^\\\\\.\\pipe\\RIMES\.Broker\.v2\.session-[0-9]+\.user-[a-f0-9]{16}$'){
@@ -390,19 +498,26 @@ function Invoke-UserDictionaryDeployment([string]$Directory) {
     $security.AddAccessRule($rule)
     $created=$false
     $mutex=[Threading.Mutex]::new($true,$name,[ref]$created,$security)
+    $owned=$created
     try {
-        if(-not $created){throw 'Exit RIMES from its tray after preserving Buffer content, then run Setup again.'}
+        if(-not $created){
+            try {$owned=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$owned=$true}
+            if(-not $owned){throw 'Another Rime operation still owns the dictionary lock. Wait for it to finish, then retry.'}
+        }
         & $broker --deploy-only | Out-Host
         if($LASTEXITCODE){throw 'Dictionary deployment failed'}
     } finally {
-        if($created){$mutex.ReleaseMutex()}
+        if($owned){$mutex.ReleaseMutex()}
         $mutex.Dispose()
     }
+    } finally {if($reservation){$reservation.Dispose()}}
 }
 function Invoke-UserUninstall([string]$InstallRoot,[string]$Directory,[scriptblock]$UnregisterMachine) {
     Assert-OwnedBrokerAutostart $Directory
     $oldAutostart=Get-BrokerAutostart
     $oldShortcut=Read-SettingsShortcut
+    $reservation=New-BrokerMaintenanceReservation
+    try {
     try {
         # Remove the initiating user's launch entries first. A cancelled or
         # failed elevated phase restores them under this same original token.
@@ -410,7 +525,6 @@ function Invoke-UserUninstall([string]$InstallRoot,[string]$Directory,[scriptblo
         Remove-OwnedSettingsShortcut $InstallRoot
         $code=& $UnregisterMachine
         if($code -notin @(0,3010)){throw 'System unregistration failed'}
-        return $code
     } catch {
         $failure=$_
         $recoveryFailures=@()
@@ -419,4 +533,14 @@ function Invoke-UserUninstall([string]$InstallRoot,[string]$Directory,[scriptblo
         if($recoveryFailures.Count){throw "Uninstall failed: $failure. User entry recovery is incomplete: $($recoveryFailures -join '; ')"}
         throw $failure
     }
+    # Recheck the initiating user's final state after the elevated worker exits.
+    # Do not restore retired launch entries if this post-unregistration cleanup
+    # fails: machine registration has already been removed successfully.
+    try {
+        Remove-OwnedBrokerAutostart $Directory
+        Remove-OwnedSettingsShortcut $InstallRoot
+        Assert-UserUninstallCleanup $InstallRoot
+    } catch {throw "RIMES system registration was removed, but original-user cleanup is incomplete. Repair with the current Setup.exe and retry uninstall. $($_.Exception.Message)"}
+    return $code
+    } finally {if($reservation){$reservation.Dispose()}}
 }

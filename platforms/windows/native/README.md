@@ -50,8 +50,9 @@ Where the TSF host cooperates, typing matches the macOS RIMES controller:
 The candidate panel is a `WS_EX_NOACTIVATE` topmost tool window so it cannot
 steal focus from the host.
 
-For the six product schemas, idle unshifted number keys (including the numeric
-keypad) pass directly to the host; composing candidate selection and Buffer
+For the six product schemas, idle unshifted number-row keys and numeric-keypad
+digits, decimal and operators (also with Shift) pass directly to the host;
+composing candidate selection and Buffer
 capture still go through the engine. Idle ASCII-mode keys also pass through.
 The initial mode and subsequent mode flags are exchanged only when both TSF
 and Broker negotiate the key-routing capability, preserving the legacy wire
@@ -129,6 +130,12 @@ does not load `rime.dll`.
 TSF stack (`ITfThreadMgr` / `ITfContext` / `ITfComposition`). It asserts
 preedit, candidate contents, `nihao`+Space → `你好`, number selection, paging,
 Escape, Shift switching, ordinary editing and host-command pass-through.
+
+The test-only `RimesE2EBroker.exe` and `RimesTsfE2E.exe` use a compile-time
+`RIMES.E2E.Broker` pipe/mutex identity, while daily builds keep `RIMES.Broker`.
+The same user/session and pipe access checks apply to both. E2E tests can run
+alongside the installed input method without stopping its Broker or losing
+Buffer contents; their TSF client never auto-launches a daily Broker.
 
 Hosted GitHub `windows-2022` runners usually have a logon session and can
 launch Notepad, but they are **not** a reliable interactive IME desktop: no

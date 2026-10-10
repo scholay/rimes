@@ -91,9 +91,21 @@ if ([string]::IsNullOrWhiteSpace($ArtifactDirectory)) {
     $ArtifactDirectory = Join-Path $nativeRoot "out/build/windows-$Architecture/$Configuration"
 }
 $artifactRoot = Resolve-RimesExistingPath -Path $ArtifactDirectory -PathType Container
-$brokerPath = Resolve-RimesExistingPath -Path (Join-Path $artifactRoot 'RimesBroker.exe') -PathType Leaf
+$brokerPath = Resolve-RimesExistingPath -Path (Join-Path $artifactRoot 'RimesE2EBroker.exe') -PathType Leaf
+$productionBrokerPath = Resolve-RimesExistingPath -Path (Join-Path $artifactRoot 'RimesBroker.exe') -PathType Leaf
 $e2ePath = Resolve-RimesExistingPath -Path (Join-Path $artifactRoot 'RimesTsfE2E.exe') -PathType Leaf
 $schemaRoot = Resolve-RimesExistingPath -Path $schemaRoot -PathType Container
+
+# Check both identities before starting either process. No test may attach to
+# the installed Broker, even when it is already serving this user's session.
+$testEndpoint = (& $brokerPath --print-endpoint | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $testEndpoint -notmatch '^\\\\\.\\pipe\\RIMES\.E2E\.Broker\.v2\.session-') {
+    throw 'The E2E Broker does not have the isolated test endpoint identity.'
+}
+$productionEndpoint = (& $productionBrokerPath --print-endpoint | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $testEndpoint -eq $productionEndpoint) {
+    throw 'The E2E Broker endpoint overlaps the daily input method.'
+}
 
 if ([string]::IsNullOrWhiteSpace($WorkDirectory)) {
     $WorkDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('rimes-ime-e2e-' + [guid]::NewGuid().ToString('N'))
@@ -142,6 +154,7 @@ Write-RimesJson -Path (Join-Path $testLocalAppData 'RIMES/settings.json') -Objec
 
 $broker = $null
 $e2eExit = 1
+$gracefulShutdown = $false
 try {
     $env:LOCALAPPDATA = $testLocalAppData
     $broker = Start-Process -FilePath $brokerPath -ArgumentList $brokerArgs -PassThru -WindowStyle Hidden `
@@ -149,6 +162,9 @@ try {
     if ($null -eq $broker) {
         throw 'Failed to start RimesBroker.exe'
     }
+    # Keep the native handle before exit. Windows PowerShell's Start-Process
+    # can otherwise report a null ExitCode for an already-exited child.
+    $broker.Handle | Out-Null
     Start-Sleep -Seconds 2
     if ($broker.HasExited) {
         throw "RimesBroker exited before the typing tests with code $($broker.ExitCode). stderr=$(Get-Content -LiteralPath $brokerStderr -Raw -ErrorAction SilentlyContinue)"
@@ -167,6 +183,22 @@ try {
         }
         throw "RimesTsfE2E.exe exited with code $e2eExit"
     }
+    # Exercise the real maintenance shutdown on the test-only endpoint. A
+    # retained lifetime handle prevents a cached TSF from opening another
+    # engine; the UI exits normally and librime flushes/closes its userdb.
+    $mutexName='Local\'+$testEndpoint.Substring('\\.\pipe\'.Length)
+    $reservation=[Threading.Mutex]::OpenExisting($mutexName)
+    try {
+        $stopEvent=[Threading.EventWaitHandle]::OpenExisting($mutexName+'.shutdown-'+$broker.Id)
+        try {$stopEvent.Set() | Out-Null}finally{$stopEvent.Dispose()}
+        $exited=$broker.WaitForExit(10000)
+        if(-not $exited -or $broker.ExitCode -ne 0){throw "Isolated Broker did not shut down gracefully for maintenance (exited=$exited, exitCode=$($broker.ExitCode))"}
+        $created=$false
+        $attempt=[Threading.Mutex]::new($false,$mutexName,[ref]$created)
+        try{if($created){throw 'Maintenance lost its Broker lifetime reservation'}}finally{$attempt.Dispose()}
+        $gracefulShutdown=$true
+        Write-Host 'PASS: real Broker graceful maintenance shutdown retains its lifetime gate'
+    }finally{$reservation.Dispose()}
 } finally {
     $env:LOCALAPPDATA = $previousLocalAppData
     if ($null -ne $broker -and -not $broker.HasExited) {
@@ -182,6 +214,9 @@ Write-RimesJson -Path (Join-Path $workRoot 'e2e-result.json') -Object ([ordered]
     LibrimeSource = [string]$runtime.Source
     LibrimeTag = [string]$runtime.Tag
     LibrimeSha256 = [string]$runtime.Sha256
+    Endpoint = $testEndpoint
+    IsolatedFromDailyBroker = $true
+    GracefulMaintenanceShutdown = $gracefulShutdown
     DesktopProbe = $probe
 })
 

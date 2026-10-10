@@ -99,14 +99,14 @@ enum PresetBufferPluginCatalog {
             id: "builtin.codex-cli",
             nameZH: "ChatGPT",
             nameEN: "ChatGPT",
-            version: "1.1.0",
+            version: "1.1.1",
             summaryZH: "通过 Codex CLI 使用 ChatGPT 生成内容，可选择模型与推理深度。",
             summaryEN: "ChatGPT official plugin; user data remains owned by the RIMES host.",
             producerID: "openai",
             defaultInstalled: false,
             defaultEnabled: false,
-            downloadAssetName: "preset-plugin-builtin.codex-cli-1.1.0.json",
-            sha256: "dd9633ad3190e753d775644d149b2437766f94eb1091d94da2ac8791f37d7eef"
+            downloadAssetName: "preset-plugin-builtin.codex-cli-1.1.1.json",
+            sha256: "356fc11d7ec340999e5a3a3d6d595e0100b36c26d3e827a10ae96d3c09a63555"
         ),
         PresetBufferPluginCatalogEntry(
             id: "builtin.fly-chord-learning",

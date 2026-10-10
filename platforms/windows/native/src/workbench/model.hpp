@@ -31,6 +31,7 @@ struct Generation {
   std::size_t source_offset = 0;
   std::string prefix;
   std::string plugin_id, plugin_grant, instruction;
+  std::string connector_id, connector_grant;
 };
 // Pure state machine. Broker serializes calls. Nothing here persists source
 // text.
@@ -48,6 +49,7 @@ class Model {
   void Open();
   void Close();
   void Protect();
+  void Discard();
   bool Append(std::string text);
   bool Backspace();
   std::string SourceText() const;

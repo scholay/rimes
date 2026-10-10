@@ -100,5 +100,24 @@ int main() {
         "unfinished suffix is not automatically sent");
   Check(!stable.Generate(1, true).source.empty() && stable.busy,
         "explicit translation can send an unfinished suffix");
+  Model disposable;
+  disposable.Focus(a); disposable.Open(); disposable.Append("Temporary.");
+  auto obsolete = disposable.Generate(1, false);
+  disposable.Stream(obsolete, 1, "Temporary result.");
+  disposable.Finish(obsolete, 1, true);
+  auto old_delivery = disposable.Send(true);
+  disposable.Discard();
+  Check(disposable.source.empty() && disposable.result.empty() &&
+            !disposable.Pending() && !disposable.capture && !disposable.visible,
+        "maintenance discards pending Buffer content without a confirmation");
+  Check(!disposable.Stream(obsolete, 1, "Late text"),
+        "a pre-reset generation cannot repopulate the Buffer");
+  disposable.Focus(a); disposable.Open(); disposable.Append("New.");
+  auto new_delivery = disposable.Send(false);
+  Check(new_delivery && old_delivery && new_delivery->request > old_delivery->request,
+        "reset preserves monotonic delivery identities");
+  disposable.Acknowledge(old_delivery->request, a, true);
+  Check(disposable.SourceText() == "New." && disposable.Pending(),
+        "late reset acknowledgement never consumes new content");
   std::cout << "Workbench model tests passed\n";
 }

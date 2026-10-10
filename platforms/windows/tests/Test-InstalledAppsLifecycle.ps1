@@ -36,7 +36,8 @@ function Get-RegisteredRimesViews {
     return @($global:RimesInstallerTestNative.GetEnumerator() | ForEach-Object {[pscustomobject]@{architecture=$_.Key;dll=(Join-Path $_.Value "$($_.Key)\RimesTsf.dll")}})
 }
 function Invoke-RecoveryRegistrar([string]$Package,[string]$Directory,[string]$Architecture,[string]$Operation){Invoke-Registrar $Directory $Architecture $Operation}
-function Stop-OwnedBroker([string]$Directory){}
+function Stop-OwnedBroker([string]$Directory,[string]$UserSid){}
+function New-BrokerMaintenanceReservation([string]$UserSid){return $null}
 function Test-SettingsCommandSupported([string]$Directory){return (Read-VerifiedPackage $Directory).version -ne '1.1.0-test-old'}
 function Assert-Unlocked([string]$Directory){if($global:RimesInstallerTestLock){throw 'Fixture DLL lock'}}
 function Invoke-Registrar([string]$Directory,[string]$Architecture,[string]$Operation){
@@ -67,6 +68,14 @@ $source=Join-Path $OutputDirectory 'FixtureNative.cs'
 @'
 public static class FixtureNative {
     public static int Main(string[] args) {
+        if (args.Length == 2 && args[0] == "--hold-mutex") {
+            using (var held = new System.Threading.Mutex(true, args[1])) {
+                System.Console.WriteLine("READY");
+                System.Console.ReadLine();
+                held.ReleaseMutex();
+            }
+            return 0;
+        }
         if (System.IO.Path.GetFileNameWithoutExtension(System.Reflection.Assembly.GetExecutingAssembly().Location) == "RimesBroker") {
             if (args.Length > 0 && args[0] == "--print-endpoint")
                 System.Console.WriteLine(@"\\.\pipe\RIMES.Broker.v2.session-" + System.Diagnostics.Process.GetCurrentProcess().SessionId + ".user-0000000000000093");
@@ -156,11 +165,18 @@ try {
     $global:RimesInstallerTestFailRemove=$true
     Expect-Failure 'uninstall discovery-entry failure is reported' {& "$active\Uninstall.ps1" -InstallRoot $root}
     Check 'uninstall failure restores both TSF registrations and discovery entry' ((Get-State $root).active -eq $oldActive -and $global:RimesInstallerTestNative.x64 -eq $oldActive -and $global:RimesInstallerTestNative.x86 -eq $oldActive -and (Same-Entry $before (Read-InstalledAppRegistration)))
+    $blockedRecord=Join-Path $root 'uninstalled-state.json'
+    New-Item -ItemType Directory -Path $blockedRecord | Out-Null
+    Expect-Failure 'recovery-record publication failure is reported' {& "$active\Uninstall.ps1" -InstallRoot $root}
+    Check 'recovery-record failure preserves active state and restores registration and discovery' ((Get-State $root).active -eq $oldActive -and $global:RimesInstallerTestNative.x64 -eq $oldActive -and $global:RimesInstallerTestNative.x86 -eq $oldActive -and (Same-Entry $before (Read-InstalledAppRegistration)))
+    Remove-Item -LiteralPath $blockedRecord -Force
     $global:RimesInstallerTestLock=$true
     Expect-Failure 'script uninstall refuses occupied DLLs by default' {& "$active\Uninstall.ps1" -InstallRoot $root}
     $result=& "$active\Uninstall.ps1" -InstallRoot $root -AllowPendingRestart
     Check 'explicit pending-restart uninstall confirms completion and removes discovery entries' ($result.Uninstalled -and $result.RequiresSignOut -and $null -eq (Read-InstalledAppRegistration) -and -not (Test-Path -LiteralPath $global:RimesInstallerTestShortcut) -and -not (Test-Path -LiteralPath "$root\state.json"))
     $message=Get-UninstallCompletionMessage $result
+    $recorded=Get-RecordedUninstallResult $root $oldActive 3010
+    Check 'elevated completion retains the exact DLL-access reason for the original-user dialog' ($recorded.SignOutReason -eq $result.SignOutReason -and (Get-UninstallCompletionMessage $recorded) -eq $message)
     Check 'exclusive DLL access failure completion explains possible use and requests sign out' ($result.SignOutReason -eq 'locked-dll' -and $message.Contains('could not be opened exclusively and may still be in use') -and $message.Contains('sign out') -and -not $message.Contains('could not be confirmed'))
     Check 'uninstall retains version files and synthetic user data unchanged' ((Test-Path -LiteralPath "$oldActive\PACKAGE.json") -and (Get-FileHash -LiteralPath $retained -Algorithm SHA256).Hash -eq $retainedHash)
     $global:RimesInstallerTestLock=$false
@@ -179,6 +195,8 @@ try {
     Check 'user-edited shortcut is preserved on uninstall' ($result.Uninstalled -and (Get-FileHash -LiteralPath $global:RimesInstallerTestShortcut -Algorithm SHA256).Hash -eq $customHash)
     $message=Get-UninstallCompletionMessage $result
     Check 'known unlocked installation completes without a sign-out warning' (-not $result.RequiresSignOut -and $result.SignOutReason -eq 'none' -and -not $message.Contains('sign out') -and -not $message.Contains('still in use'))
+    $recorded=Get-RecordedUninstallResult $root (Get-Content -LiteralPath "$root\uninstalled-state.json" -Raw | ConvertFrom-Json).active 0
+    Check 'unlocked completion is retained without inventing a sign-out requirement' (-not $recorded.RequiresSignOut -and $recorded.SignOutReason -eq 'none')
     & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
     $pending=Get-State $root
     $pending.requiresSignOut=$true
@@ -210,6 +228,8 @@ try {
     Check 'missing state uninstall removes both architectures and records recovery' ($result.Uninstalled -and $global:RimesInstallerTestNative.Count -eq 0 -and (Test-Path -LiteralPath "$root\uninstalled-state.json"))
     $message=Get-UninstallCompletionMessage $result
     Check 'missing state keeps conservative sign out and describes unknown load state' ($result.RequiresSignOut -and $result.SignOutReason -eq 'unknown-installation-state' -and $message.Contains('could not be confirmed') -and $message.Contains('sign out') -and -not $message.Contains('DLL is still in use'))
+    $recorded=Get-RecordedUninstallResult $root $actual 3010
+    Check 'missing-state completion records recovery and its unknown load-state reason' ($recorded.SignOutReason -eq 'unknown-installation-state' -and (Get-Content -LiteralPath "$root\uninstalled-state.json" -Raw | ConvertFrom-Json).recovered)
     & "$new\Install.ps1" -InstallRoot $root -NoAutostart | Out-Host
     $actual=(Get-State $root).active
     '{broken' | Set-Content -LiteralPath "$root\state.json"
@@ -284,10 +304,40 @@ try {
     $held=[Threading.Mutex]::new($false,$fixtureMutexName)
     try {
         $callsBefore=(Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw)
-        Expect-Failure 'user deployment refuses an already-running Broker' {& "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $new -NoAutostart}
+        & "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $new -NoAutostart | Out-Host
         $callsAfter=(Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw)
-        Check 'held Broker lock prevents a second dictionary engine' ($callsAfter.Substring($callsBefore.Length) -notmatch '--deploy-only')
+        Check 'an unowned lifetime reservation does not block dictionary deployment' ($callsAfter.Substring($callsBefore.Length) -match '--deploy-only')
     } finally {$held.Dispose()}
+    $holderStart=[Diagnostics.ProcessStartInfo]::new($binary,('--hold-mutex '+$fixtureMutexName))
+    $holderStart.UseShellExecute=$false
+    $holderStart.CreateNoWindow=$true
+    $holderStart.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
+    $holderStart.RedirectStandardInput=$true
+    $holderStart.RedirectStandardOutput=$true
+    $holder=[Diagnostics.Process]::Start($holderStart)
+    $companion=[Threading.Mutex]::new($false,$fixtureMutexName+'.setup')
+    try {
+        $ready=$holder.StandardOutput.ReadLineAsync()
+        if(-not $ready.Wait(5000) -or $ready.Result -ne 'READY'){throw 'Synthetic Broker mutex fixture did not start'}
+        $callsBefore=Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw
+        Expect-Failure 'live Broker ownership is rejected even if a Setup companion exists' {& "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $new -NoAutostart}
+        $callsAfter=Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw
+        Check 'foreign-process ownership never starts a second dictionary engine' ($callsAfter.Substring($callsBefore.Length) -notmatch '--deploy-only')
+    } finally {
+        $companion.Dispose()
+        $holder.StandardInput.WriteLine('exit')
+        if(-not $holder.WaitForExit(5000)){$holder.Kill();$holder.WaitForExit()}
+        $holder.Dispose()
+    }
+    $reservation=[Threading.Mutex]::new($false,$fixtureMutexName)
+    $setupReservation=[Threading.Mutex]::new($true,$fixtureMutexName+'.setup')
+    try {
+        & "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $new -NoAutostart | Out-Host
+        Check 'original-user initialization accepts the unowned Setup lifetime reservation' ($null -eq $global:RimesInstallerTestAutostart -and (Test-Path -LiteralPath $global:RimesInstallerTestShortcut))
+        $createdAfterDeploy=$false
+        $attemptedBroker=[Threading.Mutex]::new($false,$fixtureMutexName,[ref]$createdAfterDeploy)
+        try {Check 'Setup reservation still blocks TSF startup after user deployment' (-not $createdAfterDeploy)}finally{$attemptedBroker.Dispose()}
+    } finally {$setupReservation.ReleaseMutex();$setupReservation.Dispose();$reservation.Dispose()}
     & "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $new -NoAutostart | Out-Host
     Check 'original-user retry completes deployment and respects disabled autostart' ($null -eq $global:RimesInstallerTestAutostart -and (Test-Path -LiteralPath $global:RimesInstallerTestShortcut))
     $callsBefore=(Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw)

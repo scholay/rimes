@@ -10,6 +10,7 @@
 
 #include "../core/control.hpp"
 #include "buffer_hotkey_config.hpp"
+#include "codex_cli.hpp"
 #include "sse.hpp"
 
 namespace rimes::windows::workbench {
@@ -88,7 +89,10 @@ bool ValidSettings(const Settings& value) {
          value.hotkey_key <= 'Z' &&
          ValidBufferHotkeyModifiers(value.hotkey_modifiers) &&
          value.base_url.size() <= 2048 && value.model.size() <= 256 &&
-         value.target_language.size() <= 128;
+         value.target_language.size() <= 128 &&
+         (value.ai_connector == "codex-cli" || value.ai_connector == "openai-compatible") &&
+         value.codex_path.size() <= 8192 && value.codex_path.find('\0') == std::string::npos &&
+         value.codex_model.size() <= 256 && value.codex_model.find('\0') == std::string::npos;
 }
 bool LoadSettings(Settings* value, std::string* error) {
   try {
@@ -106,6 +110,9 @@ bool LoadSettings(Settings* value, std::string* error) {
     candidate.schema = j.value("schema", "rime_ice");
     candidate.base_url = j.value("base_url", "");
     candidate.model = j.value("model", "");
+    candidate.ai_connector = j.value("ai_connector", "openai-compatible");
+    candidate.codex_path = j.value("codex_path", "");
+    candidate.codex_model = j.value("codex_model", "");
     candidate.target_language = j.value("target_language", "English");
     candidate.ascii = j.value("ascii", false);
     candidate.traditional = j.value("traditional", false);
@@ -153,6 +160,9 @@ bool SaveSettings(const Settings& value, std::string* error) {
               {"hotkey_key", value.hotkey_key},
               {"base_url", value.base_url},
               {"model", value.model},
+              {"ai_connector", value.ai_connector},
+              {"codex_path", value.codex_path},
+              {"codex_model", value.codex_model},
               {"target_language", value.target_language}};
     auto temporary = path;
     temporary += L".tmp";
@@ -208,6 +218,16 @@ bool GenerateAPI(const Settings& config, const Generation& job,
     Fail(error, "Credential unavailable.");
     return false;
   }
+}
+bool GenerateText(const Settings& config, const Generation& job,
+                  const std::function<bool(const std::string&)>& chunk,
+                  const std::function<bool()>& cancelled, std::string* error) {
+  if (config.ai_connector == "codex-cli")
+    return GenerateCodex(config, job, chunk, cancelled, error);
+  if (config.ai_connector == "openai-compatible")
+    return GenerateAPI(config, job, chunk, cancelled, error);
+  Fail(error, "Unknown AI connector. Source retained.");
+  return false;
 }
 bool GenerateWithKey(const Settings& config, const Generation& job,
                      std::wstring key,

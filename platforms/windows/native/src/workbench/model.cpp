@@ -76,6 +76,17 @@ void Model::Protect() {
   preview.clear();
   status = "Protected";
 }
+void Model::Discard() {
+  Protect();
+  source.clear(); result.clear(); source_links_.clear();
+  translated_source_.clear(); pending_.reset();
+  send_all_ = false; send_until_ = 0;
+  uncertain = false; translate = false;
+  ++revision;
+  status = "Buffer reset";
+  // Keep request/block identities monotonic: a late pre-reset ack must never
+  // consume new content or continue an old multi-block send.
+}
 std::string Model::SourceText() const { return Join(source); }
 std::string Model::ResultText() const { return Join(result); }
 bool Model::Append(std::string text) {

@@ -77,6 +77,9 @@ void SettingsUiHost::SyncDraftFromConfig(const Settings& config) {
   draft_.hotkey = static_cast<wchar_t>(config.hotkey_key);
   draft_.base_url = Wide(config.base_url);
   draft_.model = Wide(config.model);
+  draft_.ai_connector_index = config.ai_connector == "codex-cli" ? 1 : 0;
+  draft_.codex_path = Wide(config.codex_path);
+  draft_.codex_model = Wide(config.codex_model);
   draft_.target_language = Wide(config.target_language);
   draft_.api_key.clear();
   draft_.page = ui::SettingsPage::kInput;
@@ -149,9 +152,9 @@ bool SettingsUiHost::HandleDialogMessage(MSG* message) {
   if (message->message == WM_KEYDOWN) {
     draft_.keyboard_focus = true;
     const auto key = message->wParam;
-    if (message->hwnd == combo_hotkey_modifiers_ &&
+    if ((message->hwnd == combo_hotkey_modifiers_ || message->hwnd == combo_connector_) &&
         (key == VK_RETURN || key == VK_ESCAPE) &&
-        SendMessageW(combo_hotkey_modifiers_, CB_GETDROPPEDSTATE, 0, 0))
+        SendMessageW(message->hwnd, CB_GETDROPPEDSTATE, 0, 0))
       return false;  // Confirm/cancel the native popup before Save/Close.
     if (key == VK_ESCAPE ||
         (key >= '1' && key <= '6' && (GetKeyState(VK_CONTROL) & 0x8000))) {
@@ -173,7 +176,7 @@ bool SettingsUiHost::HandleDialogMessage(MSG* message) {
       std::vector<HWND> controls;
       for (const auto control : {check_ascii_, check_trad_, check_punct_,
                                 edit_font_, edit_candidate_count_, check_vertical_, combo_hotkey_modifiers_, edit_hotkey_, edit_base_,
-                                edit_model_, edit_key_, edit_lang_})
+                                edit_model_, edit_key_, edit_lang_, combo_connector_, edit_codex_path_, edit_codex_model_})
         if (control && IsWindowVisible(control)) controls.push_back(control);
       const bool back = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
       const int sidebar = static_cast<int>(draft_.page);
@@ -247,6 +250,14 @@ void SettingsUiHost::CreateOrUpdateChildren() {
                    reinterpret_cast<LPARAM>(choice.label));
   }
   make_edit(&edit_base_, false);
+  make_edit(&edit_codex_path_, false);
+  make_edit(&edit_codex_model_, false);
+  if (!combo_connector_) {
+    combo_connector_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST,
+        0, 0, 200, 130, hwnd_, reinterpret_cast<HMENU>(406), GetModuleHandleW(nullptr), nullptr);
+    SendMessageW(combo_connector_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"通用 OpenAI API"));
+    SendMessageW(combo_connector_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Codex CLI（本机登录）"));
+  }
   make_edit(&edit_model_, false);
   make_edit(&edit_key_, true);
   make_edit(&edit_lang_, false);
@@ -261,9 +272,12 @@ void SettingsUiHost::CreateOrUpdateChildren() {
                BufferHotkeyChoiceIndex(draft_.hotkey_modifiers), 0);
   SetWindowTextW(edit_base_, draft_.base_url.c_str());
   SetWindowTextW(edit_model_, draft_.model.c_str());
+  SendMessageW(combo_connector_, CB_SETCURSEL, draft_.ai_connector_index, 0);
+  SetWindowTextW(edit_codex_path_, draft_.codex_path.c_str());
+  SetWindowTextW(edit_codex_model_, draft_.codex_model.c_str());
   SetWindowTextW(edit_key_, L"");
   SetWindowTextW(edit_lang_, draft_.target_language.c_str());
-  for (std::size_t i = 0; i < 3; ++i) {
+  for (std::size_t i = 0; i < plugin_labels_.size(); ++i) {
     auto make = [&](HWND& control, const wchar_t* kind, const wchar_t* title, DWORD style, int action) {
       control = CreateWindowExW(0, kind, title, WS_CHILD | style, 0, 0, 1, 1, hwnd_,
           reinterpret_cast<HMENU>(static_cast<INT_PTR>(action < 0 ? 0 : 5100 + static_cast<int>(i) * 3 + action)), GetModuleHandleW(nullptr), nullptr);
@@ -279,7 +293,7 @@ void SettingsUiHost::CreateOrUpdateChildren() {
 
 void SettingsUiHost::UpdatePlugins() {
   if (callbacks_.plugins) plugin_rows_ = callbacks_.plugins();
-  for (std::size_t i = 0; i < 3; ++i) {
+  for (std::size_t i = 0; i < plugin_labels_.size(); ++i) {
     if (i >= plugin_rows_.size()) continue;
     const auto& item = plugin_rows_[i];
     const auto name = item.id == "builtin.apple-translation" ? std::string("翻译") : item.name;
@@ -306,13 +320,13 @@ void SettingsUiHost::ThemeEdits() {
   if (edit_brush_) DeleteObject(edit_brush_);
   edit_brush_ = CreateSolidBrush(ui::ToColorRef(p.surface));
   HWND edits[] = {edit_font_, edit_candidate_count_, check_vertical_, combo_hotkey_modifiers_, edit_hotkey_, edit_base_,
-                  edit_model_, edit_key_,   edit_lang_};
+                  edit_model_, edit_key_, edit_lang_, combo_connector_, edit_codex_path_, edit_codex_model_};
   for (HWND edit : edits) {
     if (!edit) continue;
     SendMessageW(edit, WM_SETFONT, reinterpret_cast<WPARAM>(fonts_.control),
                  TRUE);
   }
-  for (std::size_t i = 0; i < 3; ++i) {
+  for (std::size_t i = 0; i < plugin_labels_.size(); ++i) {
     for (const auto control : {plugin_labels_[i], plugin_install_[i], plugin_enable_[i], plugin_remove_[i]})
       SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(fonts_.body), TRUE);
   }
@@ -361,6 +375,11 @@ void SettingsUiHost::Relayout() {
   Place(combo_hotkey_modifiers_, hotkey_dropdown, dpi_, buffer);
   place_edit(edit_hotkey_, layout_.hotkey_edit, buffer);
   place_edit(edit_base_, layout_.base_edit, api);
+  auto connector_dropdown = layout_.connector_combo;
+  connector_dropdown.bottom += 96.0f;
+  Place(combo_connector_, connector_dropdown, dpi_, api);
+  place_edit(edit_codex_path_, layout_.codex_path_edit, api);
+  place_edit(edit_codex_model_, layout_.codex_model_edit, api);
   place_edit(edit_model_, layout_.model_edit, api);
   place_edit(edit_key_, layout_.key_edit,
              draft_.page == ui::SettingsPage::kApi && draft_.subpage == 1);
@@ -371,15 +390,15 @@ void SettingsUiHost::Relayout() {
   Place(check_vertical_, layout_.check_vertical, dpi_, appearance);
   const bool plugins = draft_.page == ui::SettingsPage::kPlugins && draft_.subpage == 0;
   UpdatePlugins();
-  for (std::size_t i = 0; i < 3; ++i) {
-    const float y = layout_.body.top + static_cast<float>(i) * 94.0f;
+  for (std::size_t i = 0; i < plugin_labels_.size(); ++i) {
+    const float y = layout_.body.top + static_cast<float>(i) * 78.0f;
     const float x = layout_.body.left; const bool visible = plugins && i < plugin_rows_.size();
     Place(plugin_labels_[i], {x,y,x+285,y+52}, dpi_, visible);
     Place(plugin_install_[i], {x+300,y+6,x+414,y+38}, dpi_, visible);
     Place(plugin_enable_[i], {x+426,y+6,x+510,y+38}, dpi_, visible);
     Place(plugin_remove_[i], {x+522,y+6,x+606,y+38}, dpi_, visible);
   }
-  Place(plugin_status_, {layout_.body.left,layout_.body.top+296,layout_.body.right,layout_.body.top+366}, dpi_, plugins);
+  Place(plugin_status_, {layout_.body.left,layout_.body.top+320,layout_.body.right,layout_.body.top+370}, dpi_, plugins);
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -394,6 +413,11 @@ bool SettingsUiHost::CommitSave() {
         static_cast<ui::ThemeId>(draft_.theme_index));
     config.base_url = Utf8(GetText(edit_base_));
     config.model = Utf8(GetText(edit_model_));
+    const auto connector = SendMessageW(combo_connector_, CB_GETCURSEL, 0, 0);
+    if (connector != 0 && connector != 1) throw std::runtime_error("connector choice");
+    config.ai_connector = connector == 1 ? "codex-cli" : "openai-compatible";
+    config.codex_path = Utf8(GetText(edit_codex_path_));
+    config.codex_model = Utf8(GetText(edit_codex_model_));
     config.target_language = Utf8(GetText(edit_lang_));
     const auto font_text = GetText(edit_font_);
     std::size_t parsed = 0;
@@ -547,7 +571,7 @@ LRESULT CALLBACK SettingsUiHost::Procedure(HWND hwnd, UINT message,
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
       }
-      if (HIWORD(wparam) == BN_CLICKED && LOWORD(wparam) >= 5100 && LOWORD(wparam) < 5109) {
+      if (HIWORD(wparam) == BN_CLICKED && LOWORD(wparam) >= 5100 && LOWORD(wparam) < 5112) {
         const auto index = static_cast<std::size_t>((LOWORD(wparam) - 5100) / 3);
         const int action = (LOWORD(wparam) - 5100) % 3;
         if (self->callbacks_.manage_plugin && index < self->plugin_rows_.size()) {
@@ -773,6 +797,7 @@ LRESULT CALLBACK SettingsUiHost::Procedure(HWND hwnd, UINT message,
       self->edit_font_ = self->edit_candidate_count_ = self->edit_hotkey_ = self->edit_base_ = nullptr;
       self->combo_hotkey_modifiers_ = nullptr;
       self->edit_model_ = self->edit_key_ = self->edit_lang_ = nullptr;
+      self->combo_connector_ = self->edit_codex_path_ = self->edit_codex_model_ = nullptr;
       self->check_vertical_ = self->check_ascii_ = self->check_trad_ = self->check_punct_ = nullptr;
       if (!self->saved_ && self->callbacks_.on_theme_preview)
         self->callbacks_.on_theme_preview(self->opened_theme_);

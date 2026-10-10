@@ -64,7 +64,7 @@ This table is generated from [`Catalog/buffer-plugins.json`](Catalog/buffer-plug
 | Resources | `builtin.capsule.resources` | 1.1.0 | Bundled with RIMES | Enabled |
 | Temporary | `builtin.capsule.temporary` | 1.1.0 | Bundled with RIMES | Enabled |
 | Claude | `builtin.claude-code-cli` | 1.1.0 | On demand in Settings | Disabled |
-| ChatGPT | `builtin.codex-cli` | 1.1.0 | On demand in Settings | Disabled |
+| ChatGPT | `builtin.codex-cli` | 1.1.1 | On demand in Settings | Disabled |
 | Chord input | `builtin.fly-chord-learning` | 2.0.0 | Bundled with RIMES | Disabled |
 | LaTeX | `builtin.latex` | 1.1.0 | On demand in Settings | Disabled |
 | Chat | `builtin.mailbox.chat` | 1.1.0 | Bundled with RIMES | Enabled |

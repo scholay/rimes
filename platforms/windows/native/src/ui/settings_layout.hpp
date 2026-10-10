@@ -89,6 +89,8 @@ struct SettingsDraft {
   wchar_t hotkey = L'B';
   std::wstring base_url;
   std::wstring model;
+  int ai_connector_index = 0;
+  std::wstring codex_path, codex_model;
   std::wstring target_language = L"English";
   std::wstring api_key;  // fixture / draft only; never loaded from secrets
   std::wstring about_text;
@@ -118,6 +120,7 @@ struct SettingsLayout {
   DipRect hotkey_modifiers{};
   DipRect hotkey_edit{};
   DipRect base_edit{};
+  DipRect connector_combo{}, codex_path_edit{}, codex_model_edit{};
   DipRect model_edit{};
   DipRect key_edit{};
   DipRect lang_edit{};
@@ -245,6 +248,9 @@ struct SettingsLayout {
       y += 40.0f;
     };
     if (draft.subpage == 0) {
+      place(layout.connector_combo);
+      place(layout.codex_path_edit);
+      place(layout.codex_model_edit);
       place(layout.base_edit);
       place(layout.model_edit);
       place(layout.lang_edit);

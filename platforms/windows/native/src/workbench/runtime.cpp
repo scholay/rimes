@@ -142,6 +142,12 @@ bool Runtime::BeforeKey(Target target, const core::KeyEvent& key,
       return_sent_ = false;
       pressed_at_ = GetTickCount64();
       return_target_ = target;
+      if (ai_mode_ && (model_.busy || model_.result.empty())) {
+        // Generation owns this entire press. Never send the retained source
+        // on key-up/hold, even if the connector finishes during that press.
+        return_sent_ = true;
+        if (!model_.busy) StartGeneration(false);
+      }
     }
     return true;
   }
@@ -254,6 +260,7 @@ bool Runtime::Configure(Settings value, const std::wstring& key,
   settings_ = std::move(value);
   model_.InvalidatePluginResults();
   result_plugin_.clear(); result_grant_.clear();
+  result_connector_.clear(); result_connector_grant_.clear();
   model_.capture = false;
   CaptureChanged();
   Changed();
@@ -305,6 +312,21 @@ void Runtime::Protect() {
   CaptureChanged();
   Changed();
 }
+void Runtime::DiscardBufferLocked() {
+  api_job_.reset();
+  model_.Discard();
+  for (auto& [id, entry] : sessions_) { (void)id; entry.events.clear(); }
+  return_held_ = false; return_sent_ = false; return_target_ = {};
+  pressed_at_ = 0; pending_since_ = 0;
+  result_plugin_.clear(); result_grant_.clear();
+  result_connector_.clear(); result_connector_grant_.clear();
+  CaptureChanged();
+}
+void Runtime::DiscardBuffer() {
+  std::lock_guard lock(mutex_);
+  DiscardBufferLocked();
+  Changed();
+}
 void Runtime::Paste(std::string text) {
   std::lock_guard lock(mutex_);
   if (model_.visible) {
@@ -324,9 +346,15 @@ void Runtime::StartGeneration(bool translation, bool complete_sentence_only) {
       (!translation && !model_.result.empty()))
     return;
   CheckPluginAuthorization();
-  const std::string plugin = translation ? official::kTranslation : official::kAI;
+  const std::string plugin = translation ? official::kTranslation
+      : settings_.ai_connector == "codex-cli" ? official::kCodex : official::kAI;
   const auto grant = plugins_.Grant(plugin);
   if (grant.empty()) { model_.translate = false; model_.status = "Install and enable the plugin in Settings > Official plugins."; Changed(); return; }
+  const std::string connector = settings_.ai_connector == "codex-cli" ? official::kCodex : "";
+  const auto connector_grant = connector.empty() ? std::string{} : plugins_.Grant(connector);
+  if (!connector.empty() && connector_grant.empty()) {
+    model_.translate = false; model_.status = "Enable the Codex connector in Settings > Official plugins."; Changed(); return;
+  }
   std::string instruction;
   try { instruction = official::Instruction(plugins_.Package(plugin), settings_.target_language); }
   catch (...) { model_.status = "Plugin package unavailable."; Changed(); return; }
@@ -334,18 +362,26 @@ void Runtime::StartGeneration(bool translation, bool complete_sentence_only) {
                              complete_sentence_only);
   if (!model_.busy) return;
   job.plugin_id = plugin; job.plugin_grant = grant; job.instruction = instruction;
+  job.connector_id = connector; job.connector_grant = connector_grant;
   result_plugin_ = plugin; result_grant_ = grant;
+  result_connector_ = connector; result_connector_grant_ = connector_grant;
   api_job_ = std::make_pair(settings_, std::move(job));
   api_event_.notify_one();
   Changed();
 }
 void Runtime::Generate(bool translation) {
   std::lock_guard lock(mutex_);
+  ai_mode_ = !translation;
   model_.translate = translation;
   StartGeneration(translation);
 }
+void Runtime::SelectAIMode() {
+  std::lock_guard lock(mutex_);
+  ai_mode_ = true;
+}
 void Runtime::ReturnToInput() {
   std::lock_guard lock(mutex_);
+  ai_mode_ = false;
   api_job_.reset();
   model_.Cancel();
   model_.translate = false;
@@ -384,20 +420,22 @@ void Runtime::Tick() {
 void Runtime::Stop() {
   std::lock_guard lock(mutex_);
   stopping_ = true;
-  model_.Protect();
+  DiscardBufferLocked();
   api_event_.notify_all();
   event_.notify_all();
   Changed();
 }
 void Runtime::CheckPluginAuthorization() {
-  if (!result_plugin_.empty() && plugins_.Grant(result_plugin_) != result_grant_) {
+  if ((!result_plugin_.empty() && plugins_.Grant(result_plugin_) != result_grant_) ||
+      (!result_connector_.empty() && plugins_.Grant(result_connector_) != result_connector_grant_)) {
     model_.InvalidatePluginResults();
-    if (!model_.Pending()) { result_plugin_.clear(); result_grant_.clear(); }
+    if (!model_.Pending()) { result_plugin_.clear(); result_grant_.clear(); result_connector_.clear(); result_connector_grant_.clear(); }
     Changed();
   }
 }
 std::optional<Delivery> Runtime::SendAuthorized(bool all) {
-  const bool revoked = !result_plugin_.empty() && plugins_.Grant(result_plugin_) != result_grant_;
+  const bool revoked = (!result_plugin_.empty() && plugins_.Grant(result_plugin_) != result_grant_) ||
+      (!result_connector_.empty() && plugins_.Grant(result_connector_) != result_connector_grant_);
   CheckPluginAuthorization();
   return revoked ? std::nullopt : model_.Send(all);
 }
@@ -439,17 +477,22 @@ void Runtime::RunAPI() {
         config, job,
         [&](const std::string& text) {
           std::lock_guard l(mutex_);
-          const bool accepted = plugins_.Grant(job.plugin_id) == job.plugin_grant && model_.Stream(job, settings_.revision, text);
+          const bool accepted = plugins_.Grant(job.plugin_id) == job.plugin_grant &&
+              (job.connector_id.empty() || plugins_.Grant(job.connector_id) == job.connector_grant) &&
+              model_.Stream(job, settings_.revision, text);
           Changed();
           return accepted;
         },
         [&] {
           std::lock_guard l(mutex_);
-          return stopping_ || plugins_.Grant(job.plugin_id) != job.plugin_grant || !model_.Accepts(job, settings_.revision);
+          return stopping_ || plugins_.Grant(job.plugin_id) != job.plugin_grant ||
+              (!job.connector_id.empty() && plugins_.Grant(job.connector_id) != job.connector_grant) ||
+              !model_.Accepts(job, settings_.revision);
         },
         &error);
     lock.lock();
-    if (plugins_.Grant(job.plugin_id) == job.plugin_grant && model_.Accepts(job, settings_.revision)) {
+    if (plugins_.Grant(job.plugin_id) == job.plugin_grant &&
+        (job.connector_id.empty() || plugins_.Grant(job.connector_id) == job.connector_grant) && model_.Accepts(job, settings_.revision)) {
       const bool finished = model_.Finish(job, settings_.revision, ok);
       if (!finished) model_.translate = false;
       if (!ok) {

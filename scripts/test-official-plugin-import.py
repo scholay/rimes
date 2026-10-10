@@ -67,7 +67,12 @@ class PluginImportTests(unittest.TestCase):
     def test_reject_symlink_in_destination(self):
         outside = self.root / "other"
         outside.mkdir()
-        (self.root / "Sources").symlink_to(outside)
+        try:
+            (self.root / "Sources").symlink_to(outside, target_is_directory=True)
+        except OSError as error:
+            if getattr(error, "winerror", None) == 1314:
+                self.skipTest("directory symlinks require Windows developer mode or elevation")
+            raise
         with self.assertRaisesRegex(ValueError, "symlinks"):
             self.prepare(True)
         self.assertFalse((outside / "Test.swift").exists())

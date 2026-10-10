@@ -16,7 +16,7 @@ class Runtime {
  public:
   using APIGenerator = std::function<bool(const Settings&, const Generation&,
       const std::function<bool(const std::string&)>&, const std::function<bool()>&, std::string*)>;
-  explicit Runtime(APIGenerator generate = GenerateAPI);
+  explicit Runtime(APIGenerator generate = GenerateText);
   ~Runtime();
   Target Register(std::uint32_t process, std::uint64_t session,
                   std::uint64_t context);
@@ -38,9 +38,11 @@ class Runtime {
   void PauseCapture();
   void Close();
   void Protect();
+  void DiscardBuffer();
   void Paste(std::string text);
   void Send(bool all);
   void Generate(bool translation);
+  void SelectAIMode();
   // Stop queued/in-flight automatic translation when changing the displayed
   // mode. Source, completed results and an issued delivery/ack are retained;
   // selecting a mode does not dispatch a new request or deliver content.
@@ -66,6 +68,7 @@ class Runtime {
   Settings settings_;
   OfficialPluginStore plugins_;
   std::string result_plugin_, result_grant_, plugin_status_;
+  std::string result_connector_, result_connector_grant_;
   bool plugin_installing_ = false;
   std::jthread plugin_worker_;
   std::function<void()> notify_;
@@ -77,7 +80,9 @@ class Runtime {
   Target return_target_;
   std::uint64_t opening_revision_ = 0;
   bool return_held_ = false, return_sent_ = false;
+  bool ai_mode_ = false;
   void Changed();
+  void DiscardBufferLocked();
   void CheckPluginAuthorization();
   std::optional<Delivery> SendAuthorized(bool all);
   void Queue(const std::optional<Delivery>& delivery);

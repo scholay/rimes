@@ -43,6 +43,16 @@ inline void DrawD2DIcon(ID2D1RenderTarget* target, ID2D1SolidColorBrush* brush,
   };
 
   switch (id) {
+    case IconId::kSparkles:
+      line(cx, cy - s * .8f, cx + s * .24f, cy - s * .24f);
+      line(cx + s * .24f, cy - s * .24f, cx + s * .8f, cy);
+      line(cx + s * .8f, cy, cx + s * .24f, cy + s * .24f);
+      line(cx + s * .24f, cy + s * .24f, cx, cy + s * .8f);
+      line(cx, cy + s * .8f, cx - s * .24f, cy + s * .24f);
+      line(cx - s * .24f, cy + s * .24f, cx - s * .8f, cy);
+      line(cx - s * .8f, cy, cx - s * .24f, cy - s * .24f);
+      line(cx - s * .24f, cy - s * .24f, cx, cy - s * .8f);
+      break;
     case IconId::kGrid: {
       // Four rounded squares (Mac toolbar grid).
       const float cell = s * 0.72f;
@@ -362,8 +372,11 @@ inline void DrawBufferWorkbench(const BufferPaintContext& ctx,
   }
   if (layout.show_send) {
     draw_control_bg(layout.send, BufferHitKind::kSend, state.send_enabled, action_surface);
-    // Send remains a static plane — never a spinner.
-    DrawD2DIcon(target, brush, IconId::kPlane, layout.send,
+    // The primary action generates before a final exists; it only sends a
+    // reviewed final afterwards. This is shared by API and local CLI routes.
+    const auto primary = state.mode == BufferMode::kGenerate && state.result_blocks.empty()
+        ? IconId::kSparkles : IconId::kPlane;
+    DrawD2DIcon(target, brush, primary, layout.send,
                 icon_color(BufferHitKind::kSend, state.send_enabled,
                            p.accent_text));
   }

@@ -26,6 +26,7 @@ enum class IconId {
   kLanguage,
   kKey,
   kApi,
+  kSparkles,
   kCheck,
   kProduct,
   kRadioOn,

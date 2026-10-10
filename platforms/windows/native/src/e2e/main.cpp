@@ -591,6 +591,29 @@ int RunTypingScenarios(bool legacy_broker) {
   }
   {
     LogicalKeyboardState keyboard;
+    for (const bool shifted : {false, true}) {
+      keyboard.Shift(shifted);
+      for (WPARAM key = VK_NUMPAD0; key <= VK_DIVIDE; ++key) {
+        BOOL keypad_eaten = TRUE;
+        service->OnTestKeyDown(context, key, 0, &keypad_eaten);
+        Expect(!keypad_eaten, "idle keypad digits, decimal and operators are not pre-claimed, even with Shift");
+        service->OnKeyDown(context, key, 0, &keypad_eaten);
+        Expect(!keypad_eaten && document.text.empty() && !document.composing,
+               "idle keypad input leaves the editor and Rime session untouched");
+        service->OnTestKeyUp(context, key, 0, &keypad_eaten);
+        Expect(!keypad_eaten, "pass-through keypad input never owns a later release");
+        service->OnKeyUp(context, key, 0, &keypad_eaten);
+        Expect(!keypad_eaten, "keypad release remains with the host");
+      }
+    }
+    keyboard.Shift(false);
+    TypeLatin(service, context, "nihao");
+    TypeVirtualKey(service, context, VK_SPACE, true);
+    Expect(document.text == L"你好", "Chinese typing survives idle keypad pass-through");
+    ResetDocument(&document);
+  }
+  {
+    LogicalKeyboardState keyboard;
     for (const int modifier : {VK_CONTROL, VK_MENU, VK_LWIN}) {
       keyboard.Command(modifier, true);
       for (const WPARAM key : std::vector<WPARAM>{'A', 'C', 'V', VK_RETURN, VK_BACK, VK_ESCAPE}) {
