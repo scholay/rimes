@@ -121,6 +121,25 @@ class TimeoutTests(unittest.TestCase):
         self.assertEqual(result.returncode, 124, result)
         self.assert_process_retired(int(result.stdout.strip()))
 
+    def test_command_may_write_its_own_files_past_the_output_bound(self):
+        # The installed RIMES executable appends to a multi-megabyte log and can copy user
+        # data during --install. A file-size rlimit killed it with SIGXFSZ (status 153).
+        written = self.root / "command-owned.bin"
+        result = self.run_helper("normal", "/bin/dd", "if=/dev/zero", f"of={written}", "bs=1024", "count=1024")
+        self.assertEqual(result.returncode, 0, result)
+        self.assertEqual(written.stat().st_size, 1024 * 1024)
+
+    def test_runaway_captured_output_is_terminated_and_relay_is_bounded(self):
+        for stream in ("", " >&2"):
+            started = time.monotonic()
+            result = self.run_helper("normal", "/bin/sh", "-c", f'trap "" TERM; /usr/bin/yes rimes-timeout-flood{stream} & echo $! > "{self.root / "flood.pid"}"; wait')
+            self.assertEqual(result.returncode, 125, result.stderr[-200:])
+            self.assertLess(time.monotonic() - started, 3)
+            self.assertLessEqual(len(result.stdout), 256 * 1024)
+            self.assertLessEqual(len(result.stderr), 256 * 1024 + 128)
+            self.assertIn(b"captured output exceeded", result.stderr)
+            self.assert_process_retired(int((self.root / "flood.pid").read_text().strip()))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -122,11 +121,30 @@ static int create_output_file(void) {
     return descriptor;
 }
 
+// The bound applies to the two capture files this supervisor owns, never to
+// the command's other files. RLIMIT_FSIZE is inherited by every descendant and
+// covers every file: it killed the installed RIMES executable with SIGXFSZ
+// when it appended to its own multi-megabyte diagnostic log during --install,
+// and activation then fell through to "retry at the next GUI login".
+static bool output_exceeds_limit(int descriptor) {
+    struct stat metadata;
+    return fstat(descriptor, &metadata) == 0
+        && metadata.st_size > (off_t)output_limit_bytes;
+}
+
 static void emit_output(int source, int destination) {
     char buffer[8192];
     off_t offset = 0;
     for (;;) {
-        ssize_t count = pread(source, buffer, sizeof(buffer), offset);
+        const off_t remaining = (off_t)output_limit_bytes - offset;
+        if (remaining <= 0) {
+            return;
+        }
+        size_t wanted = sizeof(buffer);
+        if ((off_t)wanted > remaining) {
+            wanted = (size_t)remaining;
+        }
+        ssize_t count = pread(source, buffer, wanted, offset);
         if (count == 0) {
             return;
         }
@@ -223,12 +241,6 @@ static void child_main(
     if (stderr_file > STDERR_FILENO && stderr_file != stdout_file) {
         close(stderr_file);
     }
-
-    struct rlimit output_limit = {
-        .rlim_cur = output_limit_bytes,
-        .rlim_max = output_limit_bytes,
-    };
-    (void)setrlimit(RLIMIT_FSIZE, &output_limit);
 
     int lock_descriptor = -1;
     if (lock_path != NULL) {
@@ -365,6 +377,7 @@ int main(int argc, char *argv[]) {
 
     const double deadline = monotonic_seconds() + (double)timeout_seconds;
     int return_code = 125;
+    bool output_overflowed = false;
     for (;;) {
         int status = 0;
         pid_t result = waitpid(child, &status, WNOHANG);
@@ -392,11 +405,25 @@ int main(int argc, char *argv[]) {
             return_code = 124;
             break;
         }
+        if (output_exceeds_limit(stdout_file)
+            || output_exceeds_limit(stderr_file)) {
+            terminate_group_bounded(child, false);
+            output_overflowed = true;
+            return_code = 125;
+            break;
+        }
         pause_briefly();
     }
 
     emit_output(stdout_file, STDOUT_FILENO);
     emit_output(stderr_file, STDERR_FILENO);
+    if (output_overflowed) {
+        fprintf(
+            stderr,
+            "rimes-timeout: captured output exceeded %d bytes\n",
+            (int)output_limit_bytes
+        );
+    }
     close(stdout_file);
     close(stderr_file);
     return return_code;

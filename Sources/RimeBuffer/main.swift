@@ -8735,6 +8735,45 @@ func runBufferWindowSmokeTest() -> Bool {
         print("FAILED: workbench focus-follow visibility policy")
         return false
     }
+    // An Electron host names its box only after the first opening has already
+    // been placed by the caret. That opening is aligned once, and only while
+    // it is still the untouched opening of the same workbench session.
+    func lateBoxAlignment(
+        visible: Bool = true,
+        transient: Bool = true,
+        sameSession: Bool = true,
+        elapsed: TimeInterval = 0.4,
+        sameHost: Bool? = true,
+        boxNamed: Bool = true
+    ) -> BufferLateBoxAlignmentRules.Decision {
+        BufferLateBoxAlignmentRules.decision(
+            workbenchVisible: visible,
+            openingStillTransient: transient,
+            sameWorkbenchSession: sameSession,
+            elapsed: elapsed,
+            targetInSameHostProcess: sameHost,
+            boxNamed: boxNamed
+        )
+    }
+    guard lateBoxAlignment() == .align,
+          lateBoxAlignment(boxNamed: false) == .wait,
+          // The lease is briefly absent while an input-source switch
+          // re-activates the same field under a new token.
+          lateBoxAlignment(sameHost: nil) == .wait,
+          lateBoxAlignment(sameHost: false) == .abandon,
+          lateBoxAlignment(visible: false) == .abandon,
+          lateBoxAlignment(transient: false) == .abandon,
+          lateBoxAlignment(sameSession: false) == .abandon,
+          lateBoxAlignment(elapsed: BufferLateBoxAlignmentRules.window)
+            == .align,
+          lateBoxAlignment(elapsed: BufferLateBoxAlignmentRules.window + 0.1)
+            == .abandon,
+          lateBoxAlignment(elapsed: -1) == .abandon,
+          BufferLateBoxAlignmentRules.window
+            >= ElectronAccessibilityTree.buildAllowance else {
+        print("FAILED: late input-box alignment of a caret-only opening")
+        return false
+    }
     let unpinnedBehavior = BufferWindowCollectionBehaviorRules.behavior(
         pinned: false
     )

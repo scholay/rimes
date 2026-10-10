@@ -4,6 +4,21 @@
 
 安装器会注册、启用并核验 RIMES 输入源，但不会清理其他应用的缓存。重启应用、退出登录或注册成功，都不能保证解决本报告的情况。
 
+## 2026-10-09 更新：前提条件与安装器修复
+
+维护者在同一系统版本（macOS 27.0，26A428）上用一个沙盒测试进程确认了这份报告的前提条件。沙盒应用通过系统级输入源缓存 `/System/Library/Caches/com.apple.IntlDataCache.le*` 识别输入法；这份缓存只有 root 能重建，系统通常在下一次登录时才刷新。1.1.1 及更早的安装器只以当前登录用户注册 RIMES，所以重新登录之前，新启动的沙盒进程查不到 RIMES，而同一台机器上的 Squirrel、微信输入法都能查到。这也是「安装后要退出登录或重启才能用」的来源。
+
+1.1.1 之后的安装器在 `postinstall` 中以 root 调用 `TISRegisterInputSource`，完成系统级注册。在同一台机器上手动执行这一步后观察到：
+
+- 系统级缓存立即包含 RIMES；
+- 新启动的沙盒进程能查到 RIMES；
+- 一个此前已经在运行的沙盒进程，无需重启即查到 RIMES；
+- 微信、QQ、文本编辑里仍记录旧路径的按应用缓存，被系统自行丢弃。安装器仍然不清理任何应用的缓存。
+
+`CFRelease(NULL)` 闪退本身没有在维护者机器上复现；上面验证的是它的前提条件被消除。新安装包经 PackageKit 实际安装的结果，待包含此修复的发布版本确认。
+
+已安装 1.1.1 或更早版本时，安装包含此修复的版本即可。在此之前，退出登录并重新登录也会让系统重建这份缓存：维护者机器上该缓存的重建时间与登录时间一致，但没有做对照实验。下面按应用备份缓存的步骤保留为后备手段。
+
 ## 仅处理一个已经出现问题的应用
 
 1. 先切回苹果输入法或其他正常输入法，保存未发送的文字，并完全退出受影响的应用。
@@ -32,6 +47,23 @@
 ## English
 
 The reporter of [#90](https://github.com/scholay/rimes/issues/90) observed host-app crashes when switching to RIMES 1.1.0 in App Store sandboxed WeChat 4.1.5 and QQ 6.9.93 on macOS 27.0 (26A428). Their crash stack includes `CFRelease(NULL)`, and their own sandbox probe points to stale per-app input-source caches. The maintainer has not independently reproduced that crash path or verified when running apps rebuild these caches. This is a recovery suggestion, not a completed system fix. Successful input-source registration, restarting an app, or logging out does not guarantee recovery.
+
+### Update (2026-10-09): precondition and installer fix
+
+On the same OS build (macOS 27.0, 26A428) the maintainer confirmed the precondition of this report with a sandboxed test process. Sandboxed apps resolve input sources through the system-wide cache `/System/Library/Caches/com.apple.IntlDataCache.le*`. Only root can rebuild it, and macOS normally refreshes it at the next login. Installers up to 1.1.1 registered RIMES only as the logged-in user, so until that login a newly started sandboxed process could not find RIMES, while Squirrel and WeType on the same Mac were found. This is also why RIMES appeared to need a logout or restart after installing.
+
+Installers after 1.1.1 call `TISRegisterInputSource` as root in `postinstall`. Running that step by hand on the same Mac had these effects:
+
+- the system-wide cache listed RIMES immediately;
+- a newly started sandboxed process found RIMES;
+- a sandboxed process that was already running found RIMES without a relaunch;
+- macOS itself dropped the per-app caches in WeChat, QQ and TextEdit that still recorded the old path. The installer still clears no app's cache.
+
+The `CFRelease(NULL)` crash was not reproduced on the maintainer's Mac; what was verified is that its precondition is removed. An actual PackageKit install of the new package is still to be confirmed with the release that carries the fix.
+
+With 1.1.1 or earlier installed, install a version that carries the fix. Until then, logging out and back in also makes macOS rebuild this cache: on the maintainer's Mac its rebuild time matches a login, but no controlled test was run. The per-app procedure below remains as a fallback.
+
+### Per-app fallback
 
 For one affected app only:
 

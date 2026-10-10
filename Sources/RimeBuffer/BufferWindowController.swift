@@ -579,6 +579,43 @@ enum BufferWindowFocusFollowRules {
     }
 }
 
+/// A host can be unable to name its text box at the instant the workbench
+/// opens: an Electron app builds its Accessibility tree only once asked, so
+/// the opening probe finds nothing and the box becomes readable a moment
+/// later. Such an opening is placed by the caret alone, then aligned once the
+/// box is named — the placement a second opening would have produced.
+enum BufferLateBoxAlignmentRules {
+    /// Past the tree's build allowance, "no box" is the host's real answer.
+    static let window: TimeInterval = ElectronAccessibilityTree.buildAllowance
+
+    enum Decision: Equatable {
+        case wait
+        case align
+        case abandon
+    }
+
+    /// `targetInSameHostProcess` is nil while no trusted target is live, as
+    /// between the deactivate and activate of an input-source switch.
+    static func decision(
+        workbenchVisible: Bool,
+        openingStillTransient: Bool,
+        sameWorkbenchSession: Bool,
+        elapsed: TimeInterval,
+        targetInSameHostProcess: Bool?,
+        boxNamed: Bool
+    ) -> Decision {
+        // A moved, closed or reopened workbench is no longer that opening.
+        guard workbenchVisible,
+              openingStillTransient,
+              sameWorkbenchSession,
+              elapsed >= 0,
+              elapsed <= window else { return .abandon }
+        guard let targetInSameHostProcess else { return .wait }
+        guard targetInSameHostProcess else { return .abandon }
+        return boxNamed ? .align : .wait
+    }
+}
+
 enum BufferWindowCollectionBehaviorRules {
     static func behavior(pinned: Bool) -> NSWindow.CollectionBehavior {
         pinned
@@ -2193,6 +2230,11 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private var openingSide: BufferOpeningSide = .bottomFallback
     private var openingFocusToken: FocusToken?
     private var transientOpeningOrigin = false
+    /// An opening placed by the caret alone, still waiting for the host to
+    /// name its text box. See `BufferLateBoxAlignmentRules`.
+    private var pendingBoxAlignment: (processIdentifier: pid_t,
+                                      sessionEpoch: UInt64,
+                                      openedAtUptime: TimeInterval)?
     private var persistedFrameOrigin: NSPoint?
     private var lastFocusFollowToken: FocusToken?
     private var scheduledFocusFollowToken: FocusToken?
@@ -6602,6 +6644,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         // Box samples land off the key-handling path; reflect one on the
         // toolbar only when it changes the state.
         BufferTargetBoxLock.shared.onSample = { [weak self] in
+            self?.alignOpeningToNamedBoxIfPending()
             self?.recheckTargetBox()
         }
         let center = NotificationCenter.default
@@ -6992,6 +7035,20 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             ? nil
             : focusedAnchor?.token
         transientOpeningOrigin = true
+        // A caret without a box, with alignment wanted and permitted, is most
+        // often a host whose Accessibility tree was not built yet. Remember
+        // the opening so the box can still align it when it is named.
+        pendingBoxAlignment = nil
+        if let focusedAnchor,
+           focusedAnchor.box == nil,
+           placement.side != .bottomFallback,
+           FocusedInputBoxProbe.alignmentEnabled,
+           FocusedInputBoxProbe.isPermitted,
+           let lease = InputFocusCoordinator.shared.lease(for: focusedAnchor.token) {
+            pendingBoxAlignment = (lease.processIdentifier,
+                                   workbenchSessionEpoch,
+                                   ProcessInfo.processInfo.systemUptime)
+        }
         // Alignment depends on a grant the user can revoke at any time, so say
         // which inputs produced this placement rather than leaving a silent
         // fallback looking like a broken feature.
@@ -7002,6 +7059,45 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
             + "alignPref=\(FocusedInputBoxProbe.alignmentEnabled) "
             + "axGranted=\(FocusedInputBoxProbe.isPermitted)"
         )
+    }
+
+    /// Runs as each box sample lands. Repeats the opening placement once the
+    /// lock's sample names the box the opening probe could not, provided the
+    /// workbench is still exactly where that opening left it.
+    private func alignOpeningToNamedBoxIfPending() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard let pending = pendingBoxAlignment else { return }
+        let lease = InputFocusCoordinator.shared.liveTarget()
+        switch BufferLateBoxAlignmentRules.decision(
+            workbenchVisible: isVisible,
+            openingStillTransient: transientOpeningOrigin,
+            sameWorkbenchSession: pending.sessionEpoch == workbenchSessionEpoch,
+            elapsed: ProcessInfo.processInfo.systemUptime - pending.openedAtUptime,
+            targetInSameHostProcess: lease.map {
+                $0.processIdentifier == pending.processIdentifier
+            },
+            boxNamed: lease.map {
+                BufferTargetBoxLock.shared.namesElement(for: $0)
+            } ?? false
+        ) {
+        case .wait:
+            return
+        case .abandon:
+            pendingBoxAlignment = nil
+            return
+        case .align:
+            break
+        }
+        // One attempt: a host that names the box to the lock but still
+        // withholds its frame keeps the caret-centred opening.
+        pendingBoxAlignment = nil
+        guard let lease,
+              let anchor = freshFocusedInputAnchor(expected: lease.token),
+              anchor.box != nil else { return }
+        positionForOpening(focusedAnchor: anchor)
+        candidateWindow.syncWorkbenchLayout()
+        RIMESController.refreshActiveUI()
+        IMELog.write("workbench opening aligned late to the named input box token=\(lease.token)")
     }
 
     private func freshFocusedInputAnchor(

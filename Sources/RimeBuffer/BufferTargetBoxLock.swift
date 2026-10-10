@@ -165,6 +165,15 @@ final class BufferTargetBoxLock {
         return state
     }
 
+    /// True once the latest sample for `lease` names a real text element: the
+    /// host's Accessibility tree has answered, so the box's frame is readable.
+    func namesElement(for lease: FocusLease) -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard let sample, sample.token == lease.token,
+              case .element? = sample.box else { return false }
+        return true
+    }
+
     /// Checked immediately before every block is sent, without querying
     /// Accessibility on the main thread.
     func permitsDelivery(to lease: FocusLease) -> Bool {

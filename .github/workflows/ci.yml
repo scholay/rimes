@@ -204,6 +204,14 @@ jobs:
           open_current = postinstall.index('/usr/bin/open -g "$APP"')
           process_check = postinstall.index('if ! wait_for_canonical_app_process')
           assert retire < conflict_gate < account_reaudit < publish
+          # Sandboxed apps read the system-wide input-source cache, which only
+          # root can rebuild. Register the reconciled canonical bundle as root
+          # before the login user's own enable/select.
+          system_register = postinstall.index(
+              'if rimes_register_input_source_system_wide'
+          )
+          assert account_reaudit < system_register < activate
+          assert postinstall.count('"$EXE" --rimes-tis-register') == 1
           assert publish < kill_old < old_process_gate < all_process_gate
           assert all_process_gate < activate < open_current < process_check
           assert 'SYSTEM_AGENT_TRANSACTION_ACTIVE=1' in postinstall
