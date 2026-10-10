@@ -1,0 +1,8 @@
+{
+  "parse": "passed",
+  "payload": "passed",
+  "result": "passed",
+  "lifecycle": "passed",
+  "lifecycleCount": 64,
+  "testedSourceArchiveSHA256": "e5b6a6617aba1ecc85389aab26c5e314104c964f366812e072b9c5260ed3a52a"
+}
