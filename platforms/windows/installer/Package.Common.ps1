@@ -84,7 +84,9 @@ function Assert-InstallUser([string]$InstallRoot,[string]$UserSid) {
 }
 function Invoke-Registrar([string]$Directory,[string]$Architecture,[string]$Operation) {
     $registrar = Join-Path $Directory "$Architecture\RimesRegistrar.exe"
-    & $registrar $Operation --dll (Join-Path $Directory "$Architecture\RimesTsf.dll")
+    # Native diagnostics are not PowerShell result objects. Keep them visible
+    # without contaminating the one structured result consumed by launchers.
+    & $registrar $Operation --dll (Join-Path $Directory "$Architecture\RimesTsf.dll") | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Registrar $Operation $Architecture failed: $LASTEXITCODE" }
 }
 function Assert-Unlocked([string]$Directory) {
@@ -254,11 +256,11 @@ function Invoke-LegacyRegistrar([string]$Package,$Entry,[string]$Operation){
         if($Operation -eq 'register'){throw 'The original DLL was missing; a dangling registration cannot be restored. Recovery record retained.'}
         if(Test-Path -LiteralPath $Entry.dll){throw 'The missing DLL path changed during recovery'}
     } elseif((Get-FileHash -LiteralPath $Entry.dll -Algorithm SHA256).Hash -ne $Entry.sha256){throw 'Previous DLL changed since its recovery record was written'}
-    & (Join-Path $Package "$($Entry.architecture)\RimesRegistrar.exe") $Operation --dll $Entry.dll
+    & (Join-Path $Package "$($Entry.architecture)\RimesRegistrar.exe") $Operation --dll $Entry.dll | Out-Host
     if($LASTEXITCODE){throw "Legacy registration $Operation failed"}
 }
 function Invoke-RecoveryRegistrar([string]$Package,[string]$Directory,[string]$Architecture,[string]$Operation){
-    & (Join-Path $Package "$Architecture\RimesRegistrar.exe") $Operation --dll (Join-Path $Directory "$Architecture\RimesTsf.dll")
+    & (Join-Path $Package "$Architecture\RimesRegistrar.exe") $Operation --dll (Join-Path $Directory "$Architecture\RimesTsf.dll") | Out-Host
     if($LASTEXITCODE){throw "Registrar $Operation $Architecture failed: $LASTEXITCODE"}
 }
 function Assert-OwnedBrokerAutostart([string]$Directory){

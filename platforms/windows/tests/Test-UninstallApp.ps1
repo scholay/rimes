@@ -36,6 +36,54 @@ $rejected=$false
 try {Get-RecordedUninstallResult $OutputDirectory $active 1 | Out-Null}catch{$rejected=$true}
 Check 'failed worker is never reported as successful completion' $rejected
 
+# Native registrars print diagnostics on stdout. Exercise the real wrappers,
+# not a silent PowerShell mock, so their text cannot pollute structured results.
+# This executable only prints and returns an exit code; it never loads a DLL
+# or accesses real COM/TSF registration, startup, dictionaries or credentials.
+$nativeSource=Join-Path $OutputDirectory 'NoisyRegistrar.cs'
+@'
+public static class NoisyRegistrar {
+    public static int Main(string[] args) {
+        System.Console.WriteLine("Fixture registrar diagnostic");
+        System.Console.WriteLine("Fixture operation: " + args[0]);
+        return System.Environment.GetEnvironmentVariable("RIMES_UNINSTALL_EXIT_FIXTURE") == "1"
+            && args[0] == "unregister" ? 7 : 0;
+    }
+}
+'@ | Set-Content -LiteralPath $nativeSource -Encoding UTF8
+$native=Join-Path $OutputDirectory 'NoisyRegistrar.exe'
+& (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') /nologo /target:exe ("/out:"+$native) $nativeSource | Out-Host
+if($LASTEXITCODE){throw 'Noisy registrar fixture compilation failed'}
+$nativePackage=Join-Path $OutputDirectory 'native-wrappers'
+foreach($arch in @('x64','x86')){
+    New-Item -ItemType Directory -Path "$nativePackage\$arch" -Force | Out-Null
+    Copy-Item -LiteralPath $native -Destination "$nativePackage\$arch\RimesRegistrar.exe"
+}
+foreach($arch in @('x64','x86')){
+    Check ($arch+' registrar diagnostics do not enter the success stream') (@(Invoke-Registrar $nativePackage $arch 'verify-absent').Count -eq 0)
+    Check ($arch+' recovery registrar diagnostics do not enter the success stream') (@(Invoke-RecoveryRegistrar $nativePackage $nativePackage $arch 'verify-absent').Count -eq 0)
+    $legacy=[pscustomobject]@{architecture=$arch;dll=(Join-Path $nativePackage "$arch\missing.dll");missing=$true}
+    Check ($arch+' legacy registrar diagnostics do not enter the success stream') (@(Invoke-LegacyRegistrar $nativePackage $legacy 'unregister').Count -eq 0)
+}
+$oldNativeExit=$env:RIMES_UNINSTALL_EXIT_FIXTURE
+try {
+    $env:RIMES_UNINSTALL_EXIT_FIXTURE='1'
+    foreach($arch in @('x64','x86')){
+        $legacy=[pscustomobject]@{architecture=$arch;dll=(Join-Path $nativePackage "$arch\missing.dll");missing=$true}
+        foreach($wrapper in @('normal','recovery','legacy')){
+            $failed=$false
+            try {
+                switch($wrapper){
+                    'normal' {Invoke-Registrar $nativePackage $arch 'unregister'}
+                    'recovery' {Invoke-RecoveryRegistrar $nativePackage $nativePackage $arch 'unregister'}
+                    'legacy' {Invoke-LegacyRegistrar $nativePackage $legacy 'unregister'}
+                }
+            } catch {$failed=$true}
+            Check ($arch+' '+$wrapper+' registrar still rejects native failure') $failed
+        }
+    }
+} finally {$env:RIMES_UNINSTALL_EXIT_FIXTURE=$oldNativeExit}
+
 # Execute the real launcher in child Windows PowerShell processes. Only the
 # dialog type and the fixture's system boundary are replaced; no UAC, native
 # registration, real startup, user settings or credentials are touched.
@@ -91,6 +139,20 @@ if(-not $AllowPendingRestart -or -not $MachineOnly -or -not $UserSid){throw 'Mac
 if($env:RIMES_UNINSTALL_EXIT_FIXTURE -eq '1'){throw 'synthetic unregistration failure'}
 [pscustomobject]@{Uninstalled=$true;RequiresSignOut=($env:RIMES_UNINSTALL_EXIT_FIXTURE -eq '3010');SignOutReason=$env:RIMES_UNINSTALL_REASON_FIXTURE;UserDataRetained=$true}
 '@
+# Use the real uninstall implementation for noisy native worker scenarios.
+# Only OS ownership/registration/lifecycle boundaries are replaced. The real
+# recovery registrar wrappers, completion record and GUI launcher stay intact.
+$nativeCommon=$fixtureCommon+@'
+
+function Get-RimesInstallation([string]$Root,[switch]$AllowIncomplete){
+    return [pscustomobject]@{active=(Join-Path $Root 'versions\fixture');requiresSignOut=$false;entries=@()}
+}
+function Read-VerifiedPackage([string]$Directory){return [pscustomobject]@{version='fixture'}}
+function Stop-OwnedBroker([string]$Directory,[string]$UserSid){return $null}
+function Assert-Unlocked([string]$Directory){if($env:RIMES_UNINSTALL_REASON_FIXTURE -eq 'locked-dll'){throw 'Fixture DLL lock'}}
+function Read-InstalledAppRegistration {return $null}
+function Restore-InstalledAppRegistration($Value) {}
+'@
 $cases=@(
     @{name='confirm-cancel';exit=0;reason='none';cancel='1';uac='';machine=$false;expected=0;dialogs=1;worker=$false;contains=''},
     @{name='uac-cancel';exit=0;reason='none';cancel='';uac='1';machine=$false;expected=0;dialogs=1;worker=$true;contains=''},
@@ -102,7 +164,10 @@ $cases=@(
     @{name='unknown-history';exit=3010;reason='unknown-installation-state';cancel='';uac='';machine=$false;expected=0;dialogs=2;worker=$true;contains='Installation history was missing or damaged'},
     @{name='machine-unlocked';exit=0;reason='none';cancel='';uac='';machine=$true;expected=0;dialogs=0;worker=$false;contains=''},
     @{name='machine-pending';exit=3010;reason='locked-dll';cancel='';uac='';machine=$true;expected=3010;dialogs=0;worker=$false;contains=''},
-    @{name='machine-failure';exit=1;reason='none';cancel='';uac='';machine=$true;expected=1;dialogs=1;worker=$false;contains='could not be uninstalled'}
+    @{name='machine-failure';exit=1;reason='none';cancel='';uac='';machine=$true;expected=1;dialogs=1;worker=$false;contains='could not be uninstalled'},
+    @{name='native-machine-unlocked';exit=0;reason='none';cancel='';uac='';machine=$true;native=$true;expected=0;dialogs=0;worker=$false;contains=''},
+    @{name='native-machine-pending';exit=3010;reason='locked-dll';cancel='';uac='';machine=$true;native=$true;expected=3010;dialogs=0;worker=$false;contains=''},
+    @{name='native-machine-failure';exit=1;reason='none';cancel='';uac='';machine=$true;native=$true;expected=1;dialogs=1;worker=$false;contains='could not be uninstalled'}
 )
 $report=[ordered]@{status='running';checks=@();systemBoundariesMocked=$true}
 $powershell=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -114,8 +179,17 @@ try {
         New-Item -ItemType Directory -Path $directory | Out-Null
         $launcher | Set-Content -LiteralPath "$directory\Uninstall-App.ps1" -Encoding UTF8
         $fixtureUi | Set-Content -LiteralPath "$directory\FixtureUI.ps1" -Encoding UTF8
-        $fixtureCommon | Set-Content -LiteralPath "$directory\Package.Common.ps1" -Encoding UTF8
-        $fixtureUninstall | Set-Content -LiteralPath "$directory\Uninstall.ps1" -Encoding UTF8
+        if($case.ContainsKey('native') -and $case.native){
+            $nativeCommon | Set-Content -LiteralPath "$directory\Package.Common.ps1" -Encoding UTF8
+            Copy-Item -LiteralPath "$installer\Uninstall.ps1" -Destination "$directory\Uninstall.ps1"
+            foreach($arch in @('x64','x86')){
+                New-Item -ItemType Directory -Path "$directory\$arch" -Force | Out-Null
+                Copy-Item -LiteralPath $native -Destination "$directory\$arch\RimesRegistrar.exe"
+            }
+        } else {
+            $fixtureCommon | Set-Content -LiteralPath "$directory\Package.Common.ps1" -Encoding UTF8
+            $fixtureUninstall | Set-Content -LiteralPath "$directory\Uninstall.ps1" -Encoding UTF8
+        }
         $env:RIMES_UNINSTALL_APP_FIXTURE=$directory
         $env:RIMES_UNINSTALL_CANCEL_FIXTURE=$case.cancel
         $env:RIMES_UNINSTALL_UAC_CANCEL_FIXTURE=$case.uac
@@ -135,6 +209,13 @@ try {
             Check ($case.name+' does not require preserving Buffer or exiting manually') ($confirmation.Contains('stop automatically') -and -not $confirmation.Contains('First copy'))
         }
         Check ($case.name+' dialog and worker boundaries') ($dialogs.Count -eq $case.dialogs -and (Test-Path -LiteralPath "$directory\worker.log") -eq $case.worker)
+        if($case.ContainsKey('native') -and $case.native -and $case.exit -in @(0,3010)){
+            $record=Get-Content -LiteralPath "$directory\uninstalled-state.json" -Raw | ConvertFrom-Json
+            $recorded=Get-RecordedUninstallResult $directory (Join-Path $directory 'versions\fixture') $case.exit
+            Check ($case.name+' records real completion despite registrar stdout') ($record.uninstalled -and $record.uninstallResult.Uninstalled -and $recorded.SignOutReason -eq $case.reason)
+        } elseif($case.ContainsKey('native') -and $case.native){
+            Check ($case.name+' never writes a successful completion record') (-not (Test-Path -LiteralPath "$directory\uninstalled-state.json"))
+        }
         if($case.contains){
             $text=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($dialogs[-1] -split '\|')[2]))
             Check ($case.name+' completion text') ($text.Contains($case.contains) -and ($case.exit -ne 3010 -or $text.Contains('sign out')))
