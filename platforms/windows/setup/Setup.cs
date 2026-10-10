@@ -178,9 +178,9 @@ internal sealed class InstallationGate : IDisposable
                 ownsSetup = created;
                 if (!created) throw new InvalidOperationException("Another RIMES installation is in progress. Wait for it to finish.");
                 broker = new Mutex(false, name, out created, security);
-                if (!created) throw new InvalidOperationException(SetupWindow.T(
-                    "请先保存 Buffer 内容并从托盘退出 RIMES，然后重试。安装器不会停止正在运行的输入法。",
-                    "Save Buffer text and exit RIMES from the tray, then retry. Setup does not stop a running input method."));
+                // Existing Broker content is disposable. Keep this handle while
+                // the elevated phase stops it, preventing a cached TSF from
+                // starting a second engine between machine and user stages.
             }
             catch { Dispose(); throw; }
         }
@@ -226,8 +226,8 @@ internal sealed class SetupWindow : Form
             Font = new Font(Font.FontFamily, 18, FontStyle.Bold), AutoSize = true, Location = new Point(24, 20) };
         message.SetBounds(24, 72, 552, 145);
         message.Text = T(
-            "安装到此电脑，保留已有词库和设置。\n\n安装前请保存 Buffer 内容，并从托盘退出 RIMES。升级若需注销，安装完成后会提示；不会自动注销。",
-            "Install on this computer while keeping existing dictionaries and settings.\n\nSave your Buffer text and exit RIMES from the tray first. Setup will tell you if sign-out is needed; it will not sign you out.");
+            "安装到此电脑，保留已有词库和设置。\n\n输入法会自动停止，临时 Buffer 内容直接丢弃，不需要先保存或退出。升级若需注销，安装完成后会提示；不会自动注销。",
+            "Install on this computer while keeping existing dictionaries and settings.\n\nThe input method stops automatically; temporary Buffer text is discarded without a save prompt. Setup will tell you if sign-out is needed; it will not sign you out.");
         autostart.Text = T("登录后启动 RIMES", "Start RIMES when I sign in");
         autostart.Checked = true;
         autostart.SetBounds(24, 218, 550, 28);

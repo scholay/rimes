@@ -38,6 +38,7 @@ class Runtime {
   void PauseCapture();
   void Close();
   void Protect();
+  void DiscardBuffer();
   void Paste(std::string text);
   void Send(bool all);
   void Generate(bool translation);
@@ -81,6 +82,7 @@ class Runtime {
   bool return_held_ = false, return_sent_ = false;
   bool ai_mode_ = false;
   void Changed();
+  void DiscardBufferLocked();
   void CheckPluginAuthorization();
   std::optional<Delivery> SendAuthorized(bool all);
   void Queue(const std::optional<Delivery>& delivery);

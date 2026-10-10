@@ -98,6 +98,13 @@ Mark each row pass / fail / n/a. Attach host, DPI, and schema.
 
 ## Existing Buffer interactions
 
+- [ ] Leave temporary Buffer text present and install/update/reinstall/uninstall:
+      no save/copy or manual-exit prerequisite; only the owned IME runtime stops.
+      Dictionaries, settings and credentials remain separate and retained.
+- [ ] During maintenance, cached TSF activation cannot open a second engine.
+      After uninstall/upgrade, a new-build cached retired DLL cannot relaunch its
+      sibling Broker. Never kill the host; record any required sign-out.
+
 - [ ] Short field: Buffer opens aligned with the field's left edge and width
       (520–1100 DIPs), 10 DIPs below its outer bottom edge
 - [ ] Tall document: width still follows the field, but vertical placement

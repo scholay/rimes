@@ -312,6 +312,21 @@ void Runtime::Protect() {
   CaptureChanged();
   Changed();
 }
+void Runtime::DiscardBufferLocked() {
+  api_job_.reset();
+  model_.Discard();
+  for (auto& [id, entry] : sessions_) { (void)id; entry.events.clear(); }
+  return_held_ = false; return_sent_ = false; return_target_ = {};
+  pressed_at_ = 0; pending_since_ = 0;
+  result_plugin_.clear(); result_grant_.clear();
+  result_connector_.clear(); result_connector_grant_.clear();
+  CaptureChanged();
+}
+void Runtime::DiscardBuffer() {
+  std::lock_guard lock(mutex_);
+  DiscardBufferLocked();
+  Changed();
+}
 void Runtime::Paste(std::string text) {
   std::lock_guard lock(mutex_);
   if (model_.visible) {
@@ -405,7 +420,7 @@ void Runtime::Tick() {
 void Runtime::Stop() {
   std::lock_guard lock(mutex_);
   stopping_ = true;
-  model_.Protect();
+  DiscardBufferLocked();
   api_event_.notify_all();
   event_.notify_all();
   Changed();

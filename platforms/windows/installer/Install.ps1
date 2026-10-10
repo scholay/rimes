@@ -10,6 +10,8 @@ $manifest=Read-VerifiedPackage $PackageDirectory
 $InstallRoot=[IO.Path]::GetFullPath($InstallRoot)
 $packageHash=(Get-FileHash -LiteralPath "$PackageDirectory\PACKAGE.json" -Algorithm SHA256).Hash.ToLowerInvariant()
 $target=Join-Path $InstallRoot ('versions\'+$manifest.version+'-'+$manifest.commit.Substring(0,12)+'-'+$packageHash.Substring(0,12))
+$maintenanceGates=@()
+try {
 $previous=$null
 $legacy=@()
 $requiresRestart=$false
@@ -28,6 +30,7 @@ if (Test-Path -LiteralPath "$InstallRoot\state.json") {
     try {$previous=Get-Content -LiteralPath "$InstallRoot\state.json" -Raw | ConvertFrom-Json;Assert-OwnedVersion $InstallRoot $previous.active | Out-Null}
     catch {$previous=$null}
     if($previous){$requiresRestart=[bool]$previous.requiresSignOut}
+    if($previous){$maintenanceGates+=@(Stop-OwnedBroker $previous.active $UserSid)}
     if ($previous -and $previous.active -eq $target) {
         try {
             $launcher=if(Test-Path -LiteralPath "$target\Uninstall-App.ps1"){$target}elseif($oldInstalledApp){[string]$oldInstalledApp.RIMESUninstallDirectory.value}else{$PSScriptRoot}
@@ -37,12 +40,12 @@ if (Test-Path -LiteralPath "$InstallRoot\state.json") {
         } catch {Restore-InstalledAppRegistration $oldInstalledApp;if(-not $MachineOnly){Restore-SettingsShortcut $oldShortcut};throw}
         return
     }
-    if($previous){Stop-OwnedBroker $previous.active;try{Assert-Unlocked $previous.active}catch{if(-not $AllowPendingRestart){throw};$requiresRestart=$true}}
+    if($previous){try{Assert-Unlocked $previous.active}catch{if(-not $AllowPendingRestart){throw};$requiresRestart=$true}}
 }
 if(-not $previous){
     $legacy=@(Get-LegacyViews $InstallRoot)
     foreach($entry in $legacy){
-        Stop-OwnedBroker (Split-Path -Parent (Split-Path -Parent $entry.dll))
+        $maintenanceGates+=@(Stop-OwnedBroker (Split-Path -Parent (Split-Path -Parent $entry.dll)) $UserSid)
         if($entry.missing){$requiresRestart=$true;continue}
         try{$stream=[IO.File]::Open($entry.dll,'Open','ReadWrite','None');$stream.Dispose()}
         catch{if(-not $AllowPendingRestart){throw 'An existing RIMES DLL could not be opened exclusively and may still be in use. Sign out first or explicitly use -AllowPendingRestart with immutable version directories.'};$requiresRestart=$true}
@@ -100,3 +103,4 @@ try {
 }
 if($requiresRestart){Write-Output 'Registered the new immutable version. SIGN-OUT REQUIRED before daily use; running hosts may still use the previous DLL. No old DLL was overwritten.'}
 else{Write-Output 'Installed and verified both TSF architectures. Select RIMES with Win+Space. User data was retained.'}
+} finally {foreach($gate in $maintenanceGates){if($gate){$gate.Dispose()}}}

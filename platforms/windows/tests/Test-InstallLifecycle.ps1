@@ -6,7 +6,6 @@ Assert-Administrator
 $manifest=Read-VerifiedPackage $Package
 $root="$env:ProgramFiles\RIMES"
 if(Test-Path "$root\state.json"){throw 'This migration test requires the original legacy registration, not an active managed installation.'}
-if(Get-Process -Name RimesBroker -ErrorAction SilentlyContinue){throw 'Exit the Broker after preserving Buffer content before lifecycle testing.'}
 New-Item -ItemType Directory -Path $ReportDirectory -Force | Out-Null
 $report=[ordered]@{commit=$manifest.commit;status='running';checks=@();startedAt=(Get-Date).ToString('o')}
 function Save-Report{$report | ConvertTo-Json -Depth 8 | Set-Content "$ReportDirectory\result.json" -Encoding UTF8}
@@ -28,6 +27,11 @@ function Clone-Fixture([string]$name){
 }
 $legacy=@(Get-LegacyViews)
 if($legacy.Count -ne 2){throw 'Expected both legacy architectures; refusing to change a different installation.'}
+$maintenanceGates=@()
+try {
+foreach($entry in $legacy){
+ $maintenanceGates+=@(Stop-OwnedBroker (Split-Path -Parent (Split-Path -Parent $entry.dll)))
+}
 $run=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run')
 $startup=$null
 if($run){$startup=$run.GetValue('RimesBroker',$null);$run.Dispose()}
@@ -79,3 +83,4 @@ try{
  $report.status='passed'
 }catch{$report.status='failed';$report.error=$_.ToString();throw}
 finally{$report.finishedAt=(Get-Date).ToString('o');Save-Report}
+}finally{foreach($gate in $maintenanceGates){if($gate){$gate.Dispose()}}}

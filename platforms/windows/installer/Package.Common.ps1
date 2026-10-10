@@ -95,17 +95,67 @@ function Assert-Unlocked([string]$Directory) {
         catch { throw "A RIMES input method DLL could not be opened exclusively and may still be in use. Switch input methods, close applications using RIMES or sign out, then retry. No files were overwritten: $path" }
     }
 }
-function Stop-OwnedBroker([string]$Directory,[int]$DeploymentSession=-1) {
-    foreach ($process in Get-Process -Name RimesBroker -ErrorAction SilentlyContinue) {
-        if ($process.Path -eq (Join-Path $Directory 'x64\RimesBroker.exe')) {
-            # A held deployment mutex already excludes a serving Broker in this
-            # session. A TSF-launched transient process can still be exiting
-            # after seeing that gate; it has not opened the dictionary engine.
-            if($process.SessionId -eq $DeploymentSession){continue}
-            # A pending process-local Buffer is never silently discarded by upgrade.
-            throw 'Exit RIMES from its tray after copying or sending Buffer content, then retry the installation.'
-        }
+function Get-BrokerMutexName([string]$UserSid,[int]$Session) {
+    if(-not ('RimesMaintenanceNames' -as [type])){
+        Add-Type -TypeDefinition @'
+public static class RimesMaintenanceNames {
+    public static string Mutex(string sid, int session) {
+        ulong hash=14695981039346656037UL;
+        unchecked { foreach(char unit in sid) { hash^=unit; hash*=1099511628211UL; } }
+        return "Local\\RIMES.Broker.v2.session-"+session+".user-"+hash.ToString("x16");
     }
+}
+'@
+    }
+    return [RimesMaintenanceNames]::Mutex(([Security.Principal.SecurityIdentifier]::new($UserSid)).Value,$Session)
+}
+function New-BrokerMaintenanceReservation([string]$UserSid=([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) {
+    # A different UAC administrator does not open original-user kernel objects.
+    # Setup.exe / Invoke-UserUninstall retains that user's reservation instead.
+    if($UserSid -ne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value){return $null}
+    $name=Get-BrokerMutexName $UserSid ([Diagnostics.Process]::GetCurrentProcess().SessionId)
+    $security=[Security.AccessControl.MutexSecurity]::new()
+    $security.SetAccessRuleProtection($true,$false)
+    $security.AddAccessRule([Security.AccessControl.MutexAccessRule]::new([Security.Principal.SecurityIdentifier]::new($UserSid),'FullControl','Allow'))
+    $created=$false
+    # Retain even an existing object's handle before stopping its Broker. Its
+    # existence blocks TSF auto-start; ownership remains available to deploy.
+    return [Threading.Mutex]::new($false,$name,[ref]$created,$security)
+}
+function Stop-OwnedBroker([string]$Directory,[string]$UserSid=([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) {
+    # Callers have already validated the installed path/manifest. Recovery also
+    # supports absent files, so do not require a complete package again here.
+    $expected=[IO.Path]::GetFullPath((Join-Path $Directory 'x64\RimesBroker.exe'))
+    $reservation=New-BrokerMaintenanceReservation $UserSid
+    try {
+        foreach($process in Get-Process -Name RimesBroker -ErrorAction SilentlyContinue){
+            $native=Get-CimInstance Win32_Process -Filter ('ProcessId='+$process.Id)
+            if(-not $native){continue}
+            if(-not $native.ExecutablePath){if($process.WaitForExit(500)){continue};throw 'Cannot verify a Broker executable. Run maintenance with administrator approval.'}
+            if([IO.Path]::GetFullPath($native.ExecutablePath) -ne $expected){continue}
+            $owner=Invoke-CimMethod -InputObject $native -MethodName GetOwnerSid
+            if($owner.ReturnValue -ne 0 -or -not $owner.Sid){throw 'Cannot verify the Broker owner. No process was stopped.'}
+            if($owner.Sid -ne $UserSid){continue}
+            if($native.CommandLine -match '(?i)(^|\s)--(deploy-only|once|print-|install-autostart|remove-autostart|user-data-dir|shared-data-dir|rime-dll|log-dir)'){
+                throw 'Another Rime deployment or diagnostic operation is using this executable. Wait for it to finish, then retry.'
+            }
+            # Bind to the process object and creation time, not a reusable PID.
+            $process.Refresh()
+            if($process.HasExited){continue}
+            if([Math]::Abs(($process.StartTime.ToUniversalTime()-$native.CreationDate.ToUniversalTime()).TotalMilliseconds) -gt 1){throw 'Broker identity changed during maintenance. Retry.'}
+            $stopEvent=$null
+            try {
+                $name=(Get-BrokerMutexName $UserSid $process.SessionId)+'.shutdown-'+$process.Id
+                try {$stopEvent=[Threading.EventWaitHandle]::OpenExisting($name,[Security.AccessControl.EventWaitHandleRights]::Modify)}catch [Threading.WaitHandleCannotBeOpenedException]{}catch [UnauthorizedAccessException]{}
+                if($stopEvent){$stopEvent.Set() | Out-Null;if($process.WaitForExit(5000)){continue}}
+                # Legacy Brokers have no graceful maintenance event. Terminate
+                # only the verified owned executable, never its TSF host app.
+                Stop-Process -InputObject $process -Force -ErrorAction Stop
+                if(-not $process.WaitForExit(5000)){throw 'The owned Broker could not be stopped'}
+            } finally {if($stopEvent){$stopEvent.Dispose()}}
+        }
+        return $reservation
+    } catch {if($reservation){$reservation.Dispose()};throw}
 }
 function Write-InstallState([string]$Root,$State) {
     New-Item -ItemType Directory -Path $Root -Force | Out-Null
@@ -421,6 +471,8 @@ function Remove-OwnedSettingsShortcut([string]$InstallRoot) {
 # existing per-user/session mutex prevents TSF from starting a second engine
 # after machine registration while original-user setup builds dictionaries.
 function Invoke-UserDictionaryDeployment([string]$Directory) {
+    $reservation=Stop-OwnedBroker $Directory
+    try {
     $broker=Join-Path $Directory 'x64\RimesBroker.exe'
     $endpoint=(& $broker --print-endpoint | Out-String).Trim()
     if($LASTEXITCODE -or $endpoint -notmatch '^\\\\\.\\pipe\\RIMES\.Broker\.v2\.session-[0-9]+\.user-[a-f0-9]{16}$'){
@@ -434,29 +486,24 @@ function Invoke-UserDictionaryDeployment([string]$Directory) {
     $created=$false
     $mutex=[Threading.Mutex]::new($true,$name,[ref]$created,$security)
     $owned=$created
-    $setupGate=$null
     try {
         if(-not $created){
-            # Only Setup's lifetime reservation is transferable. An ordinary
-            # Broker mutex without its companion remains fail-closed.
-            try {$setupGate=[Threading.Mutex]::OpenExisting($name+'.setup')}
-            catch {throw 'Exit RIMES from its tray after preserving Buffer content, then run Setup again.'}
             try {$owned=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$owned=$true}
-            if(-not $owned){throw 'Exit RIMES from its tray after preserving Buffer content, then run Setup again.'}
+            if(-not $owned){throw 'Another Rime operation still owns the dictionary lock. Wait for it to finish, then retry.'}
         }
-        Stop-OwnedBroker $Directory -DeploymentSession ([Diagnostics.Process]::GetCurrentProcess().SessionId)
         & $broker --deploy-only | Out-Host
         if($LASTEXITCODE){throw 'Dictionary deployment failed'}
     } finally {
         if($owned){$mutex.ReleaseMutex()}
-        if($setupGate){$setupGate.Dispose()}
         $mutex.Dispose()
     }
+    } finally {if($reservation){$reservation.Dispose()}}
 }
 function Invoke-UserUninstall([string]$InstallRoot,[string]$Directory,[scriptblock]$UnregisterMachine) {
     Assert-OwnedBrokerAutostart $Directory
     $oldAutostart=Get-BrokerAutostart
     $oldShortcut=Read-SettingsShortcut
+    $reservation=New-BrokerMaintenanceReservation
     try {
         # Remove the initiating user's launch entries first. A cancelled or
         # failed elevated phase restores them under this same original token.
@@ -472,5 +519,5 @@ function Invoke-UserUninstall([string]$InstallRoot,[string]$Directory,[scriptblo
         try{Restore-SettingsShortcut $oldShortcut}catch{$recoveryFailures+=$_.ToString()}
         if($recoveryFailures.Count){throw "Uninstall failed: $failure. User entry recovery is incomplete: $($recoveryFailures -join '; ')"}
         throw $failure
-    }
+    } finally {if($reservation){$reservation.Dispose()}}
 }

@@ -354,8 +354,9 @@ void TestReturningToInputRejectsLateResultsAndDropsQueuedTranslation() {
         "returning to input retains the draft and binding without restarting requests");
   runtime.Stop();
   runtime.ReturnToInput();
-  Check(runtime.Snapshot()["status"] == "Protected",
-        "mode selection cannot replace the protected lifecycle status");
+  Check(runtime.Snapshot()["status"] == "Buffer reset" &&
+        runtime.Snapshot()["source"] == "" && runtime.Snapshot()["result"] == "",
+        "mode selection cannot revive content discarded by IME shutdown");
 }
 void TestReturningToInputRetainsCompletedResultsAndAnIssuedDelivery() {
   std::atomic<unsigned> calls{0};
@@ -531,12 +532,33 @@ void TestCodexConnectorAndReturn() {
   Check(runtime.Snapshot()["result"] == "" && runtime.Snapshot()["source"] == "Another request.", "connector revocation rejects completed results from another plugin owner");
   runtime.Stop();
 }
+void TestDisposableMaintenanceContent() {
+  workbench::Runtime runtime;
+  const auto peer = GetCurrentProcessId() + 1;
+  const auto target = runtime.Register(peer, 995, 1);
+  runtime.Focus(target); runtime.Bind(peer); runtime.Paste("Disposable Buffer.");
+  runtime.Send(true);
+  runtime.DiscardBuffer();
+  auto state = runtime.Snapshot();
+  Check(state["source"] == "" && state["result"] == "" &&
+            !runtime.Capturing(target),
+        "explicit redeployment reset discards Buffer without a content gate");
+  auto event = runtime.Control({{"op", "wait"}, {"session", 995}}, peer);
+  Check(event.value("kind", "") == "capture",
+        "reset replaces a queued delivery with revoked capture authority");
+  runtime.Focus(target); runtime.Bind(peer); runtime.Paste("Next session.");
+  runtime.Stop();
+  state = runtime.Snapshot();
+  Check(state["source"] == "" && state["result"] == "",
+        "IME shutdown discards temporary UI content instead of preserving it");
+}
 int main() {
   const auto root = std::filesystem::temp_directory_path() /
       (L"rimes-runtime-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
   std::filesystem::create_directories(root);
   Check(SetEnvironmentVariableW(L"LOCALAPPDATA", root.c_str()) != 0, "isolated runtime preferences");
   TestTargets();
+  TestDisposableMaintenanceContent();
   TestExplicitOpeningPlacementRevision();
   TestCommandModifiersDoNotBecomeBufferCommands();
   TestUnhandledModifierCommitIsCapturedWithoutChangingKeyOwnership();

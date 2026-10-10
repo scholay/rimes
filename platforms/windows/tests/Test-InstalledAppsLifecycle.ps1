@@ -36,7 +36,8 @@ function Get-RegisteredRimesViews {
     return @($global:RimesInstallerTestNative.GetEnumerator() | ForEach-Object {[pscustomobject]@{architecture=$_.Key;dll=(Join-Path $_.Value "$($_.Key)\RimesTsf.dll")}})
 }
 function Invoke-RecoveryRegistrar([string]$Package,[string]$Directory,[string]$Architecture,[string]$Operation){Invoke-Registrar $Directory $Architecture $Operation}
-function Stop-OwnedBroker([string]$Directory){}
+function Stop-OwnedBroker([string]$Directory,[string]$UserSid){}
+function New-BrokerMaintenanceReservation([string]$UserSid){return $null}
 function Test-SettingsCommandSupported([string]$Directory){return (Read-VerifiedPackage $Directory).version -ne '1.1.0-test-old'}
 function Assert-Unlocked([string]$Directory){if($global:RimesInstallerTestLock){throw 'Fixture DLL lock'}}
 function Invoke-Registrar([string]$Directory,[string]$Architecture,[string]$Operation){
@@ -303,9 +304,9 @@ try {
     $held=[Threading.Mutex]::new($false,$fixtureMutexName)
     try {
         $callsBefore=(Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw)
-        Expect-Failure 'user deployment refuses an already-running Broker' {& "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $new -NoAutostart}
+        & "$new\Initialize-User.ps1" -InstallRoot $splitRoot -ExpectedPackageDirectory $new -NoAutostart | Out-Host
         $callsAfter=(Get-Content -LiteralPath $env:RIMES_INSTALLER_FIXTURE_BROKER_LOG -Raw)
-        Check 'held Broker lock prevents a second dictionary engine' ($callsAfter.Substring($callsBefore.Length) -notmatch '--deploy-only')
+        Check 'an unowned lifetime reservation does not block dictionary deployment' ($callsAfter.Substring($callsBefore.Length) -match '--deploy-only')
     } finally {$held.Dispose()}
     $holderStart=[Diagnostics.ProcessStartInfo]::new($binary,('--hold-mutex '+$fixtureMutexName))
     $holderStart.UseShellExecute=$false

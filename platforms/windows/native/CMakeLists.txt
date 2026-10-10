@@ -525,6 +525,11 @@ if(RIMES_BUILD_TESTS)
     rimes_harden_target(RimesTsfTestHost)
 
     add_test(NAME RimesBrokerProtocol COMMAND RimesBrokerProtocolTests)
+    add_executable(RimesBrokerLaunchTests src/tsf/broker_launch_tests.cpp)
+    target_link_libraries(RimesBrokerLaunchTests PRIVATE advapi32)
+    rimes_harden_target(RimesBrokerLaunchTests)
+    add_test(NAME RimesBrokerLaunch COMMAND RimesBrokerLaunchTests)
+    set_tests_properties(RimesBrokerLaunch PROPERTIES TIMEOUT 10)
     add_test(NAME RimesEngineUnit COMMAND RimesEngineTests)
     add_test(NAME RimesBrokerKeyTranslation
              COMMAND RimesBrokerKeyTranslationTests)

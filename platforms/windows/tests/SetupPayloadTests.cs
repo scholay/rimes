@@ -150,12 +150,14 @@ internal static class SetupPayloadTests
             checks++;
             using (var existingBroker = new Mutex(false, name))
             {
-                bool rejected = false;
-                try { using (var gate = new InstallationGate(name)) { } }
-                catch (InvalidOperationException) { rejected = true; }
-                if (!rejected) throw new Exception("Setup accepted a live Broker reservation");
+                using (var gate = new InstallationGate(name)) {
+                    existingBroker.Dispose();
+                    using (var restartedBroker = new Mutex(false, name, out newObject))
+                        if (newObject) throw new Exception("Stopping the live Broker lost the maintenance reservation");
+                    checks++;
+                }
                 using (var companion = new Mutex(false, name + ".setup", out newObject))
-                    if (!newObject) throw new Exception("Rejected setup leaked its companion gate");
+                    if (!newObject) throw new Exception("Completed setup leaked its companion gate");
                 checks++;
             }
             foreach (var machineExit in new[] { 1602, 1603 }) {

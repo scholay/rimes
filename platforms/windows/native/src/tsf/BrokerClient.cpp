@@ -28,6 +28,7 @@
 #include "Diagnostics.h"
 #include "ModuleState.h"
 #include "key_routing.hpp"
+#include "broker_launch.hpp"
 
 namespace rimes::windows::tsf {
 namespace {
@@ -639,6 +640,10 @@ bool LaunchBrokerProcess() noexcept {
   // The test runner owns the isolated Broker's data and lifetime. A failed
   // test must never launch the installed Broker or leave an untracked child.
   if (!core::kAllowBrokerAutoLaunch) return false;
+  wchar_t loaded_path[MAX_PATH]{};
+  const auto length = GetModuleFileNameW(module::Instance(), loaded_path, MAX_PATH);
+  if (!length || length >= MAX_PATH || !IsRegisteredTsfModule(loaded_path))
+    return false;
   std::wstring broker_path;
   if (!SiblingBrokerPath(&broker_path)) {
     return false;

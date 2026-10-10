@@ -21,7 +21,7 @@ try {
     $state=Get-RimesInstallation $InstallRoot -AllowIncomplete
     # Validate user-owned cleanup before requesting any machine changes.
     Assert-OwnedBrokerAutostart $state.active
-    $text="Uninstall RIMES?`n`nFirst copy or send pending Buffer content, exit RIMES from its tray, and switch to another input method.`n`nDictionaries, settings and API credentials will be kept. Version files remain for recovery. Administrator approval is required for system registration only."
+    $text="Uninstall RIMES?`n`nThe input method will stop automatically. Temporary Buffer text will be discarded without a separate save confirmation.`n`nDictionaries, settings and API credentials will be kept. Version files remain for recovery. Administrator approval is required for system registration only."
     if([Windows.Forms.MessageBox]::Show($text,$caption,[Windows.Forms.MessageBoxButtons]::OKCancel,[Windows.Forms.MessageBoxIcon]::Question) -ne [Windows.Forms.DialogResult]::OK){exit 0}
     # Keep the original process to remove its own HKCU startup and shortcut.
     # A different UAC administrator never reads or writes either user profile.

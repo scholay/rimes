@@ -48,7 +48,7 @@ if ($LASTEXITCODE) { throw '插件目录检查失败' }
 ./platforms/windows/scripts/Build-RimesWindows.ps1 -Architecture x86 -Configuration Release
 ```
 
-完整词库按 [README 的产品数据流程](README.md#product-shared-data) 准备；EXE/ZIP 使用 [New-RimesNativePackage.ps1](../scripts/New-RimesNativePackage.ps1)，必须提供当前 `git rev-parse HEAD` 作为 `Commit`，以及完整 `SharedData`、锁定的 x64 `RimeDll`、Microsoft 签名的 `VCRedistX64` / `VCRedistX86` 和新的 `OutputDirectory`。双架构 `build-identity.json` 必须匹配；该脚本会同时调用 `New-RimesSetupExe.ps1` 生成 EXE 和校验和。保存好 Buffer 内容并从托盘退出，然后由日常登录用户正常双击 EXE；若安装器提示注销或重启，完成后再测。
+完整词库按 [README 的产品数据流程](README.md#product-shared-data) 准备；EXE/ZIP 使用 [New-RimesNativePackage.ps1](../scripts/New-RimesNativePackage.ps1)，必须提供当前 `git rev-parse HEAD` 作为 `Commit`，以及完整 `SharedData`、锁定的 x64 `RimeDll`、Microsoft 签名的 `VCRedistX64` / `VCRedistX86` 和新的 `OutputDirectory`。双架构 `build-identity.json` 必须匹配；该脚本会同时调用 `New-RimesSetupExe.ps1` 生成 EXE 和校验和。由日常登录用户正常双击新构建的 EXE；维护自动停止输入法并丢弃临时 Buffer，不要求保存或手动退出。若安装器提示注销或重启，保存其他应用工作并完成后再测。已发布的旧包不会自动获得此维护改动。
 
 在安装包目录用 `powershell -NoProfile -File .\Verify.ps1` 核对已安装版本。此脚本返回 `HostInputAcceptance='Requires desktop testing'`，注册和文件检查通过仍需下面的操作验收。
 

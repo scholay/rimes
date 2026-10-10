@@ -10,7 +10,8 @@ $recovery=Get-Content -LiteralPath "$InstallRoot\legacy-recovery.json" -Raw | Co
 if($recovery.PSObject.Properties['userStartupRecorded'] -and -not $recovery.userStartupRecorded){throw 'The original user startup snapshot was not recorded. Use a current Setup.exe to repair instead; no registration was changed.'}
 $legacy=@($recovery.entries)
 if(-not $legacy.Count){throw 'No legacy registration is recorded'}
-Stop-OwnedBroker $state.active
+$maintenance=Stop-OwnedBroker $state.active
+try {
 Assert-Unlocked $state.active
 foreach($entry in $legacy){if((Get-FileHash -LiteralPath $entry.dll -Algorithm SHA256).Hash -ne $entry.sha256){throw 'Legacy DLL checksum mismatch'}}
 $oldAutostart=Get-BrokerAutostart
@@ -35,3 +36,4 @@ try{
     throw "Legacy rollback failed; the managed registration, startup and Installed Apps entry were restored. $failure"
 }
 Write-Output 'Restored the exact previous DLL paths and startup setting. User data retained. Sign out before daily use if any host used the preview.'
+} finally {if($maintenance){$maintenance.Dispose()}}

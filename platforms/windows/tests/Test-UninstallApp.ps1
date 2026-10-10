@@ -68,6 +68,7 @@ function Assert-Administrator {}
 function Assert-InstallUser([string]$Root,[string]$Sid) {}
 function Get-RimesInstallation([string]$Root,[switch]$AllowIncomplete){return [pscustomobject]@{active=(Join-Path $Root 'versions\fixture')}}
 function Assert-OwnedBrokerAutostart([string]$Directory) {}
+function New-BrokerMaintenanceReservation([string]$UserSid){return $null}
 function Get-BrokerAutostart {return 'synthetic-startup'}
 function Restore-BrokerAutostart($Value) {$Value | Set-Content -LiteralPath (Join-Path $env:RIMES_UNINSTALL_APP_FIXTURE 'startup.log')}
 function Get-SettingsShortcutPath {return (Join-Path $env:RIMES_UNINSTALL_APP_FIXTURE 'nonexistent-shortcut.lnk')}
@@ -129,6 +130,10 @@ try {
         $env:PSModulePath=[IO.Path]::Combine($env:WINDIR,'System32\WindowsPowerShell\v1.0\Modules')
         Check ($case.name+' exit status') ($LASTEXITCODE -eq $case.expected)
         $dialogs=@(Get-Content -LiteralPath "$directory\dialogs.log" -ErrorAction SilentlyContinue)
+        if(-not $case.machine){
+            $confirmation=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($dialogs[0] -split '\|')[2]))
+            Check ($case.name+' does not require preserving Buffer or exiting manually') ($confirmation.Contains('stop automatically') -and -not $confirmation.Contains('First copy'))
+        }
         Check ($case.name+' dialog and worker boundaries') ($dialogs.Count -eq $case.dialogs -and (Test-Path -LiteralPath "$directory\worker.log") -eq $case.worker)
         if($case.contains){
             $text=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($dialogs[-1] -split '\|')[2]))

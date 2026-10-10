@@ -1,5 +1,11 @@
 # Buffer UI Notes
 
+## Latest Override — 2026-10-10 Disposable Maintenance Content
+
+- Buffer is an internal native IME UI, not a standalone application or a saved document. Explicit uninstall, update, reinstall, reset, exit and process restart may discard all temporary Buffer text/results/composition without a save/copy confirmation or requiring a manual tray exit. Never block maintenance just to preserve Buffer content or add Buffer persistence as a workaround.
+- Keep persistent dictionaries, configuration and credentials separate from temporary Buffer content. Preserve exact-target delivery and secure/session protection. Ordinary focus changes, plugin updates and close/pause do not authorize unsafe host delivery or bypass generation/identity validation.
+- Windows maintenance reserves the Broker lifetime while stopping its verified owned runtime and deploying dictionaries. Prefer graceful engine shutdown; legacy or unresponsive owned Brokers may be terminated. Never kill TSF host applications or unverified/other-account processes, overwrite occupied DLLs, or run two dictionary engines concurrently.
+
 ## Latest Override — 2026-09-08 Translation Units and Optional Auto-Send
 
 - The user-controlled auto-send switch is an intentional exception to the historical manual-only rules below. Use the actual routed delivery source and stable target UUID/text with a monotonic per-block clock. New/changed blocks start at zero; empty, hidden, paused, focus-loss and protection intervals never accrue retroactive lifetime. A stable translation prefix may age during tail editing/composition, but timer delivery must never settle composition and must revalidate exact source, head, generation, focus and secure state through the normal coordinator.

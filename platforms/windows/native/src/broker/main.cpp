@@ -196,6 +196,15 @@ int wmain(const int argc, wchar_t** argv) {
   workbench::Runtime runtime;
   workbench::UiCommands commands;
   const bool interactive = security.session_id() != 0;
+  struct StopEvent {
+    HANDLE handle = nullptr;
+    ~StopEvent() { if (handle) CloseHandle(handle); }
+  } maintenance;
+  const auto stop_name = security.mutex_name() + L".shutdown-" +
+                         std::to_wstring(GetCurrentProcessId());
+  maintenance.handle = CreateEventW(security.attributes(), TRUE, FALSE,
+                                    stop_name.c_str());
+  if (!maintenance.handle) return 4;
   std::jthread ui;
   if (interactive && !options.serve_once)
     ui = std::jthread([&] {
@@ -204,6 +213,20 @@ int wmain(const int argc, wchar_t** argv) {
           [&] { engine.RunMaintenance(true, nullptr); }, &commands,
           options.open_settings);
     });
+  std::jthread maintenance_stop([&](std::stop_token stop) {
+    while (!stop.stop_requested()) {
+      if (WaitForSingleObject(maintenance.handle, 100) != WAIT_OBJECT_0)
+        continue;
+      if (interactive && !options.serve_once) {
+        // UI attachment may still be starting. Keep the request pending until
+        // it can run on that thread; never read or save Buffer text here.
+        if (!commands.RequestExit()) { Sleep(25); continue; }
+      } else {
+        server.RequestStop();
+      }
+      break;
+    }
+  });
   error.clear();
   const ServeResult result = server.ServeClients(
       [&security, &engine, &runtime, &commands, interactive, &options](DWORD) {

@@ -49,6 +49,7 @@ class Model {
   void Open();
   void Close();
   void Protect();
+  void Discard();
   bool Append(std::string text);
   bool Backspace();
   std::string SourceText() const;

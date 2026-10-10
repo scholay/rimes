@@ -9,7 +9,8 @@ $state=Get-RimesInstallation $InstallRoot -AllowIncomplete
 # the installed x86 directory or DLL has been removed.
 try {Read-VerifiedPackage $PSScriptRoot | Out-Null}
 catch {throw "The current uninstall tools are incomplete or unverifiable. Run the current Setup.exe to repair the installation, then retry uninstall. No registration was changed. $($_.Exception.Message)"}
-Stop-OwnedBroker $state.active
+$maintenance=Stop-OwnedBroker $state.active $UserSid
+try {
 $requiresSignOut=($null -eq $state.requiresSignOut -or [bool]$state.requiresSignOut)
 $signOutReason=if($null -eq $state.requiresSignOut){'unknown-installation-state'}elseif($state.requiresSignOut){'previous-signout-required'}else{'none'}
 # A deleted registered DLL can remain mapped in an application. Only use the
@@ -40,3 +41,4 @@ try {
 }
 Write-Host 'Unregistered RIMES. Version files, user dictionaries, settings and credentials retained for recovery. No other input method was changed.'
 [pscustomobject]@{Uninstalled=$true;RequiresSignOut=$requiresSignOut;SignOutReason=$signOutReason;UserDataRetained=$true}
+} finally {if($maintenance){$maintenance.Dispose()}}
