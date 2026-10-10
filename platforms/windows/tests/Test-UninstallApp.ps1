@@ -36,6 +36,70 @@ $rejected=$false
 try {Get-RecordedUninstallResult $OutputDirectory $active 1 | Out-Null}catch{$rejected=$true}
 Check 'failed worker is never reported as successful completion' $rejected
 
+# Exercise the original-user phase with a real isolated shortcut. A machine
+# worker (or concurrent repair) may leave/recreate launch entries; success must
+# describe the final state, not merely the worker's exit code.
+& {
+    $cleanupRoot=Join-Path $OutputDirectory 'user-cleanup'
+    $cleanupActive=Join-Path $cleanupRoot 'versions\fixture'
+    $script:cleanupShortcut=Join-Path $cleanupRoot 'Start Menu\RIMES Settings.lnk'
+    $script:cleanupStartup='"'+(Join-Path $cleanupActive 'x64\RimesBroker.exe')+'"'
+    $ownedStartup=$script:cleanupStartup
+    function Get-BrokerAutostart {return $script:cleanupStartup}
+    function Restore-BrokerAutostart($Value) {$script:cleanupStartup=$Value}
+    function Get-SettingsShortcutPath {return $script:cleanupShortcut}
+    function New-BrokerMaintenanceReservation {return $null}
+    function Write-FixtureShortcut([string]$Arguments='--settings') {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $script:cleanupShortcut) -Force | Out-Null
+        $shell=New-Object -ComObject WScript.Shell
+        $link=$null
+        try {
+            $link=$shell.CreateShortcut($script:cleanupShortcut)
+            $link.TargetPath=Join-Path $cleanupActive 'x64\RimesBroker.exe'
+            $link.Arguments=$Arguments
+            $link.Save()
+        } finally {
+            if($link){[Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) | Out-Null}
+            [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null
+        }
+    }
+    foreach($workerCode in @(0,3010)) {
+        $script:cleanupStartup=$ownedStartup
+        Write-FixtureShortcut
+        $returned=Invoke-UserUninstall $cleanupRoot $cleanupActive {
+            $script:cleanupStartup=$ownedStartup
+            Write-FixtureShortcut
+            return $workerCode
+        }
+        Check ($workerCode.ToString()+' final cleanup removes recreated owned entries') ($returned -eq $workerCode -and $null -eq $script:cleanupStartup -and -not (Test-Path -LiteralPath $script:cleanupShortcut))
+    }
+    $script:cleanupStartup=$ownedStartup
+    Write-FixtureShortcut
+    $failed=$false
+    try {
+        Invoke-UserUninstall $cleanupRoot $cleanupActive {
+            $script:cleanupStartup='"C:\Foreign\RimesBroker.exe"'
+            Write-FixtureShortcut '--user-customized'
+            $script:foreignShortcutHash=(Get-FileHash -LiteralPath $script:cleanupShortcut).Hash
+            return 0
+        } | Out-Null
+    } catch {$failed=$true}
+    Check 'post-worker foreign launch entries are preserved and never reported as success' ($failed -and $script:cleanupStartup -eq '"C:\Foreign\RimesBroker.exe"')
+    Check 'post-worker cleanup failure never restores a retired owned shortcut' ((Get-FileHash -LiteralPath $script:cleanupShortcut).Hash -eq $script:foreignShortcutHash)
+    $script:cleanupStartup=$null
+    Write-FixtureShortcut
+    $refused=$false
+    try {Assert-UserUninstallCleanup $cleanupRoot}catch{$refused=$true}
+    Check 'final verification rejects a remaining managed shortcut' $refused
+    Write-FixtureShortcut '--user-customized'
+    Assert-UserUninstallCleanup $cleanupRoot
+    Check 'final verification permits a preserved user-customized shortcut' $true
+    $script:cleanupStartup=$ownedStartup
+    $refused=$false
+    try {Assert-UserUninstallCleanup $cleanupRoot}catch{$refused=$true}
+    Check 'final verification rejects a remaining startup entry' $refused
+}
+
 # Native registrars print diagnostics on stdout. Exercise the real wrappers,
 # not a silent PowerShell mock, so their text cannot pollute structured results.
 # This executable only prints and returns an exit code; it never loads a DLL
@@ -117,8 +181,9 @@ function Assert-InstallUser([string]$Root,[string]$Sid) {}
 function Get-RimesInstallation([string]$Root,[switch]$AllowIncomplete){return [pscustomobject]@{active=(Join-Path $Root 'versions\fixture')}}
 function Assert-OwnedBrokerAutostart([string]$Directory) {}
 function New-BrokerMaintenanceReservation([string]$UserSid){return $null}
-function Get-BrokerAutostart {return 'synthetic-startup'}
-function Restore-BrokerAutostart($Value) {$Value | Set-Content -LiteralPath (Join-Path $env:RIMES_UNINSTALL_APP_FIXTURE 'startup.log')}
+$script:fixtureStartup='synthetic-startup'
+function Get-BrokerAutostart {return $script:fixtureStartup}
+function Restore-BrokerAutostart($Value) {$script:fixtureStartup=$Value;$Value | Set-Content -LiteralPath (Join-Path $env:RIMES_UNINSTALL_APP_FIXTURE 'startup.log')}
 function Get-SettingsShortcutPath {return (Join-Path $env:RIMES_UNINSTALL_APP_FIXTURE 'nonexistent-shortcut.lnk')}
 function Start-Process([string]$FilePath,[string]$Verb,[string]$WindowStyle,[string]$ArgumentList,[switch]$Wait,[switch]$PassThru){
     if($Verb -ne 'RunAs' -or $WindowStyle -ne 'Hidden' -or -not $Wait -or -not $PassThru -or $ArgumentList -notmatch '-MachineOnly -ExpectedUserSid "S-1-'){throw 'Unexpected machine-worker invocation'}

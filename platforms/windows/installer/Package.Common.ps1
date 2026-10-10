@@ -468,6 +468,17 @@ function Remove-OwnedSettingsShortcut([string]$InstallRoot) {
     try {$shortcut=$shell.CreateShortcut($path);if(Test-OwnedSettingsShortcut $InstallRoot $shortcut){Remove-Item -LiteralPath $path -Force}}
     finally {if($shortcut){[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) | Out-Null};[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null}
 }
+function Assert-UserUninstallCleanup([string]$InstallRoot) {
+    if($null -ne (Get-BrokerAutostart)){throw 'A RimesBroker startup entry remains. User cleanup is incomplete.'}
+    $path=Get-SettingsShortcutPath
+    if(-not (Test-Path -LiteralPath $path -PathType Leaf)){return}
+    $shell=New-Object -ComObject WScript.Shell
+    $shortcut=$null
+    try {
+        $shortcut=$shell.CreateShortcut($path)
+        if(Test-OwnedSettingsShortcut $InstallRoot $shortcut){throw 'The managed RIMES settings shortcut remains. User cleanup is incomplete.'}
+    } finally {if($shortcut){[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) | Out-Null};[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null}
+}
 
 # Deployment shares the serving Broker's single-instance lifetime. Holding its
 # existing per-user/session mutex prevents TSF from starting a second engine
@@ -507,13 +518,13 @@ function Invoke-UserUninstall([string]$InstallRoot,[string]$Directory,[scriptblo
     $oldShortcut=Read-SettingsShortcut
     $reservation=New-BrokerMaintenanceReservation
     try {
+    try {
         # Remove the initiating user's launch entries first. A cancelled or
         # failed elevated phase restores them under this same original token.
         Remove-OwnedBrokerAutostart $Directory
         Remove-OwnedSettingsShortcut $InstallRoot
         $code=& $UnregisterMachine
         if($code -notin @(0,3010)){throw 'System unregistration failed'}
-        return $code
     } catch {
         $failure=$_
         $recoveryFailures=@()
@@ -521,5 +532,15 @@ function Invoke-UserUninstall([string]$InstallRoot,[string]$Directory,[scriptblo
         try{Restore-SettingsShortcut $oldShortcut}catch{$recoveryFailures+=$_.ToString()}
         if($recoveryFailures.Count){throw "Uninstall failed: $failure. User entry recovery is incomplete: $($recoveryFailures -join '; ')"}
         throw $failure
+    }
+    # Recheck the initiating user's final state after the elevated worker exits.
+    # Do not restore retired launch entries if this post-unregistration cleanup
+    # fails: machine registration has already been removed successfully.
+    try {
+        Remove-OwnedBrokerAutostart $Directory
+        Remove-OwnedSettingsShortcut $InstallRoot
+        Assert-UserUninstallCleanup $InstallRoot
+    } catch {throw "RIMES system registration was removed, but original-user cleanup is incomplete. Repair with the current Setup.exe and retry uninstall. $($_.Exception.Message)"}
+    return $code
     } finally {if($reservation){$reservation.Dispose()}}
 }
