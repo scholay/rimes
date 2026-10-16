@@ -634,12 +634,12 @@ public final class InputContractInstrumentation extends Instrumentation {
         String first=candidate(0);
         tap("展开候选"); waitButton("收起候选");
         SystemClock.sleep(300);
-        check(find("矩阵候选",true)!=null,"expanded matrix visible in real IME");
-        String later=candidate(18);
+        check(findLabel("矩阵候选",true)!=null,"expanded matrix visible in real IME");
+        String later=candidate(27);
         tap("收起候选"); tap("Space");
         expect(host.first,first,"preview restores original engine page");
         focus(host.first); type("shi"); tap("展开候选"); SystemClock.sleep(300);
-        AccessibilityNodeInfo matrix=find("矩阵候选",true);
+        AccessibilityNodeInfo matrix=findLabel("矩阵候选",true);
         check(matrix!=null && matrix.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD),"matrix scrolls in real IME");
         SystemClock.sleep(200);
         tap(later); expect(host.first,later,"scrolled later-page candidate commits exact text");

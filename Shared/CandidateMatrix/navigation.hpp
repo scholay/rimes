@@ -15,6 +15,7 @@ template <typename Page, typename Traits>
 class Navigation {
  public:
   void Reset(const Page& state) {
+    ++generation_;
     pages_.clear();
     row_ = base_ = column_ = 0;
     expanded_ = false;
@@ -59,9 +60,11 @@ class Navigation {
   // Escape returns to the page that opened the matrix, matching macOS.
   template <typename Step>
   bool CollapseToAnchor(Step&& step) {
+    const auto generation = generation_;
     while (!empty() && row_ > 0) {
       const auto previous = step(-1);
-      if (!previous || PageId(*previous) != PageId(pages_[row_ - 1])) return false;
+      if (generation != generation_ || !previous || previous->candidates.empty() ||
+          PageId(*previous) != PageId(pages_[row_ - 1])) return false;
       --row_;
       pages_[row_] = *previous;
     }
@@ -76,10 +79,11 @@ class Navigation {
   template <typename Step>
   bool MoveRow(int delta, Step&& step) {
     if (empty()) return false;
+    const auto generation = generation_;
     if (!expanded_) {
       if (delta < 0) {
         const auto previous = step(-1);
-        if (!previous) return false;
+        if (generation != generation_ || !previous) return false;
         Reset(*previous);
         return true;
       }
@@ -97,7 +101,7 @@ class Navigation {
     }
     const auto target = delta < 0 ? row_ - 1 : row_ + 1;
     const auto next = step(delta);
-    if (!next || next->candidates.empty() ||
+    if (generation != generation_ || !next || next->candidates.empty() ||
         PageId(*next) != PageId(pages_[target])) return false;
     row_ = target;
     pages_[row_] = *next;
@@ -110,15 +114,16 @@ class Navigation {
   struct Selection { std::uint32_t page_id; std::size_t index; };
   template <typename Step>
   bool SelectVisibleIndex(std::size_t index, Step&& step) {
+    const auto generation = generation_;
     for (auto row = base(); row < end(); ++row) {
       if (index < pages_[row].candidates.size()) {
         // Host UI selection can cross preview rows. Keep the engine on the
         // selected row so later keyboard navigation starts from the same page.
         while (row_ != row) {
           const int delta = row < row_ ? -1 : 1;
-          const auto next = step(delta);
           const auto target = delta < 0 ? row_ - 1 : row_ + 1;
-          if (!next || next->candidates.empty() || target >= pages_.size() ||
+          const auto next = step(delta);
+          if (generation != generation_ || !next || next->candidates.empty() || target >= pages_.size() ||
               PageId(*next) != PageId(pages_[target])) return false;
           row_ = target;
           pages_[row_] = *next;
@@ -149,13 +154,16 @@ class Navigation {
  private:
   template <typename Step>
   bool PreviewFollowing(Step& step) {
+    const auto generation = generation_;
     const auto anchor = PageId(pages_[row_]);
     auto last = anchor;
     std::size_t moved = 0;
     bool valid = true;
     for (int i = 0; i < 2; ++i) {
       auto next = step(1);
-      if (!next) { valid = false; break; }
+      // A callback can synchronously retire the context or apply a custom
+      // schema's commit. Stop immediately; even a restoring key is now stale.
+      if (generation != generation_ || !next) return false;
       if (PageId(*next) == last) break;
       ++moved;
       if (PageId(*next) <= last || next->candidates.empty()) {
@@ -167,7 +175,7 @@ class Navigation {
     }
     while (moved > 0) {
       const auto previous = step(-1);
-      if (!previous) return false;
+      if (generation != generation_ || !previous) return false;
       --moved;
       if (moved == 0 && PageId(*previous) != anchor) return false;
       if (moved == 0) pages_[row_] = *previous;
@@ -176,6 +184,7 @@ class Navigation {
   }
 
   std::vector<Page> pages_;
+  std::uint64_t generation_ = 0;
   std::size_t row_ = 0, column_ = 0, base_ = 0;
   bool expanded_ = false;
 };

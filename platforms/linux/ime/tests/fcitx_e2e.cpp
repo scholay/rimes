@@ -130,7 +130,12 @@ void RunTypingSuite(fcitx::Instance& instance,
     key("Page_Down");
     const auto later = ic->inputPanel().candidateList()->candidate(0).text().toStringForCommit();
     key("Page_Up");
-    key("Down"); key("Down"); key("Escape");
+    key("Down");
+    if (std::getenv("RIMES_REQUIRE_MATRIX_WINDOW") && !ic->inputPanel().customInputPanelCallback())
+        Die("native matrix popup did not replace the compact Fcitx panel");
+    key("Down"); key("Escape");
+    if (ic->inputPanel().customInputPanelCallback())
+        Die("matrix Escape left the native panel active");
     if (ic->inputPanel().clientPreedit().empty() || ic->inputPanel().candidateList()->candidate(0).text().toStringForCommit() != original)
         Die("matrix Escape failed to restore opening page and composition");
     key("Down"); key("Down");

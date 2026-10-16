@@ -23,5 +23,23 @@ int main() {
     check(nav.CollapseToAnchor(step) && engine == 0 && !nav.expanded(), "Escape restores anchor");
     check(nav.MoveRow(1, step) && nav.SelectVisibleIndex(19, step) && engine == 2 && nav.Selected()->index == 1, "mouse maps page and local index");
     nav.Reset({}); check(nav.empty() && !nav.Selected(), "focus retirement drops stale selection");
+    nav.Reset(pages[0]);
+    int calls = 0;
+    auto retired = [&](int) -> std::optional<Page> {
+        if (++calls == 1) return pages[1];
+        nav.Reset({}); return std::nullopt;
+    };
+    check(!nav.MoveRow(1, retired) && calls == 2 && nav.empty(), "retirement must not send a restoring key");
+    nav.Reset(pages[0]); calls = 0;
+    auto failed = [&](int) -> std::optional<Page> {
+        if (++calls == 1) return pages[1];
+        return std::nullopt;
+    };
+    check(!nav.MoveRow(1, failed) && calls == 2, "transport failure stops preview immediately");
+    engine = 0; nav.Reset(pages[0]); nav.MoveRow(1, step); nav.MoveRow(1, step);
+    auto replaced = [&](int) -> std::optional<Page> { nav.Reset(pages[0]); return pages[0]; };
+    check(!nav.CollapseToAnchor(replaced) && !nav.expanded(), "collapse cannot reuse a replaced context");
+    engine = 0; nav.MoveRow(1, step);
+    check(!nav.SelectVisibleIndex(19, replaced) && nav.row() == 0, "selection cannot reuse a replaced context");
     std::cout << "candidate matrix navigation OK\n";
 }
