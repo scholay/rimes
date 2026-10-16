@@ -49,6 +49,7 @@ let package = Package(
             ],
             path: "Sources/RimeBuffer",
             resources: [
+                .copy("Resources/Permissions"),
                 .copy("Resources/Music"),
                 .copy("Resources/PluginIcons"),
                 .copy("Resources/Skills"),

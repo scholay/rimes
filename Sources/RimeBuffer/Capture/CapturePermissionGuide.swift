@@ -54,32 +54,41 @@ final class CapturePermissionCheck {
 }
 
 struct CapturePermissionPresentation {
-    enum Action { case request, openSettings, verify }
-    let action: Action
-    let primaryTitle: String
-    let message: String
-    let showsVerify: Bool
+    let permission: SystemPermission
+    let intent: PermissionChangeIntent
+    let state: CapturePermissionCheck.State
+    let continuing: Bool
 
-    init(preflight: Bool, requested: Bool, state: CapturePermissionCheck.State, continuing: Bool) {
-        if case .failed = state {
-            action = .verify; primaryTitle = "重试"
-            message = "暂时无法继续，请重试。"; showsVerify = false
-        } else if state == .ready || (preflight && state != .blocked) {
-            action = .verify; primaryTitle = continuing ? "继续" : "完成"
-            message = "已开启，可以继续。"; showsVerify = false
-        } else if requested || state == .blocked {
-            action = .openSettings; primaryTitle = "打开系统设置"
-            message = state == .blocked ? "授权还未生效，开启后再试。" : "在系统设置中打开 \(ProductBrand.name) 的开关。"
-            showsVerify = true
-        } else {
-            action = .request; primaryTitle = "去开启"
-            message = "macOS 会请你允许 \(ProductBrand.name)。"; showsVerify = false
-        }
+    var showsAddition: Bool { intent == .enable && permission.supportsManualApplicationAddition }
+    var showsContinue: Bool { continuing && intent == .enable && state == .ready }
+    var message: String {
+        if state == .ready { return "已开启，可以继续。" }
+        if case .failed = state { return "暂时无法确认，请重新尝试。" }
+        if permission == .localNetwork { return "在系统设置中确认开关。" }
+        if intent == .disable { return "在系统设置中关闭 \(ProductBrand.name) 的开关。" }
+        return showsAddition ? "拖入左侧图标，再打开系统开关。" : "在系统设置中打开 \(ProductBrand.name) 的开关。"
     }
 }
 
-/// One guide shared by capture and Settings. No automatic Settings launch,
-/// permission reset, restart or delayed capture when the user merely returns.
+@MainActor
+struct PermissionGuideEnvironment {
+    var status: (SystemPermission) -> SystemPermissionStatus
+    var openSettings: (SystemPermission) -> Void
+    var request: (SystemPermission) async -> Void
+    var verify: (SystemPermission) async throws -> Void
+
+    static var live: Self {
+        Self(status: SystemPermissionAudit.status,
+             openSettings: { permission in
+                if let url = permission.settingsURL { NSWorkspace.shared.open(url) }
+             }, request: SystemPermissionAudit.requestOnly,
+             verify: CapturePermissionCheck.verify)
+    }
+}
+
+/// The initiating switch opens the system pane and requests authorization in
+/// one action. Passive refresh never grants permission, resets TCC, restarts
+/// the IME, or starts a capture. A pending capture still needs its own Continue.
 @MainActor
 final class CapturePermissionGuide {
     static let shared = CapturePermissionGuide()
@@ -89,17 +98,29 @@ final class CapturePermissionGuide {
     private var activationObserver: NSObjectProtocol?
     private var lockObserver: NSObjectProtocol?
     private var protectedObservers: [NSObjectProtocol] = []
-    private var status: NSTextField?
-    private var requestButton: CaptureButton?
-    private var verifyButton: CaptureButton?
+    private var poll: Timer?
+    private var statusLabel: NSTextField?
+    private var continueButton: CaptureButton?
+    private var header: NSView?
     private var body: NSView?
+    private var scroll: CaptureInspectorScroll?
     private var help: PermissionHelpDisclosure?
     private var permission = SystemPermission.screenRecording
+    private var intent = PermissionChangeIntent.enable
     private var continuation: (() -> Void)?
     private var requested = false
+    private var generation = UUID()
+    private var observedStatus: SystemPermissionStatus?
+    private var hiddenForSecureInput = false
     private let allowsSystemActions: Bool
+    private let environment: PermissionGuideEnvironment
+    private let contentWidth: CGFloat = 456
+    var isPresented: Bool { panel != nil }
 
-    init(allowsSystemActions: Bool = true) { self.allowsSystemActions = allowsSystemActions }
+    init(allowsSystemActions: Bool = true, environment: PermissionGuideEnvironment? = nil) {
+        self.allowsSystemActions = allowsSystemActions
+        self.environment = environment ?? .live
+    }
 
     @discardableResult
     func presentExisting() -> Bool {
@@ -108,63 +129,103 @@ final class CapturePermissionGuide {
         return true
     }
 
-    func show(_ permission: SystemPermission, retry: (() -> Void)? = nil) {
-        guard !IsSecureEventInputEnabled(), !presentExisting() else { return }
-        self.permission = permission; continuation = retry; requested = false
-        let panel = CapturePanel(size: NSSize(width: 500, height: 280))
+    func show(_ permission: SystemPermission, intent: PermissionChangeIntent = .enable,
+              retry: (() -> Void)? = nil) {
+        guard !IsSecureEventInputEnabled() else { return }
+        if panel != nil {
+            if self.permission == permission, self.intent == intent {
+                if let retry { continuation = retry; refreshStatus() }
+                _ = presentExisting()
+                if allowsSystemActions { environment.openSettings(permission) }
+                return
+            }
+            dismiss()
+        }
+        self.permission = permission; self.intent = intent
+        continuation = retry; requested = false; generation = UUID(); observedStatus = nil
+        hiddenForSecureInput = false
+        check.cancel()
+        let panel = CapturePanel(size: NSSize(width: 500, height: 430))
         panel.styleMask.remove(.resizable)
+        panel.title = "\(permission.title)权限"
         self.panel = panel
-        func label(_ text: String) -> NSTextField {
-            let view = NSTextField(labelWithString: text)
-            view.font = .systemFont(ofSize: 13); view.textColor = RimeUI.textSecondary
-            view.preferredMaxLayoutWidth = 456
-            return view
+
+        let applicationURL = PermissionApplication.appURL()
+        let icon = PermissionApplicationIcon(applicationURL: applicationURL,
+            allowsSystemActions: allowsSystemActions && intent == .enable && permission.supportsManualApplicationAddition)
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant: 50), icon.heightAnchor.constraint(equalToConstant: 50)])
+        let title = NSTextField(labelWithString: permission.title)
+        title.font = .systemFont(ofSize: 20, weight: .semibold)
+        let status = NSTextField(labelWithString: "")
+        status.font = .systemFont(ofSize: 13); status.textColor = RimeUI.textSecondary
+        status.lineBreakMode = .byTruncatingTail
+        statusLabel = status
+        let text = CaptureUI.column([title, status], spacing: 6)
+        text.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let close = CaptureGlyphButton(symbol: "xmark", tooltip: "关闭权限引导") { [weak self] in self?.dismiss() }
+        let header = CaptureUI.row([icon, text, close], spacing: 12)
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+        text.translatesAutoresizingMaskIntoConstraints = false
+        text.widthAnchor.constraint(equalToConstant: contentWidth - 50 - 34 - 24).isActive = true
+        self.header = header
+
+        var views: [NSView] = []
+        if presentation.showsAddition {
+            views.append(animationStep("1  拖入应用", kind: .drag))
         }
-        let status = label(""); self.status = status
-        let request = CaptureButton("去开启") { [weak self] in self?.primaryAction() }
-        request.isProminent = true; request.font = .systemFont(ofSize: 13)
-        requestButton = request
-        let verify = CaptureButton("我已开启") { [weak self] in self?.verify() }
-        verify.font = .systemFont(ofSize: 13)
-        verifyButton = verify
-        let later = CaptureButton("稍后") { [weak self] in self?.dismiss() }
-        later.font = .systemFont(ofSize: 13)
-        let actions = CaptureUI.row([request, verify, later], spacing: 10)
-        let settings = CaptureButton("打开系统设置") { [weak self] in self?.openSettings() }
-        var recovery: [NSView] = []
-        if permission.supportsManualApplicationAddition {
-            recovery.append(PermissionApplicationCard(width: 456, allowsSystemActions: allowsSystemActions))
-        } else {
-            recovery.append(label("在系统设置的「\(permission.title)」中开启 \(ProductBrand.name)。"))
+        views.append(animationStep(intent == .disable ? "关闭系统开关" : presentation.showsAddition ? "2  打开系统开关" : "打开系统开关",
+                                   kind: intent == .enable ? .enable : .disable))
+        if presentation.showsAddition {
+            let repair = animationStep("移除旧条目，再添加当前应用", kind: .repair)
+            let help = PermissionHelpDisclosure(details: repair, width: contentWidth)
+            help.didToggle = { [weak self, weak help] in
+                self?.resizePanel()
+                if let help, help.expanded { help.scrollToVisible(help.bounds) }
+            }
+            self.help = help
+            views.append(help)
         }
-        let restart = CaptureButton("重启 \(ProductBrand.name)…") { [weak self] in self?.restart() }
-        restart.toolTip = "开关已开启但仍不能用时，重启后再试"
-        recovery.append(CaptureUI.row([settings, restart]))
-        let help = PermissionHelpDisclosure(details: CaptureUI.column(recovery, spacing: 12), width: 456)
-        self.help = help
-        help.didToggle = { [weak self, weak help] in
-            self?.status?.isHidden = help?.expanded == true
-            self?.resizePanel()
-        }
-        let title = CaptureUI.label(permission.requestTitle, size: 22)
-        title.font = .systemFont(ofSize: 22, weight: .semibold)
-        let body = CaptureUI.column([title, status, actions, help], spacing: 16)
+        let next = CaptureButton("继续") { [weak self] in self?.verify(continueFeature: true) }
+        next.isProminent = true
+        next.isHidden = true
+        continueButton = next
+        views.append(next)
+        let body = CaptureUI.column(views, spacing: 16)
+        body.detachesHiddenViews = true
         self.body = body
         let scroll = CaptureInspectorScroll(body)
+        self.scroll = scroll
         scroll.autohidesScrollers = true; scroll.scrollerStyle = .overlay
-        // This panel hides its titlebar controls and supplies its own inset.
-        // AppKit's automatic titlebar inset otherwise clips the last row.
         scroll.automaticallyAdjustsContentInsets = false
         let content = panel.contentView!
-        CaptureUI.fill(scroll, in: content, inset: 22)
+        content.addSubview(header); content.addSubview(scroll)
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: content.topAnchor, constant: 22),
+            header.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 22),
+            scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 16),
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 22),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -22),
+            scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -22),
+        ])
         panel.closed = { [weak self, weak panel] in
-            self?.pending?.cancel(); self?.pending = nil; self?.check.cancel()
-            self?.continuation = nil; self?.panel = nil
-            self?.body = nil; self?.help = nil
-            self?.removeObservers(); panel?.contentView = nil
+            guard let self else { return }
+            self.generation = UUID()
+            self.pending?.cancel(); self.pending = nil; self.check.cancel()
+            self.poll?.invalidate(); self.poll = nil
+            self.continuation = nil; self.panel = nil
+            self.header = nil; self.body = nil; self.scroll = nil; self.help = nil
+            self.statusLabel = nil; self.continueButton = nil
+            self.removeObservers(); panel?.contentView = nil
         }
         activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshStatus() }
+            MainActor.assumeIsolated {
+                guard let self, self.requested else { return }
+                self.refreshStatus()
+                self.verify()
+            }
         }
         for name in [NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.willSleepNotification, NSWorkspace.willPowerOffNotification] {
             protectedObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -174,35 +235,119 @@ final class CapturePermissionGuide {
         lockObserver = DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.dismiss() }
         }
-        refreshStatus()
-        resizePanel()
-        panel.present()
+        refreshStatus(); resizePanel()
+        if allowsSystemActions, let screen = NSScreen.main {
+            // Keep the real app icon alongside the system pane for dragging.
+            let frame = screen.visibleFrame
+            panel.setFrameOrigin(NSPoint(x: frame.minX + 18, y: max(frame.minY + 18, frame.midY - panel.frame.height / 2)))
+            panel.present(center: false)
+        } else { panel.present() }
+        beginSystemFlow()
     }
 
-    private func resizePanel() {
-        guard let panel, let body else { return }
-        body.layoutSubtreeIfNeeded()
-        let availableHeight = (panel.screen ?? NSScreen.main)?.visibleFrame.height ?? 700
-        panel.setContentSize(NSSize(width: 500, height: min(availableHeight - 80, max(220, body.fittingSize.height + 44))))
+    private func animationStep(_ title: String, kind: PermissionGuideAnimation.Kind) -> NSView {
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+        label.textColor = RimeUI.textSecondary
+        return CaptureUI.column([label, PermissionGuideAnimation(kind, width: contentWidth)], spacing: 7)
+    }
+
+    private var currentStatus: SystemPermissionStatus {
+        allowsSystemActions ? environment.status(permission) : .denied
     }
 
     private var presentation: CapturePermissionPresentation {
-        CapturePermissionPresentation(preflight: allowsSystemActions && SystemPermissionAudit.status(for: permission) == .granted,
-            requested: requested, state: check.state, continuing: continuation != nil)
+        CapturePermissionPresentation(permission: permission, intent: intent,
+            state: check.state, continuing: continuation != nil)
     }
 
-    private func primaryAction() {
-        guard allowsSystemActions, pending == nil else { return }
-        switch presentation.action {
-        case .request: request()
-        case .openSettings: openSettings()
-        case .verify: verify()
+    private func beginSystemFlow() {
+        guard allowsSystemActions, panel != nil, !IsSecureEventInputEnabled() else { return }
+        // Always reveal the exact pane, even when a recorded denial makes the
+        // OS request silent. Never make the user press a second Settings button.
+        environment.openSettings(permission)
+        requested = true
+        let timer = Timer(timeInterval: 0.8, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshPermissionStatus() }
+        }
+        poll = timer; RunLoop.main.add(timer, forMode: .common)
+        guard intent == .enable else { return }
+        let permission = permission, token = generation
+        pending = Task { [weak self] in
+            guard let self else { return }
+            await self.environment.request(permission)
+            guard !Task.isCancelled, self.generation == token, self.panel != nil else { return }
+            self.pending = nil
+            self.verify()
         }
     }
 
-    private func openSettings() {
-        guard allowsSystemActions, !IsSecureEventInputEnabled(), let url = permission.settingsURL else { return }
-        NSWorkspace.shared.open(url)
+    func refreshPermissionStatus() {
+        guard panel != nil else { return }
+        // An administrator-authentication sheet can temporarily enable secure
+        // input. Keep the explicit attempt alive, but hide its interactive UI.
+        guard !IsSecureEventInputEnabled() else {
+            hiddenForSecureInput = true; panel?.orderOut(nil); return
+        }
+        let resumed = hiddenForSecureInput
+        if resumed {
+            hiddenForSecureInput = false; panel?.orderFrontRegardless()
+        }
+        if check.state == .ready, continuation == nil { dismiss(); return }
+        let latest = currentStatus
+        if latest != observedStatus || resumed {
+            observedStatus = latest
+            NotificationCenter.default.post(name: .systemPermissionStatusDidChange, object: nil)
+            refreshStatus()
+            if intent == .disable, intent.isSatisfied(by: latest) { dismiss(); return }
+            if latest == .granted { verify() }
+        }
+    }
+
+    private func verify(continueFeature: Bool = false) {
+        guard allowsSystemActions, panel != nil, pending == nil, intent == .enable,
+              permission != .localNetwork, !IsSecureEventInputEnabled() else { return }
+        let permission = permission, token = generation
+        pending = Task { [weak self] in
+            guard let self else { return }
+            await self.check.check { try await self.environment.verify(permission) }
+            guard !Task.isCancelled, self.generation == token, self.panel != nil else { return }
+            self.pending = nil
+            self.refreshStatus()
+            NotificationCenter.default.post(name: .systemPermissionStatusDidChange, object: nil)
+            if self.check.state == .ready, !IsSecureEventInputEnabled() {
+                if continueFeature {
+                    let action = self.continuation
+                    self.dismiss()
+                    if let action { DispatchQueue.main.async { action() } }
+                } else if self.continuation == nil {
+                    self.dismiss()
+                }
+            }
+        }
+    }
+
+    private func refreshStatus() {
+        guard panel != nil else { return }
+        statusLabel?.stringValue = presentation.message
+        continueButton?.isHidden = !presentation.showsContinue
+        continueButton?.isEnabled = pending == nil
+        resizePanel()
+    }
+
+    private func resizePanel() {
+        guard let panel, let header, let body else { return }
+        body.layoutSubtreeIfNeeded()
+        let availableHeight = (panel.screen ?? NSScreen.main)?.visibleFrame.height ?? 700
+        let size = NSSize(width: 500, height: min(availableHeight - 60,
+            max(220, header.fittingSize.height + 16 + body.fittingSize.height + 44)))
+        // Keep the top edge still when the single optional recovery card opens.
+        let top = panel.frame.maxY
+        panel.setContentSize(size)
+        let bottom = (panel.screen ?? NSScreen.main)?.visibleFrame.minY ?? 0
+        panel.setFrameOrigin(NSPoint(x: panel.frame.minX, y: max(bottom + 12, top - panel.frame.height)))
+        panel.contentView?.layoutSubtreeIfNeeded()
+        scroll?.needsLayout = true; scroll?.layoutSubtreeIfNeeded()
     }
 
     func dismiss() { panel?.close() }
@@ -216,81 +361,19 @@ final class CapturePermissionGuide {
         protectedObservers.removeAll()
     }
 
-    private func request() {
-        guard allowsSystemActions, pending == nil, !requested, !IsSecureEventInputEnabled() else { return }
-        requested = true
-        let permission = permission
-        pending = Task { [weak self] in
-            await SystemPermissionAudit.requestOnly(permission)
-            guard !Task.isCancelled, let self, self.panel != nil else { return }
-            self.pending = nil; self.refreshStatus()
-        }
-        refreshStatus()
-    }
-
-    private func verify() {
-        guard allowsSystemActions, pending == nil, !IsSecureEventInputEnabled() else { return }
-        let permission = permission
-        pending = Task { [weak self] in
-            guard let self else { return }
-            await self.check.check { try await CapturePermissionCheck.verify(permission) }
-            guard !Task.isCancelled, self.panel != nil else { return }
-            self.pending = nil; self.refreshStatus()
-            if self.check.state == .ready, !IsSecureEventInputEnabled() {
-                let action = self.continuation
-                self.dismiss()
-                if let action { DispatchQueue.main.async { action() } }
-            }
-        }
-        refreshStatus()
-    }
-
-    private func refreshStatus() {
-        guard panel != nil else { return }
-        let state = presentation
-        requestButton?.isEnabled = pending == nil
-        requestButton?.title = state.primaryTitle
-        requestButton?.setAccessibilityLabel(state.primaryTitle)
-        verifyButton?.isHidden = !state.showsVerify
-        verifyButton?.isEnabled = pending == nil
-        status?.stringValue = pending != nil ? "正在等待系统回应…"
-            : state.action == .request ? "用于\(permission.shortPurpose)。" : state.message
-        if case .failed(let message) = check.state {
-            status?.toolTip = message
-        } else {
-            status?.toolTip = nil
-        }
-        resizePanel()
-    }
-
-    private func restart() {
-        guard allowsSystemActions else { return }
-        let alert = NSAlert()
-        alert.messageText = "重启 \(ProductBrand.name)？"
-        alert.informativeText = "会关闭窗口、结束终端会话并停止录屏。请先保存未完成内容；词库和设置会保留。"
-        alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "重启 \(ProductBrand.name)")
-        guard alert.runModal() == .alertSecondButtonReturn else { return }
-        dismiss(); StatusMenu.shared.restart()
-    }
-
     func renderForSmoke(to output: URL) throws {
         precondition(!allowsSystemActions)
         show(.screenRecording)
         defer { dismiss() }
-        if ProcessInfo.processInfo.environment["RIMES_PERMISSION_HELP_PREVIEW"] == "1" {
-            help?.setExpanded(true)
-        }
-        if ProcessInfo.processInfo.environment["RIMES_UI_REVIEW"] == "permission" {
-            let end = Date().addingTimeInterval(45)
-            while Date() < end { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
-        }
+        if ProcessInfo.processInfo.environment["RIMES_PERMISSION_HELP_PREVIEW"] == "1" { help?.setExpanded(true) }
         guard let view = panel?.contentView else { throw CaptureError.message("permission preview unavailable") }
         view.layoutSubtreeIfNeeded()
         func validate(_ node: NSView) throws {
             guard !node.isHiddenOrHasHiddenAncestor else { return }
-            if node is CaptureButton,
+            if node is NSControl, !(node is NSTextField),
                !node.visibleRect.contains(node.bounds.insetBy(dx: 0.5, dy: 0.5)) {
-                throw CaptureError.message("permission preview contains a clipped action")
+                // Expanded help may scroll; the header close control must not.
+                if node is CaptureGlyphButton { throw CaptureError.message("permission close control is clipped") }
             }
             try node.subviews.forEach(validate)
         }
