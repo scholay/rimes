@@ -1,6 +1,11 @@
 # iOS GitHub Actions release
 
-Current iOS target: **1.1.5 (59)**, prepared from merged main with XSIME branding. The verified archive was uploaded manually through Xcode and formally submitted for App Review on 2026-10-15 at 15:47 Asia/Tokyo. The same build was submitted for external TestFlight review at 17:14 and assigned to RIMES Community, with automatic tester notification enabled. Both reviews were last observed as **Waiting for Review**; neither submission establishes approval or public availability. The maintainer's six screenshots and three-locale copy are included. The development-signed Release app is installed on the paired iPhone; outstanding physical acceptance limitations remain documented in [the preparation record](AppStore/release-preparation/1.1.5.md). Build, upload, TestFlight, App Review and public availability are separate states. [TestFlight invitation](https://testflight.apple.com/join/Kdj9RB4q).
+Current iOS target: **1.1.5 (60)**. This rebuild changes the AI settings explanation to provider-neutral wording without changing the user-configured connection or consent behavior. Follow [the rebuild record](AppStore/release-preparation/1.1.5-build60.md) for validation and submission evidence. Build 59 was uploaded and submitted on October 15, then rejected by App Review under Guideline 5.0; its separate external TestFlight review still showed **Waiting for Review** when checked at 22:31 Asia/Tokyo. The existing six accepted screenshots remain applicable. Earlier device installation and outstanding physical acceptance limitations are documented in [the build 59 record](AppStore/release-preparation/1.1.5.md). Build, upload, TestFlight, App Review and public availability remain separate states. [TestFlight invitation](https://testflight.apple.com/join/Kdj9RB4q).
+
+Build 60 was uploaded through Xcode at 22:44 and resubmitted for App Review at
+22:50 Asia/Tokyo on 2026-10-15. The submission page confirmed **1.1.5 (60),
+Waiting for Review**. This is not App Store approval or external TestFlight
+distribution; build 59's separate beta review was left unchanged.
 
 `ios.yml` runs unsigned builds, shared tests and hosted iOS tests on matching
 pull requests targeting main and matching pushes to main. `ios-release.yml` runs

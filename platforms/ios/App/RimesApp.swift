@@ -138,7 +138,7 @@ struct ProvidersView: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(L("已选 AI 服务用于快问快答、AI 润色、AI 作诗和 AI 字符画。Apple 本地翻译使用本机语言包，单独在“Apple 本地翻译语言包”中准备。", "The selected AI service powers Quick Q&A, AI Polish, AI Poem and AI Text Art. Apple on-device translation uses language packs prepared separately under Apple translation languages."))
-                    Text(L("使用自己的 API Key。支持 HTTPS OpenAI 兼容 Chat Completions 接口。Key 仅保存在本设备 Keychain。", "Bring your own API key. Supports HTTPS OpenAI-compatible Chat Completions. Keys stay in this device's Keychain."))
+                    Text(L("使用自己的 API Key。支持采用通用接口格式的 HTTPS AI 服务。Key 仅保存在本设备 Keychain。", "Bring your own API key. Supports HTTPS AI services using a general-purpose interface format. Keys stay in this device's Keychain."))
                 }
             }
         }.navigationTitle(L("AI 服务", "AI services"))

@@ -4618,83 +4618,12 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         ])
     }
 
-    /// One short instruction; recovery is an explicit, collapsed choice.
     private func permissionsPage() -> NSView {
-        let intro = NSTextField(labelWithString: "正常打字无需授权，用到扩展功能时再开启。")
-        intro.font = .systemFont(ofSize: 13)
-        intro.textColor = RimeUI.textSecondary
-        var rows: [NSView] = [intro]
-        for report in SystemPermissionAudit.reportAll() {
-            let status: String
-            let symbol: String
-            switch report.status {
-            case .granted:
-                status = "已开启"; symbol = "checkmark.circle"
-            case .denied:
-                // A negative screen preflight is not proof that the system
-                // switch is off; the guide verifies the actual capability.
-                status = report.permission == .screenRecording ? "待确认" : "未开启"
-                symbol = "circle"
-            case .undeterminable:
-                status = "按需开启"; symbol = "network"
+        contentColumn([SystemPermissionsView { permission, intent in
+            MainActor.assumeIsolated {
+                CapturePermissionGuide.shared.show(permission, intent: intent)
             }
-            let button = SettingsPointingButton(
-                title: report.permission == .localNetwork ? "系统设置"
-                    : report.status == .granted ? "检查" : "开启",
-                target: self, action: #selector(permissionActionTapped(_:)))
-            button.font = .systemFont(ofSize: 13)
-            button.tag = SystemPermission.allCases.firstIndex(of: report.permission) ?? 0
-            button.setAccessibilityLabel("\(button.title)\(report.permission.title)")
-            rows.append(settingsRow(
-                title: "\(report.permission.title) · \(status)",
-                detail: report.permission.shortPurpose,
-                symbolName: symbol, control: button, nameSize: 13))
-        }
-        let refresh = SettingsPointingButton(title: "重新检测", target: self,
-                                             action: #selector(refreshPermissionsPage))
-        let reset = SettingsPointingButton(title: "重置辅助功能…", target: self,
-                                           action: #selector(resetAccessibilityRecordTapped))
-        reset.toolTip = "仅重置 \(ProductBrand.name) 的辅助功能授权；执行前会确认"
-        let identity = SystemPermissionAudit.identity()
-        refresh.toolTip = "\(identity.bundleIdentifier)\n\(identity.bundlePath)"
-        if let authority = SystemPermissionAudit.signingAuthority() {
-            refresh.toolTip! += "\n\(authority)"
-        }
-        let help = PermissionHelpDisclosure(details: CaptureUI.column([
-            PermissionApplicationCard(width: 650), CaptureUI.row([refresh, reset])
-        ]), width: 650)
-        help.didToggle = { [weak intro, weak help] in intro?.isHidden = help?.expanded == true }
-        rows.append(help)
-        return contentColumn(rows)
-    }
-
-    @MainActor @objc private func permissionActionTapped(_ sender: NSButton) {
-        let permissions = SystemPermission.allCases
-        guard sender.tag >= 0, sender.tag < permissions.count else { return }
-        let permission = permissions[sender.tag]
-        if permission == .localNetwork, let url = permission.settingsURL {
-            NSWorkspace.shared.open(url)
-        } else {
-            CapturePermissionGuide.shared.show(permission)
-        }
-    }
-
-    @MainActor @objc private func resetAccessibilityRecordTapped() {
-        let alert = NSAlert()
-        alert.messageText = "仅重置 \(ProductBrand.name) 的辅助功能授权？"
-        alert.informativeText = "这不会修复屏幕录制权限，也不会清除其他权限。重置后需要重新允许 \(ProductBrand.name) 使用辅助功能。"
-        alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "重置辅助功能")
-        guard alert.runModal() == .alertSecondButtonReturn else { return }
-        let cleared = SystemPermissionAudit.resetAccessibilityRecord()
-        // Only ask after the record is gone; asking first is what produced
-        // nothing at all.
-        if cleared { CapturePermissionGuide.shared.show(.accessibility) }
-        else { info("未能重置辅助功能授权。请到系统设置手动检查 \(ProductBrand.name) 条目。") }
-        reload()
-    }
-
-    @objc private func refreshPermissionsPage() {
-        reload()
+        }])
     }
 
     private func contentColumn(_ views: [NSView]) -> NSView {

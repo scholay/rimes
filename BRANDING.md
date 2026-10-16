@@ -23,11 +23,13 @@ IME 表示 Input Method Editor。Rime / librime 是上游输入引擎名称，�
 
 ## 兼容标识不改
 
-- macOS Bundle ID、输入源 ID、IMK 连接与控制器类名、现有 `RIMES.app` / `RIMES` 可执行文件名。
+- macOS Bundle ID、输入源 ID、IMK 控制器类名、现有 `RIMES.app` / `RIMES` 可执行文件名。
 - iOS Bundle ID、App Groups、Keychain Groups；Android applicationId、签名。
 - Windows CLSID、注册表键、协议、安装所有权标记；Linux 包名、addon ID。
 - 所有用户数据路径、偏好键、凭据、词库、输入方案 ID（包括 `lingxi_wubi`）、插件 ID。
 - 既有发布资产文件名、版本号、校验和、历史 Release、提交记录、备案证据。
+
+2026-10-16 输入法连接修复：`InputMethodConnectionName` 从旧的 `RIMES_1_Connection` 校正为 `com.scholay.inputmethod.isaac_Connection`，与现有 Bundle ID 加 `_Connection` 的运行时约定一致。Info.plist、IMKServer 后备值、安装诊断和 CI／发布校验同步采用此值；Bundle ID、父／子输入源 ID、控制器类、签名和用户数据保持原值。这是输入法连接故障修复，不是品牌替换。
 
 显示名必须与上述身份分离，不能全仓库无差别替换 `rimes` / `RIMES` / `lingxi`。历史截图、词典里的自然语言词条不属于品牌替换。
 

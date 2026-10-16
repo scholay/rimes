@@ -103,7 +103,7 @@ jobs:
           test "$PARENT_ID" = "$BUNDLE_ID"
           test "$PARENT_ID" != "$MODE_ID"
           test "$MODE_ID" = "$DECLARED_MODE_ID"
-          test "$CONNECTION" = 'RIMES_1_Connection'
+          test "$CONNECTION" = 'com.scholay.inputmethod.isaac_Connection'
           test "$DISPLAY_NAME" = 'XSIME'
           test "$MENU_TITLE" = 'XSIME'
           test "$EXECUTABLE" = 'RIMES'
@@ -631,6 +631,7 @@ jobs:
             matrix-smoke
             candidate-metrics-smoke
             candidate-pagination-smoke
+            candidate-rendering-smoke
             candidate-commit-smoke
             activation-cache-smoke
             theme-smoke

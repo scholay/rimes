@@ -1,7 +1,7 @@
 import Foundation
 
 /// One candidate on the current page, already stringified out of the C bridge.
-struct RimeCandidateModel {
+struct RimeCandidateModel: Hashable {
     let text: String
     let comment: String
     let label: String
@@ -10,7 +10,7 @@ struct RimeCandidateModel {
 /// A native snapshot of the current-page Rime context — the in-process
 /// replacement for the old state.json payload. Fed directly to the candidate
 /// window / buffer.
-struct RimeContextModel {
+struct RimeContextModel: Equatable {
     var active = false
     var preedit = ""
     var input = ""

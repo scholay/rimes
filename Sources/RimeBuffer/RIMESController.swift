@@ -7,6 +7,14 @@ import InputMethodKit
 let rimeEngine = RimeEngine()
 let candidateWindow = CandidateWindow()
 
+/// Only plain presses can enter deferred or held-chord state. Caps Lock may
+/// already be on when a fresh Chinese session resets ascii_mode to false;
+/// librime still rejects Lock-modified letters. Keep their processing
+/// synchronous so that rejection returns the original event to the host.
+enum ChordPressRoutingRules {
+    static func accepts(mask: Int32) -> Bool { mask == 0 }
+}
+
 enum BufferControlDisposition: Equatable {
     case passThrough
     case executeBufferAction
@@ -1219,11 +1227,13 @@ final class RIMESController: IMKInputController {
     private var userDictionaryMaintenanceObserver: NSObjectProtocol?
     private var userDictionaryMaintenanceEndObserver: NSObjectProtocol?
 
-    private var chordGated: Bool {
-        FlyChordRoutingRules.shouldStage(schemaID: currentSchemaId,
-                                         asciiMode: currentASCIIMode,
-                                         extensionEnabled:
-                                            ChordExtensionStore.shared.isEnabled)
+    private func shouldStageFlyChord(mask: Int32) -> Bool {
+        ChordPressRoutingRules.accepts(mask: mask)
+            && FlyChordRoutingRules.shouldStage(
+                schemaID: currentSchemaId,
+                asciiMode: currentASCIIMode,
+                extensionEnabled: ChordExtensionStore.shared.isEnabled
+            )
     }
     private var flyChordSettlementPolicy: FlyChordSettlementPolicy {
         ChordExtensionStore.shared.settlementPolicy
@@ -1888,10 +1898,12 @@ final class RIMESController: IMKInputController {
         guard callbackHasCurrentInputSourceAuthority(
             operation: "activate"
         ) else { return }
-        // Seed from real hardware state — clearing to [] would desync the
-        // flagsChanged delta stream whenever a modifier (esp. Caps Lock) is
-        // held or locked across a focus change.
-        lastModifiers = NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // Activation has no flagsChanged event. NSEvent's process-local state
+        // may still reflect another app's earlier Caps Lock state, so seed
+        // from the combined session before comparing the next modifier delta.
+        lastModifiers = NSEvent.ModifierFlags(
+            rawValue: UInt(CGEventSource.flagsState(.combinedSessionState).rawValue)
+        ).intersection(.deviceIndependentFlagsMask)
         if !lastModifiers.contains(.shift) {
             shiftGesture = nil
         } else {
@@ -2006,13 +2018,17 @@ final class RIMESController: IMKInputController {
             return
         }
         StatusMenu.shared.setHealthy(true)
-        _ = ensureSessionReady(applyPreference: true)
+        let sessionReady = ensureSessionReady(applyPreference: true)
+        IMELog.write(
+            "activate: sessionReady=\(sessionReady) schema=\(currentSchemaId) "
+                + "ascii=\(currentASCIIMode) capsLock=\(lastModifiers.contains(.capsLock))"
+        )
         if let activeClient {
             // Arm the idle guard during activation. Waiting for the first key
             // is too late for a field whose first key is Return.
             updateUI(client: activeClient)
         }
-        BufferWindowController.shared.refresh()
+        BufferWindowController.shared.refreshForFocusChange()
     }
 
     /// Post-start initialization, shared by activateServer AND the key paths —
@@ -3907,7 +3923,8 @@ final class RIMESController: IMKInputController {
             return false
         }
         let mask = routedMask
-        if NativeChordRoutingRules.isChordKey(
+        if ChordPressRoutingRules.accepts(mask: mask),
+           NativeChordRoutingRules.isChordKey(
             keycode: keycode,
             mask: mask,
             profile: ChordKeymapStore.shared.activeProfile,
@@ -5849,15 +5866,11 @@ final class RIMESController: IMKInputController {
     /// unhandled ones fall through to the app (Cmd-C etc. keep working).
     private func processRimeKey(_ keycode: Int32, mask: Int32, client: IMKTextInput) -> Bool {
         let isPress = mask & RimeKey.releaseMask == 0
-        // A chord key is a PLAIN press of a chording letter — anything carrying
-        // Ctrl/Opt/Cmd is a shortcut/binding, never chord material.
-        let hasCommandModifier = mask & (
-            RimeKey.controlMask | RimeKey.altMask | RimeKey.superMask
-        ) != 0
+        // Only plain presses may be deferred. Modified letters (including
+        // Caps Lock) need the synchronous route so rejection can pass through.
         let isChordKey = isPress
-            && !hasCommandModifier
             && ChordKeymapStore.shared.activeProfile.half(for: keycode) != nil
-            && chordGated
+            && shouldStageFlyChord(mask: mask)
         // Prototype semantics: a PRESS of a non-chord key resolves the pending
         // chord before processing; release events never pre-flush.
         if isPress, !isChordKey {
@@ -6476,7 +6489,13 @@ final class RIMESController: IMKInputController {
                     )
                 }
             }
-            IMELog.write("FlyYao batch rejected accepted=\(acceptedKeys.count) total=\(engineKeys.count)")
+            let status = rimeEngine.getStatus(session: session)
+            let masks = Set(engineKeys.map(\.mask)).sorted()
+            IMELog.write(
+                "FlyYao batch rejected accepted=\(acceptedKeys.count) total=\(engineKeys.count) "
+                    + "released=\(handledCount) masks=\(masks) schema=\(status.schemaId) "
+                    + "ascii=\(status.asciiMode) disabled=\(status.disabled)"
+            )
         }
         if !chordClientRoutingGate.allowsClientRouting {
             IMELog.write("chord replay isolated from reused client proxy keys=\(keys.count) handled=\(handledCount)")

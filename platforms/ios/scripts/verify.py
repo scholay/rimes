@@ -30,6 +30,11 @@ p=plistlib.loads((ios/'Keyboard/Info.plist').read_bytes())
 assert p['NSExtension']['NSExtensionAttributes']['RequestsOpenAccess'] is True
 manifest=plistlib.loads((ios/'Resources/PrivacyInfo.xcprivacy').read_bytes())
 assert manifest['NSPrivacyTracking'] is False
+# The optional connection is provider-neutral. Keep the settings explanation
+# consistent with the store copy without changing endpoint or consent behavior.
+provider_ui=(ios/'App/RimesApp.swift').read_text()
+assert '通用接口格式' in provider_ui and 'general-purpose interface format' in provider_ui
+assert not any(brand in provider_ui.lower() for brand in ['openai', 'chatgpt']), 'Unexpected provider-brand wording in iOS app UI'
 # Keep mobile encoding behavior aligned with the desktop source without changing desktop packaging.
 a=(root/'Sources/RimeBuffer/ChordOutputEncoding.swift').read_text().split('\nextension ChordKeymapProfile')[0]
 b=(root/'Shared/Sources/RimesCore/ChordEncoding.swift').read_text().split('\n',1)[1].replace('public ','')

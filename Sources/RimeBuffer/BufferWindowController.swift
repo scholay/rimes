@@ -2160,6 +2160,7 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
     private lazy var exchangeEditSlot = BufferToolbarControlSlot(control: exchangeEditButton)
     private var railActionCenterYConstraint: NSLayoutConstraint?
     private var pendingCaptureRequest: BufferPendingCaptureRequest?
+    private var presentationRefreshProbe: (() -> Void)?
     private var appliedLiveMetricsHeight = false
     private var presentationMode = BufferPresentationMode.integratedRime
     private var railFoldedForFocus = false
@@ -3869,11 +3870,56 @@ final class BufferWindowController: NSObject, NSWindowDelegate {
         bufferRail.reconcileTranslationDocumentGeometry()
     }
 
+    /// Ordinary input changes focus/composition state even while Buffer is
+    /// closed. Its next explicit opening already calls refresh before ordering
+    /// front; keep hidden controls/layout off the typing path. Protection and
+    /// an outstanding capture request still require immediate reconciliation.
+    func refreshForFocusChange() {
+        if panel.isVisible || pendingCaptureRequest != nil
+            || sessionProtectionActive || IsSecureEventInputEnabled() {
+            refresh()
+        } else {
+            _ = reconcileAutoSendClock()
+            syncLiveMetricsTimer()
+            syncTargetBoxTimer()
+        }
+    }
+
+    static func hiddenFocusRefreshSmoke() -> Bool {
+        let controller = shared
+        guard !controller.panel.isVisible, !IsSecureEventInputEnabled(),
+              !controller.sessionProtectionActive, controller.pendingCaptureRequest == nil else {
+            print("hidden-buffer-refresh-smoke: SKIPPED (requires an idle, unprotected fixture)")
+            return true
+        }
+        var refreshes = 0
+        controller.presentationRefreshProbe = { refreshes += 1 }
+        defer {
+            controller.presentationRefreshProbe = nil
+            controller.screenLocked = false
+        }
+        for _ in 0..<100 { controller.refreshForFocusChange() }
+        let hiddenSkipped = refreshes == 0
+        // The explicit-open path must still render its up-to-date contents
+        // before ordering front, even though the panel is currently hidden.
+        controller.refresh()
+        let explicitRefreshRan = refreshes > 0
+        let beforeProtection = refreshes
+        controller.screenLocked = true
+        controller.refreshForFocusChange()
+        let protectedWasScrubbed = refreshes > beforeProtection
+            && controller.bufferRail.renderedTextFragments == ["内容已隐藏"]
+        let passed = hiddenSkipped && explicitRefreshRan && protectedWasScrubbed
+        print("hidden-buffer-refresh-smoke: \(passed ? "OK" : "FAILED") (hidden=\(hiddenSkipped), explicit=\(explicitRefreshRan), protection=\(protectedWasScrubbed))")
+        return passed
+    }
+
     func refresh() {
         guard Thread.isMainThread else {
             DispatchQueue.main.async { [weak self] in self?.refresh() }
             return
         }
+        presentationRefreshProbe?()
         let secureInputEnabled = IsSecureEventInputEnabled()
         let rimeOwnsInput = RimeInputSourceAuthority.currentSourceIsOwn()
         // Focus transitions all land here, so a click made while no field

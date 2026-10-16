@@ -1,24 +1,37 @@
 # XSIME iOS 1.1.5 preparation
 
 Native iPhone application and keyboard extension (iOS 17+). The local release
-target is **1.1.5 (59)**; both targets inherit the same marketing version and
+target is **1.1.5 (60)**; both targets inherit the same marketing version and
 build number from `project.yml`. This build applies the XSIME / 犀术IME / 犀術IME
 branding without changing bundle identities or persistent data locations.
+Build 60 replaces provider-brand wording in AI settings with a general-purpose
+interface explanation; the user-configured connection and consent behavior are
+unchanged. See [the rebuild record](AppStore/release-preparation/1.1.5-build60.md)
+for verification and the new submission state.
 
-On 2026-10-15, the Release archive and App Store-signed IPA passed package
+Build 60 passed archive, App Store package validation, 82 shared-core tests and
+272 hosted iOS tests (three fixture/capture skips, zero failures). It was uploaded
+at 22:44 and **resubmitted for App Review at 22:50 Asia/Tokyo on 2026-10-15**.
+The submission page confirmed **1.1.5 (60), Waiting for Review**. The updated
+Review Notes and reviewer reply disclose the wording-only change accurately.
+
+Earlier on 2026-10-15, build 59's Release archive and App Store-signed IPA passed package
 verification. The development-signed Release app was installed over 1.1.4 (58)
 on the paired iPhone 15 Pro and launched. The same archive was uploaded through
 Xcode and **1.1.5 (59) was submitted for App Review at 15:47 Asia/Tokyo** with
 three-locale names/copy and the maintainer's six accepted screenshots. The observed
-state is **Waiting for Review**, not approved or publicly released. Automatic
+initial state was **Waiting for Review**. App Review subsequently rejected build
+59 under Guideline 5.0 on October 15; a clarification was sent at 22:27 Asia/Tokyo.
+This is not approval or public release of 1.1.5. Automatic
 release after approval is retained; outstanding physical acceptance limitations
 are not marked passed by submission.
 See [the 1.1.5 preparation record](AppStore/release-preparation/1.1.5.md).
 
-The same build was submitted for external TestFlight review at 17:14 Asia/Tokyo
+Build 59 was submitted for external TestFlight review at 17:14 Asia/Tokyo
 on 2026-10-15 and assigned to RIMES Community. It was last observed as
 **Waiting for Review**. The [TestFlight invitation](https://testflight.apple.com/join/Kdj9RB4q)
 does not establish availability of build 59 until Apple approves that build.
+Build 60 was not added to an external TestFlight group during this resubmission.
 Earlier acceptance records, including
 [1.1.0](validation/release-1.1.0/README.md) and build 22 in `VALIDATION.md`, are
 historical. See `CI_RELEASE.md` for the separate release workflow.

@@ -1159,6 +1159,11 @@ if CommandLine.arguments.contains("inbound-smoke") {
 if CommandLine.arguments.contains("candidate-metrics-smoke") {
     exit(runCandidateMetricsSmokeTest() ? 0 : 1)
 }
+if CommandLine.arguments.contains("candidate-rendering-smoke") {
+    let candidatesPassed = CandidateWindow.renderingPerformanceSmoke()
+    let hiddenBufferPassed = BufferWindowController.hiddenFocusRefreshSmoke()
+    exit(candidatesPassed && hiddenBufferPassed ? 0 : 1)
+}
 if CommandLine.arguments.contains("candidate-pagination-smoke") {
     exit(runCandidatePaginationSmokeTest() ? 0 : 1)
 }
@@ -1486,7 +1491,7 @@ if SchemaListStore.enabledIDs(at: startupSchemaListURL)
 }
 }
 let connectionName = (Bundle.main.infoDictionary?["InputMethodConnectionName"] as? String)
-    ?? "\(RimesIdentity.productName)_1_Connection"
+    ?? "\(Bundle.main.bundleIdentifier ?? RimesIdentity.bundleIdentifier)_Connection"
 
 NSApplication.shared.setActivationPolicy(.accessory)   // background app; panels can float above others
 CapsuleCloudSyncController.shared.start()
@@ -1553,7 +1558,7 @@ BufferModel.shared.onChange = {
 InputFocusCoordinator.shared.onChange = {
     ActionPluginHost.shared.focusDidChange()
     StreamInputWorkspace.shared.focusDidChange()
-    BufferWindowController.shared.refresh()
+    BufferWindowController.shared.refreshForFocusChange()
     ClipboardHistoryWindowController.shared.focusDidChange()
 }
 InputFocusCoordinator.shared.onInvalidated = { owner in
@@ -2211,6 +2216,31 @@ func runEngineSmokeTest() -> Bool {
         return false
     }
     engine.setOption("ascii_mode", false, session: session)
+
+    // Reproduce switching into a fresh Chinese session with Caps Lock already
+    // enabled. librime rejects Lock-modified letters even with ascii_mode off.
+    // The frontend must let that rejection reach the host immediately, rather
+    // than consuming the press and discovering it after the chord timer fires.
+    let capsLetterHandled = engine.processKey(0x61,
+                                              mask: RimeKey.lockMask,
+                                              session: session)
+    guard FlyChordRoutingRules.shouldStage(schemaID: "my_combo",
+                                           asciiMode: false,
+                                           extensionEnabled: true),
+          !ChordPressRoutingRules.accepts(mask: RimeKey.lockMask),
+          !capsLetterHandled,
+          engine.getContext(session: session).input.isEmpty,
+          engine.takeCommit(session: session) == nil,
+          !engine.processKey(RimeKey.space,
+                             mask: RimeKey.controlMask,
+                             session: session),
+          engine.processKey(0x6e, session: session),
+          engine.processKey(0x6e, mask: RimeKey.releaseMask, session: session),
+          !engine.getContext(session: session).candidates.isEmpty else {
+        print("FAILED: Caps Lock pass-through, Ctrl+Space, or resumed Chinese chord")
+        return false
+    }
+    engine.clearComposition(session: session)
 
     func typeFlyChordStrokes(
         _ strokes: [String],
@@ -3032,6 +3062,12 @@ func runSchemaListStoreSmokeTest() -> Bool {
                                             extensionEnabled: false),
           !FlyChordRoutingRules.shouldStage(schemaID: "my_combo", asciiMode: true),
           !FlyChordRoutingRules.shouldStage(schemaID: "english", asciiMode: false),
+          ChordPressRoutingRules.accepts(mask: 0),
+          [RimeKey.lockMask, RimeKey.shiftMask, RimeKey.controlMask,
+           RimeKey.altMask, RimeKey.superMask, RimeKey.releaseMask,
+           RimeKey.lockMask | RimeKey.controlMask].allSatisfy({ mask in
+              !ChordPressRoutingRules.accepts(mask: mask)
+          }),
           FlyChordBoundaryRules.plan(for: settledLeftContext)
             == .init(before: true, after: false),
           FlyChordBoundaryRules.plan(for: movedCursorContext)
@@ -3365,8 +3401,7 @@ func runStatsSmokeTest() -> Bool {
 /// row while selecting a different page's candidate.
 /// Fast typing exposed a commit fade: candidates stayed nearly opaque beside
 /// text the host already showed. A commit must remove the panel before the
-/// host insertion, and only that keystroke's own follow-up composition may
-/// skip the entrance.
+/// host insertion. Fresh and continued compositions must both appear immediately.
 func runCandidateCommitSmokeTest() -> Bool {
     print("== \(ProductIdentity.displayName) candidate commit smoke test ==")
     guard let snapshot = CandidateWindow.commitRetirementSnapshotForSmoke() else {
@@ -3380,19 +3415,15 @@ func runCandidateCommitSmokeTest() -> Bool {
         ("commit retires the logical presentation", snapshot.retiredLogicalPresentation),
         ("same-keystroke composition continues without an entrance",
          snapshot.sameKeystrokeContinuedWithoutEntrance),
-        ("continuation is consumed by one show", snapshot.continuationConsumedByOneShow),
-        ("continuation expires with its keystroke", snapshot.continuationExpiredAfterKeystroke),
-        ("hidden panel does not arm a continuation",
-         snapshot.hiddenRetirementDidNotArmContinuation),
-        ("a later composition makes a normal entrance",
-         snapshot.laterEntrancePhase == snapshot.expectedEntrancePhase),
+        ("ordinary hide is immediate and retires content", snapshot.ordinaryHideIsImmediate),
+        ("fresh composition is immediately opaque", snapshot.laterEntranceIsImmediate),
     ]
     let failures = checks.filter { !$0.1 }.map(\.0)
     guard failures.isEmpty else {
         print("FAILED: \(failures.joined(separator: "; "))")
         return false
     }
-    print("candidate-commit-smoke: OK (synchronous commit retirement, stale owner, 顶字 continuation, expiry, entrance)")
+    print("candidate-commit-smoke: OK (immediate show/hide, synchronous commit retirement, stale owner, 顶字 continuation)")
     return true
 }
 
@@ -8896,73 +8927,6 @@ func runBufferWindowSmokeTest() -> Bool {
             transitionAllowsInteraction: false
           ) else {
         print("FAILED: hidden candidate panel must not capture local interaction")
-        return false
-    }
-    guard CandidatePanelAnimationRules.fadeInDuration > 0,
-          CandidatePanelAnimationRules.fadeInDuration <= 0.1,
-          CandidatePanelAnimationRules.fadeOutDuration > 0,
-          CandidatePanelAnimationRules.fadeOutDuration <= 0.1,
-          CandidatePanelAnimationRules.shouldFadeIn(
-            panelIsVisible: false,
-            phase: .hidden,
-            reduceMotion: false
-          ),
-          !CandidatePanelAnimationRules.shouldFadeIn(
-            panelIsVisible: true,
-            phase: .fadingIn,
-            reduceMotion: false
-          ),
-          !CandidatePanelAnimationRules.shouldFadeIn(
-            panelIsVisible: true,
-            phase: .visible,
-            reduceMotion: false
-          ),
-          CandidatePanelAnimationRules.shouldFadeIn(
-            panelIsVisible: true,
-            phase: .fadingOut,
-            reduceMotion: false
-          ),
-          !CandidatePanelAnimationRules.shouldFadeIn(
-            panelIsVisible: false,
-            phase: .hidden,
-            reduceMotion: true
-          ),
-          !CandidatePanelAnimationRules.shouldFadeIn(
-            panelIsVisible: false,
-            phase: .hidden,
-            reduceMotion: false,
-            continuesCommittedSurface: true
-          ),
-          CandidatePanelAnimationRules.shouldFadeOut(
-            panelIsVisible: true,
-            phase: .visible,
-            reduceMotion: false
-          ),
-          !CandidatePanelAnimationRules.shouldFadeOut(
-            panelIsVisible: true,
-            phase: .fadingOut,
-            reduceMotion: false
-          ),
-          !CandidatePanelAnimationRules.shouldFadeOut(
-            panelIsVisible: true,
-            phase: .visible,
-            reduceMotion: true
-          ),
-          CandidatePanelAnimationRules.allowsInteraction(phase: .fadingIn),
-          CandidatePanelAnimationRules.allowsInteraction(phase: .visible),
-          !CandidatePanelAnimationRules.allowsInteraction(phase: .fadingOut),
-          !CandidatePanelAnimationRules.allowsInteraction(phase: .hidden),
-          CandidatePanelAnimationRules.mayCompleteFadeOut(
-            expectedGeneration: 4,
-            currentGeneration: 4,
-            phase: .fadingOut
-          ),
-          !CandidatePanelAnimationRules.mayCompleteFadeOut(
-            expectedGeneration: 4,
-            currentGeneration: 5,
-            phase: .fadingIn
-          ) else {
-        print("FAILED: candidate panel fade transition policy")
         return false
     }
 

@@ -1,4 +1,4 @@
-XSIME 1.1.5 (59) is an update of the existing iPhone app, formerly RIMES / Lingxi IME. The English name is XSIME; Simplified Chinese is 犀术IME and Traditional Chinese is 犀術IME. Bundle IDs, App Group, Keychain group and persistent data locations are unchanged. No app account, subscription, ads or in-app purchases are included.
+XSIME 1.1.5 (60) is an update of the existing iPhone app, formerly RIMES / Lingxi IME. The English name is XSIME; Simplified Chinese is 犀术IME and Traditional Chinese is 犀術IME. Bundle IDs, App Group, Keychain group and persistent data locations are unchanged. No app account, subscription, ads or in-app purchases are included.
 
 SETUP / FULL ACCESS OFF
 Settings > General > Keyboard > Keyboards > Add New Keyboard > XSIME (or its localized Chinese name). Open the app's Try typing page, focus a field, and select XSIME using the system globe. Keep Full Access OFF to test ordinary offline typing and Buffer editing. Secure fields and apps prohibiting third-party keyboards use the system keyboard.
@@ -14,9 +14,12 @@ APPLE TRANSLATION
 Requires iOS 26+ and supported downloaded language models. Prepare languages in the containing app, select the translation tool and a language pair in Buffer. Missing models or unsupported languages show an unavailable state; there is no automatic external-AI fallback.
 
 OPTIONAL EXTERNAL AI
-Users supply their own HTTPS OpenAI-compatible Chat Completions endpoint, model and API key, enable Full Access, and explicitly consent to the displayed recipient. Only explicitly submitted Buffer text is sent. API keys are device-only Keychain items. Requests do not follow redirects. Optional model lookup is a separate explicit action that sends the key to the configured provider. No provider key, account or AI service is bundled; the provider's own charges/policies may apply.
+Users supply their own HTTPS AI endpoint supporting a general-purpose interface format, model and API key, enable Full Access, and explicitly consent to the displayed recipient. The interface sends JSON model/messages fields to the user-configured chat/completions endpoint. Only explicitly submitted Buffer text is sent. API keys are device-only Keychain items. Requests do not follow redirects. Optional model lookup is a separate explicit action that sends the key to the configured provider. No provider endpoint, model, key, account or AI service is bundled; the provider's own charges/policies may apply.
 
 PERMISSIONS / PRIVACY
 Full Access is needed for external AI, keyboard clipboard collection and keyboard image export, not ordinary typing or Buffer editing. Explicit Save to Photos requests add-only access. Privacy and third-party licenses are available in the app and on the support site. No keyboard-text telemetry or automatic clipboard monitoring is used.
 
 This version updates the product name and related guidance; prior schemes, learned words, settings and credentials are retained.
+
+REVIEW CLARIFICATION
+Build 60 replaces the provider-brand wording in the AI Services screen with "general-purpose interface format," matching the updated store descriptions. The wording describes compatibility, not affiliation or a bundled service. Compared with build 59, the binary change is display text only. The optional user-configured AI connection remains available; no functionality has been disabled and no China-specific endpoint restriction has been added. We request reconsideration of this distinction.

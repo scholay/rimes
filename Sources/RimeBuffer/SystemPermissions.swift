@@ -2,6 +2,7 @@ import AVFoundation
 import ApplicationServices
 import Cocoa
 import CoreGraphics
+import Network
 
 /// Every macOS permission RIMES actually uses, what stops working without it,
 /// and how to reach the pane that grants it.
@@ -379,7 +380,16 @@ enum SystemPermissionAudit {
             if AVCaptureDevice.authorizationStatus(for: type) == .notDetermined {
                 _ = await AVCaptureDevice.requestAccess(for: type)
             }
-        case .localNetwork: break
+        case .localNetwork:
+            // There is no requestAccess API for local-network privacy. A
+            // user-initiated browse of our declared Bonjour service triggers
+            // the system alert. Do not connect to peers, keep results, or
+            // mistake the browser's ready state for an authorization grant.
+            let browser = NWBrowser(for: .bonjour(type: "_etinput._tcp", domain: "local."), using: .tcp)
+            browser.start(queue: .global(qos: .utility))
+            defer { browser.cancel() }
+            // Closing/replacing the guide cancels this task immediately.
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
         }
     }
 

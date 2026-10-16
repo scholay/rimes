@@ -398,8 +398,11 @@ enum RimeUI {
         get {
             // Development renderers can exercise every theme without
             // mutating the user's persisted preference domain.
-            if let raw = ProcessInfo.processInfo.environment["RIMEBUFFER_APPEARANCE_MODE"],
-               let mode = RimeAppearanceMode(rawValue: raw) {
+            // Read only this override, not a newly bridged dictionary of the
+            // entire process environment for every color/width lookup. Keep
+            // it dynamic for the in-process theme renderers.
+            if let raw = getenv("RIMEBUFFER_APPEARANCE_MODE"),
+               let mode = RimeAppearanceMode(rawValue: String(cString: raw)) {
                 return mode
             }
             if let raw = UserDefaults.standard.string(forKey: appearanceKey),
