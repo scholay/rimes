@@ -65,7 +65,7 @@
 		</array>
 	</dict>
 	<key>InputMethodConnectionName</key>
-	<string>RIMES_1_Connection</string>
+	<string>com.scholay.inputmethod.isaac_Connection</string>
 	<key>InputMethodServerControllerClass</key>
 	<string>RIMESController</string>
 	<key>InputMethodServerDelegateClass</key>

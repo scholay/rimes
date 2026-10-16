@@ -76,7 +76,7 @@ struct Painter {
         NSGraphicsContext.current?.cgContext.setAlpha(alpha)
         box(NSRect(x: x, y: y, width: width, height: 58), fill: background, stroke: border)
         appIcon(x + 10, y + 9, 40, alpha: old ? 0.45 : 1)
-        text(old ? "RIMES（旧版）" : "XSIME", x: x + 60, y: y + 17, font: 17, weight: .medium)
+        text(old ? "旧授权条目（示意）" : "XSIME", x: x + 60, y: y + 17, font: 17, weight: .medium)
         toggle(x: x + width - 62, y: y + 15, on: on)
         NSGraphicsContext.restoreGraphicsState()
     }
@@ -85,8 +85,17 @@ struct Painter {
         if kind == "drag" {
             box(NSRect(x: 18, y: 26, width: 215, height: 180), fill: surface, stroke: border)
             text("权限引导", x: 38, y: 42, font: 17, weight: .semibold)
-            appIcon(43, 92, 66)
-            text("XSIME", x: 124, y: 114, font: 18, weight: .medium)
+            let source = NSRect(x: 38, y: 88, width: 76, height: 76)
+            box(source, fill: blue.withAlphaComponent(0.06))
+            let outline = NSBezierPath(roundedRect: source, xRadius: 10, yRadius: 10)
+            outline.setLineDash([5, 4], count: 2, phase: 0)
+            outline.lineWidth = 2; blue.setStroke(); outline.stroke()
+            appIcon(48, 98, 56)
+            let arrow = NSBezierPath()
+            arrow.move(to: NSPoint(x: 140, y: 126)); arrow.line(to: NSPoint(x: 121, y: 126))
+            arrow.move(to: NSPoint(x: 127, y: 120)); arrow.line(to: NSPoint(x: 121, y: 126)); arrow.line(to: NSPoint(x: 127, y: 132))
+            arrow.lineWidth = 2; blue.setStroke(); arrow.stroke()
+            text("拖动这个", x: 147, y: 115, font: 16, weight: .semibold)
             settings(NSRect(x: 302, y: 26, width: 400, height: 180))
             let p = smooth((t - 0.18) / 0.42)
             let arrived = t > 0.65
@@ -97,8 +106,8 @@ struct Painter {
                 box(target, fill: blue.withAlphaComponent(0.04), stroke: blue.withAlphaComponent(0.55))
                 text("拖入应用", x: 459, y: 128, font: 17, color: muted)
             }
-            let x: CGFloat = 65 + 320 * p
-            let y: CGFloat = 111 - 26 * sin(p * .pi)
+            let x: CGFloat = 76 + 309 * p
+            let y: CGFloat = 126 - 26 * sin(p * .pi)
             if t > 0.18 && !arrived { appIcon(x - 20, y - 20, 48, alpha: 0.9) }
             cursor(x, arrived ? 145 : y)
         } else if kind == "repair" {

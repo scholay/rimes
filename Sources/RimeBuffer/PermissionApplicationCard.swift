@@ -28,11 +28,13 @@ enum PermissionApplication {
 final class PermissionApplicationIcon: NSImageView, NSDraggingSource {
     let applicationURL: URL?
     private let allowsSystemActions: Bool
+    private let showsDragTarget: Bool
     static let dragOperations: NSDragOperation = .copy
 
-    init(applicationURL: URL?, allowsSystemActions: Bool) {
+    init(applicationURL: URL?, allowsSystemActions: Bool, showsDragTarget: Bool = false) {
         self.applicationURL = applicationURL
         self.allowsSystemActions = allowsSystemActions
+        self.showsDragTarget = showsDragTarget
         super.init(frame: .zero)
         image = applicationURL.map { NSWorkspace.shared.icon(forFile: $0.path) }
             ?? PermissionGuideAnimation.resourceURL("application", extension: "png").flatMap(NSImage.init(contentsOf:))
@@ -48,6 +50,15 @@ final class PermissionApplicationIcon: NSImageView, NSDraggingSource {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+    override func draw(_ dirtyRect: NSRect) {
+        guard showsDragTarget else { super.draw(dirtyRect); return }
+        let border = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 10, yRadius: 10)
+        RimeUI.accentTextColor.withAlphaComponent(0.06).setFill(); border.fill()
+        border.setLineDash([4, 3], count: 2, phase: 0)
+        border.lineWidth = 1.5; RimeUI.accentTextColor.setStroke(); border.stroke()
+        image?.draw(in: bounds.insetBy(dx: 8, dy: 8), from: .zero,
+            operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+    }
     override var mouseDownCanMoveWindow: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {}

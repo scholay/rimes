@@ -18,7 +18,7 @@ class BrandingTests(unittest.TestCase):
         self.assertEqual(p["CFBundleExecutable"], "RIMES")
         self.assertEqual(p["CFBundleIdentifier"], "com.scholay.inputmethod.isaac")
         self.assertEqual(p["TISInputSourceID"], "com.scholay.inputmethod.isaac")
-        self.assertEqual(p["InputMethodConnectionName"], "RIMES_1_Connection")
+        self.assertEqual(p["InputMethodConnectionName"], p["CFBundleIdentifier"] + "_Connection")
         self.assertEqual(p["InputMethodServerControllerClass"], "RIMESController")
         mode = p["ComponentInputModeDict"]["tsInputModeListKey"]["com.scholay.inputmethod.isaac.Hans"]
         self.assertEqual(mode["TISInputSourceID"], "com.scholay.inputmethod.isaac.Hans")

@@ -66,7 +66,7 @@ struct CapturePermissionPresentation {
         if case .failed = state { return "暂时无法确认，请重新尝试。" }
         if permission == .localNetwork { return "在系统设置中确认开关。" }
         if intent == .disable { return "在系统设置中关闭 \(ProductBrand.name) 的开关。" }
-        return showsAddition ? "拖入左侧图标，再打开系统开关。" : "在系统设置中打开 \(ProductBrand.name) 的开关。"
+        return showsAddition ? "拖动虚线框内的图标，再打开系统开关。" : "在系统设置中打开 \(ProductBrand.name) 的开关。"
     }
 }
 
@@ -151,10 +151,6 @@ final class CapturePermissionGuide {
         self.panel = panel
 
         let applicationURL = PermissionApplication.appURL()
-        let icon = PermissionApplicationIcon(applicationURL: applicationURL,
-            allowsSystemActions: allowsSystemActions && intent == .enable && permission.supportsManualApplicationAddition)
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant: 50), icon.heightAnchor.constraint(equalToConstant: 50)])
         let title = NSTextField(labelWithString: permission.title)
         title.font = .systemFont(ofSize: 20, weight: .semibold)
         let status = NSTextField(labelWithString: "")
@@ -164,21 +160,32 @@ final class CapturePermissionGuide {
         let text = CaptureUI.column([title, status], spacing: 6)
         text.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let close = CaptureGlyphButton(symbol: "xmark", tooltip: "关闭权限引导") { [weak self] in self?.dismiss() }
-        let header = CaptureUI.row([icon, text, close], spacing: 12)
+        let header = CaptureUI.row([text, close], spacing: 12)
         header.translatesAutoresizingMaskIntoConstraints = false
         header.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
         text.translatesAutoresizingMaskIntoConstraints = false
-        text.widthAnchor.constraint(equalToConstant: contentWidth - 50 - 34 - 24).isActive = true
+        text.widthAnchor.constraint(equalToConstant: contentWidth - 34 - 12).isActive = true
         self.header = header
 
         var views: [NSView] = []
         if presentation.showsAddition {
-            views.append(animationStep("1  拖入应用", kind: .drag))
+            let target = PermissionApplicationIcon(applicationURL: applicationURL,
+                allowsSystemActions: allowsSystemActions, showsDragTarget: true)
+            target.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([target.widthAnchor.constraint(equalToConstant: 56), target.heightAnchor.constraint(equalToConstant: 56)])
+            target.setAccessibilityIdentifier("permission-application-drag-target")
+            let arrow = NSImageView(image: RimeUI.symbol("arrow.left", pointSize: 22, weight: .semibold) ?? NSImage())
+            arrow.contentTintColor = RimeUI.accentTextColor
+            let hint = NSTextField(labelWithString: "1  拖动这个")
+            hint.font = .systemFont(ofSize: 14, weight: .semibold)
+            hint.textColor = RimeUI.textPrimary
+            views.append(CaptureUI.column([CaptureUI.row([target, arrow, hint], spacing: 12),
+                PermissionGuideAnimation(.drag, width: contentWidth)], spacing: 10))
         }
         views.append(animationStep(intent == .disable ? "关闭系统开关" : presentation.showsAddition ? "2  打开系统开关" : "打开系统开关",
                                    kind: intent == .enable ? .enable : .disable))
         if presentation.showsAddition {
-            let repair = animationStep("移除旧条目，再添加当前应用", kind: .repair)
+            let repair = animationStep("修复示意：移除旧条目，再添加当前应用", kind: .repair)
             let help = PermissionHelpDisclosure(details: repair, width: contentWidth)
             help.didToggle = { [weak self, weak help] in
                 self?.resizePanel()

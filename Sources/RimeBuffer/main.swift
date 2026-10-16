@@ -1484,7 +1484,7 @@ if SchemaListStore.enabledIDs(at: startupSchemaListURL)
 }
 }
 let connectionName = (Bundle.main.infoDictionary?["InputMethodConnectionName"] as? String)
-    ?? "\(RimesIdentity.productName)_1_Connection"
+    ?? "\(Bundle.main.bundleIdentifier ?? RimesIdentity.bundleIdentifier)_Connection"
 
 NSApplication.shared.setActivationPolicy(.accessory)   // background app; panels can float above others
 CapsuleCloudSyncController.shared.start()
