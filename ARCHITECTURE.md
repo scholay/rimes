@@ -232,7 +232,7 @@
   1. `recognizedEvents` = keyDown | keyUp | flagsChanged。`keyUp` 继续用于完整的修饰键/并击生命周期；缓冲区 Return 在 keyDown 绑定焦点租约并重建 IME guard，keyUp 或物理轮询检测到抬起时判定轻按发送一块，持续物理按住达到 1.2 秒时发送全部。
   2. keysym 映射表 = 原型 `RimeKey` 全表 **+ 增补**：F1–F12（X11 keysym `0xffbe + n`，F4 = `0xffc1`；Mac keyCode F4=118 等），grave（keyCode 50 → `0x60`），数字行/符号经 `event.characters` 直通已可用。
   3. **修饰键组合先喂 Rime**（带完整 mask 调 processKey）；Rime 未处理且 mask 含 command/control 时才 return false 放行给 App（Cmd-C 等正常）。**禁止**一刀切 `guard modifiers.isEmpty`。
-  4. caps 的 `mask ^ lockMask` 逻辑保持原样。Shift 的 mode-switch press/release 延迟到物理抬起后判定：只有同一 session/schema、未参与任何按键且小于 500 ms 的轻点，才把保存的左/右 Shift keysym 成对补发给 Rime；组合键、长按、双 Shift 或失焦手势整对丢弃。这样 `commit_code` 不会先提交组字、再由前端事后回滚模式。
+  4. caps 的 `mask ^ lockMask` 逻辑保持原样。FlyYao 只暂存 `mask == 0` 的普通按下；Caps Lock/Shift 字母与组合键走同步 Rime 路由，被拒绝时交还宿主，不进入延迟并击，也不加入原生并击的按住键集合。即使 Caps Lock 在切入前已开启、session 的 `ascii_mode` 仍为 false，也不能吞键。Shift 的 mode-switch press/release 延迟到物理抬起后判定：只有同一 session/schema、未参与任何按键且小于 500 ms 的轻点，才把保存的左/右 Shift keysym 成对补发给 Rime；组合键、长按、双 Shift 或失焦手势整对丢弃。这样 `commit_code` 不会先提交组字、再由前端事后回滚模式。
   5. 非 chord 键按下先 `flushChordRelease()` 再处理。
   6. 每次 processKey 后：drain commit → CompositionSession 更新 marked text → CandidateWindow 更新。
   7. 兜底不变式见 §3-3。
@@ -435,7 +435,7 @@ pkill -x RIMES                     # 系统会按需重新拉起
 
 ### P1'（状态：**已全部实现并过三视角对抗审查（14 项修复已并入），等用户实测验收**）——"三个现场 bug 清零"
 
-> 审查并入的关键修复：activateServer 用真实硬件修饰键状态播种 lastModifiers（Caps 常开不再乱流）；
+> 审查并入的关键修复：activateServer 用 CGEventSource 的 combinedSessionState 播种 lastModifiers（不使用进程内可能过期的 NSEvent.modifierFlags）（Caps 常开不再乱流）；
 > grave 按修饰键分派（Shift+`=波浪号 0x7e，Ctrl+grave=切换器）；deactivate/commit 只作用于当前
 > `FocusToken`：显式 sender 必须精确匹配；nil/non-client sender 仅在 `self.client()` 仍指向同一对象且通过年龄/抑制规则时接受，绝不作为投递目标兜底；App 切换观察器升级为 forceCommit；候选点击加
 > acceptsFirstMouse（非激活窗首击生效）；多屏定位改点包含（零宽 caret rect 与 intersects 不兼容）；

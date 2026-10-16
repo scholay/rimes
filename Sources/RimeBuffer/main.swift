@@ -2210,6 +2210,31 @@ func runEngineSmokeTest() -> Bool {
     }
     engine.setOption("ascii_mode", false, session: session)
 
+    // Reproduce switching into a fresh Chinese session with Caps Lock already
+    // enabled. librime rejects Lock-modified letters even with ascii_mode off.
+    // The frontend must let that rejection reach the host immediately, rather
+    // than consuming the press and discovering it after the chord timer fires.
+    let capsLetterHandled = engine.processKey(0x61,
+                                              mask: RimeKey.lockMask,
+                                              session: session)
+    guard FlyChordRoutingRules.shouldStage(schemaID: "my_combo",
+                                           asciiMode: false,
+                                           extensionEnabled: true),
+          !ChordPressRoutingRules.accepts(mask: RimeKey.lockMask),
+          !capsLetterHandled,
+          engine.getContext(session: session).input.isEmpty,
+          engine.takeCommit(session: session) == nil,
+          !engine.processKey(RimeKey.space,
+                             mask: RimeKey.controlMask,
+                             session: session),
+          engine.processKey(0x6e, session: session),
+          engine.processKey(0x6e, mask: RimeKey.releaseMask, session: session),
+          !engine.getContext(session: session).candidates.isEmpty else {
+        print("FAILED: Caps Lock pass-through, Ctrl+Space, or resumed Chinese chord")
+        return false
+    }
+    engine.clearComposition(session: session)
+
     func typeFlyChordStrokes(
         _ strokes: [String],
         clearComposition: Bool = true,
@@ -3030,6 +3055,12 @@ func runSchemaListStoreSmokeTest() -> Bool {
                                             extensionEnabled: false),
           !FlyChordRoutingRules.shouldStage(schemaID: "my_combo", asciiMode: true),
           !FlyChordRoutingRules.shouldStage(schemaID: "english", asciiMode: false),
+          ChordPressRoutingRules.accepts(mask: 0),
+          [RimeKey.lockMask, RimeKey.shiftMask, RimeKey.controlMask,
+           RimeKey.altMask, RimeKey.superMask, RimeKey.releaseMask,
+           RimeKey.lockMask | RimeKey.controlMask].allSatisfy({ mask in
+              !ChordPressRoutingRules.accepts(mask: mask)
+          }),
           FlyChordBoundaryRules.plan(for: settledLeftContext)
             == .init(before: true, after: false),
           FlyChordBoundaryRules.plan(for: movedCursorContext)

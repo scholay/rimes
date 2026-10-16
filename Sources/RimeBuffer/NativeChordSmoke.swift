@@ -36,7 +36,8 @@ func runNativeChordSmokeTest() -> Bool {
 
     func routes(_ keycode: Int32, mask: Int32 = 0, profile: ChordKeymapProfile = zhemei,
                 schema: String = "yoyo-yx", ascii: Bool = false, enabled: Bool = true) -> Bool {
-        NativeChordRoutingRules.isChordKey(keycode: keycode, mask: mask, profile: profile,
+        ChordPressRoutingRules.accepts(mask: mask)
+            && NativeChordRoutingRules.isChordKey(keycode: keycode, mask: mask, profile: profile,
                                            schemaID: schema, asciiMode: ascii,
                                            extensionEnabled: enabled)
     }
@@ -46,7 +47,10 @@ func runNativeChordSmokeTest() -> Bool {
           routes(key("/"), profile: hanmei, schema: "yoyo-yx-hm"),
           !routes(key("'")), !routes(RimeKey.return), !routes(RimeKey.backspace),
           !routes(key("q"), mask: RimeKey.shiftMask),
+          !routes(key("q"), mask: RimeKey.lockMask),
+          !routes(key("q"), mask: RimeKey.lockMask | RimeKey.releaseMask),
           !routes(key("q"), mask: RimeKey.controlMask),
+          !routes(key(" "), mask: RimeKey.controlMask),
           !routes(key("q"), ascii: true),
           !routes(key("q"), enabled: false),
           !routes(key("q"), schema: "rime_ice"),
