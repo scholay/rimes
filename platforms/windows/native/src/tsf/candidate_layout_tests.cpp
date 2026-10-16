@@ -263,6 +263,8 @@ void TestBufferLayoutBounds() {
   empty.folded = true;
   layout = LayoutBuffer(empty, 760);
   Check(layout.height_dip == 35, "toolbar-only height");
+  Check(!layout.show_source && !layout.show_result && !layout.show_edit,
+        "folded workbench exposes no hidden rail or candidate caret surface");
 }
 
 void TestCandidateMatrixNavigation() {

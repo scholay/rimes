@@ -132,6 +132,30 @@ jobs:
             -Configuration Release `
             -RunBuild
 
+      - name: Verify isolated API streaming and model discovery
+        shell: pwsh
+        run: |
+          python platforms/windows/tests/test_provider_transport.py platforms/windows/native/out/build/windows-${{ matrix.architecture }}/Release/RimesProviderProbe.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Render native settings and Buffer fixtures
+        if: matrix.architecture == 'x64'
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'rimes-parity-renders'
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'platforms/windows/native/out/build/windows-x64/Release/RimesVisualPreview.exe'
+          $process = Start-Process -FilePath $exe -ArgumentList "--export=$output" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Native visual fixture rendering failed.' }
+
+      - name: Upload native visual fixtures
+        if: matrix.architecture == 'x64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: RIMES-Windows-settings-preview-${{ github.sha }}
+          path: ${{ runner.temp }}/rimes-parity-renders/*.png
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Verify local Chinese and English translation
         if: matrix.architecture == 'x64'
         shell: pwsh
@@ -211,6 +235,8 @@ jobs:
           $version = $env:PACKAGE_VERSION
           if (-not $version) { $version = (Get-Content platforms/windows/native/VERSION -Raw).Trim() }
           ./platforms/windows/scripts/New-RimesCiPackage.ps1 -Version $version -OutputDirectory "$env:RUNNER_TEMP/rimes-complete-package"
+          $checklist = 'docs/validation/windows-parity-20261016.md'
+          if (Test-Path $checklist) { Copy-Item $checklist "$env:RUNNER_TEMP/rimes-complete-package/delivery/ACCEPTANCE-WINDOWS.md" }
       - name: Upload installable package and checksums
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

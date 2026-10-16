@@ -159,7 +159,7 @@ struct Window {
   }
 
   ui::ThemeId ActiveTheme() const {
-    return ui::ThemeIdOrDefault(runtime.Configuration().theme);
+    return ui::ThemeIdOrDefault(EffectiveTheme(runtime.Configuration()));
   }
   void EnsureSettings();
   void OpenSettings();
@@ -180,6 +180,8 @@ struct Window {
   void UpdateTooltip(int hit);
   void UpdateTargetIcon(DWORD process);
   void PublishLogicalCaret(const ui::BufferPaintState& paint);
+  bool folded = false;
+  unsigned configured_width = 0;
   ui::BufferPaintState MakePaintState(const core::Json& state) const;
   static LRESULT CALLBACK Procedure(HWND, UINT, WPARAM, LPARAM);
 };
@@ -187,6 +189,7 @@ struct Window {
 ui::BufferPaintState Window::MakePaintState(const core::Json& state) const {
   ui::BufferPaintState paint{};
   paint.theme = theme;
+  paint.folded = folded;
   paint.mode = static_cast<ui::BufferMode>(state.value("mode", 0));
   paint.insertion = state.value("insertion", std::size_t{});
   paint.preedit_caret = state.value("preedit_caret", 0U);
@@ -265,6 +268,15 @@ void Window::EnsureSettings() {
     return count > 0 && count < 32768 && reinterpret_cast<INT_PTR>(ShellExecuteW(window, L"open", path, L"--schemes", nullptr, SW_SHOWNORMAL)) > 32;
   };
   cb.load = [this] { return runtime.Configuration(); };
+  cb.save_connections = [this](Settings value, const std::map<std::string, std::wstring>& secrets, std::string* error) {
+    const auto result = buffer_hotkey->Update(value.hotkey_modifiers, value.hotkey_key,
+        [&] { return runtime.Configure(value, L"", false, error, secrets); });
+    if (result == HotkeyUpdate::kInvalid || result == HotkeyUpdate::kUnavailable) {
+      if (error) *error = "快捷键不可用，设置未保存；原快捷键保持有效。"; return false;
+    }
+    if (result == HotkeyUpdate::kSaveFailed) return false;
+    RefreshTrayIcon(); InvalidateRect(window, nullptr, FALSE); return true;
+  };
   cb.save = [this](Settings value, const std::wstring& key, bool replace,
                    std::string* error) {
     const auto result = buffer_hotkey->Update(
@@ -402,6 +414,7 @@ void Window::PopupMoreMenu() {
                               {4, L"取消"},
                               {5, L"下一块"},
                               {6, L"全部发送"},
+                              {2901, folded ? L"展开 Buffer" : L"折叠为工具栏"},
                               {0, L"", false, true},
                               {7, L"设置"}});
   POINT cursor{};
@@ -414,6 +427,8 @@ void Window::PopupMoreMenu() {
     case 1:
       Action(0);
       break;
+    case 2901:
+      folded = !folded; Update(); break;
     case kPasteMenu:
       Paste();
       break;
@@ -726,9 +741,23 @@ void Window::Update() {
   // Keep unsaved settings theme preview while the settings host is open.
   if (!settings || !settings->IsOpen()) theme = ActiveTheme();
   auto state = runtime.Snapshot();
+  // A new input or summon reveals the draft again; folded geometry must never
+  // leave an active candidate anchor pointing into a hidden source rail.
+  if (folded && (state.value("revision", 0ULL) != shown_revision ||
+      Wide(state.value("preedit", std::string())) != shown_preedit ||
+      state.value("opening_revision", 0ULL) != placed_opening_revision)) folded = false;
   mode = static_cast<ui::BufferMode>(state.value("mode", 0));
   UpdateTargetIcon(state.value("target_pid", 0U));
   const auto config = runtime.Configuration();
+  if (configured_width != config.buffer_width) {
+    configured_width = config.buffer_width;
+    RECT frame{}; GetWindowRect(window, &frame);
+    const auto work = BufferMonitorWorkArea(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST));
+    const auto scale = static_cast<double>(GetDpiForWindow(window)) / 96;
+    const auto width = (std::min)(static_cast<int>(config.buffer_width * scale), static_cast<int>(work.right - work.left - 16));
+    const auto left = (std::clamp)(static_cast<int>(frame.left), static_cast<int>(work.left), static_cast<int>(work.right) - width);
+    SetWindowPos(window, nullptr, left, frame.top, width, frame.bottom-frame.top, SWP_NOZORDER | SWP_NOACTIVATE);
+  }
   if (send_hotkey) {
     if (state.value("capture", false) && state.value("visible", false) &&
         state.value("preedit", std::string()).empty() &&
@@ -862,6 +891,7 @@ LRESULT CALLBACK Window::Procedure(HWND hwnd, UINT message, WPARAM wparam,
     switch (message) {
       case WM_SETTINGCHANGE:
       case WM_THEMECHANGED:
+        self->runtime.AppearanceChanged();
         self->RefreshTrayIcon();
         return 0;
       case WM_NCCALCSIZE:

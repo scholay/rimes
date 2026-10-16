@@ -34,9 +34,11 @@ class Runtime {
   std::optional<BufferRect> PlacementCaret(Target target);
   void CancelOpeningPlacement();
   Settings Configuration();
+  std::uint64_t ConfigurationRevision();
+  void AppearanceChanged();
   void SetImportedSchema(std::string schema);
   bool Configure(Settings value, const std::wstring& key, bool replace_key,
-                 std::string* error);
+                 std::string* error, const std::map<std::string, std::wstring>& secrets = {});
   void Toggle(std::uint32_t foreground_process);
   void Bind(std::uint32_t foreground_process);
   // A settings window takes keyboard focus without closing the workbench or

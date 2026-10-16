@@ -64,6 +64,9 @@ class RimeEngine final {
   // Applies one key and atomically drains its commit/context into output. An
   // ordinary unhandled key yields an empty snapshot; explicit Shift snapshots
   // report state changes independently of host key ownership.
+  bool ProcessChordText(SessionId session, const std::string& text, const std::string& replacement,
+                        const EngineSnapshot& expected, EngineSnapshot* output,
+                        bool* replaced, std::string* error = nullptr) noexcept;
   bool ProcessKey(SessionId session, std::int32_t keycode,
                  std::int32_t modifiers, EngineSnapshot* output,
                  std::string* error = nullptr) noexcept;

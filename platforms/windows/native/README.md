@@ -1,13 +1,11 @@
 # XSIME Native Windows Foundation
 
-Current Windows release: **[1.1.1](https://github.com/scholay/xsime/releases/tag/windows-v1.1.1)**. Download the EXE installer for a data-preserving upgrade, including discoverable Settings and system uninstall entries. See the [release notes](RELEASE-1.1.1.md); package verification and actual desktop acceptance are recorded separately in the release BUILD-INFO.json.
-
-The published 1.1.1 package includes damaged-install recovery, candidate settings
-and caret-placement fixes. Its BUILD-INFO.json distinguishes automated checks,
-the actual upgrade, and remaining host/uninstall acceptance. The current Shift
-and Buffer shortcut repairs still require a new package and ordinary desktop
-typing acceptance; see the [acceptance record](validation/2026-10-07-typing-buffer.md) and
-[maintenance checklist](MANUAL-TEST.md).
+This source prepares **Windows 1.1.5**. Published installers are listed in
+[GitHub Releases](https://github.com/scholay/xsime/releases?q=windows&expanded=true);
+a source change or CI artifact does not establish a public release or desktop
+acceptance. Preview packages include their source commit, checksums and
+`ACCEPTANCE-WINDOWS.md`. Use that checklist and the
+[maintenance checklist](MANUAL-TEST.md) when testing a data-preserving upgrade.
 
 This directory contains the native Windows implementation of RIMES. It is
 separate from the Weasel data preview in the parent directory.
@@ -72,7 +70,8 @@ The [1.0.0 preparation checklist](RELEASE-1.0.0.md) remains historical context.
 
 The current development branch also repairs the Buffer workbench: the default
 Alt+Shift+Enter chord sends one ready block on release or drains the frozen queue
-after a one-second hold, including in hosts that intercept modified Enter.
+after a 1.2-second hold by default, including in hosts that intercept modified
+Enter. Settings → Buffer → Shortcuts accepts a 500–3000 ms hold threshold.
 Alt+Shift+S opens Settings. Candidate geometry follows the Buffer insertion caret;
 source editing supports block navigation, select-all and paste. AI generation
 uses one exchange rail, with return-to-edit and complete-result copy-and-close.
@@ -103,8 +102,8 @@ Where the TSF host cooperates, typing matches the macOS XSIME controller:
   tap; unavailable or older Brokers do not receive deferred input.
 
 The candidate panel is a `WS_EX_NOACTIVATE` topmost tool window so it cannot
-steal focus from the host. Horizontal pages stay on one line and grow to the
-monitor's available width; oversized entries are ellipsized while keeping all
+steal focus from the host. Horizontal pages stay on one line within the configured
+maximum width and monitor work area; oversized entries are ellipsized while keeping all
 selection targets. Preedit is displayed only in the host editor or Buffer.
 
 For the six product schemas, idle unshifted number-row keys and numeric-keypad
@@ -120,7 +119,8 @@ a host denies an unnecessary write during an idle Shift tap. Custom schemas
 with idle digit bindings and real desktop hosts need separate acceptance.
 
 Settings → Appearance → Size controls the candidate font, page size (1–9),
-and vertical arrangement. Page size changes the real librime menu pagination.
+vertical arrangement, maximum width, minimum row height and label size.
+Page size changes the real librime menu pagination.
 Vertical candidates use additional columns when the current monitor is too
 short to fit the page. If the host temporarily cannot resolve its caret, the
 panel keeps the last position within the current focus context; with no valid
@@ -128,8 +128,8 @@ position it stays hidden until a caret is available.
 
 The tray and the TSF language-bar/input-method indicator use the shared macOS
 horn from `Logo/rhino-horn.svg`. The tray's black and white variants follow the
-Windows taskbar theme. The language profile selects the second icon group in
-`RimesTsf.dll` (the black horn) through `AddLanguageProfile`; keep the resource
+Windows taskbar theme. The language profile selects the fourth icon group in
+`RimesTsf.dll` (a two-tone horn badge) through `AddLanguageProfile`; keep the resource
 order in `src/product_version.rc.in` stable when adding icons. Regenerate the
 ICO sizes with `python platforms/windows/scripts/Export-RimesTrayIcons.py`
 (Pillow required). Registration refreshes existing profiles after COM/TSF
@@ -193,17 +193,51 @@ an explicit Translate action). Paused/unbound workspaces do not start new
 automatic requests. Ordinary AI generation remains explicit. Switching the workbench
 back to Input stops automatic translation and queued processing; source and
 completed results remain available for explicit sending. These changes describe
-the current source, not a replacement of the published 1.1.1 installer.
+the current source; verify the package's source commit before testing them.
 
 Host availability is a separate acceptance gate. The current TSF registers
-keyboard and display-attribute categories only: it does **not** yet implement
-the UI-less candidate contract or declare immersive support. A basic registrar
+keyboard, display-attribute, immersive and UI-less candidate categories; the
+corresponding implementation is described above. A basic registrar
 `verify` success must not be reported as Chrome/Windows Search acceptance.
 Use `RimesRegistrar diagnose` for read-only profile enablement and capability
 categories, and `Debug-RimesWindows.ps1 -Registered` for these checks plus the
 active architecture's DLL signature. Missing capabilities and unsigned DLLs
 are warnings, not something the diagnostic tool silently changes. Do not
 register unimplemented capabilities or weaken Windows security to remove them.
+
+## Settings, connectors and isaac2026
+
+The native settings window follows the macOS sidebar, segmented navigation,
+cards and four themes. Appearance can follow Windows light/dark mode. Buffer
+has a configurable default width and can fold its editor without discarding
+text; new input expands it again. A reliable host-field width still takes
+precedence when explicitly opening or rebinding Buffer.
+
+Settings → Connectors stores multiple OpenAI-compatible API and Codex profiles.
+Only the saved active profile is used for generation and AI translation. Each
+API profile has an independent Windows Credential Manager entry; credentials
+are also tied to the endpoint. `/models` discovery is optional and the model
+can be entered manually. Editing settings, switching profiles or cancelling a
+request invalidates obsolete results. API output streams into Buffer; Codex
+publishes only a complete successful result. Codex uses a native executable,
+its own login and an isolated `exec` session. The connection check verifies
+installation/login without making a generation request. No Claude connector
+is included in this preview.
+
+Settings → Chording edits the applied **isaac2026** keymap: enable/disable,
+physical key-batch interval, left/right keys, mappings and combination lookup.
+Import/export supports the shared `formatVersion=1`, `fullPinyin` JSON format.
+Native-scheme references and natural-code encoded profiles are rejected.
+This is separate from importing an ordinary third-party Rime scheme package.
+Changes take effect only on Save; Cancel preserves the applied profile.
+
+The Broker keeps each native chord composer with its TSF session and clears
+pending batches on focus/configuration changes. Pending-key negotiation allows
+Space/Escape and Buffer commands to settle a held batch before it has Rime
+preedit. Older loaded DLLs continue to use the original librime `my_combo`
+implementation until restarted; the custom native keymap requires the new DLL.
+The editable mapper covers physical batches and adjacent left/right pairing;
+it does not claim every macOS release-timer behavior.
 
 ## Build
 

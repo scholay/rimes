@@ -1718,6 +1718,7 @@ void TextService::OnBrokerNotification() {
       candidate_window_.SetFont(
           (std::clamp)(message->value("font", 16U), 10U, 40U));
       candidate_window_.SetVertical(message->value("verticalCandidates", false));
+      candidate_window_.SetMetrics(message->value("candidateWidth", 460U), message->value("candidateHeight", 34U), message->value("candidateLabelSize", 10U));
       candidate_window_.SetTheme(ui::ThemeIdOrDefault(
           message->value("theme", std::string("night"))));
       const bool enabled = message->value("enabled", false);

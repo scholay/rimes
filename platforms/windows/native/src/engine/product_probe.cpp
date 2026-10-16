@@ -34,6 +34,93 @@ class RuntimePreferences {
   bool active_ = false;
 };
 
+bool TestNativeIsaac2026(RimeEngine& engine, const std::filesystem::path& log_dir) {
+  using namespace rimes::windows;
+  const auto guarded=engine.CreateSession(nullptr);
+  EngineSnapshot before, changed; bool replaced=false;
+  if(!guarded || !engine.Configure(guarded,"rime_ice",false,false,false,nullptr) ||
+      !engine.ProcessChordText(guarded,"n'","",{},&before,&replaced,nullptr) ||
+      !engine.ProcessKey(guarded,'a',0,&changed,nullptr) ||
+      !engine.ProcessChordText(guarded,"i","ni'",before,&changed,&replaced,nullptr) || replaced) {
+    std::cerr<<"Chord rewrite must reject changed engine preedit\n"; return false;
+  }
+  engine.DestroySession(guarded);
+  RuntimePreferences preferences(log_dir);
+  if (!preferences.active()) return false;
+  workbench::Settings initial; initial.schema = "my_combo";
+  initial.close_after_send = false;
+  if (!workbench::SaveSettings(initial, nullptr)) return false;
+  workbench::Runtime runtime;
+  if (runtime.Configuration().schema != "my_combo") return false;
+  broker::BrokerConnection connection(0, &engine, &runtime);
+  const auto peer = GetCurrentProcessId() + 1;
+  std::uint32_t request_id = 1;
+  std::uint64_t sequence = 1;
+  core::Frame response;
+  std::vector<std::byte> payload;
+  auto exchange = [&](core::MessageType type, std::vector<std::byte> bytes) {
+    core::Frame request; request.header.message_type=type; request.header.request_id=request_id++;
+    request.payload=std::move(bytes);
+    return connection.Handle(request,peer,&response)==broker::ClientAction::kContinue;
+  };
+  core::InputSessionOpened opened;
+  if (!core::EncodeClientHello({peer,0,core::kModifierSnapshotsCapability | core::kPendingChordCapability,"IsaacProbe"},&payload) ||
+      !exchange(core::MessageType::kClientHello,std::move(payload)) ||
+      !core::EncodeOpenInputSession({1,{}},&payload) ||
+      !exchange(core::MessageType::kOpenInputSession,std::move(payload)) ||
+      !core::DecodeInputSessionOpened(response.payload,&opened)) return false;
+  core::InputState state;
+  auto key = [&](unsigned vk,bool down) {
+    core::KeyEvent e; e.session_id=opened.session_id; e.sequence_id=sequence++; e.virtual_key=vk;
+    e.event_flags=down?static_cast<unsigned>(core::KeyEventFlags::kKeyDown):0;
+    return core::EncodeKeyEvent(e,&payload) && exchange(core::MessageType::kKeyEvent,std::move(payload)) &&
+        core::DecodeInputState(response.payload,&state);
+  };
+  auto batch = [&](const std::string& keys) {
+    for (const char c:keys) if(!key(static_cast<unsigned>(c-'a'+'A'),true)) return false;
+    for (const char c:keys) if(!key(static_cast<unsigned>(c-'a'+'A'),false)) return false;
+    return true;
+  };
+  // Exercise the production Broker path, including the guarded native rewrite
+  // against a real librime session and the normal TSF commit snapshot.
+  if(!batch("dv") || !batch("i") || !key(VK_SPACE,true) || state.commit_text!="你" || !key(VK_SPACE,false)) {
+    std::cerr<<"Native isaac2026 adjacent batches failed\n"; return false;
+  }
+  if(!batch("dvi") || !key(VK_SPACE,true) || state.commit_text!="你" || !key(VK_SPACE,false)) return false;
+  if(!batch("dv") || !key('I',true) || !key(VK_SPACE,true) || state.commit_text!="你" ||
+      !key('I',false) || !key(VK_SPACE,false)) {
+    std::cerr<<"Adjacent chord must settle before a command while a key remains held\n"; return false;
+  }
+  if(!key('D',true) || !(state.state_flags & static_cast<unsigned>(core::InputStateFlags::kPendingChord)) ||
+      !state.composition.empty() || !key(VK_ESCAPE,true) ||
+      (state.state_flags & static_cast<unsigned>(core::InputStateFlags::kPendingChord)) || !key('D',false)) {
+    std::cerr<<"Pending-key routing state must not fabricate preedit or survive cancellation\n"; return false;
+  }
+  auto config=runtime.Configuration(); config.chord_profile=workbench::BuiltinChordProfile();
+  for(auto& mapping:config.chord_profile["mappings"]) if(mapping["keys"]=="dvi") mapping["output"]="hao";
+  if(!runtime.Configure(config,{},false,nullptr) || !batch("dvi") || !key(VK_SPACE,true) || state.commit_text!="好" || !key(VK_SPACE,false)) {
+    std::cerr<<"Applied custom keymap did not change real Rime output\n"; return false;
+  }
+  const workbench::Target target{peer,opened.session_id,1};
+  runtime.Focus(target); runtime.Bind(peer);
+  // A command before the final key release must settle the physical batch
+  // before Buffer decides whether it is sending a draft or selecting preedit.
+  if(!key('D',true) || !key('V',true) || !key('I',true) || !key(VK_SPACE,true) ||
+      !state.commit_text.empty() || runtime.Snapshot()["source"]!="好") {
+    std::cerr<<"Pending chord did not settle into Buffer\n"; return false;
+  }
+  if(!key('D',false) || !key('V',false) || !key('I',false) || runtime.Snapshot()["source"]!="好") return false;
+  // Closing the actual TSF session revokes unfinished chord and rewrite state.
+  if(!key('D',true) || !key('V',true) || !core::EncodeCloseInputSession({opened.session_id},&payload) ||
+      !exchange(core::MessageType::kCloseInputSession,std::move(payload)) ||
+      !core::EncodeOpenInputSession({2,{}},&payload) ||
+      !exchange(core::MessageType::kOpenInputSession,std::move(payload)) ||
+      !core::DecodeInputSessionOpened(response.payload,&opened) || !batch("i") ||
+      state.composition.find('n')!=std::string::npos || state.composition.find("hao")!=std::string::npos) return false;
+  std::cout<<"Native isaac2026 real-Rime batches, applied keymap, Buffer and session isolation passed\n";
+  return true;
+}
+
 bool TestPausedBufferShift(RimeEngine& engine,
                           const std::filesystem::path& log_dir) {
   using namespace rimes::windows;
@@ -492,5 +579,6 @@ int wmain(int argc, wchar_t** argv) {
   }
   std::cout << "Real Broker legacy/new client capability negotiation passed\n";
   if (!TestPausedBufferShift(engine, options.log_dir)) return 1;
+  if (!TestNativeIsaac2026(engine, options.log_dir)) return 1;
   return 0;
 }

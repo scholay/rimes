@@ -66,6 +66,17 @@ class CandidateWindow {
     if (window_ && GetCapture() == window_) ReleaseCapture();
     if (snapshot_.visible) Update(snapshot_);
   }
+  void SetMetrics(unsigned width, unsigned height, unsigned label) {
+    max_width_ = (std::clamp)(width, 240U, 1200U);
+    strip_height_ = (std::clamp)(height, 28U, 72U); label_size_ = (std::clamp)(label, 8U, 24U);
+    if (snapshot_.visible) LayoutAndShow(snapshot_);
+  }
+  ui::CandidateStripMetrics Metrics() const {
+    auto metrics = ui::MakeCandidateMetrics(font_size_);
+    metrics.max_strip_width_dip = static_cast<int>(max_width_);
+    metrics.strip_height_dip = (std::max)(metrics.strip_height_dip, static_cast<int>(strip_height_));
+    metrics.label_font_dip = static_cast<int>(label_size_); return metrics;
+  }
   void SetTheme(ui::ThemeId theme) {
     if (theme_ == theme) return;
     theme_ = theme;
@@ -89,6 +100,7 @@ class CandidateWindow {
 
   std::function<void(std::size_t)> select_;
   unsigned font_size_ = 16;
+  unsigned max_width_ = 460, strip_height_ = 34, label_size_ = 10;
   bool vertical_ = false;
   ui::ThemeId theme_ = ui::ThemeId::kNight;
   int hover_index_ = -1;

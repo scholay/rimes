@@ -9,6 +9,7 @@
 #include "../ui/settings_paint.hpp"
 #include "provider.hpp"
 #include "official_plugins.hpp"
+#include "parity_settings.hpp"
 
 namespace rimes::windows::workbench {
 
@@ -17,6 +18,7 @@ struct SettingsUiCallbacks {
   std::function<bool(Settings, const std::wstring& key, bool replace_key,
                      std::string* error)>
       save;
+  std::function<bool(Settings, const std::map<std::string, std::wstring>&, std::string*)> save_connections;
   // Theme is owned by parent capture/JSON pipeline; UI keeps a local preview
   // until Save, then notifies the host. Close without Save restores this.
   std::function<ui::ThemeId()> load_theme;
@@ -59,6 +61,7 @@ class SettingsUiHost {
   static LRESULT CALLBACK Procedure(HWND, UINT, WPARAM, LPARAM);
   static LRESULT CALLBACK ComboProcedure(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);
 
+  std::unique_ptr<ParitySettings> parity_;
   SettingsUiCallbacks callbacks_;
   ui::SettingsDraft draft_{};
   ui::SettingsLayout layout_{};

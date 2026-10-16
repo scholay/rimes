@@ -440,6 +440,34 @@ class RimeEngine::Impl final {
     } catch (...) { return false; }
   }
 
+  bool ProcessChordText(SessionId session, const std::string& text, const std::string& replacement,
+                        const EngineSnapshot& expected, EngineSnapshot* output,
+                        bool* replaced, std::string* error) noexcept {
+    try {
+      std::lock_guard lock(mutex_);
+      if (!output || !replaced) return false;
+      *output = {}; *replaced = false;
+      if (!healthy_ || !sessions_.contains(session) || !api_ || !api_->clear_composition) return false;
+      EngineSnapshot current;
+      if (!CollectSnapshotLocked(session, &current, error)) return false;
+      std::string input = text;
+      if (!replacement.empty() && current.commit_text.empty() && current.composing &&
+          current.composition == expected.composition && current.caret_utf16 == expected.caret_utf16 &&
+          current.selection_start_utf16 == expected.selection_start_utf16 &&
+          current.selection_length_utf16 == expected.selection_length_utf16) {
+        api_->clear_composition(session); input = replacement; *replaced = true;
+      }
+      std::string commits = current.commit_text;
+      for (unsigned char key : input) {
+        api_->process_key(session, key, 0);
+        if (!CollectSnapshotLocked(session, &current, error)) return false;
+        commits += current.commit_text;
+      }
+      current.commit_text = commits; current.handled = true;
+      *output = std::move(current); return true;
+    } catch (...) { SetError(error, "Chord processing failed"); return false; }
+  }
+
   bool ProcessKey(SessionId session, std::int32_t keycode,
                   std::int32_t modifiers, EngineSnapshot* output,
                   std::string* error) noexcept {
@@ -842,6 +870,12 @@ RimeEngine::SessionId RimeEngine::CreateSession(std::string* error) noexcept {
 bool RimeEngine::DestroySession(SessionId session,
                                 std::string* error) noexcept {
   return impl_->DestroySession(session, error);
+}
+
+bool RimeEngine::ProcessChordText(SessionId session, const std::string& text, const std::string& replacement,
+                                  const EngineSnapshot& expected, EngineSnapshot* output,
+                                  bool* replaced, std::string* error) noexcept {
+  return impl_->ProcessChordText(session, text, replacement, expected, output, replaced, error);
 }
 
 bool RimeEngine::ProcessKey(SessionId session, std::int32_t keycode,

@@ -78,8 +78,10 @@ void Runtime::CaptureChanged() {
          {"context", entry.target.context},
          {"openingRevision", opening_revision_},
          {"font", settings_.font_size},
+         {"candidateWidth", settings_.candidate_width}, {"candidateHeight", settings_.candidate_height},
+         {"candidateLabelSize", settings_.candidate_label_size},
          {"verticalCandidates", settings_.vertical_candidates},
-         {"theme", settings_.theme},
+         {"theme", EffectiveTheme(settings_)},
          {"sendKey", settings_.send_key},
          {"sendModifiers", settings_.send_modifiers},
          {"enabled", model_.capture && model_.bound == entry.target &&
@@ -111,7 +113,7 @@ bool Runtime::BeforeKey(Target target, const core::KeyEvent& key,
       return_target_ == target) {
     if (!down) {
       if (!return_sent_ && model_.capture && model_.bound == target)
-        Queue(SendAuthorized(GetTickCount64() - pressed_at_ >= 1000));
+        Queue(SendAuthorized(GetTickCount64() - pressed_at_ >= settings_.send_hold_ms));
       return_held_ = false;
     }
     return true;
@@ -335,6 +337,8 @@ void Runtime::CancelOpeningPlacement() {
 void Runtime::SetImportedSchema(std::string schema) {
   std::lock_guard lock(mutex_); imported_schema_ = std::move(schema);
 }
+std::uint64_t Runtime::ConfigurationRevision() { std::lock_guard lock(mutex_); return settings_.revision; }
+void Runtime::AppearanceChanged() { std::lock_guard lock(mutex_); CaptureChanged(); Changed(); }
 Settings Runtime::Configuration() {
   std::lock_guard lock(mutex_);
   auto effective = settings_;
@@ -343,7 +347,7 @@ Settings Runtime::Configuration() {
   return effective;
 }
 bool Runtime::Configure(Settings value, const std::wstring& key,
-                        bool replace_key, std::string* error) {
+                        bool replace_key, std::string* error, const std::map<std::string, std::wstring>& secrets) {
   std::lock_guard lock(mutex_);
   if (!settings_valid_) {
     if (error)
@@ -352,9 +356,18 @@ bool Runtime::Configure(Settings value, const std::wstring& key,
     return false;
   }
   if (!imported_schema_.empty()) value.schema = settings_.schema;
+  MigrateConnections(&value);
+  if (!SelectConnection(&value, value.active_connection)) {
+    if (error) *error = "连接器配置无效。";
+    return false;
+  }
   value.revision = settings_.revision + 1;
   if (!SaveSettings(value, error)) return false;
-  if (replace_key && !SaveSecret(key, value.base_url, error)) {
+  auto updates = secrets;
+  if (replace_key) updates[CredentialIdentity(value)] = key;
+  const bool secrets_saved = SaveConnectionSecrets(value, updates, error);
+  for (auto& [id, secret] : updates) if (!secret.empty()) SecureZeroMemory(secret.data(), secret.size() * sizeof(wchar_t));
+  if (!secrets_saved) {
     if (!SaveSettings(settings_, nullptr)) {
       settings_valid_ = false;
       model_.Cancel();
@@ -611,7 +624,7 @@ void Runtime::Tick() {
   std::lock_guard lock(mutex_);
   CheckPluginAuthorization();
   const auto now = GetTickCount64();
-  if (return_held_ && !return_sent_ && now - pressed_at_ >= 1000) {
+  if (return_held_ && !return_sent_ && now - pressed_at_ >= settings_.send_hold_ms) {
     return_sent_ = true;
     if (model_.capture && return_target_ == model_.bound)
       Queue(SendAuthorized(true));

@@ -84,6 +84,8 @@ inline void PaintSettingsShell(HDC dc, const SettingsLayout& layout,
   RECT header = px({12, 14, 148, 34});
   DrawTextW(dc, L"设置", -1, &header, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
+  RECT extension_header = px({12, layout.nav[6].top - 26, 148, layout.nav[6].top - 4});
+  DrawTextW(dc, L"扩展", -1, &extension_header, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
   for (int i = 0; i < kSettingsPageCount; ++i) {
     const auto row = px(layout.nav[static_cast<std::size_t>(i)]);
     const bool selected = static_cast<int>(draft.page) == i;
@@ -308,11 +310,11 @@ inline void PaintSettingsShell(HDC dc, const SettingsLayout& layout,
   } else if (draft.page == SettingsPage::kAppearance) {
     SelectObject(dc, fonts.body);
     SetTextColor(dc, ToColorRef(p.text_secondary));
-    RECT fl = px({layout.body.left, layout.font_edit.top,
+    RECT fl = px({layout.body.left + 16, layout.font_edit.top,
                   layout.font_edit.left - 8.0f, layout.font_edit.bottom});
     DrawTextW(dc, L"候选字号（10–40）", -1, &fl,
               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    RECT count_label = px({layout.body.left, layout.candidate_count_edit.top,
+    RECT count_label = px({layout.body.left + 16, layout.candidate_count_edit.top,
       layout.candidate_count_edit.left - 8.f, layout.candidate_count_edit.bottom});
     DrawTextW(dc, L"每页候选数（1–9）", -1, &count_label, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
   } else if (draft.page == SettingsPage::kBuffer && draft.subpage == 0) {
@@ -344,34 +346,11 @@ inline void PaintSettingsShell(HDC dc, const SettingsLayout& layout,
     DrawTextW(dc, L"本地翻译首次下载约 182 MiB 中英模型，之后无需联网或 API 密钥。\n"
                  L"目标语言填写 English 或中文；其他语言可选择 AI 翻译。\n\n"
                  L"切换输入框会暂停发送，重新关联后重新倒计时。发送确认完成后才移除内容。", -1, &help, DT_LEFT | DT_WORDBREAK);
-  } else if (draft.page == SettingsPage::kApi) {
-    SelectObject(dc, fonts.body);
-    SetTextColor(dc, ToColorRef(p.text_secondary));
-    const wchar_t* labels[] = {L"API 地址", L"模型", L"API 密钥（留空保留）",
-                               L"翻译目标语言"};
-    const DipRect* edits[] = {&layout.base_edit, &layout.model_edit,
-                              &layout.key_edit, &layout.lang_edit};
-    for (int i = 0; i < 4; ++i) {
-      if (edits[i]->width() <= 0) continue;
-      RECT fl = px({layout.body.left, edits[i]->top, edits[i]->left - 8.0f,
-                    edits[i]->bottom});
-      DrawTextW(dc, labels[i], -1, &fl, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    }
-    const wchar_t* codex_labels[] = {L"AI 连接器", L"Codex .exe（空=自动）", L"Codex 模型（空=默认）"};
-    const DipRect* codex_fields[] = {&layout.connector_combo, &layout.codex_path_edit, &layout.codex_model_edit};
-    for (int i = 0; i < 3; ++i) {
-      if (codex_fields[i]->width() <= 0) continue;
-      RECT label = px({layout.body.left, codex_fields[i]->top, codex_fields[i]->left - 8.0f, codex_fields[i]->bottom});
-      DrawTextW(dc, codex_labels[i], -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    }
-    const float note_y = draft.subpage == 0 ? layout.lang_edit.bottom
-                                            : layout.key_edit.bottom;
-    RECT note = px({layout.body.left, note_y + 12.0f,
-                    layout.body.right, note_y + 60.0f});
-    SelectObject(dc, fonts.family);
-    SetTextColor(dc, ToColorRef(p.text_muted));
-    DrawTextW(dc, L"Codex 复用 CLI 登录，忽略用户配置，无本地工具；生成仍发送到云端。\nAPI 密钥保存在 Windows 凭据管理器。正文只在生成或翻译时发送。",
-              -1, &note, DT_LEFT | DT_WORDBREAK);
+  } else if (draft.page == SettingsPage::kApi || draft.page == SettingsPage::kChord) {
+    const auto card = px({layout.body.left, layout.body.top - 12, layout.body.right,
+                         layout.body.top + (draft.page == SettingsPage::kApi ? 296.f : 270.f)});
+    FillRoundRect(dc, card, MulDiv(10, static_cast<int>(dpi), 96), ToColorRef(p.surface_secondary));
+    StrokeRoundRect(dc, card, MulDiv(10, static_cast<int>(dpi), 96), ToColorRef(p.border));
   } else if (draft.page == SettingsPage::kPlugins) {
     SelectObject(dc, fonts.body); SetTextColor(dc, ToColorRef(p.text_secondary));
     if (draft.subpage == 1) {

@@ -824,7 +824,7 @@ void TestCodexConnectorSelector() {
   const auto window = host.hwnd();
   ui::SettingsDraft draft;
   Click(window, Layout(window, draft).nav[3]);
-  const HWND selector = GetDlgItem(window, 406);
+  const HWND selector = GetDlgItem(window, 6005);
   Check(IsVisibleWithinFixture(selector, window) && SendMessageW(selector, CB_GETCOUNT, 0, 0) == 2 &&
       SendMessageW(selector, CB_GETCURSEL, 0, 0) == 1, "Codex selector reflects saved connector");
   for (const WPARAM key : {VK_RETURN, VK_ESCAPE}) {
@@ -865,7 +865,7 @@ void TestPluginManagementAndChordSelection() {
   ShowWindow(window, SW_SHOWNOACTIVATE);
   ui::SettingsDraft draft;
   auto layout = Layout(window, draft);
-  Check(layout.nav.size() == 6, "six settings pages");
+  Check(layout.nav.size() == 7, "core settings and chord extension pages");
   Click(window, layout.nav[4]);
   const HWND toggle = GetDlgItem(window, 5101);
   // SSH/CTest's Session 0 desktop can be hidden even when these owned windows
@@ -1160,7 +1160,60 @@ void TestBufferBehaviorControls() {
   Check(saves == 1 && saved.auto_send_seconds == 5 && saved.close_after_send && saved.translation_provider == "ai",
         "Buffer behavior controls persist their values");
 }
+void TestParityDraftsAndConnections() {
+  workbench::Settings current, saved;
+  current.theme="rasta"; current.follow_system_theme=true;
+  std::map<std::string,std::wstring> keys;
+  int saves=0;
+  workbench::SettingsUiCallbacks callbacks;
+  callbacks.load=[&] {return current;};
+  callbacks.load_theme=[] {return ui::ThemeId::kNight;};
+  callbacks.save_connections=[&](workbench::Settings value,const auto& secrets,std::string*) {
+    saved=std::move(value); keys=secrets; current=saved; ++saves; return true;
+  };
+  workbench::SettingsUiHost host(std::move(callbacks));
+  host.OpenPage(nullptr,ui::SettingsPage::kApi,0,false);
+  auto window=host.hwnd();
+  auto edit=[&](int id,const wchar_t* text) { SetWindowTextW(GetDlgItem(window,id),text); };
+  auto press=[&](int id) { SendMessageW(GetDlgItem(window,id),BM_CLICK,0,0); };
+  edit(6004,L"API A"); edit(6006,L"https://a.invalid/v1"); edit(6007,L"model-a"); edit(6008,L"synthetic-a");
+  press(6001);
+  edit(6004,L"API B"); edit(6006,L"https://b.invalid/v1"); edit(6007,L"model-b"); edit(6008,L"synthetic-b");
+  SendMessageW(GetDlgItem(window,6000),CB_SETCURSEL,0,0);
+  SendMessageW(window,WM_COMMAND,MAKEWPARAM(6000,CBN_SELCHANGE),reinterpret_cast<LPARAM>(GetDlgItem(window,6000)));
+  host.Close(true);
+  Check(saves==1 && saved.connections.size()==3 && saved.active_connection=="legacy-api" &&
+    saved.connections.front().name=="API A" && saved.connections.back().model=="model-b" &&
+    keys.size()==2 && keys["legacy-api"]==L"synthetic-a" && keys[saved.connections.back().id]==L"synthetic-b",
+    "native connection controls preserve unsaved profiles and isolate their key drafts");
+  Check(workbench::ValidConnections(saved),"new GUID profile identity is valid for persisted settings");
+  Check(saved.theme=="rasta" && saved.follow_system_theme,"saving another page retains the fixed fallback while following system appearance");
+  host.OpenPage(nullptr,ui::SettingsPage::kChord,1,false); window=host.hwnd();
+  edit(6021,L"dvi"); edit(6022,L"hao"); press(6024);
+  edit(6010,L"Cancelled keymap"); host.Close(false);
+  Check(saves==1 && saved.chord_profile["name"]=="isaac2026","Cancel does not apply a keymap draft");
+  host.OpenPage(nullptr,ui::SettingsPage::kChord,1,false); window=host.hwnd();
+  edit(6021,L"dvi"); edit(6022,L"hao"); press(6024);
+  edit(6030,L"900"); edit(6031,L"1600"); edit(6033,L"640"); edit(6034,L"44"); edit(6035,L"12");
+  host.Close(true);
+  bool mapping=false;
+  for(const auto& row:saved.chord_profile["mappings"]) if(row["keys"]=="dvi" && row["output"]=="hao") mapping=true;
+  Check(saves==2 && mapping && saved.buffer_width==900 && saved.send_hold_ms==1600 &&
+    saved.candidate_width==640 && saved.candidate_height==44 && saved.candidate_label_size==12,
+    "native keymap, Buffer and candidate fields save through the production settings host");
+  host.OpenPage(nullptr,ui::SettingsPage::kApi,0,false); window=host.hwnd();
+  edit(6008,L"erased-synthetic-key");
+  for (const int selection : {2, 0}) {
+    SendMessageW(GetDlgItem(window,6000),CB_SETCURSEL,selection,0);
+    SendMessageW(window,WM_COMMAND,MAKEWPARAM(6000,CBN_SELCHANGE),reinterpret_cast<LPARAM>(GetDlgItem(window,6000)));
+  }
+  edit(6008,L""); host.Close(true);
+  Check(saves==3 && keys.empty(),
+    "erasing a previously captured key draft preserves the saved vault credential");
+}
+
 int main() {
+  TestParityDraftsAndConnections();
   TestBufferBehaviorControls();
   TestNestedHitTargets();
   TestOwnedClicksAndTransientDetails();

@@ -118,8 +118,12 @@ rimes_harden_target(RimesEngine)
 
 add_library(RimesWorkbench STATIC
     src/workbench/model.cpp
+    src/workbench/chord_profile.cpp
     src/workbench/official_plugins.cpp
     src/workbench/provider.cpp
+    src/workbench/connection_secrets.cpp
+    src/workbench/parity_settings.cpp
+    src/workbench/connection_probe.cpp
     src/workbench/codex_cli.cpp src/workbench/local_translation.cpp
     src/workbench/runtime.cpp
     src/workbench/settings_ui.cpp
@@ -330,8 +334,8 @@ if(RIMES_BUILD_TESTS)
     target_link_libraries(RimesOfficialPluginTests PRIVATE RimesWorkbench)
     rimes_harden_target(RimesOfficialPluginTests)
     add_test(NAME RimesOfficialPlugins COMMAND RimesOfficialPluginTests)
-    add_executable(RimesProviderProbe src/workbench/provider_probe.cpp src/workbench/provider.cpp src/workbench/codex_cli.cpp src/workbench/local_translation.cpp src/workbench/model.cpp)
-    target_link_libraries(RimesProviderProbe PRIVATE RimesCore RimesSchemeImport winhttp advapi32)
+    add_executable(RimesProviderProbe src/workbench/provider_probe.cpp)
+    target_link_libraries(RimesProviderProbe PRIVATE RimesWorkbench)
     rimes_harden_target(RimesProviderProbe)
     rimes_use_unicode_console_entrypoint(RimesProviderProbe)
     add_executable(RimesSseTests src/workbench/sse_tests.cpp)
@@ -448,6 +452,16 @@ if(RIMES_BUILD_TESTS)
     rimes_harden_target(RimesSettingsTests)
     add_test(NAME RimesSettings COMMAND RimesSettingsTests)
 
+    add_executable(RimesChordProfileTests src/workbench/chord_profile_tests.cpp src/workbench/chord_profile.cpp)
+    target_link_libraries(RimesChordProfileTests PRIVATE RimesCore)
+    rimes_harden_target(RimesChordProfileTests)
+    add_test(NAME RimesChordProfile COMMAND RimesChordProfileTests)
+
+    add_executable(RimesConnectionTests src/workbench/connection_tests.cpp)
+    target_link_libraries(RimesConnectionTests PRIVATE RimesWorkbench)
+    rimes_harden_target(RimesConnectionTests)
+    add_test(NAME RimesConnections COMMAND RimesConnectionTests)
+
     add_executable(RimesSettingsUiTests
         src/workbench/settings_ui_tests.cpp
         src/broker/autostart.cpp
@@ -511,6 +525,9 @@ if(RIMES_BUILD_TESTS)
     add_executable(RimesVisualPreview WIN32
         src/visual_preview/main.cpp
         src/workbench/settings_ui.cpp
+        src/workbench/parity_settings.cpp
+        src/workbench/connection_probe.cpp
+        src/workbench/chord_profile.cpp
         src/workbench/provider.cpp
         src/workbench/codex_cli.cpp src/workbench/local_translation.cpp
         src/workbench/model.cpp

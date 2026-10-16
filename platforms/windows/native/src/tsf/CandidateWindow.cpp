@@ -197,10 +197,11 @@ void CandidateWindow::Update(const CandidateSnapshot& snapshot) noexcept {
 void CandidateWindow::LayoutAndShow(
     const CandidateSnapshot& snapshot) {
   const unsigned int dpi = WindowDpi(window_);
-  const auto metrics = ui::MakeCandidateMetrics(font_size_);
+  const auto metrics = Metrics();
   const ScreenRect work = WorkAreaFromCaret(snapshot.caret_rect);
   const float available_dip =
-      static_cast<float>(work.width()) * 96.0f / static_cast<float>(dpi);
+      (std::min)(static_cast<float>(metrics.max_strip_width_dip),
+      static_cast<float>(work.width()) * 96.0f / static_cast<float>(dpi));
 
   HDC device = GetDC(window_);
   const int cand_px = ui::ScaleDip(metrics.candidate_font_dip, dpi);
@@ -303,7 +304,7 @@ void CandidateWindow::Paint(HDC device) const {
   GetClientRect(window_, &client);
   const unsigned dpi = WindowDpi(window_);
   const auto& palette = ui::Palette(theme_);
-  const auto metrics = ui::MakeCandidateMetrics(font_size_);
+  const auto metrics = Metrics();
 
   HDC mem = CreateCompatibleDC(device);
   HBITMAP bitmap =

@@ -87,8 +87,9 @@ inline int Export(const std::filesystem::path& directory) {
       workbench::SettingsUiCallbacks callbacks;
       callbacks.load = [theme] { workbench::Settings s; s.theme = ui::ThemeIdString(static_cast<ui::ThemeId>(theme)); s.auto_send_seconds = 2; s.close_after_send = true; return s; };
       workbench::SettingsUiHost settings(callbacks);
-      for (const auto page : {ui::SettingsPage::kInput, ui::SettingsPage::kAppearance, ui::SettingsPage::kBuffer, ui::SettingsPage::kApi}) {
-        settings.OpenPage(nullptr, page, page == ui::SettingsPage::kBuffer ? 1 : 0, false);
+      for (const auto page : {ui::SettingsPage::kInput, ui::SettingsPage::kAppearance, ui::SettingsPage::kBuffer, ui::SettingsPage::kApi, ui::SettingsPage::kChord}) {
+        for (int subpage=0;subpage<2;++subpage) {
+        settings.OpenPage(nullptr, page, subpage, false);
         RECT rect{}; GetClientRect(settings.hwnd(), &rect); Canvas canvas(rect.right, rect.bottom);
         SendMessageW(settings.hwnd(), WM_PRINTCLIENT, reinterpret_cast<WPARAM>(canvas.dc), PRF_CLIENT);
         for (HWND child = GetWindow(settings.hwnd(), GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
@@ -114,7 +115,8 @@ inline int Export(const std::filesystem::path& directory) {
           }
           RestoreDC(canvas.dc, saved);
         }
-        canvas.Save(directory / (L"settings-" + std::to_wstring(theme) + L"-" + std::to_wstring(static_cast<int>(page)) + L".png"), imaging.Get());
+        canvas.Save(directory / (L"settings-" + std::to_wstring(theme) + L"-" + std::to_wstring(static_cast<int>(page)) + L"-" + std::to_wstring(subpage) + L".png"), imaging.Get());
+        }
       }
     }
     return 0;

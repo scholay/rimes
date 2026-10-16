@@ -69,7 +69,8 @@ int main() {
           "absent file uses Alt+Shift+B and Alt+Shift+Enter");
     for (const auto* theme : {"night", "day", "quiet", "rasta"}) {
       settings.theme = theme;
-      settings.model = "fixture-model";
+      settings.connections.front().model = "fixture-model";
+      Check(SelectConnection(&settings, "legacy-api"), "select saved API profile");
       Check(SaveSettings(settings, nullptr), "save theme");
       Settings restored;
       Check(LoadSettings(&restored, nullptr) && restored.theme == theme &&
@@ -78,9 +79,9 @@ int main() {
     }
     settings.candidate_count = 5;
     settings.auto_send_seconds = 3; settings.close_after_send = true; settings.translation_provider = "ai";
-    settings.ai_connector = "codex-cli";
-    settings.codex_path = "C:/Program Files/Codex/codex.exe";
-    settings.codex_model = "fixture-model";
+    settings.connections[1].executable = "C:/Program Files/Codex/codex.exe";
+    settings.connections[1].model = "fixture-model";
+    Check(SelectConnection(&settings, "codex"), "select saved Codex profile");
     Check(SaveSettings(settings, nullptr), "save Codex connector without API credentials");
     Settings codex;
     Check(LoadSettings(&codex, nullptr) && SameSettings(codex, settings), "Codex connector round trip");

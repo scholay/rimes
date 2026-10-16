@@ -686,7 +686,9 @@ void TestCodexConnectorAndReturn() {
     if (cancelled()) { cancelled_old = true; return false; }
     return chunk("Generated only.");
   });
-  auto config = runtime.Configuration(); config.ai_connector = "codex-cli"; config.translation_provider = "ai";
+  auto config = runtime.Configuration();
+  Check(workbench::SelectConnection(&config, "codex"), "select saved Codex profile");
+  config.translation_provider = "ai";
   Check(runtime.Configure(config, {}, false, nullptr), "save Codex configuration");
   const auto peer = GetCurrentProcessId() + 1;
   const auto target = runtime.Register(peer, 950, 951);
@@ -761,13 +763,13 @@ void TestNativeShortcutAutoSendAndCopy() {
     runtime.Control({{"op", "ack"}, {"session", 998}, {"request", event.at("request")}, {"accepted", true}}, peer);
   };
   Check(!runtime.ShortcutDown(peer + 1), "global shortcut rejects foreign foreground process");
-  Check(runtime.ShortcutDown(peer) && !runtime.Snapshot()["pending"].get<bool>(), "global key-down defers send until release or one-second hold");
+  Check(runtime.ShortcutDown(peer) && !runtime.Snapshot()["pending"].get<bool>(), "global key-down defers send until release or configured 1.2-second hold");
   runtime.ShortcutUp(); auto event = next_event(); Check(event["text"] == "One. ", "tap sends first block"); acknowledge(event);
   Check(runtime.Snapshot()["source"] == "Two.", "tap retains unsent suffix");
   runtime.Paste(" Three."); Check(runtime.ShortcutDown(peer), "second gesture starts");
-  Sleep(1020); runtime.Tick(); runtime.ShortcutUp();
+  Sleep(1250); runtime.Tick(); runtime.ShortcutUp();
   event = next_event(); acknowledge(event); event = next_event(); acknowledge(event);
-  Check(runtime.Snapshot()["source"] == "", "one-second hold drains exactly the frozen blocks");
+  Check(runtime.Snapshot()["source"] == "", "configured 1.2-second hold drains exactly the frozen blocks");
   runtime.Paste("Automatic."); runtime.SetAutoSend(1, true); runtime.Tick();
   Check(runtime.Snapshot()["auto_remaining_ms"].get<long long>() > 0, "automatic send exposes countdown");
   runtime.PauseCapture(); Sleep(1020); runtime.Tick(); Check(!runtime.Snapshot()["pending"].get<bool>(), "focus pause cancels countdown delivery");

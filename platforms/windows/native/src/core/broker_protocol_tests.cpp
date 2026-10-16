@@ -382,6 +382,15 @@ InputState MakeInputState() {
 }
 
 void TestInputStateRoundTripAndValidation() {
+  InputState pending;
+  pending.session_id = 7; pending.sequence_id = 9;
+  pending.state_flags = static_cast<std::uint32_t>(InputStateFlags::kHandled) |
+      static_cast<std::uint32_t>(InputStateFlags::kPendingChord);
+  std::vector<std::byte> pending_bytes;
+  InputState pending_decoded;
+  EXPECT(EncodeInputState(pending, &pending_bytes));
+  EXPECT(DecodeInputState(pending_bytes, &pending_decoded));
+  EXPECT(pending_decoded.state_flags == pending.state_flags && pending_decoded.composition.empty());
   const InputState input = MakeInputState();
   std::vector<std::byte> encoded;
   EXPECT(EncodeInputState(input, &encoded));

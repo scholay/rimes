@@ -14,6 +14,7 @@
 #include "codex_cli.hpp"
 #include "local_translation.hpp"
 #include "sse.hpp"
+#include "chord_profile.hpp"
 
 namespace rimes::windows::workbench {
 using core::Json;
@@ -26,9 +27,13 @@ std::filesystem::path ConfigPath() {
     throw std::runtime_error("LOCALAPPDATA unavailable");
   return std::filesystem::path(value) / L"RIMES" / L"settings.json";
 }
-std::wstring Secret(const std::string& endpoint) {
+std::wstring CredentialName(const std::string& identity) {
+  return identity.empty() || identity == "legacy-api" ? std::wstring(kCredential)
+      : std::wstring(kCredential) + L"." + Wide(identity);
+}
+std::wstring Secret(const std::string& endpoint, const std::string& identity) {
   PCREDENTIALW credential = nullptr;
-  if (!CredReadW(kCredential, CRED_TYPE_GENERIC, 0, &credential)) return {};
+  if (!CredReadW(CredentialName(identity).c_str(), CRED_TYPE_GENERIC, 0, &credential)) return {};
   if (!credential->UserName || Wide(endpoint) != credential->UserName) {
     CredFree(credential);
     return {};
@@ -77,13 +82,67 @@ std::string Utf8(const std::wstring& text) {
                       nullptr, nullptr);
   return result;
 }
+void MigrateConnections(Settings* settings) {
+  if (!settings->connections.empty()) return;
+  settings->connections = {{"legacy-api", "AI API", "openai-compatible", settings->base_url, settings->model, ""},
+                           {"codex", "Codex", "codex-cli", "", settings->codex_model, settings->codex_path}};
+  settings->active_connection = settings->ai_connector == "codex-cli" ? "codex" : "legacy-api";
+}
+bool SelectConnection(Settings* settings, const std::string& id) {
+  for (const auto& profile : settings->connections) {
+    if (profile.id != id) continue;
+    settings->active_connection = id;
+    settings->ai_connector = profile.kind;
+    if (profile.kind == "codex-cli") {
+      settings->codex_path = profile.executable; settings->codex_model = profile.model;
+    } else { settings->base_url = profile.base_url; settings->model = profile.model; }
+    return true;
+  }
+  return false;
+}
+std::string CredentialIdentity(const Settings& settings) { return settings.active_connection; }
+bool ValidConnections(const Settings& settings) {
+  if (settings.connections.empty()) return settings.active_connection.empty();
+  if (settings.connections.size() > 32) return false;
+  std::vector<std::string> ids;
+  bool active = false;
+  for (const auto& p : settings.connections) {
+    if (p.id.empty() || p.id.size() > 80 || p.id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-") != std::string::npos ||
+        std::find(ids.begin(), ids.end(), p.id) != ids.end() || p.name.empty() || p.name.size() > 160 ||
+        (p.kind != "codex-cli" && p.kind != "openai-compatible") || p.base_url.size() > 2048 ||
+        p.model.size() > 256 || p.executable.size() > 8192) return false;
+    for (const auto* text : {&p.name, &p.base_url, &p.model, &p.executable})
+      if (text->find('\0') != std::string::npos || text->find('\n') != std::string::npos || text->find('\r') != std::string::npos) return false;
+    ids.push_back(p.id); active |= settings.active_connection == p.id;
+  }
+  return active;
+}
+std::string EffectiveTheme(const Settings& settings) {
+  if (!settings.follow_system_theme) return settings.theme;
+  DWORD light = 0, size = sizeof(light);
+  RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+      L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &size);
+  HIGHCONTRASTW contrast{sizeof(HIGHCONTRASTW)};
+  if (SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) && (contrast.dwFlags & HCF_HIGHCONTRASTON)) {
+    const auto background = GetSysColor(COLOR_WINDOW);
+    light = GetRValue(background) + GetGValue(background) + GetBValue(background) > 384;
+  }
+  return light ? "day" : "night";
+}
 bool ValidTheme(const std::string& theme) {
   return theme == "night" || theme == "day" || theme == "quiet" ||
          theme == "rasta";
 }
 bool ValidSettings(const Settings& value) {
+  try { if (!value.chord_profile.is_null()) (void)ChordProfile::Parse(value.chord_profile); } catch (...) { return false; }
   const bool schema = rimes::schemes::ValidID(value.schema);
-  return schema && value.candidate_count >= 1 && value.candidate_count <= 9 && ValidTheme(value.theme) && value.font_size >= 10 &&
+  return ValidConnections(value) && value.buffer_width >= 520 && value.buffer_width <= 1100 &&
+         value.send_hold_ms >= 500 && value.send_hold_ms <= 3000 &&
+         value.candidate_width >= 240 && value.candidate_width <= 1200 &&
+         value.candidate_height >= 28 && value.candidate_height <= 72 &&
+         value.candidate_label_size >= 8 && value.candidate_label_size <= 24 &&
+         value.chord_interval_ms >= 10 && value.chord_interval_ms <= 300 &&
+         (value.chord_profile.is_null() || value.chord_profile.dump().size() <= 2 * 1024 * 1024) && schema && value.candidate_count >= 1 && value.candidate_count <= 9 && ValidTheme(value.theme) && value.font_size >= 10 &&
          (value.auto_send_seconds == 0 || value.auto_send_seconds == 1 || value.auto_send_seconds == 2 ||
           value.auto_send_seconds == 3 || value.auto_send_seconds == 5) &&
          (value.translation_provider == "local" || value.translation_provider == "ai") &&
@@ -100,12 +159,15 @@ bool ValidSettings(const Settings& value) {
 bool LoadSettings(Settings* value, std::string* error) {
   try {
     auto path = ConfigPath();
-    if (!std::filesystem::exists(path)) return true;
+    if (!std::filesystem::exists(path)) { MigrateConnections(value); return true; }
     if (std::filesystem::is_symlink(path) ||
-        std::filesystem::file_size(path) > 32768)
+        std::filesystem::file_size(path) > 3 * 1024 * 1024)
       throw std::runtime_error("Invalid settings file");
     std::ifstream file(path);
-    auto j = Json::parse(file);
+    auto j = Json::parse(file, [](int depth, Json::parse_event_t, Json&) {
+      if (depth > 16) throw std::runtime_error("Settings nesting limit");
+      return true;
+    });
     // Do not expose partial or invalid values to startup hotkey registration.
     // A failed read retains the caller's previous trusted configuration.
     Settings candidate;
@@ -116,6 +178,21 @@ bool LoadSettings(Settings* value, std::string* error) {
     candidate.ai_connector = j.value("ai_connector", "openai-compatible");
     candidate.codex_path = j.value("codex_path", "");
     candidate.codex_model = j.value("codex_model", "");
+    candidate.active_connection = j.value("active_connection", "");
+    if (j.contains("connections")) for (const auto& p : j.at("connections")) {
+      candidate.connections.push_back({p.at("id"), p.at("name"), p.at("kind"), p.value("base_url", ""), p.value("model", ""), p.value("executable", "")});
+    }
+    if (candidate.connections.empty()) MigrateConnections(&candidate);
+    if (!SelectConnection(&candidate, candidate.active_connection)) throw std::runtime_error("Missing connection");
+    candidate.buffer_width = j.value("buffer_width", 680U);
+    candidate.send_hold_ms = j.value("send_hold_ms", 1200U);
+    candidate.follow_system_theme = j.value("follow_system_theme", false);
+    candidate.candidate_width = j.value("candidate_width", 460U);
+    candidate.candidate_height = j.value("candidate_height", 34U);
+    candidate.candidate_label_size = j.value("candidate_label_size", 10U);
+    candidate.chord_enabled = j.value("chord_enabled", true);
+    candidate.chord_interval_ms = j.value("chord_interval_ms", 50U);
+    candidate.chord_profile = j.value("chord_profile", Json());
     candidate.target_language = j.value("target_language", "English");
     candidate.translation_provider = j.value("translation_provider", "local");
     candidate.auto_send_seconds = j.value("auto_send_seconds", 0U);
@@ -160,7 +237,7 @@ bool SaveSettings(const Settings& value, std::string* error) {
     if (!ValidSettings(value)) throw std::runtime_error("invalid settings");
     auto path = ConfigPath();
     std::filesystem::create_directories(path.parent_path());
-    Json j = {{"version", 4},
+    Json j = {{"version", 5},
               {"revision", value.revision},
               {"schema", value.schema},
               {"ascii", value.ascii},
@@ -180,6 +257,15 @@ bool SaveSettings(const Settings& value, std::string* error) {
               {"codex_path", value.codex_path},
               {"codex_model", value.codex_model},
               {"target_language", value.target_language}};
+    j["connections"] = Json::array();
+    for (const auto& p : value.connections) j["connections"].push_back({{"id",p.id},{"name",p.name},{"kind",p.kind},{"base_url",p.base_url},{"model",p.model},{"executable",p.executable}});
+    j["active_connection"] = value.active_connection;
+    j["buffer_width"] = value.buffer_width; j["send_hold_ms"] = value.send_hold_ms;
+    j["follow_system_theme"] = value.follow_system_theme;
+    j["candidate_width"] = value.candidate_width; j["candidate_height"] = value.candidate_height;
+    j["candidate_label_size"] = value.candidate_label_size;
+    j["chord_enabled"] = value.chord_enabled; j["chord_interval_ms"] = value.chord_interval_ms;
+    j["chord_profile"] = value.chord_profile;
     j["translation_provider"] = value.translation_provider;
     j["auto_send_seconds"] = value.auto_send_seconds;
     j["close_after_send"] = value.close_after_send;
@@ -199,18 +285,19 @@ bool SaveSettings(const Settings& value, std::string* error) {
   }
 }
 bool SaveSecret(const std::wstring& key, const std::string& endpoint,
-                std::string* error) {
+                std::string* error, const std::string& identity) {
+  const auto credential_name = CredentialName(identity);
   if (key.empty()) {
-    if (CredDeleteW(kCredential, CRED_TYPE_GENERIC, 0) ||
+    if (CredDeleteW(credential_name.c_str(), CRED_TYPE_GENERIC, 0) ||
         GetLastError() == ERROR_NOT_FOUND)
       return true;
   } else if (key.size() <= 2048 &&
-             key.find_first_of(L"\r\n") == std::wstring::npos) {
+             key.find_first_of(L"\r\n") == std::wstring::npos && key.find(L'\0') == std::wstring::npos) {
     auto endpoint_name = Wide(endpoint);
     CREDENTIALW credential{};
     credential.UserName = endpoint_name.data();
     credential.Type = CRED_TYPE_GENERIC;
-    credential.TargetName = const_cast<wchar_t*>(kCredential);
+    credential.TargetName = const_cast<wchar_t*>(credential_name.c_str());
     credential.CredentialBlobSize =
         static_cast<DWORD>(key.size() * sizeof(wchar_t));
     credential.CredentialBlob =
@@ -231,7 +318,7 @@ bool GenerateAPI(const Settings& config, const Generation& job,
                  const std::function<bool(const std::string&)>& chunk,
                  const std::function<bool()>& cancelled, std::string* error) {
   try {
-    return GenerateWithKey(config, job, Secret(config.base_url), chunk,
+    return GenerateWithKey(config, job, Secret(config.base_url, CredentialIdentity(config)), chunk,
                            cancelled, error);
   } catch (...) {
     Fail(error, "Credential unavailable.");

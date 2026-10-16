@@ -110,6 +110,9 @@ inline constexpr std::uint64_t kModifierSnapshotsCapability = 1ULL << 1;
 // Separately negotiated: legacy peers must not receive the session-mode
 // extension or kAsciiMode flag they cannot decode.
 inline constexpr std::uint64_t kKeyRoutingCapability = 1ULL << 2;
+// Pending physical chords need command routing before librime has preedit.
+// Old DLLs retain librime's legacy chord composer until they are restarted.
+inline constexpr std::uint64_t kPendingChordCapability = 1ULL << 3;
 
 struct ClientHello {
   std::uint32_t process_id = 0;
@@ -234,6 +237,7 @@ enum class InputStateFlags : std::uint32_t {
   // exclusive with kHandled; this is an authoritative snapshot, not an eat.
   kModifierSnapshot = 1U << 4,
   kAsciiMode = 1U << 5,
+  kPendingChord = 1U << 6,
 };
 
 inline constexpr std::uint32_t kKnownInputStateFlags =
@@ -242,7 +246,8 @@ inline constexpr std::uint32_t kKnownInputStateFlags =
     static_cast<std::uint32_t>(InputStateFlags::kCandidatesVisible) |
     static_cast<std::uint32_t>(InputStateFlags::kBufferCapture) |
     static_cast<std::uint32_t>(InputStateFlags::kModifierSnapshot) |
-    static_cast<std::uint32_t>(InputStateFlags::kAsciiMode);
+    static_cast<std::uint32_t>(InputStateFlags::kAsciiMode) |
+    static_cast<std::uint32_t>(InputStateFlags::kPendingChord);
 inline constexpr std::uint16_t kNoCandidateSelected = 0xffffU;
 
 // One atomic response contains every text mutation for a key event. Wire text

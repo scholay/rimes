@@ -165,6 +165,7 @@ struct BufferLayout {
   layout.toolbar_only = state.folded;
 
   if (state.folded) {
+    layout.show_source = layout.show_result = layout.show_edit = false;
     layout.height_dip = static_cast<float>(metrics.toolbar_only_height_dip);
   } else if (two_rails) {
     // Generation, waiting, translation, and any result preview need two rails.
