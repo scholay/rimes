@@ -318,6 +318,8 @@ void TestCandidateMatrixNavigation() {
         "mouse hit index maps to the visible page and its local index");
   Check(navigation.MoveRow(1, step) && engine_row == 5 && navigation.row() == 5,
         "end of candidate list never wraps or duplicates rows");
+  Check(navigation.CollapseToAnchor(step) && engine_row == 0 && !navigation.expanded(),
+        "Escape restores the opening page without committing composition");
   navigation.Reset({});
   Check(navigation.empty() && !navigation.expanded() && !navigation.Selected(),
         "commit or context retirement clears matrix selection");
@@ -327,11 +329,17 @@ void TestCandidateMatrixNavigation() {
   const auto matrix = ui::LayoutCandidateMatrixMeasured(items, {9, 9, 2}, {}, 320);
   Check(matrix.row_count == 3 && matrix.width_dip <= 320 && matrix.pills.size() == 20,
         "matrix keeps explicit page boundaries while fitting monitor width");
-  for (std::size_t i = 0; i < matrix.pills.size(); ++i) {
+  for (const auto i : matrix.order) {
     const auto& pill = matrix.pills[i];
     Check(HitTestCandidateStrip(matrix, (pill.left + pill.right) / 2,
                (pill.top + pill.bottom) / 2) == static_cast<int>(i),
           "matrix paint geometry preserves every mouse selection index");
+  }
+  Check(matrix.order.size() < items.size(), "long rows expose a viewport instead of squeezing every candidate");
+  for (std::size_t selected = 0; selected < items.size(); ++selected) {
+    const auto moved = ui::LayoutCandidateMatrixMeasured(items, {9, 9, 2}, {}, 320, selected);
+    Check(moved.pills[selected].width() > 0, "arrow navigation reveals every overflow candidate");
+    Check(moved.pills[selected].width() >= 90, "normal long candidates retain their measured width");
   }
 }
 

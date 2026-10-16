@@ -10,20 +10,19 @@ struct CandidateLayout {
     let height: CGFloat
     static func rowHeight(landscape: Bool) -> CGFloat { ceil(UIFont.systemFont(ofSize: landscape ? 18 : 20).lineHeight) + 6 }
     static func commentFont(landscape: Bool) -> UIFont { .systemFont(ofSize: landscape ? 12 : 13) }
-    static func measure(_ texts: [String], comments: [String] = [], width: CGFloat, expanded: Bool, landscape: Bool, controlInsets: UIEdgeInsets = .zero, reservedRows: Set<Int> = [0]) -> CandidateLayout {
+    static func measure(_ texts: [String], comments: [String] = [], width: CGFloat, expanded: Bool, landscape: Bool) -> CandidateLayout {
         let font = UIFont.systemFont(ofSize: landscape ? 18 : 20)
         let rowHeight = rowHeight(landscape: landscape)
         let available = max(1, width)
-        func insets(_ row: Int) -> UIEdgeInsets { expanded && reservedRows.contains(row) ? controlInsets : .zero }
-        var row = 0, x = insets(0).left, frames: [CGRect] = []
+        var row = 0, x: CGFloat = 0, frames: [CGRect] = []
         for (index, text) in texts.enumerated() {
             let comment = comments.indices.contains(index) ? comments[index] : ""
             let annotationWidth = comment.isEmpty ? 0 : 4 + (comment as NSString).size(withAttributes: [.font: commentFont(landscape: landscape)]).width
             let natural = max(32, ceil((text as NSString).size(withAttributes: [.font: font]).width + annotationWidth) + 12)
-            if expanded && x > insets(row).left && x + natural > available - insets(row).right {
-                row += 1; x = insets(row).left
+            if expanded && x > 0 && x + natural > available {
+                row += 1; x = 0
             }
-            let rowWidth = available - insets(row).left - insets(row).right
+            let rowWidth = available
             let w = expanded ? min(max(1, rowWidth), natural) : natural
             frames.append(CGRect(x: x, y: CGFloat(row) * (rowHeight + 4), width: w, height: rowHeight)); x += w + 4
         }
@@ -53,8 +52,6 @@ final class CandidateStrip: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     private var lastFeedbackIndex: Int?
     private var layoutWidth: CGFloat = 0
     private var layingOutCandidates = false
-    private var laidOutReservedRows: Set<Int> = []
-    private var matrixMaximumOffset: CGFloat = 0
     var onSelect: ((Int) -> Void)?
     var onSelectionChanged: (() -> Void)?
     var onExpand: (() -> Void)?
@@ -64,7 +61,7 @@ final class CandidateStrip: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     /// The nine-key punctuation strip draws its marks in their Chinese forms.
     var showsChineseMarks = false { didSet { if showsChineseMarks != oldValue { setNeedsLayout() } } }
     override var isHidden: Bool { didSet { if isHidden { cancelSelection() } } }
-    /// Fixed controls occupy only their visible corner rectangles, not an entire column.
+    /// Controls occupy fixed gutters outside the scrolling candidate content.
     var controlInsets = UIEdgeInsets.zero { didSet { if controlInsets != oldValue { cancelSelection(); setNeedsLayout() } } }
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -83,16 +80,20 @@ final class CandidateStrip: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     required init?(coder: NSCoder) { fatalError() }
     deinit { selectionTimer?.invalidate() }
     func update(_ values: [String], comments: [String] = [], context: String = "") {
-        if context != self.context { cancelSelection(); self.context = context }
+        let sameContext = context == self.context
+        if !sameContext { cancelSelection(); self.context = context }
         guard values != texts || comments != self.comments else { return }
         cancelSelection()
+        let appending = expanded && sameContext && !texts.isEmpty && values.count >= texts.count
+            && Array(values.prefix(texts.count)) == texts
+            && texts.indices.allSatisfy { (comments.indices.contains($0) ? comments[$0] : "") == (self.comments.indices.contains($0) ? self.comments[$0] : "") }
         texts = values
         self.comments = comments
         // Keep idle buttons across compositions instead of constructing sixty
         // UIKit controls on every key. A button under a finger is retired so its
         // eventual release cannot select a different word at the reused index.
         while buttons.count > values.count { buttons.removeLast().removeFromSuperview() }
-        scroll.setContentOffset(.zero, animated: false)
+        if !appending { scroll.setContentOffset(.zero, animated: false) }
         for (index, text) in values.enumerated() {
             if index == buttons.count { buttons.append(makeButton(at: index)) }
             else if buttons[index].isTracking || buttons[index].isHighlighted {
@@ -123,52 +124,29 @@ final class CandidateStrip: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         // A collapsed strip always has one row; measuring every candidate here
         // repeats text shaping during each host sizing/layout callback.
         guard expanded else { return texts.isEmpty ? 0 : CandidateLayout.rowHeight(landscape: landscape) }
-        return CandidateLayout.measure(texts, comments: comments, width: width, expanded: true, landscape: landscape, controlInsets: reservedInsets).height
+        return CandidateLayout.measure(texts, comments: comments, width: max(1, width - reservedInsets.left - reservedInsets.right), expanded: true, landscape: landscape).height
     }
     override func layoutSubviews() {
         super.layoutSubviews()
         if layoutWidth != bounds.width { cancelSelection(); layoutWidth = bounds.width }
-        layoutCandidates(recalculateExtent: true)
+        layoutCandidates()
     }
-    /// Rows passing behind a fixed corner control reflow around it. Every candidate
-    /// remains in the same scrolling content view, including the original first row.
-    private func reservedRows(at offset: CGFloat) -> Set<Int> {
-        guard expanded else { return [] }
-        let height = CandidateLayout.rowHeight(landscape: landscape), pitch = height + 4
-        let top = max(0, offset), bottom = top + height
-        return Set((Int(top / pitch)...Int(bottom / pitch)).filter {
-            CGFloat($0) * pitch < bottom && CGFloat($0) * pitch + height > top
-        })
-    }
-    private func maximumMatrixOffset(width: CGFloat) -> CGFloat {
-        let pitch = CandidateLayout.rowHeight(landscape: landscape) + 4
-        let plain = CandidateLayout.measure(texts, comments: comments, width: width, expanded: true, landscape: landscape)
-        var offset = max(0, ceil((plain.contentSize.height - bounds.height) / pitch) * pitch)
-        // Fix the scroll range for this geometry. A live content-size clamp can
-        // otherwise bounce between two reflows and make the last words unreachable.
-        while true {
-            let end = CandidateLayout.measure(texts, comments: comments, width: width, expanded: true, landscape: landscape,
-                controlInsets: reservedInsets, reservedRows: reservedRows(at: offset))
-            if end.contentSize.height <= offset + bounds.height { return offset }
-            offset += pitch
-        }
-    }
-    private func layoutCandidates(recalculateExtent: Bool = false) {
+    private func layoutCandidates() {
         guard !layingOutCandidates else { return }
         layingOutCandidates = true
         defer { layingOutCandidates = false; refreshSelection() }
         let insets = reservedInsets
-        let width = expanded ? bounds.width : max(1, bounds.width - insets.left - insets.right)
-        scroll.frame = CGRect(x: expanded ? 0 : insets.left, y: 0, width: width, height: bounds.height)
-        if expanded && recalculateExtent { matrixMaximumOffset = maximumMatrixOffset(width: width) }
-        var offset = CGPoint(x: expanded ? 0 : max(0, scroll.contentOffset.x), y: expanded ? min(matrixMaximumOffset, max(0, scroll.contentOffset.y)) : 0)
-        let layout = CandidateLayout.measure(texts, comments: comments, width: width, expanded: expanded, landscape: landscape,
-            controlInsets: insets, reservedRows: reservedRows(at: offset.y))
-        offset.x = min(offset.x, max(0, layout.contentSize.width - scroll.bounds.width))
-        laidOutReservedRows = reservedRows(at: offset.y)
-        let size = CGSize(width: layout.contentSize.width, height: expanded ? matrixMaximumOffset + bounds.height : layout.contentSize.height)
-        content.frame = CGRect(x: 0, y: 0, width: size.width, height: max(size.height, layout.contentSize.height))
-        scroll.contentSize = size
+        let width = max(1, bounds.width - insets.left - insets.right)
+        scroll.frame = CGRect(x: insets.left, y: 0, width: width, height: bounds.height)
+        // Layout depends only on the candidate list and available width, never on
+        // scroll position. Every row has the same width, including under controls.
+        let layout = CandidateLayout.measure(texts, comments: comments, width: width,
+            expanded: expanded, landscape: landscape)
+        var offset = scroll.contentOffset
+        offset.x = expanded ? 0 : min(max(0, offset.x), max(0, layout.contentSize.width - width))
+        offset.y = expanded ? min(max(0, offset.y), max(0, layout.contentSize.height - bounds.height)) : 0
+        content.frame = CGRect(origin: .zero, size: layout.contentSize)
+        scroll.contentSize = layout.contentSize
         let rowHeight = layout.frames.first?.height ?? 32
         expandButton.isHidden = texts.isEmpty
         expandButton.frame = CGRect(x: bounds.width - controlInsets.right - 32, y: 0, width: 32, height: rowHeight)
@@ -254,8 +232,7 @@ final class CandidateStrip: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     }
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !layingOutCandidates else { return }
-        if expanded && reservedRows(at: scroll.contentOffset.y) != laidOutReservedRows { layoutCandidates() }
-        else { refreshSelection() }
+        refreshSelection()
     }
     private func advanceSelection(by elapsed: TimeInterval) {
         guard let point = selectionPoint, scroll.frame.contains(point) else { return }

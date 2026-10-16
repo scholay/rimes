@@ -104,6 +104,12 @@ public final class RimesInputMethodService extends InputMethodService {
     private static final int CANDIDATE_SLOTS=Math.max(9,PunctuationLayout.STRIP.size());
     private TextView preedit;
     private HorizontalScrollView candidateScroll;
+    private CandidateMatrixView candidateMatrix;
+    private KeyButton expandCandidates;
+    private boolean matrixExpanded,matrixLoading,matrixLastPage;
+    private long matrixGeneration;
+    private RimeEngine.Snapshot matrixAnchor=RimeEngine.Snapshot.EMPTY;
+    private List<org.scholay.rimes.core.CandidateMatrix.Item> matrixItems=java.util.Collections.emptyList();
     private ChordPreview chordReadout;
     private ChordGesture.Preview heldPreview;
     private String renderedRaw="";
@@ -206,6 +212,7 @@ public final class RimesInputMethodService extends InputMethodService {
         });
     }
     private void resetEngine() {
+        closeCandidateMatrix();
         if(!ready) return;
         final String selected=effectiveSchema();
         final boolean active=target!=null;
@@ -379,6 +386,7 @@ public final class RimesInputMethodService extends InputMethodService {
         dispatch(operation,false);
     }
     private void dispatch(Operation operation,boolean policyChange) {
+        closeCandidateMatrix();
         if(!ownsTarget()) { endTarget(); return; }
         if(!policyChange && !retained.isEmpty()) { notice(R.string.delivery_pending); return; }
         InputEpoch.Ticket ticket=epoch.issue(); InputConnection connection=target;
@@ -890,6 +898,12 @@ public final class RimesInputMethodService extends InputMethodService {
         LinearLayout strip=new LinearLayout(this); candidateScroll.addView(strip,new HorizontalScrollView.LayoutParams(-2,-1));
         FrameLayout center=new FrameLayout(this); candidateRow.addView(center,new LinearLayout.LayoutParams(0,-1,1));
         center.addView(candidateScroll,new FrameLayout.LayoutParams(-1,-1));
+        candidateMatrix=new CandidateMatrixView(this,new CandidateMatrixView.Listener() {
+            public void select(org.scholay.rimes.core.CandidateMatrix.Item item) { selectMatrixCandidate(item); }
+            public void more() { loadCandidateMatrix(); }
+        });
+        center.addView(candidateMatrix,new FrameLayout.LayoutParams(-1,-1));
+        candidateMatrix.setVisibility(View.GONE);
         pluginShortcuts=new PluginShortcutBar(this,theme,new PluginShortcutBar.Listener() {
             public void onPluginTap(String id) { selectPlugin(id); }
             public void onPluginLongPress(String id) { openPluginSettings(id); }
@@ -902,6 +916,9 @@ public final class RimesInputMethodService extends InputMethodService {
             candidate.setAutoSizeTextTypeWithDefaults(TextView.AUTO_SIZE_TEXT_TYPE_NONE); candidate.setTextSize(20); candidates.add(candidate);
         }
         next=button(candidateRow,"›",() -> candidatePage(true),0); fixedWidth(next,32); ((KeyButton)next).plain(true); next.setContentDescription("下一页候选"); ((KeyButton)next).icon(KeyboardIcon.CHEVRON_RIGHT,16);
+        expandCandidates=button(candidateRow,"⌃",this::toggleCandidateMatrix,0);
+        fixedWidth(expandCandidates,32); expandCandidates.plain(true);
+        expandCandidates.setTag("keyboard.candidates.expand");
         bufferButton=button(candidateRow,"▤",() -> { if(pending==0 && !snapshot.composing() && retained.isEmpty()) { cancelChord(); buffer.setEnabled(!buffer.isEnabled()); if(!buffer.isEnabled()) { cancelPlugin(); pluginSession.clear(); activePlugin=null; pluginSettingsOpen=false; } render(); } },0);
         fixedWidth(bufferButton,32); gapLeft(bufferButton,4); ((KeyButton)bufferButton).appearance(false,false,true); ((KeyButton)bufferButton).icon(KeyboardIcon.STACK_LAYERS);
         spellingRow=row(keyboard,34); spellingButtons.clear();
@@ -1078,12 +1095,54 @@ public final class RimesInputMethodService extends InputMethodService {
             if(index<PunctuationLayout.STRIP.size()) { punctuationOpen=false; punctuate(PunctuationLayout.STRIP.get(index)); }
         } else if(snapshot.composing()) select(index);
     }
+    private void closeCandidateMatrix() {
+        matrixGeneration++; matrixExpanded=false; matrixLoading=false;
+        matrixItems=java.util.Collections.emptyList(); matrixAnchor=RimeEngine.Snapshot.EMPTY;
+    }
+    private void toggleCandidateMatrix() {
+        if(matrixExpanded) { closeCandidateMatrix(); render(); return; }
+        if(pending!=0 || !ready || !ownsTarget() || !snapshot.composing() || snapshot.candidates.isEmpty()) return;
+        matrixExpanded=true; matrixAnchor=snapshot; matrixLastPage=snapshot.lastPage;
+        matrixItems=org.scholay.rimes.core.CandidateMatrix.items(snapshot);
+        render(); loadCandidateMatrix();
+    }
+    private void loadCandidateMatrix() {
+        if(!matrixExpanded || matrixLoading || matrixLastPage || pending!=0 || !ownsTarget()) return;
+        matrixLoading=true;
+        final long generation=matrixGeneration;
+        final InputEpoch.Ticket ticket=epoch.issue(); final InputConnection connection=target;
+        final RimeEngine.Snapshot anchor=matrixAnchor;
+        final int count=matrixItems.size()+27;
+        EngineWorker.QUEUE.execute(() -> {
+            if(!epoch.current(ticket)) return;
+            try {
+                org.scholay.rimes.core.CandidateMatrix.Preview preview=org.scholay.rimes.core.CandidateMatrix.preview(engine,session,anchor,count);
+                main.post(() -> {
+                    if(generation!=matrixGeneration || !epoch.current(ticket) || connection!=target || !ownsTarget()) return;
+                    matrixLoading=false;
+                    if(preview.items.size()<matrixItems.size() || !preview.items.subList(0,matrixItems.size()).equals(matrixItems)) {
+                        closeCandidateMatrix(); render(); return;
+                    }
+                    matrixItems=preview.items; matrixLastPage=preview.lastPage; render();
+                });
+            } catch(RuntimeException error) {
+                android.util.Log.e("RIMES","Candidate preview failed",error);
+                main.post(() -> { if(generation==matrixGeneration) { closeCandidateMatrix(); render(); } });
+            }
+        });
+    }
+    private void selectMatrixCandidate(org.scholay.rimes.core.CandidateMatrix.Item item) {
+        if(!matrixExpanded || pending!=0 || !matrixItems.contains(item) || !snapshot.raw.equals(matrixAnchor.raw)) return;
+        if(chords!=null && chords.isChordActive()) return;
+        dispatch(() -> Result.state(engine.selectCandidate(session,item.index)));
+    }
     private void candidatePage(boolean forward) {
         if(spellingOpen) { spellingPage=Math.max(0,Math.min(((spellingChoices.size()-1)/9)*9,spellingPage+(forward?9:-9))); render(); }
         else page(forward);
     }
     private void render() {
         if(keyboard==null) return;
+        if(matrixExpanded && (!snapshot.composing() || !snapshot.raw.equals(matrixAnchor.raw) || punctuationOpen || !chordPreview.isEmpty() || heldPreview!=null)) closeCandidateMatrix();
         scheduleTranslation();
         if(clipboardOpen && !clipboardCurrent()) closeClipboard();
         KeyboardTheme.Palette palette=theme.palette(this); keyboard.setBackgroundColor(palette.background);
@@ -1104,8 +1163,16 @@ public final class RimesInputMethodService extends InputMethodService {
         boolean idle=!snapshot.composing() && snapshot.candidates.isEmpty() && heldPreview==null && chordPreview.isEmpty() && !chords.isChordActive() && !punctuationOpen;
         pluginShortcuts.setVisibility(idle && !privateField && !directOnly?View.VISIBLE:View.GONE);
         pluginShortcuts.render(theme,buffer.isEnabled()?activePlugin:null,canSelectPlugin(),officialPlugins::enabled);
-        candidateScroll.setVisibility(heldPreview==null && !idle?View.VISIBLE:View.GONE); chordReadout.setVisibility(heldPreview==null?View.GONE:View.VISIBLE);
+        candidateScroll.setVisibility(!matrixExpanded && heldPreview==null && !idle?View.VISIBLE:View.GONE); chordReadout.setVisibility(heldPreview==null?View.GONE:View.VISIBLE);
         chordReadout.render(heldPreview,theme,landscape());
+        candidateMatrix.setVisibility(matrixExpanded?View.VISIBLE:View.GONE);
+        candidateMatrix.update(matrixItems,theme,pending==0);
+        int candidateHeight=dp(matrixExpanded?(landscape()?68:104):32);
+        if(candidateRow.getLayoutParams().height!=candidateHeight) { candidateRow.getLayoutParams().height=candidateHeight; candidateRow.requestLayout(); }
+        expandCandidates.setVisibility(snapshot.composing() && !snapshot.candidates.isEmpty() && !punctuationOpen && chordPreview.isEmpty() && heldPreview==null?View.VISIBLE:View.GONE);
+        expandCandidates.setText(matrixExpanded?"⌄":"⌃");
+        expandCandidates.setContentDescription(matrixExpanded?"收起候选":"展开候选");
+        expandCandidates.setEnabled(pending==0);
         boolean marks=punctuationOpen;
         int count=directOnly?0:!chordPreview.isEmpty()?1:marks?PunctuationLayout.STRIP.size():snapshot.candidates.size();
         for(int i=0;i<candidates.size();i++) {
@@ -1122,7 +1189,7 @@ public final class RimesInputMethodService extends InputMethodService {
         if(renderedPage!=snapshot.pageStart || !renderedRaw.equals(snapshot.raw)) {
             candidateScroll.scrollTo(0,0); renderedPage=snapshot.pageStart; renderedRaw=snapshot.raw;
         }
-        previous.setVisibility(idle || marks && !spellingOpen || directOnly || heldPreview!=null || !spellingOpen && snapshot.pageStart==0?View.GONE:View.VISIBLE); next.setVisibility(idle || marks && !spellingOpen || directOnly || heldPreview!=null?View.GONE:View.VISIBLE);
+        previous.setVisibility(matrixExpanded || idle || marks && !spellingOpen || directOnly || heldPreview!=null || !spellingOpen && snapshot.pageStart==0?View.GONE:View.VISIBLE); next.setVisibility(matrixExpanded || idle || marks && !spellingOpen || directOnly || heldPreview!=null?View.GONE:View.VISIBLE);
         previous.setEnabled(pending==0 && (spellingOpen?spellingPage>0:snapshot.pageStart>0));
         next.setEnabled(pending==0 && (spellingOpen?spellingPage+9<spellingChoices.size():!snapshot.lastPage));
         bufferRow.setVisibility(buffer.isEnabled()?View.VISIBLE:View.GONE);

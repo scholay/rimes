@@ -4,6 +4,7 @@
 #include <functional>
 
 #include <fcitx-utils/log.h>
+#include <fcitx-config/iniparser.h>
 #include <fcitx/event.h>
 #include <fcitx/inputcontextmanager.h>
 #include <fcitx/userinterface.h>
@@ -27,6 +28,7 @@ RimesIme::RimesIme(Instance* instance)
     : instance_(instance),
       factory_([this](InputContext& ic) { return new RimesState(this, &ic); }),
       alive_(std::make_shared<std::atomic<bool>>(true)) {
+    reloadConfig();
     instance_->inputContextManager().registerProperty("rimesState", &factory_);
     dispatcher_.attach(&instance_->eventLoop());
 
@@ -84,6 +86,9 @@ RimesIme::RimesIme(Instance* instance)
         [this](Event& event) {
             auto& cap = static_cast<CapabilityChangedEvent&>(event);
             const bool password = cap.newFlags().test(CapabilityFlag::Password);
+            if (password) {
+                if (auto* state = cap.inputContext()->propertyFor(&factory_)) state->reset();
+            }
             if (buffer_) {
                 buffer_->OnPasswordField(cap.inputContext(), password);
             }
@@ -91,6 +96,16 @@ RimesIme::RimesIme(Instance* instance)
                 capsule_->OnPasswordField(cap.inputContext(), password);
             }
         });
+}
+
+void RimesIme::reloadConfig() { readAsIni(config_, "conf/rimes.conf"); }
+void RimesIme::setConfig(const RawConfig& config) {
+    config_.load(config, true);
+    safeSaveAsIni(config_, "conf/rimes.conf");
+    instance_->inputContextManager().foreachFocused([this](InputContext* ic) {
+        if (auto* state = ic->propertyFor(&factory_)) state->refreshCandidates();
+        return true;
+    });
 }
 
 RimesIme::~RimesIme() {

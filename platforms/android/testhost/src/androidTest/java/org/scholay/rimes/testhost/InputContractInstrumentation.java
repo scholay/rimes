@@ -44,7 +44,8 @@ public final class InputContractInstrumentation extends Instrumentation {
             // OEMs can deny an implicit show after an instrumentation process restart.
             // Begin every contract with a real editor touch so IME ownership is observable.
             touchHostField();
-            if("closure-fields".equals(arguments.getString("mode"))) closureFields();
+            if("candidate-matrix".equals(arguments.getString("mode"))) matrixContract();
+            else if("closure-fields".equals(arguments.getString("mode"))) closureFields();
             else if("delete-video".equals(arguments.getString("mode"))) deleteVideoContract();
             else if("closure-punctuation".equals(arguments.getString("mode"))) closurePunctuation();
             else if("closure-thumbs".equals(arguments.getString("mode"))) closureThumbs();
@@ -628,6 +629,26 @@ public final class InputContractInstrumentation extends Instrumentation {
         }
         report("PASSWORD_AX phase="+phase+" rimesQ="+(find("q",false)!=null)+" rimesN="+(find("n",false)!=null));
     }
+    private void matrixContract() throws Exception {
+        focus(host.first); pinyin(); type("shi");
+        String first=candidate(0);
+        tap("展开候选"); waitButton("收起候选");
+        SystemClock.sleep(300);
+        check(find("矩阵候选",true)!=null,"expanded matrix visible in real IME");
+        String later=candidate(18);
+        tap("收起候选"); tap("Space");
+        expect(host.first,first,"preview restores original engine page");
+        focus(host.first); type("shi"); tap("展开候选"); SystemClock.sleep(300);
+        AccessibilityNodeInfo matrix=find("矩阵候选",true);
+        check(matrix!=null && matrix.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD),"matrix scrolls in real IME");
+        SystemClock.sleep(200);
+        tap(later); expect(host.first,later,"scrolled later-page candidate commits exact text");
+        check(find("收起候选",true)==null,"commit closes the matrix");
+        focus(host.first); type("shi"); tap("展开候选"); tap("n");
+        check(find("收起候选",true)==null,"editing composition retires old matrix");
+        report("PASS matrix expansion, scroll, later-page commit, collapse and edit retirement");
+    }
+
     private void contract() throws Exception {
         focus(host.first); pinyin(); type("nihao");
         check(find("Buffer off",false)!=null && !find("Buffer off",false).isEnabled(),"Buffer toggle locked during composition");

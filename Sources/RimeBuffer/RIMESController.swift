@@ -33,6 +33,8 @@ enum CandidateKeyboardRoutingRules {
              RimeKey.return, RimeKey.space, RimeKey.pageUp, RimeKey.pageDown,
              0x2D, 0x3D:
             return true
+        case RimeKey.escape:
+            return isExpanded
         case 0x31...0x39:
             return isExpanded || usesNumericLabels
         default:
@@ -6540,6 +6542,8 @@ final class RIMESController: IMKInputController {
             mutualPairingState.reset()
         }
         switch keycode {
+        case RimeKey.escape:
+            return candidateWindow.collapseExpanded()
         case RimeKey.left:
             return candidateWindow.moveSelection(delta: -1)
         case RimeKey.right:

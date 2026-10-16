@@ -12,6 +12,7 @@
 #include <fcitx-utils/eventdispatcher.h>
 #include <fcitx-utils/key.h>
 #include <fcitx-utils/testing.h>
+#include <fcitx-config/rawconfig.h>
 #include <fcitx/addonmanager.h>
 #include <fcitx/candidatelist.h>
 #include <fcitx/inputcontextmanager.h>
@@ -119,6 +120,33 @@ void RunTypingSuite(fcitx::Instance& instance,
     frontend->call<fcitx::ITestFrontend::keyEvent>(uuid, fcitx::Key("Escape"), false);
     frontend->call<fcitx::ITestFrontend::keyEvent>(uuid, fcitx::Key("Escape"), true);
     std::cout << "ok: testfrontend Escape\n";
+
+    auto key = [&](const char* name) {
+        frontend->call<fcitx::ITestFrontend::keyEvent>(uuid, fcitx::Key(name), false);
+        frontend->call<fcitx::ITestFrontend::keyEvent>(uuid, fcitx::Key(name), true);
+    };
+    Type(frontend, uuid, "shi");
+    const auto original = ic->inputPanel().candidateList()->candidate(0).text().toStringForCommit();
+    key("Page_Down");
+    const auto later = ic->inputPanel().candidateList()->candidate(0).text().toStringForCommit();
+    key("Page_Up");
+    key("Down"); key("Down"); key("Escape");
+    if (ic->inputPanel().clientPreedit().empty() || ic->inputPanel().candidateList()->candidate(0).text().toStringForCommit() != original)
+        Die("matrix Escape failed to restore opening page and composition");
+    key("Down"); key("Down");
+    frontend->call<fcitx::ITestFrontend::pushCommitExpectation>(later);
+    key("space");
+    Type(frontend, uuid, "ni");
+    fcitx::RawConfig config;
+    auto* engine = instance.inputMethodEngine(ic);
+    config.setValueByPath("VerticalCandidates", "False"); engine->setConfig(config);
+    if (ic->inputPanel().candidateList()->layoutHint() != fcitx::CandidateLayoutHint::Horizontal)
+        Die("horizontal setting was not applied to the candidate list");
+    config.setValueByPath("VerticalCandidates", "True"); engine->setConfig(config);
+    if (ic->inputPanel().candidateList()->layoutHint() != fcitx::CandidateLayoutHint::Vertical)
+        Die("vertical setting was not applied to the candidate list");
+    key("Escape");
+    std::cout << "ok: matrix navigation, Escape, exact later-page commit and orientation settings\n";
 
     Type(frontend, uuid, "nihao");
     if (ic->inputPanel().clientPreedit().empty()) {

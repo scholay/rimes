@@ -107,6 +107,7 @@ if(RIMES_BUILD_FCITX5)
     include("${FCITX_INSTALL_CMAKECONFIG_DIR}/Fcitx5Utils/Fcitx5CompilerSettings.cmake")
 
     add_library(rimes MODULE
+        src/fcitx/candidate_matrix_window.cpp
         src/fcitx/rimes_candidate.cpp
         src/fcitx/rimes_ime.cpp
         src/fcitx/rimes_state.cpp
@@ -114,6 +115,13 @@ if(RIMES_BUILD_FCITX5)
         src/capsule/capsule_service.cpp
     )
     target_link_libraries(rimes PRIVATE Fcitx5::Core RimesEngine RimesBufferCore RimesCapsuleCore)
+    pkg_check_modules(GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0)
+    pkg_check_modules(GTK_LAYER_SHELL IMPORTED_TARGET gtk-layer-shell-0)
+    target_link_libraries(rimes PRIVATE PkgConfig::GTK3)
+    if(GTK_LAYER_SHELL_FOUND)
+        target_link_libraries(rimes PRIVATE PkgConfig::GTK_LAYER_SHELL)
+        target_compile_definitions(rimes PRIVATE HAVE_GTK_LAYER_SHELL=1)
+    endif()
     target_compile_definitions(rimes PRIVATE
         RIMES_INSTALL_SHARED_DIR="${CMAKE_INSTALL_FULL_DATADIR}/rimes/data"
     )
@@ -225,6 +233,10 @@ if(RIMES_BUILD_FCITX5)
 endif()
 
 if(RIMES_BUILD_TESTS)
+    add_executable(rimes-candidate-matrix-tests tests/candidate_matrix_tests.cpp)
+    target_include_directories(rimes-candidate-matrix-tests PRIVATE src)
+    rimes_harden(rimes-candidate-matrix-tests)
+    add_test(NAME RimesCandidateMatrix COMMAND rimes-candidate-matrix-tests)
     add_executable(rimes-key-tests tests/rime_key_tests.cpp)
     target_link_libraries(rimes-key-tests PRIVATE RimesEngine)
     rimes_harden(rimes-key-tests)

@@ -10,7 +10,11 @@ func runCandidatePaginationSmokeTest() -> Bool {
     }
     let defaults = UserDefaults.standard
     let saved = CandidateWindowMetric.allCases.map { ($0.userDefaultsKey, defaults.object(forKey: $0.userDefaultsKey)) }
+    let savedArrangement = defaults.object(forKey: CandidateArrangement.defaultsKey)
+    defaults.removeObject(forKey: CandidateArrangement.defaultsKey)
     defer {
+        if let savedArrangement { defaults.set(savedArrangement, forKey: CandidateArrangement.defaultsKey) }
+        else { defaults.removeObject(forKey: CandidateArrangement.defaultsKey) }
         for (key, value) in saved {
             if let value { defaults.set(value, forKey: key) }
             else { defaults.removeObject(forKey: key) }
@@ -54,6 +58,19 @@ func runCandidatePaginationSmokeTest() -> Bool {
           "zero keeps its schema binding")
     check(!CandidateKeyboardRoutingRules.ownsLocally(keycode: 0x31, isExpanded: false, usesNumericLabels: false),
           "custom selection-key schemas keep their digit bindings")
+
+    check(CandidateKeyboardRoutingRules.ownsLocally(keycode: RimeKey.escape, isExpanded: true), "expanded Escape belongs to matrix")
+    check(!CandidateKeyboardRoutingRules.ownsLocally(keycode: RimeKey.escape, isExpanded: false), "collapsed Escape keeps schema cancellation")
+    defaults.set("vertical", forKey: CandidateArrangement.defaultsKey)
+    configure(width: 360, count: 5, font: 24)
+    let verticalContext = context(["中华人民共和国", "你好", "长候选测试", "测试", "五", "六", "七", "八", "九"])
+    for page in 0..<2 {
+        let vertical = CandidateWindow.paginationSnapshotForSmoke(context: verticalContext, page: page)
+        check(vertical.pages == [Array(0..<5), Array(5..<9)], "vertical pages follow count instead of summed width")
+        check(vertical.contentFits, "vertical native buttons fit in panel")
+        check(vertical.numberSelections == vertical.visibleIndices, "vertical numeric selection matches visible rows")
+    }
+    defaults.removeObject(forKey: CandidateArrangement.defaultsKey)
 
     let output = CommandLine.arguments.first { $0.hasPrefix("--output=") }
         .map { URL(fileURLWithPath: String($0.dropFirst("--output=".count)), isDirectory: true) }

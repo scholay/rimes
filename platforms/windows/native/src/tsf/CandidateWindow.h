@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -72,6 +73,8 @@ class CandidateWindow {
   }
   [[nodiscard]] CandidateSnapshot snapshot() const noexcept;
 
+  std::optional<std::size_t> MatrixDigitIndex(std::size_t digit) const noexcept;
+
   static bool GetLastSnapshot(CandidateSnapshot* snapshot) noexcept;
 
  private:
@@ -95,6 +98,7 @@ class CandidateWindow {
   CandidateSnapshot snapshot_{};
   // Last computed DIP hit rectangles in window client space (DIP).
   mutable std::vector<ui::DipRect> hit_pills_;
+  std::vector<std::wstring> matrix_labels_;
   mutable float layout_width_dip_ = 0;
   mutable float layout_height_dip_ = 0;
 };

@@ -10,6 +10,8 @@ final class NativeRimeEngine implements RimeEngine {
     public boolean selectSchema(long session,String schema) { return schemaNative(session,schema); }
     public Snapshot processKey(long session,int key) { return snapshotNative(session,keyNative(session,key)); }
     public Snapshot selectCandidate(long session,int index) { return snapshotNative(session,selectNative(session,index)); }
+    public Snapshot candidateRange(long session,int start,int count) { return candidatesNative(session,start,count); }
+    private static native Snapshot candidatesNative(long session,int start,int count);
     public Snapshot snapshot(long session) { return snapshotNative(session,false); }
     public void clearComposition(long session) { clearNative(session); }
     private static native void initializeNative(String system,String user);

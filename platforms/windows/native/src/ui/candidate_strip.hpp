@@ -141,28 +141,50 @@ struct CandidateStripLayout {
   return layout;
 }
 
+// Matrix rows preserve natural text widths. Only a consecutive visible range
+// is drawn; moving the selection reveals overflow without squeezing every word.
 [[nodiscard]] inline CandidateStripLayout LayoutCandidateMatrixMeasured(
     const std::vector<CandidateStripItem>& items,
     const std::vector<std::size_t>& row_sizes,
-    const CandidateStripMetrics& metrics, float available_width_dip) {
+    const CandidateStripMetrics& metrics, float available_width_dip,
+    std::size_t highlighted = 0) {
   CandidateStripLayout matrix;
+  matrix.pills.resize(items.size()); // hidden entries have empty hit rectangles
   std::size_t offset = 0;
+  const float viewport = (std::max)(1.f, available_width_dip);
+  const float pad = (std::min)(static_cast<float>(metrics.bar_horizontal_padding_dip), viewport * .2f);
+  const float available = viewport - 2 * pad;
+  const float gap = static_cast<float>(metrics.inter_pill_spacing_dip * 2 + metrics.separator_width_dip);
   for (const auto count : row_sizes) {
-    if (count == 0 || count > items.size() - offset) return {};
-    const std::vector<CandidateStripItem> row(
-        items.begin() + offset, items.begin() + offset + count);
-    const auto layout = LayoutCandidateStripMeasured(row, metrics, available_width_dip);
+    if (offset > items.size() || count == 0 || count > items.size() - offset) return {};
+    auto endFrom = [&](std::size_t start) {
+      float used = 0;
+      auto end = start;
+      while (end < count && end - start < 9) {
+        const float width = (std::min)(available, items[offset + end].content_width_dip + 2.f * metrics.pill_padding_dip);
+        const float next = width + (end > start ? gap : 0);
+        if (end > start && used + next > available) break;
+        used += next; ++end;
+      }
+      return end;
+    };
+    std::size_t start = 0;
+    if (highlighted >= offset && highlighted < offset + count) {
+      const auto selected = highlighted - offset;
+      while (selected >= endFrom(start) && start < selected) ++start;
+    }
+    const auto end = endFrom(start);
+    const std::vector<CandidateStripItem> row(items.begin() + offset + start, items.begin() + offset + end);
+    const auto layout = LayoutCandidateStripMeasured(row, metrics, viewport);
     const float top = matrix.height_dip + (offset == 0 ? 0.f : 3.f);
-    for (auto pill : layout.pills) {
-      pill.top += top;
-      pill.bottom += top;
-      matrix.pills.push_back(pill);
-      matrix.order.push_back(matrix.order.size());
+    for (std::size_t column = 0; column < layout.pills.size(); ++column) {
+      auto pill = layout.pills[column]; pill.top += top; pill.bottom += top;
+      const auto index = offset + start + column;
+      matrix.pills[index] = pill; matrix.order.push_back(index);
     }
     matrix.width_dip = (std::max)(matrix.width_dip, layout.width_dip);
     matrix.height_dip = top + layout.height_dip;
-    ++matrix.row_count;
-    offset += count;
+    ++matrix.row_count; offset += count;
   }
   if (offset != items.size()) return {};
   matrix.strip = {0, 0, matrix.width_dip, matrix.height_dip};

@@ -111,6 +111,21 @@ extern "C" JNIEXPORT jboolean JNICALL JNI(selectNative)(JNIEnv*, jclass, jlong s
 }
 extern "C" JNIEXPORT void JNICALL JNI(clearNative)(JNIEnv*, jclass, jlong session) { api()->clear_composition(session); }
 extern "C" JNIEXPORT jstring JNICALL JNI(roundTripNative)(JNIEnv* env, jclass, jstring text) { return string(env,utf8(env,text)); }
+static jobject candidateSnapshot(JNIEnv* env, bool handled, const std::string& raw, const std::string& preedit,
+    int cursor, const std::string& commit, const std::vector<std::string>& candidates,
+    const std::vector<std::string>& comments, int start, int highlighted, bool last) {
+    jclass strings=env->FindClass("java/lang/String");
+    auto texts=env->NewObjectArray(candidates.size(),strings,nullptr);
+    auto notes=env->NewObjectArray(comments.size(),strings,nullptr);
+    for (size_t i=0;i<candidates.size();++i) {
+        auto t=string(env,candidates[i]); auto n=string(env,comments[i]);
+        env->SetObjectArrayElement(texts,i,t); env->SetObjectArrayElement(notes,i,n);
+        env->DeleteLocalRef(t); env->DeleteLocalRef(n);
+    }
+    auto cls=env->FindClass("org/scholay/rimes/core/RimeEngine$Snapshot");
+    auto constructor=env->GetMethodID(cls,"<init>","(ZLjava/lang/String;Ljava/lang/String;ILjava/lang/String;[Ljava/lang/String;[Ljava/lang/String;IIZ)V");
+    return env->NewObject(cls,constructor,handled,string(env,raw),string(env,preedit),cursor,string(env,commit),texts,notes,start,highlighted,static_cast<jboolean>(last));
+}
 extern "C" JNIEXPORT jobject JNICALL JNI(snapshotNative)(JNIEnv* env, jclass, jlong session, jboolean handled) {
     std::string raw = api()->get_input(session) ? api()->get_input(session) : "";
     std::string commit, preedit;
@@ -132,15 +147,35 @@ extern "C" JNIEXPORT jobject JNICALL JNI(snapshotNative)(JNIEnv* env, jclass, jl
         }
         api()->free_context(&context);
     }
-    jclass strings=env->FindClass("java/lang/String");
-    auto texts=env->NewObjectArray(candidates.size(),strings,nullptr);
-    auto notes=env->NewObjectArray(comments.size(),strings,nullptr);
-    for (size_t i=0;i<candidates.size();++i) {
-        auto t=string(env,candidates[i]); auto n=string(env,comments[i]);
-        env->SetObjectArrayElement(texts,i,t); env->SetObjectArrayElement(notes,i,n);
-        env->DeleteLocalRef(t); env->DeleteLocalRef(n);
+    return candidateSnapshot(env,handled,raw,preedit,cursor,commit,candidates,comments,start,highlighted,last);
+}
+
+// Enumerate the engine's immutable candidate sequence. This neither changes its
+// current page nor invokes custom PageUp/Down bindings or drains pending commits.
+extern "C" JNIEXPORT jobject JNICALL JNI(candidatesNative)(JNIEnv* env, jclass, jlong session, jint start, jint count) {
+    if (start < 0 || count < 1 || count > 100000) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Invalid candidate range"); return nullptr;
     }
-    auto cls=env->FindClass("org/scholay/rimes/core/RimeEngine$Snapshot");
-    auto constructor=env->GetMethodID(cls,"<init>","(ZLjava/lang/String;Ljava/lang/String;ILjava/lang/String;[Ljava/lang/String;[Ljava/lang/String;IIZ)V");
-    return env->NewObject(cls,constructor,handled,string(env,raw),string(env,preedit),cursor,string(env,commit),texts,notes,start,highlighted,static_cast<jboolean>(last));
+    std::string raw = api()->get_input(session) ? api()->get_input(session) : "";
+    std::string preedit;
+    int cursor = 0;
+    RIME_STRUCT(RimeContext, context);
+    if (api()->get_context(session, &context)) {
+        if (context.composition.preedit) preedit = context.composition.preedit;
+        const auto bytes = std::min(preedit.size(), static_cast<size_t>(std::max(0, context.composition.cursor_pos)));
+        cursor = static_cast<int>(utf16(preedit.substr(0, bytes)).size());
+        api()->free_context(&context);
+    }
+    std::vector<std::string> candidates, comments;
+    bool last = true;
+    RimeCandidateListIterator iterator{};
+    if (api()->candidate_list_from_index(session, &iterator, start)) {
+        struct End { RimeCandidateListIterator* iterator; ~End() { api()->candidate_list_end(iterator); } } end{&iterator};
+        while (static_cast<int>(candidates.size()) < count && api()->candidate_list_next(&iterator)) {
+            candidates.emplace_back(iterator.candidate.text ? iterator.candidate.text : "");
+            comments.emplace_back(iterator.candidate.comment ? iterator.candidate.comment : "");
+        }
+        last = !api()->candidate_list_next(&iterator);
+    }
+    return candidateSnapshot(env, false, raw, preedit, cursor, "", candidates, comments, start, 0, last);
 }

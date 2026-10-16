@@ -842,6 +842,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     private var claudeLoginCancelling = false
     private var claudeLoginFeedback: String?
     private var claudeLoginFeedbackIsError = false
+    private let candidateArrangementPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
     private var candidateMetricFields: [CandidateWindowMetric: NSTextField] = [:]
     private var candidateMetricSliders: [CandidateWindowMetric: NSSlider] = [:]
     private var candidateMetricHints: [CandidateWindowMetric: NSTextField] = [:]
@@ -3158,6 +3159,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             sectionLabel("候选窗预览"),
             preview,
             spacer(12),
+            candidateArrangementView(),
             candidateMetricsView(),
             spacer(20),
             sectionLabel("缓冲工作台"),
@@ -4742,6 +4744,24 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
         return v
     }
 
+    private func candidateArrangementView() -> NSView {
+        candidateArrangementPopUp.removeFromSuperview()
+        candidateArrangementPopUp.removeAllItems()
+        candidateArrangementPopUp.addItems(withTitles: ["横向", "纵向"])
+        candidateArrangementPopUp.selectItem(at: CandidateArrangement.current == .vertical ? 1 : 0)
+        candidateArrangementPopUp.target = self
+        candidateArrangementPopUp.action = #selector(candidateArrangementChanged)
+        candidateArrangementPopUp.setAccessibilityLabel("候选排列")
+        let row = NSStackView(views: [NSTextField(labelWithString: "候选排列"), candidateArrangementPopUp])
+        row.spacing = 12
+        return row
+    }
+
+    @objc private func candidateArrangementChanged() {
+        CandidateArrangement.current = candidateArrangementPopUp.indexOfSelectedItem == 1 ? .vertical : .horizontal
+        candidatePreview?.metrics = candidateMetrics(from: liveMetricValues())
+    }
+
     private func candidateMetricsView() -> NSView {
         let rows = CandidateWindowMetric.allCases.map(candidateMetricRow)
         let applyBtn = SettingsPointingButton(
@@ -5096,6 +5116,7 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
     }
 
     private func refreshCandidateMetricControls() {
+        candidateArrangementPopUp.selectItem(at: CandidateArrangement.current == .vertical ? 1 : 0)
         var stored: [CandidateWindowMetric: Double] = [:]
         for metric in CandidateWindowMetric.allCases {
             stored[metric] = Double(CandidateWindowMetrics.value(for: metric))
@@ -5166,7 +5187,8 @@ final class SettingsWindowController: NSObject, NSTextFieldDelegate, NSWindowDel
             preeditHeight: get(.preeditHeight),
             candidateFontSize: get(.candidateFontSize),
             labelFontSize: get(.labelFontSize),
-            candidatesPerPage: Int(get(.candidatesPerPage))
+            candidatesPerPage: Int(get(.candidatesPerPage)),
+            verticalCandidates: CandidateArrangement.current == .vertical
         )
     }
 

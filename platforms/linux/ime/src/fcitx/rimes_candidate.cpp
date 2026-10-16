@@ -77,7 +77,7 @@ int RimesCandidateList::size() const { return static_cast<int>(words_.size()); }
 int RimesCandidateList::cursorIndex() const { return cursor_; }
 
 CandidateLayoutHint RimesCandidateList::layoutHint() const {
-    return CandidateLayoutHint::Vertical;
+    return ime_->verticalCandidates() ? CandidateLayoutHint::Vertical : CandidateLayoutHint::Horizontal;
 }
 
 void RimesCandidateList::prev() {

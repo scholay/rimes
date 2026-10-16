@@ -114,6 +114,18 @@ enum CandidatePanelSecurityRules {
     }
 }
 
+enum CandidateArrangement: String, CaseIterable {
+    case horizontal, vertical
+    static let defaultsKey = "candidateWindow.arrangement"
+    static var current: CandidateArrangement {
+        get { CandidateArrangement(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "") ?? .horizontal }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey)
+            NotificationCenter.default.post(name: .candidateWindowMetricsDidChange, object: nil)
+        }
+    }
+}
+
 enum CandidateWindowMetric: String, CaseIterable {
     case baseWidth
     case compactStripHeight
@@ -189,6 +201,7 @@ struct CandidateWindowMetrics {
     let candidateFontSize: CGFloat
     let labelFontSize: CGFloat
     var candidatesPerPage: Int = 9
+    var verticalCandidates: Bool = false
 
     static var current: CandidateWindowMetrics {
         let values = resolvedValues(Dictionary(uniqueKeysWithValues:
@@ -204,7 +217,8 @@ struct CandidateWindowMetrics {
             preeditHeight: get(.preeditHeight),
             candidateFontSize: get(.candidateFontSize),
             labelFontSize: get(.labelFontSize),
-            candidatesPerPage: Int(get(.candidatesPerPage))
+            candidatesPerPage: Int(get(.candidatesPerPage)),
+            verticalCandidates: CandidateArrangement.current == .vertical
         )
     }
 
@@ -271,6 +285,7 @@ struct CandidateWindowMetrics {
     }
 
     static func resetToDefaults() {
+        UserDefaults.standard.removeObject(forKey: CandidateArrangement.defaultsKey)
         for metric in CandidateWindowMetric.allCases {
             UserDefaults.standard.removeObject(forKey: metric.userDefaultsKey)
         }
@@ -423,7 +438,7 @@ struct CandidatePagination {
     let showsControls: Bool
 
     init(widths: [CGFloat], availableWidth: CGFloat, limit: Int,
-         hasEngineNeighbours: Bool, separator: CGFloat = CandidateLayout.candidateSeparatorRunWidth) {
+         hasEngineNeighbours: Bool, vertical: Bool = false, separator: CGFloat = CandidateLayout.candidateSeparatorRunWidth) {
         func partition(_ available: CGFloat) -> [[Int]] {
             var pages: [[Int]] = []
             var page: [Int] = []
@@ -431,7 +446,7 @@ struct CandidatePagination {
             for index in widths.indices {
                 let width = min(available, widths[index])
                 let next = page.isEmpty ? width : used + separator + width
-                if !page.isEmpty, page.count >= max(1, limit) || next > available {
+                if !page.isEmpty, page.count >= max(1, limit) || (!vertical && next > available) {
                     pages.append(page)
                     page = []
                     used = 0
@@ -1731,15 +1746,16 @@ final class CandidateWindow {
     }
 
     private func renderCompactRow() {
-        candidateStack.orientation = .horizontal
-        candidateStack.alignment = .centerY
-        candidateStack.spacing = Self.candidateSpacing
+        let vertical = CandidateArrangement.current == .vertical
+        candidateStack.orientation = vertical ? .vertical : .horizontal
+        candidateStack.alignment = vertical ? .leading : .centerY
+        candidateStack.spacing = vertical ? Self.expandedRowSpacing : Self.candidateSpacing
 
         let panelWidth = activePanelWidth()
         let indices = currentVisualCandidateIndices(panelWidth: panelWidth)
         let renderedIndices = indices
         for (offset, i) in renderedIndices.enumerated() {
-            if offset > 0 {
+            if offset > 0 && !vertical {
                 candidateStack.addArrangedSubview(candidateSeparatorView())
             }
             let c = compactCandidate(at: i, visibleIndex: offset)
@@ -2104,9 +2120,10 @@ final class CandidateWindow {
                 return rowWidth(Array(widths[range]))
             }
         } else {
-            rows = [rowWidth(currentVisualCandidateIndices(panelWidth: budget).map {
+            let widths = currentVisualCandidateIndices(panelWidth: budget).map {
                 min(available, stableCandidateWidth(compactCandidate(at: $0, visibleIndex: 0)))
-            })]
+            }
+            rows = CandidateArrangement.current == .vertical ? widths : [rowWidth(widths)]
         }
         let preeditWidth = preeditPill.isHidden ? 0
             : ceil(preeditLabel.intrinsicContentSize.width) + CandidateLayout.preeditHorizontalPadding * 2
@@ -2142,7 +2159,8 @@ final class CandidateWindow {
         },
             availableWidth: panelWidth - Self.barHorizontalPadding * 2,
             limit: CandidateWindowMetrics.current.candidatesPerPage,
-            hasEngineNeighbours: currentContext.pageNo > 0 || !currentContext.isLastPage)
+            hasEngineNeighbours: currentContext.pageNo > 0 || !currentContext.isLastPage,
+            vertical: CandidateArrangement.current == .vertical)
     }
 
     private func compactCandidate(at index: Int, visibleIndex: Int) -> RimeCandidateModel {
@@ -2241,9 +2259,11 @@ final class CandidateWindow {
 
     private func candidateAreaHeight(for metrics: CandidateWindowMetrics) -> CGFloat {
         let rowHeight = compactCandidateButtonHeight(for: metrics)
-        guard isExpanded, !isSingleCharacterSelectionActive else {
-            return rowHeight
+        if !isExpanded && !isSingleCharacterSelectionActive && metrics.verticalCandidates {
+            let count = currentVisualCandidateIndices(panelWidth: activePanelWidth()).count
+            return CGFloat(max(1, count)) * rowHeight + CGFloat(max(0, count - 1)) * Self.expandedRowSpacing
         }
+        guard isExpanded, !isSingleCharacterSelectionActive else { return rowHeight }
         return Self.matrixViewportHeight(rowHeight: rowHeight,
                                          rowCount: expandedPages.count)
     }
@@ -3258,7 +3278,6 @@ final class CandidatePreviewView: NSView {
         preeditLabel.stringValue = samplePreedit
 
         // Geometry (identical to the live window).
-        let stripHeight = CandidateLayout.compactStripHeight(m)
         let buttonHeight = CandidateLayout.candidateButtonHeight(m)
         let widths = sampleCandidates.map { item in
             ceil(max(candidateAttr(label: item.label, text: item.text, highlighted: true, m: m).size().width,
@@ -3267,16 +3286,22 @@ final class CandidatePreviewView: NSView {
         }
         let pagination = CandidatePagination(widths: widths,
             availableWidth: m.baseWidth - CandidateLayout.barHorizontalPadding * 2,
-            limit: m.candidatesPerPage, hasEngineNeighbours: false)
+            limit: m.candidatesPerPage, hasEngineNeighbours: false, vertical: m.verticalCandidates)
         visualPageIndex = min(max(0, visualPageIndex), pagination.pages.count - 1)
         let indices = pagination.pages[visualPageIndex]
         let count = indices.count
         pagingControls.isHidden = !pagination.showsControls
         pagingControls.update(canGoBack: visualPageIndex > 0,
                               canGoForward: visualPageIndex + 1 < pagination.pages.count)
-        let rowWidth = indices.map { min(widths[$0], pagination.availableWidth) }.reduce(0, +)
-            + CGFloat(max(0, count - 1)) * CandidateLayout.candidateSeparatorRunWidth
+        let visibleWidths = indices.map { min(widths[$0], pagination.availableWidth) }
+        let rowWidth = (m.verticalCandidates ? (visibleWidths.max() ?? 0)
+            : visibleWidths.reduce(0, +) + CGFloat(max(0, count - 1)) * CandidateLayout.candidateSeparatorRunWidth)
             + (pagination.showsControls ? CandidateLayout.pagingReservedWidth : 0)
+        let areaHeight = m.verticalCandidates ? CGFloat(count) * buttonHeight + CGFloat(max(0, count - 1)) * 3 : buttonHeight
+        let stripHeight = max(CandidateLayout.compactStripHeight(m), areaHeight + 2 * CandidateLayout.barVerticalPadding(m))
+        candidateRow.orientation = m.verticalCandidates ? .vertical : .horizontal
+        candidateRow.alignment = m.verticalCandidates ? .leading : .centerY
+        candidateRow.spacing = m.verticalCandidates ? 3 : CandidateLayout.candidateSpacing
         let windowWidth = CandidateLayout.fittedPanelWidth(rowWidths: [rowWidth],
             preeditWidth: ceil(preeditLabel.intrinsicContentSize.width) + CandidateLayout.preeditHorizontalPadding * 2,
             maximumWidth: m.baseWidth)
@@ -3288,7 +3313,7 @@ final class CandidatePreviewView: NSView {
 
         preeditHeightConstraint.constant = m.preeditHeight
         stripHeightConstraint.constant = stripHeight
-        candidateRowHeightConstraint.constant = max(buttonHeight, CandidateLayout.actionButtonSize)
+        candidateRowHeightConstraint.constant = max(areaHeight, CandidateLayout.actionButtonSize)
         windowWidthConstraint.constant = windowWidth
         previewDocument.frame = NSRect(x: 0, y: 0, width: documentWidth, height: scrollHeight)
         previewScroll.hasHorizontalScroller = overflows
@@ -3305,7 +3330,7 @@ final class CandidatePreviewView: NSView {
             let item = sampleCandidates[i]
             let attr = candidateAttr(label: String(offset + 1), text: item.text, highlighted: offset == 0, m: m)
             let w = min(pagination.availableWidth, widths[i])
-            if offset > 0 {
+            if offset > 0 && !m.verticalCandidates {
                 candidateRow.addArrangedSubview(candidateSeparator())
             }
             candidateRow.addArrangedSubview(candidatePill(attr,

@@ -44,45 +44,52 @@ import UIKit
         XCTAssertNil(strip.buttons[0].accessibilityValue)
     }
 
-    func testEveryMatrixRowScrollsAndReflowsAroundVisibleControls() {
+    func testMatrixFramesStayFixedThroughoutScrollingAndRelayout() {
         for width: CGFloat in [320, 393, 852] {
             for controls in [false, true] {
                 let strip = strip(width: width, expanded: true, controls: controls)
-                XCTAssertEqual(strip.scroll.frame.minX, 0)
-                XCTAssertEqual(strip.scroll.frame.maxX, width)
-                XCTAssertEqual(strip.scroll.frame.minY, 0)
-                let firstRow = strip.buttons.filter { frame($0, in: strip).minY == 0 }
-                XCTAssertFalse(firstRow.isEmpty)
-                XCTAssertGreaterThanOrEqual(frame(firstRow.first!, in: strip).minX, controls ? 36 : 0)
-                XCTAssertLessThanOrEqual(frame(firstRow.last!, in: strip).maxX, strip.expandButton.frame.minX - 4)
-                let firstBodyY = CandidateLayout.rowHeight(landscape: width > 600) + 4
-                let row = strip.buttons.filter { frame($0, in: strip).minY == firstBodyY }
-                XCTAssertEqual(frame(row.first!, in: strip).minX, 0)
-                // A full extra candidate fits in the space formerly reserved as a column.
-                XCTAssertGreaterThan(frame(row.last!, in: strip).maxX, width - 60)
-                let height = CandidateLayout.rowHeight(landscape: width > 600)
-                let leftControl = CGRect(x: 0, y: 0, width: controls ? 32 : 0, height: height)
-                let rightControl = CGRect(x: width - 32, y: 0, width: controls ? 32 : 0, height: height)
-                for offset: CGFloat in [1, 15, 29, 30, 33, 34, 49, 68, 102, 201, 10_000] {
+                strip.update((0..<60).map { $0 % 7 == 0 ? "这是一个比较长的候选词" : "词\($0)" })
+                strip.layoutIfNeeded()
+                let original = strip.buttons.map(\.frame)
+                let contentSize = strip.scroll.contentSize
+                XCTAssertEqual(strip.scroll.frame.minX, controls ? 36 : 0)
+                XCTAssertEqual(strip.scroll.frame.maxX, width - (controls ? 72 : 36))
+                let limit = max(0, contentSize.height - strip.scroll.bounds.height)
+                for proposed: CGFloat in [1, 15, 29, 30, 33, 34, 49, 68, 102, 201, 10_000, 68, 0] {
+                    let offset = min(proposed, limit)
                     strip.scroll.contentOffset.y = offset
-                    let settled = strip.scroll.contentOffset
                     strip.setNeedsLayout(); strip.layoutIfNeeded()
-                    XCTAssertEqual(strip.scroll.contentOffset, settled) // stable at the end after reflow
-                    XCTAssertEqual(frame(strip.buttons[0], in: strip).minY, -settled.y)
+                    XCTAssertEqual(strip.scroll.contentOffset.y, offset, accuracy: 0.01)
+                    XCTAssertEqual(strip.scroll.contentSize, contentSize)
+                    XCTAssertEqual(strip.buttons.map(\.frame), original)
                     for button in strip.buttons {
                         let rect = frame(button, in: strip)
-                        XCTAssertGreaterThanOrEqual(rect.minX, 0); XCTAssertLessThanOrEqual(rect.maxX, width)
+                        XCTAssertGreaterThanOrEqual(rect.minX, strip.scroll.frame.minX)
+                        XCTAssertLessThanOrEqual(rect.maxX, strip.scroll.frame.maxX)
                         XCTAssertFalse(rect.intersects(strip.expandButton.frame))
-                        if controls {
-                            XCTAssertFalse(rect.intersects(leftControl)); XCTAssertFalse(rect.intersects(rightControl))
-                        }
                     }
                 }
             }
         }
     }
 
-    func testReflowKeepsEveryWordReachableWhileScrollingForwardAndBackward() {
+    func testAppendingCandidatesPreservesExistingFramesAndScrollPosition() {
+        let strip = strip(expanded: true, controls: true)
+        let values = (0..<60).map { "候选\($0)" }
+        strip.update(Array(values.prefix(30)), context: "shi")
+        strip.layoutIfNeeded()
+        strip.scroll.contentOffset.y = 34
+        let frames = strip.buttons.map(\.frame)
+        strip.update(values, context: "shi")
+        strip.layoutIfNeeded()
+        XCTAssertEqual(Array(strip.buttons.prefix(30)).map(\.frame), frames)
+        XCTAssertEqual(strip.scroll.contentOffset.y, 34)
+        strip.update(["新候选"], context: "xin")
+        strip.layoutIfNeeded()
+        XCTAssertEqual(strip.scroll.contentOffset, .zero)
+    }
+
+    func testStableMatrixKeepsEveryWordReachableWhileScrollingForwardAndBackward() {
         let strip = strip(width: 320, expanded: true, controls: true)
         strip.update((0..<60).map { $0 % 7 == 0 ? "这是一个比较长的候选词" : "词\($0)" })
         strip.layoutIfNeeded()

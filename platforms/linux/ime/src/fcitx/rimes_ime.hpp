@@ -22,6 +22,7 @@
 namespace fcitx {
 
 FCITX_CONFIGURATION(RimesConfiguration,
+    Option<bool> verticalCandidates{this, "VerticalCandidates", "竖向排列候选", true};
     ExternalOption schemes{this, "Schemes", "导入与管理输入方案", "rimes-schemes"};)
 class RimesState;
 
@@ -36,6 +37,9 @@ public:
     void reset(const InputMethodEntry& entry, InputContextEvent& event) override;
     std::string subMode(const InputMethodEntry& entry, InputContext& inputContext) override;
 
+    void reloadConfig() override;
+    void setConfig(const RawConfig& config) override;
+    bool verticalCandidates() const { return *config_.verticalCandidates; }
     const Configuration* getConfig() const override { return &config_; }
     const Configuration* getConfigForInputMethod(const InputMethodEntry&) const override { return &config_; }
     const std::string& initialSchema() const { return imported_schema_; }

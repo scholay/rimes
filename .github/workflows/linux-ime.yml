@@ -10,6 +10,7 @@ on:
     paths:
       - "platforms/linux/**"
       - "Shared/SchemeImport/**"
+      - "Shared/CandidateMatrix/**"
       - "scripts/input-schemes/fetch_fixture.py"
       - "scripts/input-schemes/repair-rime-table.py"
       - "platforms/ios/scripts/prepare-lua.py"
@@ -26,6 +27,7 @@ on:
     paths:
       - "platforms/linux/**"
       - "Shared/SchemeImport/**"
+      - "Shared/CandidateMatrix/**"
       - "scripts/input-schemes/fetch_fixture.py"
       - "scripts/input-schemes/repair-rime-table.py"
       - "platforms/ios/scripts/prepare-lua.py"

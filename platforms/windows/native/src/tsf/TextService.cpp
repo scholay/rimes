@@ -753,22 +753,28 @@ bool TextService::HandleCandidateKey(BrokerKeyPhase phase, ITfContext* context,
   const bool arrow = key == VK_LEFT || key == VK_RIGHT || key == VK_UP || key == VK_DOWN;
   const bool digit = candidate_navigation_.expanded() && key >= '1' && key <= '9';
   const bool collapse = candidate_navigation_.expanded() && key == VK_ESCAPE;
-  if (!arrow && !digit && !collapse && key != VK_SPACE) return false;
+  const bool page = candidate_navigation_.expanded() && (key == VK_PRIOR || key == VK_NEXT || key == VK_OEM_MINUS || key == VK_OEM_PLUS);
+  if (!arrow && !digit && !collapse && !page && key != VK_SPACE) return false;
   if (phase == BrokerKeyPhase::kTestKeyDown) return true;
   candidate_owned_keys_.set(static_cast<std::size_t>(key));
   ++candidate_epoch_;
   try {
     if (key == VK_LEFT || key == VK_RIGHT) {
       candidate_navigation_.MoveColumn(key == VK_LEFT ? -1 : 1);
-    } else if (key == VK_UP || key == VK_DOWN) {
-      if (!candidate_navigation_.MoveRow(key == VK_UP ? -1 : 1,
+    } else if (key == VK_UP || key == VK_DOWN || page) {
+      if (!candidate_navigation_.MoveRow(key == VK_UP || key == VK_PRIOR || key == VK_OEM_MINUS ? -1 : 1,
           [this](int delta) { return StepCandidatePage(delta); }))
         candidate_navigation_.Reset(last_state_);
     } else if (collapse) {
-      candidate_navigation_.Collapse();
+      if (!candidate_navigation_.CollapseToAnchor([this](int delta) { return StepCandidatePage(delta); }))
+        candidate_navigation_.Reset(last_state_);
     } else {
-      const auto selection = candidate_navigation_.Selected(
+      auto selection = candidate_navigation_.Selected(
           digit ? std::optional<std::size_t>(key - '1') : std::nullopt);
+      if (digit && candidate_window_.IsVisible()) {
+        const auto index = candidate_window_.MatrixDigitIndex(key - '1');
+        selection = index ? candidate_navigation_.AtVisibleIndex(*index) : std::nullopt;
+      }
       if (selection && FAILED(CommitCandidate(context, *selection)))
         candidate_navigation_.Reset(last_state_);
     }

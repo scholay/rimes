@@ -85,6 +85,8 @@ void RimesState::keyEvent(KeyEvent& event) {
         return;
     }
 
+    if (HandleCandidateKey(event)) return;
+
     if (!event.isRelease()) {
         int select_index = -1;
         if (ime_->initialSchema().empty() && composing_ &&
@@ -129,6 +131,8 @@ void RimesState::keyEvent(KeyEvent& event) {
 void RimesState::activate() { (void)EnsureSession(); }
 
 void RimesState::reset() {
+    if (matrix_) matrix_->hide();
+    navigation_.Reset({}); ++candidate_epoch_;
     if (session_ == 0) {
         return;
     }
@@ -168,6 +172,7 @@ void RimesState::selectCandidate(int index) {
 }
 
 void RimesState::page(bool next) {
+    if (navigation_.expanded()) { MoveMatrixRow(next ? 1 : -1); return; }
     const auto session = EnsureSession();
     if (session == 0) {
         return;
@@ -182,8 +187,67 @@ void RimesState::page(bool next) {
 }
 
 void RimesState::applySnapshot(const rimes::linuxime::EngineSnapshot& snapshot) {
+    snapshot_ = snapshot; navigation_.Reset(snapshot);
     ime_->applySnapshot(ic_, snapshot);
     UpdateUI(snapshot);
+}
+
+void RimesState::refreshCandidates() { UpdateUI(snapshot_); }
+
+std::optional<rimes::linuxime::EngineSnapshot> RimesState::StepCandidatePage(int delta) {
+    rimes::linuxime::EngineSnapshot next;
+    std::string error;
+    if (!ime_->engine().ProcessKey(session_, delta < 0 ? rimes::linuxime::kPageUp : rimes::linuxime::kPageDown, 0, &next, &error)) return std::nullopt;
+    const bool navigation = next.commit_text.empty() && next.raw_input == snapshot_.raw_input && next.schema_id == snapshot_.schema_id && !next.candidates.empty();
+    snapshot_ = next;
+    return navigation ? std::optional<rimes::linuxime::EngineSnapshot>(next) : std::nullopt;
+}
+void RimesState::MoveMatrixRow(int delta) {
+    if (!navigation_.MoveRow(delta, [this](int direction) { return StepCandidatePage(direction); })) {
+        applySnapshot(snapshot_); return;
+    }
+    UpdateUI(snapshot_);
+}
+void RimesState::SelectMatrixIndex(std::size_t index) {
+    if (!navigation_.SelectVisibleIndex(index, [this](int direction) { return StepCandidatePage(direction); })) {
+        applySnapshot(snapshot_); return;
+    }
+    selectCandidate(static_cast<int>(navigation_.column()));
+}
+bool RimesState::HandleCandidateKey(KeyEvent& event) {
+    const auto key = static_cast<std::uint32_t>(event.rawKey().sym());
+    if (event.isRelease()) {
+        if (owned_keys_.erase(key)) { event.filterAndAccept(); return true; }
+        return false;
+    }
+    const auto modifiers = ModifierMask(event) & ~rimes::linuxime::kLockMask;
+    if (modifiers || navigation_.empty() || !ic_->hasFocus() || ic_->capabilityFlags().test(CapabilityFlag::Password)) return false;
+    const bool expanded = navigation_.expanded();
+    const bool arrow = key == FcitxKey_Left || key == FcitxKey_Right || key == FcitxKey_Up || key == FcitxKey_Down;
+    const bool paging = expanded && (key == FcitxKey_Page_Up || key == FcitxKey_Page_Down || key == '-' || key == '=');
+    const bool number = expanded && key >= '1' && key <= '9';
+    const bool collapse = expanded && key == FcitxKey_Escape;
+    if (!arrow && !paging && !number && !collapse && key != FcitxKey_space) return false;
+    owned_keys_.insert(key); event.filterAndAccept();
+    if (key == FcitxKey_Left || key == FcitxKey_Right) {
+        navigation_.MoveColumn(key == FcitxKey_Left ? -1 : 1);
+        snapshot_.highlighted = static_cast<int>(navigation_.column());
+        UpdateUI(snapshot_);
+    } else if (arrow || paging) {
+        MoveMatrixRow(key == FcitxKey_Up || key == FcitxKey_Page_Up || key == '-' ? -1 : 1);
+    } else if (collapse) {
+        if (!navigation_.CollapseToAnchor([this](int direction) { return StepCandidatePage(direction); })) applySnapshot(snapshot_);
+        else { snapshot_.highlighted = static_cast<int>(navigation_.column()); UpdateUI(snapshot_); }
+    } else if (number) {
+        if (matrix_visible_) {
+            if (auto index = matrix_->digit(key - '1')) SelectMatrixIndex(*index);
+        } else if (auto selection = navigation_.Selected(key - '1')) {
+            selectCandidate(static_cast<int>(selection->index));
+        }
+    } else {
+        selectCandidate(static_cast<int>(navigation_.column()));
+    }
+    return true;
 }
 
 void RimesState::UpdateUI(const rimes::linuxime::EngineSnapshot& snapshot) {
@@ -215,10 +279,27 @@ void RimesState::UpdateUI(const rimes::linuxime::EngineSnapshot& snapshot) {
         panel.setPreedit(preedit);
     }
 
+    ++candidate_epoch_;
+    if (matrix_) matrix_->hide();
+    matrix_visible_ = false;
     if (!snapshot.candidates.empty()) {
         panel.setCandidateList(std::make_unique<RimesCandidateList>(ime_, ic_, snapshot));
     }
 
+    if (navigation_.expanded()) {
+        if (!matrix_) matrix_ = std::make_unique<CandidateMatrixWindow>(ime_->instance());
+        const auto epoch = candidate_epoch_;
+        matrix_visible_ = matrix_->show(ic_, navigation_,
+            [this, epoch](std::size_t index) {
+                if (epoch == candidate_epoch_ && ic_->hasFocus()) SelectMatrixIndex(index);
+            }, [this, epoch](int delta) {
+                if (epoch == candidate_epoch_ && ic_->hasFocus()) MoveMatrixRow(delta);
+            });
+        if (matrix_visible_) {
+            // Keep native client preedit, suppress only the stock candidate popup.
+            panel.setCustomInputPanelCallback([](InputContext*) {});
+        }
+    }
     ic_->updatePreedit();
     ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
 }

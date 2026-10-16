@@ -9,6 +9,7 @@ on:
     paths:
       - 'platforms/windows/**'
       - 'Shared/SchemeImport/**'
+      - 'Shared/CandidateMatrix/**'
       - 'scripts/input-schemes/fetch_fixture.py'
       - 'OfficialPlugins'
       - 'plugins.lock.json'
@@ -26,6 +27,7 @@ on:
     paths:
       - 'platforms/windows/**'
       - 'Shared/SchemeImport/**'
+      - 'Shared/CandidateMatrix/**'
       - 'scripts/input-schemes/fetch_fixture.py'
       - 'OfficialPlugins'
       - 'plugins.lock.json'

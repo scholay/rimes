@@ -123,6 +123,7 @@ public final class EngineInstrumentation extends Instrumentation {
             java.util.concurrent.atomic.AtomicReference<Throwable> renderingError=new java.util.concurrent.atomic.AtomicReference<>();
             runOnMainSync(() -> {
                 try { iconChecks=KeyboardIconContract.run(getTargetContext()); keycapRendering(); chordChecks=ChordSurfaceContract.run(getTargetContext()); chordReadoutRetirement(); renderBufferRail();
+                    bufferRenderingResult+="CANDIDATE_MATRIX checks="+CandidateMatrixContract.run(getTargetContext())+"\n";
                     bufferRenderingResult+="HEIGHT_FIT checks="+KeyboardHeightContract.run(getTargetContext())+"\n";
                     bufferRenderingResult+="PET_APPEARANCE checks="+KeyboardAppearanceContract.run(getTargetContext())+"\n"; }
                 catch(Throwable error) { renderingError.set(error); }
@@ -139,6 +140,13 @@ public final class EngineInstrumentation extends Instrumentation {
                 NativeRimeEngine engine=isolatedEngine;
                 long session=engine.createSession();
                 if(!engine.selectSchema(session,"rimes_pinyin_private")) throw new AssertionError("private schema");
+                for(char key:"shi".toCharArray()) engine.processKey(session,key);
+                org.scholay.rimes.core.RimeEngine.Snapshot anchor=engine.snapshot(session);
+                org.scholay.rimes.core.CandidateMatrix.Preview preview=org.scholay.rimes.core.CandidateMatrix.preview(engine,session,anchor,36);
+                if(preview.items.size()<20 || engine.snapshot(session).pageStart!=anchor.pageStart) throw new AssertionError("Matrix preview/restore");
+                org.scholay.rimes.core.CandidateMatrix.Item chosen=preview.items.get(18);
+                if(!engine.selectCandidate(session,chosen.index).commit.equals(chosen.text)) throw new AssertionError("Matrix absolute candidate commit");
+                engine.clearComposition(session);
                 for(char key:"nihao".toCharArray()) engine.processKey(session,key);
                 org.scholay.rimes.core.RimeEngine.Snapshot partial=engine.selectCandidate(session,1);
                 if(!partial.preedit.contains("你") || partial.caret!=partial.preedit.length())

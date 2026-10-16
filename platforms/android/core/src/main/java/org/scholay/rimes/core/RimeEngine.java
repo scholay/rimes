@@ -11,6 +11,8 @@ public interface RimeEngine {
     Snapshot processKey(long session, int key);
     Snapshot selectCandidate(long session, int index);
     Snapshot snapshot(long session);
+    /** Read candidates without sending schema-dependent paging keys or learning. */
+    default Snapshot candidateRange(long session,int start,int count) { throw new UnsupportedOperationException("Candidate enumeration unavailable"); }
     void clearComposition(long session);
 
     final class Snapshot {
