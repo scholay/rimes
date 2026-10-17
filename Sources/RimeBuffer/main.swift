@@ -614,6 +614,13 @@ if CommandLine.arguments.contains("buffer-smoke") {
 if CommandLine.arguments.contains("buffer-window-smoke") {
     exit(runBufferWindowSmokeTest() ? 0 : 1)
 }
+if let index = CommandLine.arguments.firstIndex(of: "clipboard-linux-fixtures"),
+   CommandLine.arguments.indices.contains(index + 1) {
+    _ = NSApplication.shared
+    exit(MainActor.assumeIsolated {
+        ClipboardHistorySmoke.exportLinuxParityFixtures(to: CommandLine.arguments[index + 1])
+    } ? 0 : 1)
+}
 if CommandLine.arguments.contains("clipboard-history-smoke") {
     _ = NSApplication.shared
     exit(MainActor.assumeIsolated { ClipboardHistorySmoke.run() } ? 0 : 1)

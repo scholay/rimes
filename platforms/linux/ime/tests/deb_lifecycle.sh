@@ -17,10 +17,11 @@ VERSION=$(dpkg-deb -f "$DEB" Version)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 DATA="$WORK/user-data/rimes"
-mkdir -p "$DATA/rime_ice.userdb" "$DATA/schemes/learning/custom.userdb" "$DATA/capsule" "$DATA/translation/cache"
+mkdir -p "$DATA/rime_ice.userdb" "$DATA/schemes/learning/custom.userdb" "$DATA/capsule/clipboard" "$DATA/translation/cache"
 printf '%s\n' 'keep learned dictionary' > "$DATA/rime_ice.userdb/CURRENT"
 printf '%s\n' 'keep imported learning' > "$DATA/schemes/learning/custom.userdb/CURRENT"
 printf '%s\n' 'keep notes' > "$DATA/capsule/note.md"
+printf '%s\n' 'keep original MIME history and favorites' > "$DATA/capsule/clipboard/history-v1.sqlite3"
 printf '%s\n' 'keep downloaded model' > "$DATA/translation/cache/model.argosmodel"
 (cd "$DATA" && find . -type f -exec sha256sum {} +) > "$WORK/user-data.sha256"
 
