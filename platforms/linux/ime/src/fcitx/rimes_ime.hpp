@@ -21,6 +21,8 @@
 #include "plugin_registry.hpp"
 #include "package_binding.hpp"
 #include "configuration.hpp"
+#include "local_translation.hpp"
+#include "ai_api.hpp"
 
 namespace fcitx {
 
@@ -90,6 +92,8 @@ private:
     std::unique_ptr<EventSourceIO> configuration_watch_;
     int configuration_watch_fd_ = -1;
     std::string configuration_revision_;
+    rimes::runtime::LocalTranslationWorker translation_worker_;
+    rimes::runtime::AIWorker ai_worker_;
 };
 
 class RimesImeFactory : public AddonFactory {

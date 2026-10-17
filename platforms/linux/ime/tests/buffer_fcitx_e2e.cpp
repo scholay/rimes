@@ -16,6 +16,7 @@
 
 #include "buffer_protocol.hpp"
 #include "configuration.hpp"
+#include "official_catalog.hpp"
 
 #include <fcitx-utils/capabilityflags.h>
 #include <fcitx-utils/event.h>
@@ -87,6 +88,34 @@ std::string IsolateDirs() {
     setenv("RIMES_BUFFER_AUTO_CAPTURE", "0", 1);
     setenv("RIMES_BUFFER_CLOSE_AFTER_LAST", "1", 1);
     setenv("RIMES_BUFFER_FOCUS_GRACE_MS", "200", 1);
+    if (const auto* endpoint = std::getenv("RIMES_TEST_AI_API")) {
+        rimes::runtime::ConfigurationStore config(root / "user/configuration");
+        auto settings = config.Load();
+        auto provider = rimes::runtime::FieldDefaults(rimes::runtime::ProviderFields());
+        const auto id = rimes::runtime::RandomID();
+        provider["id"] = id; provider["name"] = "Loopback fixture";
+        provider["baseURL"] = std::string(endpoint) + "/fragmented"; provider["model"] = "fixture-model";
+        settings["providers"].push_back(provider); settings["activeProvider"] = id;
+        config.Save(settings, settings.at("revision"), {{id, "fixture-credential"}});
+        const auto packages = rimes::plugins::BundledPackages();
+        rimes::plugins::PackageStore store(root / "user/plugins", rimes::plugins::OfficialCatalog(), packages,
+                                           rimes::plugins::CompiledAdapters(), "1.1.0");
+        const auto plugin = "builtin.openai-compatible";
+        store.Install(plugin, packages.at(plugin), store.Inspect(plugin).grant);
+        store.Enable(plugin, true, store.Inspect(plugin).grant);
+    }
+    if (const auto* resources = std::getenv("RIMES_TEST_TRANSLATION_RESOURCES")) {
+        // Copy only the active verified bundle, never a real user profile.
+        const auto source = std::filesystem::path(resources);
+        std::ifstream input(source / "current.json");
+        rimes::runtime::Json pointer; input >> pointer;
+        const auto bundle = pointer.at("bundle").get<std::string>();
+        if (bundle.size() != 39 || bundle.substr(0, 7) != "bundle-" || bundle.find_first_not_of("0123456789abcdef", 7) != std::string::npos) Die("invalid translation fixture");
+        std::filesystem::create_directories(root / "user/translation");
+        std::filesystem::permissions(root / "user/translation", std::filesystem::perms::owner_all);
+        std::filesystem::copy_file(source / "current.json", root / "user/translation/current.json");
+        std::filesystem::copy(source / bundle, root / "user/translation" / bundle, std::filesystem::copy_options::recursive);
+    }
     return dump_env;
 }
 
@@ -183,7 +212,7 @@ void SendBufferOp(const char* op, std::string_view text = {}) {
         Die("could not connect to the Buffer socket");
     }
     const std::string json = std::string("{\"v\":1,\"op\":\"") + op + "\"" +
-        (text.empty() ? "" : ",\"text\":" + rimes::buffer::JsonEscape(text)) + "}";
+        (text.empty() ? "" : (std::string(op) == "select_plugin" ? ",\"id\":" : ",\"text\":") + rimes::buffer::JsonEscape(text)) + "}";
     std::string frame;
     if (!rimes::buffer::EncodeFrame(json, &frame) ||
         send(fd, frame.data(), frame.size(), MSG_NOSIGNAL) != static_cast<ssize_t>(frame.size())) {
@@ -595,6 +624,166 @@ void RunBufferSuite(fcitx::Instance& instance,
 
 }  // namespace
 
+void RunAISuite(SuiteCtx ctx) {
+    ctx.ic->setCapabilityFlags(fcitx::CapabilityFlags{fcitx::CapabilityFlag::Preedit});
+    EnsureCapturing(ctx.frontend, ctx.uuid, ctx.dump_path);
+    SendBufferOp("select_plugin", "builtin.openai-compatible"); SendBufferOp("paste", "原文🙂");
+    struct Progress { int phase = 0; bool preview = false; std::string remaining; std::chrono::steady_clock::time_point closed; };
+    auto progress = std::make_shared<Progress>();
+    const auto started = std::chrono::steady_clock::now();
+    ctx.timers->emplace_back(ctx.instance->eventLoop().addTimeEvent(CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + 50000, 0,
+        [ctx, progress, started](fcitx::EventSourceTime* timer, std::uint64_t) {
+            try {
+                rimes::buffer::Snapshot s;
+                if (!rimes::buffer::ParseSnapshot(ReadDump(ctx.dump_path), &s)) Die("AI snapshot malformed");
+                const auto elapsed = std::chrono::steady_clock::now() - started;
+                if (elapsed > std::chrono::seconds(15)) Die("AI workbench deadline");
+                if (s.phase == rimes::buffer::DerivedPhase::Failed) Die("AI workbench request failed: " + s.message);
+                if (progress->phase == 0 && elapsed > std::chrono::milliseconds(250)) {
+                    if (s.active_plugin != "builtin.openai-compatible" || s.phase != rimes::buffer::DerivedPhase::Idle || !s.results.empty())
+                        Die("AI requested network before explicit generation");
+                    SendBufferOp("generate"); progress->phase = 1;
+                } else if (progress->phase == 1) {
+                    if (s.phase == rimes::buffer::DerivedPhase::Running && !s.results.empty()) {
+                        progress->preview = true;
+                        if (s.can_deliver || s.results[0].ready) Die("AI stream preview became deliverable");
+                    }
+                    if (s.phase == rimes::buffer::DerivedPhase::Ready) {
+                        if (!progress->preview || s.results.size() != 1 || s.results[0].text != "First 🙂.第二段。" ||
+                            s.result_blocks.size() < 2 || s.staged_text != "原文🙂") Die("AI stream or source preservation differs");
+                        ctx.frontend->call<fcitx::ITestFrontend::pushCommitExpectation>(s.result_blocks.front().text);
+                        progress->remaining = s.results[0].text.substr(s.result_blocks.front().text.size());
+                        SendBufferOp("send_next"); progress->phase = 2;
+                    }
+                } else if (progress->phase == 2 && !s.results.empty() && s.results[0].text == progress->remaining) {
+                    if (s.staged_text != "原文🙂") Die("AI source consumed before final output child");
+                    for (const auto& block : s.result_blocks) ctx.frontend->call<fcitx::ITestFrontend::pushCommitExpectation>(block.text);
+                    SendBufferOp("send_all"); progress->phase = 3;
+                } else if (progress->phase == 3 && !s.visible) {
+                    if (!s.staged_text.empty() || !s.results.empty()) Die("AI final native delivery did not consume source");
+                    EnsureCapturing(ctx.frontend, ctx.uuid, ctx.dump_path);
+                    SendBufferOp("paste", "原文🙂"); progress->phase = 4;
+                } else if (progress->phase == 4 && s.can_generate) {
+                    SendBufferOp("generate"); progress->phase = 5;
+                } else if (progress->phase == 5 && s.phase == rimes::buffer::DerivedPhase::Running && !s.results.empty()) {
+                    SendBufferOp("close"); progress->closed = std::chrono::steady_clock::now(); progress->phase = 6;
+                } else if (progress->phase == 6 && std::chrono::steady_clock::now() - progress->closed > std::chrono::milliseconds(500)) {
+                    if (s.visible || !s.results.empty() || s.staged_text != "原文🙂") Die("closed AI request restored output or consumed source");
+                    std::cout << "ok: production AI adapter, explicit HTTP, stream preview, final-only delivery, source consumption and close cancellation\n";
+                    ctx.instance->exit(); return true;
+                }
+                timer->setTime(fcitx::now(CLOCK_MONOTONIC) + 20000); timer->setOneShot();
+            } catch (const std::exception& error) { std::cerr << error.what() << '\n'; g_exit_status = EXIT_FAILURE; ctx.instance->exit(); }
+            return true;
+        }));
+}
+
+void RunAutoSendSuite(SuiteCtx ctx) {
+    ctx.ic->setCapabilityFlags(fcitx::CapabilityFlags{fcitx::CapabilityFlag::Preedit});
+    EnsureCapturing(ctx.frontend, ctx.uuid, ctx.dump_path);
+    SendBufferOp("cycle_auto_send"); SendBufferOp("paste", "hello world.");
+    AfterUs(ctx, 150000, [](SuiteCtx active) {
+        ExpectContains(ReadDump(active.dump_path), "\"auto_send_seconds\":1", "toolbar cycle did not persist one-second timer");
+        Type(active.frontend, active.uuid, "nihao");
+        AfterUs(active, 1500000, [](SuiteCtx composing) {
+            rimes::buffer::Snapshot snapshot;
+            if (!rimes::buffer::ParseSnapshot(ReadDump(composing.dump_path), &snapshot) ||
+                snapshot.preedit.empty() || snapshot.staged_text != "hello world.")
+                Die("auto-send settled composition or consumed stable source while composing");
+            for (const auto& block : snapshot.blocks)
+                composing.frontend->call<fcitx::ITestFrontend::pushCommitExpectation>(block.text);
+            SendKey(composing.frontend, composing.uuid, "Escape");
+            AfterUs(composing, 250000, [](SuiteCtx delivered) {
+                ExpectContains(ReadDump(delivered.dump_path), "\"visible\":false", "ready timer did not deliver after composition ended");
+                EnsureCapturing(delivered.frontend, delivered.uuid, delivered.dump_path);
+                SendBufferOp("paste", "pause check");
+                AfterUs(delivered, 400000, [](SuiteCtx pause) {
+                    SendBufferOp("close");
+                    AfterUs(pause, 1400000, [](SuiteCtx hidden) {
+                        ExpectContains(ReadDump(hidden.dump_path), "pause check", "hidden timer consumed source");
+                        EnsureCapturing(hidden.frontend, hidden.uuid, hidden.dump_path);
+                        AfterUs(hidden, 250000, [](SuiteCtx resumed) {
+                            rimes::buffer::Snapshot snapshot;
+                            if (!rimes::buffer::ParseSnapshot(ReadDump(resumed.dump_path), &snapshot) ||
+                                snapshot.staged_text != "pause check") Die("hidden interval counted toward auto-send");
+                            for (const auto& block : snapshot.blocks)
+                                resumed.frontend->call<fcitx::ITestFrontend::pushCommitExpectation>(block.text);
+                            AfterUs(resumed, 900000, [](SuiteCtx done) {
+                                ExpectContains(ReadDump(done.dump_path), "\"visible\":false", "resumed timer did not drain and close");
+                                std::cout << "ok: Default automatic native delivery, toolbar persistence, composition gate, hidden pause and close-after-last\n";
+                                done.instance->exit();
+                            });
+                        });
+                    });
+                });
+            });
+        });
+    });
+}
+
+void RunTranslationSuite(SuiteCtx ctx) {
+    ctx.ic->setCapabilityFlags(fcitx::CapabilityFlags{fcitx::CapabilityFlag::Preedit} | fcitx::CapabilityFlag::ClientUnfocusCommit);
+    EnsureCapturing(ctx.frontend, ctx.uuid, ctx.dump_path);
+    SendBufferOp("select_plugin", "builtin.apple-translation");
+    SendBufferOp("paste", "今天天气很好，我们下午去公园散步。");
+    struct Progress { int phase = 0; std::string prefix, result_id; };
+    auto progress = std::make_shared<Progress>();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    ctx.timers->emplace_back(ctx.instance->eventLoop().addTimeEvent(CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + 50000, 0,
+        [ctx, progress, deadline](fcitx::EventSourceTime* timer, std::uint64_t) {
+            try {
+                if (std::chrono::steady_clock::now() >= deadline) Die("real translation addon deadline");
+                rimes::buffer::Snapshot snapshot;
+                if (!rimes::buffer::ParseSnapshot(ReadDump(ctx.dump_path), &snapshot)) Die("translation snapshot malformed");
+                if (snapshot.phase == rimes::buffer::DerivedPhase::Failed) Die("real translation adapter reported failure");
+                if (progress->phase == 0 && snapshot.phase == rimes::buffer::DerivedPhase::Ready) {
+                    if (snapshot.active_plugin != "builtin.apple-translation" || snapshot.results.size() != 1 || snapshot.results[0].text.find("park") == std::string::npos) Die("real translation result missing");
+                    progress->prefix = snapshot.results[0].text; progress->result_id = snapshot.results[0].id;
+                    if (snapshot.staged_text != "今天天气很好，我们下午去公园散步。") Die("translation consumed original source");
+                    SendBufferOp("paste", "请保存文档。"); progress->phase = 1;
+                } else if (progress->phase == 1 && snapshot.staged_text.find("请保存文档。") != std::string::npos) {
+                    if (snapshot.results.empty() || snapshot.results[0].text.substr(0, progress->prefix.size()) != progress->prefix) Die("tail edit erased ready prefix");
+                    if (snapshot.results[0].id == progress->result_id) Die("source edit reused whole-result copy authority");
+                    progress->phase = 2;
+                } else if (progress->phase == 2 && snapshot.phase == rimes::buffer::DerivedPhase::Ready) {
+                    if (snapshot.results[0].text.size() <= progress->prefix.size()) Die("new sentence was not translated");
+                    if (!snapshot.can_deliver || snapshot.result_blocks.size() < 2) Die("translated output was not segmented for delivery");
+                    const auto first = snapshot.result_blocks.front();
+                    ctx.frontend->call<fcitx::ITestFrontend::pushCommitExpectation>(first.text);
+                    ctx.frontend->call<fcitx::ITestFrontend::keyEvent>(ctx.uuid, fcitx::Key("Return"), false);
+                    rimes::buffer::Snapshot delivered;
+                    if (!rimes::buffer::ParseSnapshot(ReadDump(ctx.dump_path), &delivered) ||
+                        delivered.staged_text != "请保存文档。") Die("first translated child did not retire exactly its source unit on key-down");
+                    progress->prefix.erase(0, first.text.size());
+                    if (delivered.results.empty() || delivered.results[0].text.substr(0, progress->prefix.size()) != progress->prefix)
+                        Die("first translation delivery lost immutable siblings");
+                    const auto remaining = delivered.results[0].text;
+                    ctx.frontend->call<fcitx::ITestFrontend::keyEvent>(ctx.uuid, fcitx::Key("Return"), true);
+                    if (!rimes::buffer::ParseSnapshot(ReadDump(ctx.dump_path), &delivered) || delivered.results[0].text != remaining)
+                        Die("derived Return release delivered twice");
+                    SendBufferOp("close"); progress->phase = 3;
+                } else if (progress->phase == 3 && !snapshot.visible) {
+                    if (!snapshot.results.empty()) Die("hidden workbench retained translation authority");
+                    EnsureCapturing(ctx.frontend, ctx.uuid, ctx.dump_path);
+                    SendBufferOp("paste", "你好，世界。"); progress->phase = 4;
+                } else if (progress->phase == 4 && snapshot.phase == rimes::buffer::DerivedPhase::Ready &&
+                           snapshot.staged_text.find("你好，世界。") != std::string::npos) {
+                    if (snapshot.results.empty() || snapshot.results[0].text.substr(0, progress->prefix.size()) != progress->prefix)
+                        Die("reopen/source editing rewrote frozen translated output");
+                    for (const auto& block : snapshot.result_blocks)
+                        ctx.frontend->call<fcitx::ITestFrontend::pushCommitExpectation>(block.text);
+                    SendBufferOp("send_all"); progress->phase = 5;
+                } else if (progress->phase == 5 && !snapshot.visible) {
+                    if (!snapshot.staged_text.empty() || !snapshot.results.empty()) Die("translated send-all left consumed source or output");
+                    std::cout << "ok: production translation, stable prefix, exact source retirement, immediate Return, frozen siblings, reopen and send-all\n";
+                    ctx.instance->exit(); return true;
+                }
+                timer->setTime(fcitx::now(CLOCK_MONOTONIC) + 50000); timer->setOneShot();
+            } catch (const std::exception& error) { std::cerr << error.what() << '\n'; g_exit_status = EXIT_FAILURE; ctx.instance->exit(); }
+            return true;
+        }));
+}
+
 int main(int argc, char** argv) {
     if (argc < 4) {
         std::cerr << "Usage: rimes-buffer-fcitx-e2e <build-dir> <addon-rel-dir> <data-rel-dir>\n";
@@ -603,6 +792,11 @@ int main(int argc, char** argv) {
 
     try {
         const auto dump_path = IsolateDirs();
+        struct FixtureCleanup {
+            std::filesystem::path root;
+            ~FixtureCleanup() { if (!root.empty()) { std::error_code error; std::filesystem::remove_all(root, error); } }
+        } cleanup{std::getenv("RIMES_TEST_TRANSLATION_RESOURCES") || std::getenv("RIMES_TEST_AI_API") ?
+                  std::filesystem::path(dump_path).parent_path() : std::filesystem::path{}};
         fcitx::setupTestingEnvironment(argv[1], {argv[2]}, {argv[3]});
 
         char arg0[] = "rimes-buffer-fcitx-e2e";
@@ -675,8 +869,14 @@ int main(int argc, char** argv) {
                     suite_started = true;
                     std::cout << "ok: buffer testfrontend left Deploying\n";
                     try {
-                        RunBufferSuite(instance, frontend, uuid, ic, dump_path, &grace_timer,
-                                       &hold_timer, &extra_timers);
+                        if (std::getenv("RIMES_TEST_AI_API"))
+                            RunAISuite({&instance, &extra_timers, frontend, uuid, ic, dump_path, &grace_timer, &hold_timer});
+                        else if (std::getenv("RIMES_TEST_AUTO_SEND"))
+                            RunAutoSendSuite({&instance, &extra_timers, frontend, uuid, ic, dump_path, &grace_timer, &hold_timer});
+                        else if (std::getenv("RIMES_TEST_TRANSLATION_RESOURCES"))
+                            RunTranslationSuite({&instance, &extra_timers, frontend, uuid, ic, dump_path, &grace_timer, &hold_timer});
+                        else RunBufferSuite(instance, frontend, uuid, ic, dump_path, &grace_timer,
+                                            &hold_timer, &extra_timers);
                     } catch (const TestFailed&) {
                         instance.exit();
                     }
