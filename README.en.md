@@ -61,7 +61,7 @@ This table is generated from [`Catalog/buffer-plugins.json`](Catalog/buffer-plug
 
 | Plug-in | ID | Version | Default installation | Default state |
 |---|---|---:|---|---|
-| Translation | `builtin.apple-translation` | 2.2.0 | Bundled with XSIME | Enabled |
+| Translation | `builtin.apple-translation` | 2.3.0 | Bundled with XSIME | Enabled |
 | Capture | `builtin.capsule.capture` | 1.1.0 | Bundled with XSIME | Enabled |
 | Notes | `builtin.capsule.notes` | 1.1.0 | Bundled with XSIME | Enabled |
 | Passwords | `builtin.capsule.passwords` | 1.1.0 | Bundled with XSIME | Enabled |

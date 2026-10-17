@@ -22,12 +22,17 @@ target_link_libraries(RimesRuntimeStorage PUBLIC OpenSSL::Crypto)
 set_target_properties(RimesRuntimeStorage PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(RimesRuntimeStorage PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
-add_library(RimesProcess STATIC core/process.cpp)
+add_library(RimesProcess STATIC core/process.cpp core/background_jobs.cpp)
 target_compile_features(RimesProcess PUBLIC cxx_std_17)
 target_include_directories(RimesProcess PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/core")
 target_link_libraries(RimesProcess PUBLIC Threads::Threads)
 set_target_properties(RimesProcess PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(RimesProcess PRIVATE -Wall -Wextra -Wpedantic -Werror)
+if(RIMES_BUILD_TESTS)
+    add_executable(rimes-background-jobs-tests tests/background_jobs_tests.cpp)
+    target_link_libraries(rimes-background-jobs-tests PRIVATE RimesProcess)
+    add_test(NAME background-jobs COMMAND rimes-background-jobs-tests)
+endif()
 
 add_library(RimesPluginCore STATIC core/plugin_registry.cpp core/plugin_store.cpp core/package_binding.cpp core/official_catalog.cpp core/http_download.cpp core/configuration.cpp)
 target_compile_features(RimesPluginCore PUBLIC cxx_std_17)
@@ -51,13 +56,25 @@ install(TARGETS rimes-plugins DESTINATION "${CMAKE_INSTALL_BINDIR}")
 add_executable(rimes-translation ctl/translation_ctl.cpp)
 target_link_libraries(rimes-translation PRIVATE RimesPluginCore RimesProcess)
 target_compile_options(rimes-translation PRIVATE -Wall -Wextra -Wpedantic -Werror)
-target_compile_definitions(rimes-translation PRIVATE
+add_library(RimesTranslationLocations INTERFACE)
+target_compile_definitions(RimesTranslationLocations INTERFACE
     RIMES_INSTALLED_TRANSLATION_RESOURCES="${CMAKE_INSTALL_FULL_LIBEXECDIR}/rimes/translation"
     RIMES_BUILD_TRANSLATION_RESOURCES="${CMAKE_CURRENT_SOURCE_DIR}/../translation"
     RIMES_TRANSLATION_PYTHON="${Python3_EXECUTABLE}")
+target_link_libraries(rimes-translation PRIVATE RimesTranslationLocations)
 install(TARGETS rimes-translation DESTINATION "${CMAKE_INSTALL_BINDIR}")
 install(FILES ../translation/runtime.py ../translation/translation_core.py ../translation/resources.lock.json ../translation/NOTICE.md
     DESTINATION "${CMAKE_INSTALL_LIBEXECDIR}/rimes/translation")
+
+add_library(RimesTranslationUnits STATIC ../translation/units.cpp)
+target_compile_features(RimesTranslationUnits PUBLIC cxx_std_17)
+target_include_directories(RimesTranslationUnits PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../translation")
+target_compile_options(RimesTranslationUnits PRIVATE -Wall -Wextra -Wpedantic -Werror)
+set_target_properties(RimesTranslationUnits PROPERTIES POSITION_INDEPENDENT_CODE ON)
+add_library(RimesLocalTranslation STATIC core/local_translation.cpp)
+target_link_libraries(RimesLocalTranslation PUBLIC RimesPluginCore RimesProcess PRIVATE RimesTranslationLocations)
+target_compile_options(RimesLocalTranslation PRIVATE -Wall -Wextra -Wpedantic -Werror)
+set_target_properties(RimesLocalTranslation PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 
 pkg_check_modules(RuntimeGtk REQUIRED IMPORTED_TARGET gtk+-3.0)
@@ -90,6 +107,9 @@ install(TARGETS rimes-settings DESTINATION "${CMAKE_INSTALL_BINDIR}")
 install(FILES ui/org.scholay.rimes.settings.desktop DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
 
 if(BUILD_TESTING OR RIMES_BUILD_TESTS)
+    add_executable(rimes-translation-units-tests ../translation/units_tests.cpp)
+    target_link_libraries(rimes-translation-units-tests PRIVATE RimesTranslationUnits)
+    add_test(NAME translation-units COMMAND rimes-translation-units-tests)
     add_executable(rimes-process-tests tests/process_tests.cpp)
     target_link_libraries(rimes-process-tests PRIVATE RimesProcess)
     add_test(NAME runtime-process COMMAND rimes-process-tests)

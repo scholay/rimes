@@ -8,14 +8,14 @@ enum PresetBufferPluginCatalog {
             id: "builtin.apple-translation",
             nameZH: "实时翻译",
             nameEN: "Translation",
-            version: "2.2.0",
+            version: "2.3.0",
             summaryZH: "实时翻译官方插件；用户数据由 RIMES 宿主管理。",
             summaryEN: "Translation official plugin; user data remains owned by the RIMES host.",
             producerID: "official",
             defaultInstalled: true,
             defaultEnabled: true,
-            downloadAssetName: "preset-plugin-builtin.apple-translation-2.2.0.json",
-            sha256: "6fbb30f06133b95b6a7e9ee167550f95a123ca522637c21265df9e36fbc8d37e"
+            downloadAssetName: "preset-plugin-builtin.apple-translation-2.3.0.json",
+            sha256: "9ed28df8f1621bb22c2bbfdec48397e38a035ff9d0c00a8826d330d07ad8daa4"
         ),
         PresetBufferPluginCatalogEntry(
             id: "builtin.capsule.capture",

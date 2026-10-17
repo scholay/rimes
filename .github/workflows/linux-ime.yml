@@ -114,7 +114,10 @@ jobs:
         run: ctest --test-dir platforms/linux/ime/build --output-on-failure
 
       - name: Real pinned offline translation engine
-        run: python3 platforms/linux/runtime/tests/translation_engine_smoke.py platforms/linux/ime/build/runtime/rimes-translation
+        run: |
+          python3 scripts/platform-preview/preview.py stage --repo-root "$PWD" --output-dir "$RUNNER_TEMP/translation-shared"
+          python3 platforms/linux/runtime/tests/translation_engine_smoke.py platforms/linux/ime/build/runtime/rimes-translation \
+            --fcitx-build platforms/linux/ime/build --shared-data "$RUNNER_TEMP/translation-shared"
 
       - name: Render native settings with an isolated profile
         run: |

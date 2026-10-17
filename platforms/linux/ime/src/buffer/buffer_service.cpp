@@ -140,6 +140,7 @@ BufferService::BufferService(Instance* instance, PostFn post)
       focus_grace_ms_(FocusGraceMsFromEnv()),
       auto_capture_(EnvFlag("RIMES_BUFFER_AUTO_CAPTURE")),
       headless_(EnvFlag("RIMES_BUFFER_HEADLESS")) {
+    translation_.SetSegmenter([this](std::string_view text) { return model_.SplitSegments(text); });
     if (const char* close_after = std::getenv("RIMES_BUFFER_CLOSE_AFTER_LAST")) {
         model_.set_close_after_last(std::strcmp(close_after, "0") != 0);
     }
@@ -148,6 +149,7 @@ BufferService::BufferService(Instance* instance, PostFn post)
 }
 
 BufferService::~BufferService() {
+    auto_send_timer_.reset();
     alive_->store(false);
     CancelDerived();
     CancelHoldTimer();
@@ -298,6 +300,9 @@ bool BufferService::HandleEarlyKey(KeyEvent& event, bool composing) {
     if (ic == nullptr) {
         return false;
     }
+    if (gesture_.pending() && !event.isRelease() && !IsReturnKey(event.rawKey()) && !IsReturnKey(event.key())) {
+        gesture_.cancel(); CancelHoldTimer(); model_.set_hold_progress(0);
+    }
     if (IsToggleHotkey(event)) {
         Toggle(ic);
         event.filterAndAccept();
@@ -354,8 +359,22 @@ bool BufferService::HandleEarlyKey(KeyEvent& event, bool composing) {
             if (!is_repeat) {
                 eat_return_until_release_ = true;
             }
-            ApplyReturnAction(gesture_.on_press(false, is_repeat, now), ic, composing);
-            if (!is_repeat && !gesture_.settle_only()) {
+            SynchronizeDerived();
+            const bool derived = plugins_ && !plugins_->SelectedBuffer().empty();
+            if (derived && !CanDeliverDerived()) {
+                if (!is_repeat) {
+                    gesture_.cancel(); CancelHoldTimer();
+                    // Return requests generation only when there is no ready
+                    // output to send. A missing target or a commit conflict is
+                    // not permission to replace an existing result.
+                    if (!delivery_conflict_ && derived_.Phase() != rimes::buffer::DerivedPhase::Ready &&
+                        !(Translating() && translation_.Head())) Generate();
+                }
+                event.filterAndAccept(); return true;
+            }
+            ApplyReturnAction(gesture_.on_press(false, is_repeat, now, derived), ic, composing);
+            return_generation_ = model_.generation();
+            if (!is_repeat && gesture_.pending() && !gesture_.settle_only()) {
                 ArmHoldTimer();
             }
         }
@@ -434,6 +453,50 @@ void BufferService::Configure(bool close_after_last, bool reset_on_app_switch, i
     Publish();
 }
 
+void BufferService::ConfigureAutoSend(bool enabled, int seconds) {
+    if (seconds != 1 && seconds != 2 && seconds != 3 && seconds != 5) return;
+    if (auto_send_ != enabled || auto_send_seconds_ != seconds) auto_send_clock_.Reset();
+    auto_send_ = enabled; auto_send_seconds_ = seconds;
+    Publish();
+}
+
+void BufferService::SynchronizeAutoSend() {
+    const auto plugin = plugins_ ? plugins_->SelectedBuffer() : std::string{};
+    auto_send_clock_.Synchronize(plugin, model_.blocks());
+    if (model_.secure() || model_.password_field() || model_.last_reason() == rimes::buffer::MutationReason::PrivacyDiscard)
+        auto_send_clock_.Reset();
+    const bool active = auto_send_ && plugin.empty() && model_.visible() && model_.processing_active() &&
+        model_.capture_enabled() && !model_.secure() && !model_.password_field() && !model_.empty() && LiveTarget();
+    if (!active) { auto_send_clock_.Pause(); return; }
+    if (!auto_send_timer_ && instance_) {
+        auto_send_timer_ = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 100000, 0,
+            [this](EventSourceTime* timer, uint64_t) {
+                (void)timer;
+                auto_send_scheduled_ = false;
+                AutoSendTick();
+                return true;
+            });
+    }
+    if (auto_send_timer_ && !auto_send_scheduled_) {
+        auto_send_timer_->setTime(now(CLOCK_MONOTONIC) + 100000); auto_send_timer_->setOneShot();
+        auto_send_scheduled_ = true;
+    }
+}
+
+void BufferService::AutoSendTick() {
+    SynchronizeAutoSend();
+    const bool active = auto_send_ && (!plugins_ || plugins_->SelectedBuffer().empty()) &&
+        model_.visible() && model_.processing_active() && model_.capture_enabled() &&
+        !model_.secure() && !model_.password_field() && LiveTarget();
+    const auto head = auto_send_clock_.Tick(static_cast<double>(now(CLOCK_MONOTONIC)) / 1000000.0,
+                                           active, auto_send_seconds_);
+    // Stable earlier blocks may age while composing; no timer settles preedit
+    // or competes with a physical Return/drag operation.
+    if (head && model_.preedit().empty() && !gesture_.pending() && !dragging_ &&
+        !model_.blocks().empty() && model_.blocks().front().id == *head) Deliver(false);
+    else if (active && !model_.empty()) Publish();
+}
+
 void BufferService::BindPlugins(rimes::plugins::Registry& registry,
     std::function<bool(const rimes::plugins::Lease&)> validate,
     std::function<rimes::runtime::RequestConfiguration(std::string_view)> freeze) {
@@ -453,34 +516,46 @@ void BufferService::RegisterDerivedAdapter(std::string id, std::string capabilit
 }
 
 void BufferService::CancelDerived() {
+    CancelTranslation(false);
     if (derived_cancel_) derived_cancel_->store(true);
     derived_cancel_.reset();
     derived_request_.reset();
     derived_.Cancel();
+    result_pending_.clear(); result_pending_id_.clear();
 }
 
 void BufferService::SynchronizeDerived() {
     // A permission check may refresh configuration and publish a new snapshot.
     if (synchronizing_derived_) return;
     synchronizing_derived_ = true;
+    if (model_.last_reason() == rimes::buffer::MutationReason::PrivacyDiscard) translation_.Clear();
     bool grant = false;
     try { grant = derived_request_ && validate_ && validate_(derived_request_->lease); }
     catch (const std::exception&) { grant = false; }
     derived_.Synchronize(model_.blocks(), plugins_ ? plugins_->SelectedBuffer() : "",
         configuration_revision_, {model_.capture_token(), focus_epoch_},
         model_.visible() && model_.processing_active(), model_.secure() || model_.password_field());
+    if (Translating()) {
+        SynchronizeTranslation();
+        synchronizing_derived_ = false;
+        return;
+    }
+    CancelTranslation(true);
     if (derived_request_ && !derived_.Owns(*derived_request_, grant)) CancelDerived();
+    SynchronizeResultDelivery();
     synchronizing_derived_ = false;
 }
 
 bool BufferService::SelectPlugin(const std::string& id) {
     if (!plugins_ || (!id.empty() && !derived_adapters_.count(id)) || !plugins_->SelectBuffer(id)) return false;
     CancelDerived();
+    gesture_.cancel(); CancelHoldTimer();
     Publish();
     return true;
 }
 
 bool BufferService::Generate() {
+    if (Translating()) return TranslationTick(true);
     SynchronizeDerived();
     if (!plugins_ || !freeze_ || !validate_) return false;
     const auto adapter = derived_adapters_.find(plugins_->SelectedBuffer());
@@ -503,7 +578,8 @@ bool BufferService::Generate() {
             post([this, alive, request, alternative, text = std::move(text), finished, success] {
                 if (!alive->load()) return;
                 SynchronizeDerived();
-                const bool grant = validate_ && validate_(request.lease);
+                bool grant = false;
+                try { grant = validate_ && validate_(request.lease); } catch (const std::exception&) {}
                 if (!derived_.Accepts(request, grant)) return;
                 const bool valid = text.empty() || derived_.Update(request, grant, alternative, text);
                 if (finished || !valid) {
@@ -780,9 +856,8 @@ void BufferService::ApplyReturnAction(rimes::buffer::ReturnGesture::Action actio
 }
 
 bool BufferService::Deliver(bool all) {
-    // Derived output is delivered through its ownership-aware path (task 7).
-    // Never send source text behind the user's selected transform.
-    if (plugins_ && !plugins_->SelectedBuffer().empty()) return false;
+    if (!model_.preedit().empty()) return false;
+    if (plugins_ && !plugins_->SelectedBuffer().empty()) return DeliverDerived(all);
     auto* ic = LiveTarget();
     if (ic == nullptr) {
         FCITX_LOGC(rimes_buffer_log, Info) << "delivery rejected: no live target";
@@ -845,6 +920,12 @@ void BufferService::HandleCommand(const rimes::buffer::Command& command) {
         case rimes::buffer::CommandOp::SendAll:
             SendAll();
             break;
+        case rimes::buffer::CommandOp::CycleAutoSend:
+            if ((!plugins_ || plugins_->SelectedBuffer().empty()) && !model_.secure() && cycle_auto_send_) {
+                try { cycle_auto_send_(); }
+                catch (const std::exception&) { WriteAll(rimes::buffer::EncodeError("settings", "自动发送设置未保存，请重新加载设置后重试")); }
+            }
+            break;
         case rimes::buffer::CommandOp::RemoveLast:
             model_.remove_last_block();
             break;
@@ -879,8 +960,12 @@ void BufferService::HandleCommand(const rimes::buffer::Command& command) {
             Generate();
             break;
         case rimes::buffer::CommandOp::CancelGeneration:
+            CancelDerived();
+            break;
         case rimes::buffer::CommandOp::ReturnToEdit:
             CancelDerived();
+            delivery_conflict_ = false;
+            if (Translating()) translation_.ReturnToEdit();
             break;
         case rimes::buffer::CommandOp::SelectResult:
             SynchronizeDerived();
@@ -888,8 +973,17 @@ void BufferService::HandleCommand(const rimes::buffer::Command& command) {
             break;
         case rimes::buffer::CommandOp::CopyResult: {
             SynchronizeDerived();
+            if (TranslationActive()) {
+                if (translation_.Complete() && command.id == translation_result_id_) {
+                    const auto text = translation_.Preview();
+                    if (!text.empty()) WriteAll(rimes::runtime::Json{{"v", 1}, {"type", "copy_result"}, {"id", command.id}, {"text", text}}.dump());
+                }
+                break;
+            }
             const auto request = derived_request_;
-            const bool grant = request && validate_ && validate_(request->lease);
+            bool grant = false;
+            try { grant = request && validate_ && validate_(request->lease); }
+            catch (const std::exception&) { CancelDerived(); break; }
             SynchronizeDerived();
             if (request && derived_.Owns(*request, grant) &&
                 derived_.SelectResult(command.id)) {
@@ -1182,24 +1276,61 @@ void BufferService::WriteAll(const std::string& payload) {
 
 void BufferService::Publish() {
     SynchronizeDerived();
+    SynchronizeAutoSend();
     if (model_.visible()) {
         EnsureUi();
     }
     auto snapshot = rimes::buffer::MakeSnapshot(model_);
     snapshot.width = width_;
     snapshot.theme = theme_;
+    snapshot.auto_send_seconds = auto_send_ ? auto_send_seconds_ : 0;
+    if (auto_send_ && (!plugins_ || plugins_->SelectedBuffer().empty()) && model_.visible() &&
+        model_.processing_active() && !model_.secure() && LiveTarget())
+        for (const auto& block : snapshot.blocks)
+            snapshot.auto_send_progress[block.id] = std::clamp(auto_send_clock_.Age(block.id) / auto_send_seconds_, 0.0, 1.0);
     snapshot.active_plugin = derived_.Plugin();
     const auto adapter = derived_adapters_.find(snapshot.active_plugin);
     snapshot.live_expand = adapter == derived_adapters_.end() || adapter->second.live_expand;
     snapshot.phase = derived_.Phase();
     snapshot.can_generate = derived_.CanGenerate();
     snapshot.results = derived_.Results();
+    snapshot.result_blocks = result_pending_;
     if (const auto* selected = derived_.SelectedResult()) snapshot.selected_result = selected->id;
+    if (TranslationActive()) {
+        const bool running = translation_.Running() || (translation_.HasPending() && !translation_.Paused() && translation_configuration_ &&
+            (translation_configuration_->plugin.value("continuous", true) || translation_explicit_));
+        snapshot.phase = translation_.Complete() ? rimes::buffer::DerivedPhase::Ready :
+            translation_.Failed() || translation_source_invalid_ ? rimes::buffer::DerivedPhase::Failed : running ? rimes::buffer::DerivedPhase::Running : rimes::buffer::DerivedPhase::Idle;
+        if (translation_source_invalid_) snapshot.message = "原文过长，请分段翻译";
+        else if (translation_.Failed()) snapshot.message = "本地翻译未完成，请检查语言资源或重试";
+        else if (translation_.Paused()) snapshot.message = "翻译已暂停";
+        snapshot.can_generate = !translation_.All().empty() && !translation_.Running();
+        snapshot.results.clear(); snapshot.selected_result.clear();
+        snapshot.result_blocks.clear();
+        auto append_blocks = [&](const auto& units) {
+            for (const auto& unit : units) {
+                if (unit.phase != rimes::translation::Phase::Ready) break;
+                for (const auto& block : unit.children) {
+                    if (snapshot.result_blocks.size() < 200)
+                        snapshot.result_blocks.push_back({block.id, block.text, rimes::buffer::Origin::Local, 0});
+                    else { snapshot.result_blocks.back().id = "overflow-" + translation_result_id_; snapshot.result_blocks.back().text += block.text; }
+                }
+            }
+        };
+        append_blocks(translation_.Retired()); append_blocks(translation_.All());
+        const auto preview = translation_.Preview();
+        if (!preview.empty()) {
+            snapshot.results.push_back({translation_result_id_, preview, 0, translation_.Complete()});
+            snapshot.selected_result = translation_result_id_;
+        }
+    }
     if (plugins_) for (const auto& state : plugins_->Entries()) {
         if (state.descriptor.kind == rimes::plugins::Kind::Buffer && state.installed && state.enabled &&
             derived_adapters_.count(state.descriptor.id))
             snapshot.plugins.push_back({state.descriptor.id, state.descriptor.name});
     }
+    snapshot.can_deliver = !snapshot.active_plugin.empty() && CanDeliverDerived();
+    if (delivery_conflict_) snapshot.message = "上屏状态未确认，请返回编辑后继续";
     snapshot.ui_clients = UiClientCount();
     const auto json = rimes::buffer::EncodeSnapshot(snapshot);
     WriteAll(json);
@@ -1224,6 +1355,13 @@ void BufferService::ArmHoldTimer() {
     hold_timer_ = instance_->eventLoop().addTimeEvent(
         CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + kHoldTickUs, kHoldTickUs,
         [this](EventSourceTime* source, uint64_t) {
+            // Rearm explicitly only while this gesture is live. Retain the
+            // disabled source until release instead of destroying its callback
+            // from inside an aborted tick.
+            source->setEnabled(false);
+            if (model_.generation() != return_generation_ || !model_.preedit().empty()) {
+                gesture_.cancel(); model_.set_hold_progress(0); Publish(); return true;
+            }
             const auto now_tp = std::chrono::steady_clock::now();
             const auto action = gesture_.on_tick(now_tp);
             model_.set_hold_progress(gesture_.progress(now_tp));
