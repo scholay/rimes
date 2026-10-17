@@ -21,6 +21,11 @@ enum class CommandOp {
     Activate,
     Copy,
     Search,
+    Module,
+    Filter,
+    Manage,
+    Rail,
+    Refresh,
     Unknown,
 };
 
@@ -28,6 +33,7 @@ struct Command {
     CommandOp op = CommandOp::Unknown;
     std::string text;
     int index = -1;
+    std::string id;
 };
 
 struct Snapshot {
@@ -35,6 +41,12 @@ struct Snapshot {
     bool visible = false;
     bool armed = false;
     bool password_field = false;
+    std::string theme = "night";
+    std::string module = "notes";
+    std::string filter = "all";
+    bool managing = false;
+    bool loading = false;
+    std::vector<Module> modules{Module::Notes};
     std::string tab;
     std::string query;
     std::string hint;
@@ -44,6 +56,7 @@ struct Snapshot {
     std::string selected_title;
     std::string selected_preview;
     int selected = 0;
+    int offset = 0;
     int count = 0;
     int ui_clients = 0;
     std::vector<Card> cards;

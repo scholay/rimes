@@ -12,6 +12,7 @@
 #include <thread>
 
 #include "buffer_protocol.hpp"
+#include "capsule_protocol.hpp"
 
 namespace {
 
@@ -96,7 +97,9 @@ bool ReadSnapshot(int fd, std::string* json, int timeout_ms) {
 
 void Usage() {
     std::cerr << "Usage: rimes-capsule-ctl [--socket PATH] "
-                 "hello|status|toggle|show|close|next|prev|activate|copy\n";
+                 "hello|status|toggle|show|close|next|prev|activate|copy|manage|rail|refresh\n"
+                 "       rimes-capsule-ctl [--socket PATH] module|filter|search TEXT\n"
+                 "       rimes-capsule-ctl [--socket PATH] select UUID\n";
 }
 
 }  // namespace
@@ -104,11 +107,14 @@ void Usage() {
 int main(int argc, char** argv) {
     std::string socket_path = DefaultSocketPath();
     std::string op;
+    std::string argument;
     for (int index = 1; index < argc; ++index) {
         if (std::strcmp(argv[index], "--socket") == 0 && index + 1 < argc) {
             socket_path = argv[++index];
         } else if (argv[index][0] != '-') {
-            op = argv[index];
+            if (op.empty()) op = argv[index];
+            else if (argument.empty()) argument = argv[index];
+            else { Usage(); return 2; }
         } else {
             Usage();
             return 2;
@@ -118,12 +124,18 @@ int main(int argc, char** argv) {
         Usage();
         return 2;
     }
+    nlohmann::json encoded{{"v",1},{"op",op}};
+    if(op=="select") encoded["id"]=argument;
+    else if(op=="module" || op=="filter" || op=="search") encoded["text"]=argument;
+    else if(!argument.empty()) { Usage(); return 2; }
+    rimes::capsule::Command parsed;std::string error;
+    const auto command=encoded.dump();
+    if(!rimes::capsule::ParseCommand(command,&parsed,&error)) { Usage(); return 2; }
     const int fd = Connect(socket_path, 40);
     if (fd < 0) {
         std::cerr << "rimes-capsule-ctl: cannot connect to " << socket_path << '\n';
         return 1;
     }
-    const std::string command = std::string("{\"v\":1,\"op\":\"") + op + "\"}";
     std::string connect_snapshot;
     if (!ReadSnapshot(fd, &connect_snapshot, 3000)) {
         close(fd);

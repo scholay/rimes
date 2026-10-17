@@ -23,6 +23,7 @@ enum class Kind {
     Pdf,
     Video,
     Skill,
+    Resource,
     Password,
     Retired,
 };
@@ -35,6 +36,7 @@ enum class Tab {
     Video,
     Pdf,
     Skill,
+    Resource,
     Password,
 };
 

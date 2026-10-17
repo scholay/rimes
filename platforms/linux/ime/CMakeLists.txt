@@ -55,12 +55,13 @@ target_include_directories(RimesBufferCore PUBLIC
     "${RIMES_BUFFER_ROOT}/core"
 )
 set_target_properties(RimesBufferCore PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(RimesBufferCore PUBLIC RimesPluginCore)
+target_link_libraries(RimesBufferCore PUBLIC RimesPluginCore RimesTranslationUnits)
 rimes_harden(RimesBufferCore)
 
 add_library(RimesCapsuleCore STATIC
     "${RIMES_CAPSULE_ROOT}/core/capsule_hash.cpp"
     "${RIMES_CAPSULE_ROOT}/core/capsule_kinds.cpp"
+    "${RIMES_CAPSULE_ROOT}/core/capsule_modules.cpp"
     "${RIMES_CAPSULE_ROOT}/core/capsule_store.cpp"
     "${RIMES_CAPSULE_ROOT}/core/capsule_model.cpp"
     "${RIMES_CAPSULE_ROOT}/core/capsule_protocol.cpp"
@@ -70,7 +71,7 @@ target_include_directories(RimesCapsuleCore PUBLIC
     "${RIMES_CAPSULE_ROOT}/core"
     "${RIMES_BUFFER_ROOT}/core"
 )
-target_link_libraries(RimesCapsuleCore PUBLIC RimesBufferCore)
+target_link_libraries(RimesCapsuleCore PUBLIC RimesBufferCore RimesProcess)
 set_target_properties(RimesCapsuleCore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 rimes_harden(RimesCapsuleCore)
 
@@ -114,13 +115,20 @@ if(RIMES_BUILD_FCITX5)
         src/fcitx/rimes_candidate.cpp
         src/fcitx/rimes_ime.cpp
         src/fcitx/rimes_state.cpp
+        src/session/session_monitor.cpp
+        src/desktop/workspace_launcher.cpp
+        src/desktop/desktop_shortcuts.cpp
         src/buffer/buffer_service.cpp
+        src/buffer/buffer_translation.cpp
+        src/buffer/buffer_delivery.cpp
         src/capsule/capsule_service.cpp
     )
-    target_link_libraries(rimes PRIVATE Fcitx5::Core RimesEngine RimesBufferCore RimesCapsuleCore RimesPluginCore)
+    target_link_libraries(rimes PRIVATE Fcitx5::Core RimesEngine RimesBufferCore RimesCapsuleCore RimesPluginCore RimesLocalTranslation RimesAI)
     pkg_check_modules(GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0)
+    pkg_check_modules(RimesXCB REQUIRED IMPORTED_TARGET xcb)
     pkg_check_modules(GTK_LAYER_SHELL IMPORTED_TARGET gtk-layer-shell-0)
     target_link_libraries(rimes PRIVATE PkgConfig::GTK3)
+    target_link_libraries(rimes PRIVATE PkgConfig::RimesXCB)
     if(GTK_LAYER_SHELL_FOUND)
         target_link_libraries(rimes PRIVATE PkgConfig::GTK_LAYER_SHELL)
         target_compile_definitions(rimes PRIVATE HAVE_GTK_LAYER_SHELL=1)
@@ -128,6 +136,8 @@ if(RIMES_BUILD_FCITX5)
     target_compile_definitions(rimes PRIVATE
         RIMES_INSTALL_SHARED_DIR="${CMAKE_INSTALL_FULL_DATADIR}/rimes/data"
         RIMES_PRODUCT_VERSION="${RIMES_PRODUCT_VERSION}"
+        RIMES_INSTALLED_SETTINGS="${CMAKE_INSTALL_FULL_BINDIR}/rimes-settings"
+        RIMES_BUILD_SETTINGS="${CMAKE_BINARY_DIR}/runtime/rimes-settings"
     )
     set_target_properties(rimes PROPERTIES
         PREFIX ""
@@ -202,10 +212,12 @@ if(RIMES_BUILD_FCITX5)
 
 
         add_executable(rimes-capsule
+            "${RIMES_CAPSULE_ROOT}/ui/capsule_manager.cpp"
             "${RIMES_CAPSULE_ROOT}/ui/rimes_capsule_app.cpp"
         )
         target_include_directories(rimes-capsule PRIVATE ${GTK3_INCLUDE_DIRS})
-        target_link_libraries(rimes-capsule PRIVATE RimesCapsuleCore ${GTK3_LIBRARIES})
+        target_link_libraries(rimes-capsule PRIVATE RimesCapsuleCore RimesDesktopUI ${GTK3_LIBRARIES})
+        target_compile_definitions(rimes-capsule PRIVATE RIMES_PRODUCT_VERSION="${RIMES_PRODUCT_VERSION}")
         target_compile_options(rimes-capsule PRIVATE ${GTK3_CFLAGS_OTHER})
         if(GTK_LAYER_SHELL_FOUND)
             target_include_directories(rimes-capsule PRIVATE ${GTK_LAYER_SHELL_INCLUDE_DIRS})
@@ -285,6 +297,11 @@ if(RIMES_BUILD_TESTS)
     rimes_harden(rimes-derived-workspace-tests)
     add_test(NAME derived-workspace COMMAND rimes-derived-workspace-tests)
 
+    add_executable(rimes-buffer-auto-send-tests "${RIMES_BUFFER_ROOT}/tests/buffer_auto_send_tests.cpp")
+    target_link_libraries(rimes-buffer-auto-send-tests PRIVATE RimesBufferCore)
+    rimes_harden(rimes-buffer-auto-send-tests)
+    add_test(NAME buffer-auto-send COMMAND rimes-buffer-auto-send-tests)
+
     add_executable(rimes-buffer-return-tests
         "${RIMES_BUFFER_ROOT}/tests/buffer_return_tests.cpp"
     )
@@ -353,6 +370,23 @@ if(RIMES_BUILD_TESTS)
     add_test(NAME RimesCapsuleProtocol COMMAND rimes-capsule-protocol-tests)
     add_test(NAME RimesCapsuleClick COMMAND rimes-capsule-click-tests)
     add_test(NAME RimesCapsuleClipboard COMMAND rimes-capsule-clipboard-tests)
+    add_executable(rimes-capsule-modules-tests "${RIMES_CAPSULE_ROOT}/tests/capsule_modules_tests.cpp")
+    target_link_libraries(rimes-capsule-modules-tests PRIVATE RimesCapsuleCore)
+    target_compile_definitions(rimes-capsule-modules-tests PRIVATE RIMES_PRODUCT_VERSION="${RIMES_PRODUCT_VERSION}")
+    rimes_harden(rimes-capsule-modules-tests)
+    add_test(NAME RimesCapsuleModules COMMAND rimes-capsule-modules-tests)
+    if(TARGET rimes-capsule)
+        add_executable(rimes-capsule-manager-tests "${RIMES_CAPSULE_ROOT}/tests/capsule_manager_tests.cpp"
+            "${RIMES_CAPSULE_ROOT}/ui/capsule_manager.cpp")
+        target_include_directories(rimes-capsule-manager-tests PRIVATE "${RIMES_CAPSULE_ROOT}/ui")
+        target_link_libraries(rimes-capsule-manager-tests PRIVATE RimesCapsuleCore RimesDesktopUI)
+        target_compile_definitions(rimes-capsule-manager-tests PRIVATE RIMES_PRODUCT_VERSION="${RIMES_PRODUCT_VERSION}")
+        rimes_harden(rimes-capsule-manager-tests)
+        if(RIMES_XVFB_RUN)
+            add_test(NAME capsule-manager-ui COMMAND ${RIMES_XVFB_RUN} -a $<TARGET_FILE:rimes-capsule-manager-tests>)
+            set_tests_properties(capsule-manager-ui PROPERTIES ENVIRONMENT "G_DEBUG=fatal-criticals")
+        endif()
+    endif()
 
     pkg_check_modules(GTK3 gtk+-3.0)
     if(GTK3_FOUND)
@@ -382,11 +416,43 @@ if(RIMES_BUILD_TESTS)
         )
         rimes_harden(rimes-fcitx-e2e)
 
-        add_executable(rimes-buffer-derived-host-tests tests/buffer_derived_host_tests.cpp src/buffer/buffer_service.cpp)
+        add_executable(rimes-buffer-derived-host-tests tests/buffer_derived_host_tests.cpp src/buffer/buffer_service.cpp src/buffer/buffer_translation.cpp src/buffer/buffer_delivery.cpp)
         target_include_directories(rimes-buffer-derived-host-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
         target_link_libraries(rimes-buffer-derived-host-tests PRIVATE Fcitx5::Core RimesBufferCore Threads::Threads)
         rimes_harden(rimes-buffer-derived-host-tests)
         add_test(NAME buffer-derived-host COMMAND rimes-buffer-derived-host-tests)
+
+        add_executable(rimes-buffer-translation-host-tests tests/buffer_translation_host_tests.cpp src/buffer/buffer_service.cpp src/buffer/buffer_translation.cpp src/buffer/buffer_delivery.cpp)
+        target_include_directories(rimes-buffer-translation-host-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        target_link_libraries(rimes-buffer-translation-host-tests PRIVATE Fcitx5::Core RimesBufferCore Threads::Threads)
+        rimes_harden(rimes-buffer-translation-host-tests)
+        add_test(NAME buffer-translation-host COMMAND rimes-buffer-translation-host-tests)
+
+        add_executable(rimes-buffer-delivery-host-tests tests/buffer_delivery_host_tests.cpp src/buffer/buffer_service.cpp src/buffer/buffer_translation.cpp src/buffer/buffer_delivery.cpp)
+        target_include_directories(rimes-buffer-delivery-host-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        target_link_libraries(rimes-buffer-delivery-host-tests PRIVATE Fcitx5::Core RimesBufferCore Threads::Threads)
+        rimes_harden(rimes-buffer-delivery-host-tests)
+        add_test(NAME buffer-delivery-host COMMAND rimes-buffer-delivery-host-tests)
+
+        add_executable(rimes-session-monitor-tests tests/session_monitor_tests.cpp src/session/session_monitor.cpp)
+        target_include_directories(rimes-session-monitor-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        target_link_libraries(rimes-session-monitor-tests PRIVATE Fcitx5::Core)
+        rimes_harden(rimes-session-monitor-tests)
+        find_program(DBUS_RUN_SESSION dbus-run-session REQUIRED)
+        add_test(NAME session-protection-dbus COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:rimes-session-monitor-tests>)
+        set_tests_properties(session-protection-dbus PROPERTIES ENVIRONMENT "RIMES_PRIVATE_SESSION_TEST=1")
+
+        add_executable(rimes-desktop-shortcuts-tests tests/desktop_shortcuts_tests.cpp src/desktop/desktop_shortcuts.cpp)
+        target_include_directories(rimes-desktop-shortcuts-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        target_link_libraries(rimes-desktop-shortcuts-tests PRIVATE Fcitx5::Core RimesPluginCore PkgConfig::RimesXCB)
+        rimes_harden(rimes-desktop-shortcuts-tests)
+        add_dependencies(rimes-desktop-shortcuts-tests rimes-launch)
+        add_test(NAME desktop-shortcuts-portal COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:rimes-desktop-shortcuts-tests> --portal $<TARGET_FILE:rimes-launch>)
+        set_tests_properties(desktop-shortcuts-portal PROPERTIES ENVIRONMENT "RIMES_PRIVATE_SESSION_TEST=1")
+        find_program(RIMES_XDOTOOL xdotool)
+        if(RIMES_BUFFER_XVFB_RUN AND RIMES_XDOTOOL)
+            add_test(NAME desktop-shortcuts-x11 COMMAND ${RIMES_BUFFER_XVFB_RUN} -a ${DBUS_RUN_SESSION} -- $<TARGET_FILE:rimes-desktop-shortcuts-tests> --x11)
+        endif()
 
         add_executable(rimes-buffer-fcitx-e2e tests/buffer_fcitx_e2e.cpp)
         target_link_libraries(rimes-buffer-fcitx-e2e PRIVATE
@@ -421,6 +487,7 @@ if(RIMES_BUILD_TESTS)
             RimesEngine
             RimesCapsuleCore
         )
+        target_compile_definitions(rimes-capsule-fcitx-e2e PRIVATE RIMES_PRODUCT_VERSION="${RIMES_PRODUCT_VERSION}")
         rimes_harden(rimes-capsule-fcitx-e2e)
 
         add_executable(rimes-capsule-ui-stub tests/capsule_ui_stub.cpp)

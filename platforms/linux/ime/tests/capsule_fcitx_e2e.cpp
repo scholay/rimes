@@ -1,3 +1,5 @@
+#include "official_catalog.hpp"
+#include "capsule_store.hpp"
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -27,6 +29,7 @@
 namespace {
 
 int g_exit_status = EXIT_SUCCESS;
+std::unique_ptr<fcitx::EventSourceTime> resume_timer;
 
 struct TestFailed : std::runtime_error {
     explicit TestFailed(const std::string& message) : std::runtime_error(message) {}
@@ -131,6 +134,7 @@ void RunCapsuleSuite(fcitx::Instance& instance, fcitx::AddonInstance* frontend,
                            fcitx::CapabilityFlag::ClientUnfocusCommit);
 
     SendKey(frontend, uuid, "Control+Shift+V");
+    for (int i=0;i<5 && ReadDump(dump_path).find("\"module\":\"notes\"")==std::string::npos;++i) SendKey(frontend,uuid,"Tab");
     auto snapshot = ReadDump(dump_path);
     ExpectContains(snapshot, "\"visible\":true", "Ctrl+Shift+V did not show the rail");
     ExpectContains(snapshot, "\"armed\":true", "Ctrl+Shift+V did not arm the session");
@@ -256,35 +260,41 @@ void RunCapsuleSuite(fcitx::Instance& instance, fcitx::AddonInstance* frontend,
 
     auto* engine = instance.inputMethodEngine(ic);
     if (!engine || !engine->getConfig()) Die("missing plugin host configuration");
-    fcitx::RawConfig original;
-    engine->getConfig()->save(original);
-    fcitx::RawConfig disabled = original;
-    disabled.setValueByPath("CapsuleNotes", "False");
-    engine->setConfig(disabled);
-    snapshot = ReadDump(dump_path);
-    ExpectContains(snapshot, "\"visible\":false", "plugin disable must hide existing rail");
-    ExpectContains(snapshot, "\"armed\":false", "plugin disable must revoke insertion");
-    ExpectContains(snapshot, "\"last_copied\":\"\"", "plugin disable must clear clipboard intent");
-    engine->reloadConfig();
-    SendKey(frontend, uuid, "Control+Shift+V");
-    ExpectContains(ReadDump(dump_path), "\"visible\":false", "disabled plugin reopened after config reload");
+    rimes::plugins::PackageStore packages(rimes::runtime::UserRoot()/"plugins",rimes::plugins::OfficialCatalog(),
+        rimes::plugins::BundledPackages(),rimes::plugins::CompiledAdapters(),RIMES_PRODUCT_VERSION);
+    const auto notes=packages.Inspect("builtin.capsule.notes");
+    packages.Enable(notes.id,false,notes.grant); engine->reloadConfig();
+    snapshot=ReadDump(dump_path);
+    ExpectContains(snapshot,"\"armed\":false","plugin disable must revoke insertion");
+    ExpectContains(snapshot,"\"last_copied\":\"\"","plugin disable must clear clipboard intent");
+    ExpectMissing(snapshot,"RIMES 默认词条","disabled notes still exposed");
     frontend->call<fcitx::ITestFrontend::pushCommitExpectation>("你好");
-    Type(frontend, uuid, "nihao");
-    SendKey(frontend, uuid, "space");
-    engine->setConfig(original);
-    SendKey(frontend, uuid, "Control+Shift+V");
-    snapshot = ReadDump(dump_path);
-    ExpectContains(snapshot, "\"armed\":true", "re-enabled plugin did not regain explicit capture");
-    ExpectContains(snapshot, "RIMES 默认词条", "disabling plugin deleted its persisted notes");
-    std::cout << "ok: plugin disable revokes the live rail, survives reload, preserves data and ordinary typing\n";
-
-    SendKey(frontend, uuid, "Control+Shift+B");
-    SendKey(frontend, uuid, "Return");
-    snapshot = ReadDump(dump_path);
-    ExpectContains(snapshot, "\"visible\":true", "Buffer Return must not close Capsule");
-    std::cout << "ok: Buffer capturing keeps Capsule from consuming Return\n";
-
-    instance.exit();
+    Type(frontend,uuid,"nihao"); SendKey(frontend,uuid,"space");
+    rimes::capsule::ContentStore content(rimes::capsule::ContentStore::DefaultRoot());
+    rimes::capsule::Record saved; std::string error;
+    if(content.Get(rimes::capsule::kDefaultEntryId,&saved,&error)!=rimes::capsule::StoreStatus::Ok) Die("disabled plugin lost its data");
+    const auto disabled=packages.Inspect(notes.id);
+    packages.Enable(notes.id,true,disabled.grant); engine->reloadConfig();
+    const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(8);
+    resume_timer=instance.eventLoop().addTimeEvent(CLOCK_MONOTONIC,fcitx::now(CLOCK_MONOTONIC)+50000,50000,
+        [&,frontend,uuid,ic,dump_path,until](fcitx::EventSourceTime* timer,uint64_t) {
+            try {
+                if(ReadDump(dump_path).find("\"loading\":true")!=std::string::npos) {
+                    if(std::chrono::steady_clock::now()>until) Die("Capsule reload timed out");
+                    timer->setTime(fcitx::now(CLOCK_MONOTONIC)+50000);timer->setOneShot();return true;
+                }
+                SendKey(frontend,uuid,"Control+Shift+V");
+                for(int i=0;i<5 && ReadDump(dump_path).find("\"module\":\"notes\"")==std::string::npos;++i) SendKey(frontend,uuid,"Tab");
+                const auto restored=ReadDump(dump_path);
+                ExpectContains(restored,"\"armed\":true","re-enabled plugin needs explicit target capture");
+                ExpectContains(restored,"RIMES 默认词条","re-enabled module failed to reload data");
+                std::cout<<"ok: package disable revokes capture, preserves data and ordinary typing; re-enable reloads notes\n";
+                SendKey(frontend,uuid,"Control+Shift+B");SendKey(frontend,uuid,"Return");
+                ExpectContains(ReadDump(dump_path),"\"visible\":true","Buffer Return must not close Capsule");
+                std::cout<<"ok: Buffer capturing keeps Capsule from consuming Return\n";
+            } catch(const TestFailed&) {}
+            instance.exit();return true;
+        });
 }
 
 }  // namespace
@@ -367,6 +377,9 @@ int main(int argc, char** argv) {
                         source->setTime(fcitx::now(CLOCK_MONOTONIC) + 200000);
                         source->setOneShot();
                         return true;
+                    }
+                    if (ReadDump(dump_path).find("\"loading\":true")!=std::string::npos) {
+                        source->setTime(fcitx::now(CLOCK_MONOTONIC)+50000);source->setOneShot();return true;
                     }
                     if (suite_started) {
                         return true;

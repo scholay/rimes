@@ -4,6 +4,9 @@
 #include "capsule_clipboard.hpp"
 #include "capsule_kinds.hpp"
 #include "capsule_protocol.hpp"
+#include "desktop.hpp"
+#include "panel_window.hpp"
+#include "capsule_manager.hpp"
 
 #include <gdk/gdk.h>
 #include <gtk/gtk.h>
@@ -25,6 +28,7 @@
 #include <unistd.h>
 
 #include <cstdint>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -39,6 +43,8 @@ constexpr int kWindowHeight = rimes::capsule::kRailHeight;
 struct App {
     GtkWidget* window = nullptr;
     GtkWidget* tab_box = nullptr;
+    GtkWidget* filter_box = nullptr;
+    std::unique_ptr<rimes::capsule::ManagerWindow> manager;
     GtkWidget* count = nullptr;
     GtkWidget* card_box = nullptr;
     GtkWidget* hint = nullptr;
@@ -51,6 +57,10 @@ struct App {
     bool dumped_geometry = false;
     rimes::capsule::Snapshot snapshot;
     bool wayland_layer = false;
+    bool preview = false;
+    bool placed = false;
+    std::string theme;
+    std::unique_ptr<rimes::desktop::PanelWindow> panel;
     struct CardRow {
         std::string id;
         GtkWidget* event = nullptr;
@@ -85,67 +95,6 @@ bool SendCommand(App* app, const std::string& json) {
     }
     return send(app->socket_fd, frame.data(), frame.size(), MSG_NOSIGNAL) ==
            static_cast<ssize_t>(frame.size());
-}
-
-void ApplyLayerShell(GtkWindow* window, App* app) {
-#ifdef HAVE_GTK_LAYER_SHELL
-    GdkDisplay* display = gtk_widget_get_display(GTK_WIDGET(window));
-#ifdef GDK_WINDOWING_WAYLAND
-    if (display == nullptr || !GDK_IS_WAYLAND_DISPLAY(display)) {
-        return;
-    }
-#else
-    (void)display;
-    return;
-#endif
-    if (!gtk_layer_is_supported()) {
-        return;
-    }
-    gtk_layer_init_for_window(window);
-    gtk_layer_set_layer(window, GTK_LAYER_SHELL_LAYER_OVERLAY);
-    gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_BOTTOM, TRUE);
-    gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_LEFT, TRUE);
-    gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_RIGHT, TRUE);
-    gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_BOTTOM, 48);
-    gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_LEFT, 80);
-    gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_RIGHT, 80);
-    gtk_layer_set_namespace(window, "rimes-capsule");
-#if GTK_LAYER_SHELL_MAJOR >= 0
-    // NONE keeps the rail from stealing focus. gtk_clipboard_set_text on
-    // Wayland then uses wl_data_device.set_selection with the last pointer
-    // serial. Ctrl+C is consumed by the IME, so this window never mints a
-    // keyboard serial; an unclicked bar often has serial 0 and labwc/sway
-    // drop the offer. Copy therefore prefers wl-copy (see ApplySnapshot).
-    gtk_layer_set_keyboard_mode(window, GTK_LAYER_SHELL_KEYBOARD_MODE_NONE);
-#endif
-    app->wayland_layer = true;
-#else
-    (void)window;
-    (void)app;
-#endif
-}
-
-void PlaceOnX11(App* app) {
-    if (app->wayland_layer) {
-        return;
-    }
-    GdkWindow* gdk_window = gtk_widget_get_window(app->window);
-    if (gdk_window == nullptr) {
-        return;
-    }
-    GdkDisplay* display = gtk_widget_get_display(app->window);
-    GdkMonitor* monitor = gdk_display_get_monitor_at_window(display, gdk_window);
-    if (monitor == nullptr) {
-        monitor = gdk_display_get_primary_monitor(display);
-    }
-    if (monitor == nullptr) {
-        return;
-    }
-    GdkRectangle workarea{};
-    gdk_monitor_get_workarea(monitor, &workarea);
-    const int x = workarea.x + (workarea.width - kWindowWidth) / 2;
-    const int y = workarea.y + workarea.height - kWindowHeight - 16;
-    gtk_window_move(GTK_WINDOW(app->window), x, y);
 }
 
 void WriteGeometryDump(App* app) {
@@ -195,26 +144,27 @@ void ClearBox(GtkWidget* box) {
 }
 
 void RebuildTabs(App* app) {
-    ClearBox(app->tab_box);
-    for (auto tab : rimes::capsule::kTabs) {
-        GtkWidget* button = gtk_button_new_with_label(rimes::capsule::TabLabel(tab));
-        gtk_style_context_add_class(gtk_widget_get_style_context(button), "rimes-tab");
-        if (rimes::capsule::TabRaw(tab) == app->snapshot.tab) {
-            gtk_style_context_add_class(gtk_widget_get_style_context(button), "rimes-tab-active");
-        }
-        const std::string command =
-            std::string("{\"v\":1,\"op\":\"tab\",\"text\":") +
-            rimes::buffer::JsonEscape(rimes::capsule::TabRaw(tab)) + '}';
-        g_object_set_data_full(G_OBJECT(button), "cmd", g_strdup(command.c_str()), g_free);
-        g_signal_connect(button, "clicked", G_CALLBACK(+[](GtkButton* self, gpointer data) {
-                             SendCommand(static_cast<App*>(data),
-                                         static_cast<const char*>(
-                                             g_object_get_data(G_OBJECT(self), "cmd")));
-                         }),
-                         app);
-        gtk_box_pack_start(GTK_BOX(app->tab_box), button, FALSE, FALSE, 0);
+    ClearBox(app->tab_box); ClearBox(app->filter_box);
+    for (auto module : app->snapshot.modules) {
+        const auto& definition = rimes::capsule::ModuleDefinition(module);
+        auto* button = rimes::desktop::Button(definition.at("title"), [app, module] {
+            SendCommand(app, rimes::desktop::Json{{"v",1},{"op","module"},{"text",rimes::capsule::ModuleRaw(module)}}.dump());
+        }, "rimes-tab");
+        if (rimes::capsule::ModuleRaw(module) == app->snapshot.module) rimes::desktop::Class(button,"rimes-tab-active");
+        gtk_widget_set_can_focus(button,FALSE);
+        gtk_box_pack_start(GTK_BOX(app->tab_box),button,FALSE,FALSE,0);
     }
-    gtk_widget_show_all(app->tab_box);
+    if (const auto module = rimes::capsule::ModuleFromRaw(app->snapshot.module)) {
+        for (const auto& filter : rimes::capsule::ModuleDefinition(*module).at("filters")) {
+            auto* button = rimes::desktop::Button(filter.at("title"), [app, id = filter.at("id").get<std::string>()] {
+                SendCommand(app, rimes::desktop::Json{{"v",1},{"op","filter"},{"text",id}}.dump());
+            }, "rimes-filter");
+            if (filter.at("id") == app->snapshot.filter) rimes::desktop::Class(button,"selected");
+            gtk_widget_set_size_request(button,60,18); gtk_widget_set_can_focus(button,FALSE);
+            gtk_box_pack_start(GTK_BOX(app->filter_box),button,FALSE,FALSE,0);
+        }
+    }
+    gtk_widget_show_all(app->tab_box); gtk_widget_show_all(app->filter_box);
 }
 
 gboolean OnCardButtonPress(GtkWidget* self, GdkEventButton* ev, gpointer data) {
@@ -225,10 +175,10 @@ gboolean OnCardButtonPress(GtkWidget* self, GdkEventButton* ev, gpointer data) {
     const bool activate = rimes::capsule::ShouldActivateOnPress(
         index, host->last_press_index, now_ms, host->last_press_ms, gdk_double);
     const std::string select =
-        std::string("{\"v\":1,\"op\":\"select\",\"index\":") + std::to_string(index) + '}';
+        rimes::desktop::Json{{"v",1},{"op","select"},{"id",host->snapshot.cards.at(index).id}}.dump();
     SendCommand(host, select);
     if (activate) {
-        SendCommand(host, R"({"v":1,"op":"activate"})");
+        SendCommand(host, rimes::desktop::Json{{"v",1},{"op","activate"},{"id",host->snapshot.cards.at(index).id}}.dump());
     }
     host->last_press_index = index;
     host->last_press_ms = now_ms;
@@ -286,6 +236,8 @@ App::CardRow MakeCardRow(App* app, const rimes::capsule::Card& card, int index) 
     gtk_label_set_xalign(GTK_LABEL(row.preview), 0);
     gtk_label_set_line_wrap(GTK_LABEL(row.preview), TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(row.preview), 28);
+    gtk_label_set_lines(GTK_LABEL(row.preview),4);
+    gtk_label_set_ellipsize(GTK_LABEL(row.preview),PANGO_ELLIPSIZE_END);
     gtk_box_pack_start(GTK_BOX(column), row.preview, TRUE, TRUE, 0);
     gtk_widget_set_size_request(row.event, 206, 126);
     g_object_set_data(G_OBJECT(row.event), "index", GINT_TO_POINTER(index));
@@ -353,11 +305,17 @@ void ApplyCopiedText(App* app, const rimes::capsule::ClipboardWriteDecision& dec
     }
 }
 
+void LoadCss(const std::string& theme, GdkScreen* screen);
+
 void ApplySnapshot(App* app) {
+    if (app->theme != app->snapshot.theme) {
+        LoadCss(app->snapshot.theme, gtk_widget_get_screen(app->window));
+        app->theme = app->snapshot.theme;
+    }
     gtk_label_set_text(GTK_LABEL(app->count),
                        rimes::capsule::CountText(app->snapshot.count).c_str());
     gtk_label_set_text(GTK_LABEL(app->hint), app->snapshot.hint.c_str());
-    const auto query = app->snapshot.query.empty() ? std::string("Search notes")
+    const auto query = app->snapshot.query.empty() ? std::string("搜索标题或内容")
                                                    : app->snapshot.query;
     gtk_label_set_text(GTK_LABEL(app->query), query.c_str());
     RebuildTabs(app);
@@ -371,13 +329,16 @@ void ApplySnapshot(App* app) {
     app->seen_copy_seq = copy_state.seen_seq;
     app->handled_copy_seq = copy_state.handled_seq;
     ApplyCopiedText(app, decision);
-    if (app->snapshot.visible) {
+    app->manager->Apply(app->snapshot);
+    if (app->snapshot.visible && !app->snapshot.managing) {
+        app->panel->Place(kWindowWidth, kWindowHeight, {}, !app->placed);
         gtk_widget_show_all(app->window);
-        PlaceOnX11(app);
+        app->placed = true;
     } else {
         app->last_press_index = -1;
         app->last_press_ms = -1;
         gtk_widget_hide(app->window);
+        app->placed = false;
     }
 }
 
@@ -442,50 +403,29 @@ bool ConnectSocket(App* app, const std::string& path) {
     return true;
 }
 
-void LoadCss() {
-    GtkCssProvider* provider = gtk_css_provider_new();
-    const char* css = R"CSS(
-#rimes-capsule-window, .rimes-capsule {
-  background-color: #1c2420;
-  color: #e8f0ea;
-  border-radius: 10px;
-}
-#rimes-chrome { background-color: #1c2420; }
-#rimes-title { color: #e8f0ea; font-weight: bold; font-size: 13px; }
-#rimes-count, #rimes-query, #rimes-hint, #rimes-placeholder {
-  color: #9aada0; font-size: 12px;
-}
-button.rimes-tab {
-  background: #2a3830;
-  color: #e8f0ea;
-  border: 1px solid #4a6b58;
-  border-radius: 6px;
-  padding: 2px 8px;
-  font-size: 12px;
-}
-button.rimes-tab-active { background: #3b5a49; }
-button.rimes-action {
-  background: #2f463a;
-  color: #e8f0ea;
-  border: 1px solid #4a6b58;
-  border-radius: 6px;
-  min-width: 22px;
-  min-height: 22px;
-}
-#rimes-card {
-  background-color: #2a3830;
-  border-radius: 8px;
-  margin-right: 8px;
-}
-#rimes-card.rimes-card-selected { border: 1px solid #7cbc8a; }
-#rimes-card-title { color: #e8f0ea; font-weight: bold; }
-#rimes-card-preview { color: #9aada0; font-size: 11px; }
-)CSS";
-    gtk_css_provider_load_from_data(provider, css, -1, nullptr);
-    gtk_style_context_add_provider_for_screen(gdk_screen_get_default(),
-                                              GTK_STYLE_PROVIDER(provider),
-                                              GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-    g_object_unref(provider);
+void LoadCss(const std::string& theme, GdkScreen* screen) {
+    using namespace rimes::desktop;
+    Theme(theme, screen);
+    const auto& palette = Visuals().at("palettes").at(theme == "liquidGlass" ? "day" : theme);
+    auto c = [&](const char* key) { return palette.at(key).get<std::string>(); };
+    static auto* provider = gtk_css_provider_new();
+    const std::string css =
+        "#rimes-capsule-window, .rimes-capsule, #rimes-chrome { background: " + c("bufferBackground") + "; color: " + c("textPrimary") + "; border-radius: 10px; }"
+        "#rimes-title { color: " + c("textPrimary") + "; font-family: monospace; font-weight: bold; font-size: 15px; }"
+        "#rimes-count, #rimes-query, #rimes-hint, #rimes-placeholder { color: " + c("textSecondary") + "; font-size: 12px; }"
+        "button.rimes-tab, button.rimes-action { background: " + c("surfaceSecondary") + "; color: " + c("textPrimary") + "; border: 1px solid " + c("borderStrong") + "; border-radius: 6px; padding: 2px 8px; font-size: 12px; }"
+        "button.rimes-tab-active { background: alpha(" + c("accentGreen") + ", 0.18); }"
+        "button.rimes-action { min-width: 22px; min-height: 22px; padding: 0; }"
+        "button.rimes-filter { padding: 0 8px; border: 0; min-height: 0; background: transparent; border-radius: 4px; font-size: 11px; color: " + c("textSecondary") + "; }"
+        "button.rimes-filter.selected { background: " + c("surfaceTertiary") + "; font-weight: 600; color: " + c("textPrimary") + "; }"
+        "#rimes-hint { font-size: 9px; } #rimes-count { font-family: monospace; font-size: 10px; }"
+        "#rimes-card { background: " + c("surfaceSecondary") + "; border-radius: 8px; margin-right: 8px; }"
+        "#rimes-card.rimes-card-selected { border: 1px solid " + c("accentGreen") + "; }"
+        "#rimes-card-title { color: " + c("textPrimary") + "; font-weight: bold; }"
+        "#rimes-card-preview { color: " + c("textSecondary") + "; font-size: 11px; }";
+    gtk_css_provider_load_from_data(provider, css.c_str(), -1, nullptr);
+    gtk_style_context_remove_provider_for_screen(screen, GTK_STYLE_PROVIDER(provider));
+    gtk_style_context_add_provider_for_screen(screen, GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
 }
 
 void BuildUi(App* app) {
@@ -507,15 +447,17 @@ void BuildUi(App* app) {
     g_signal_connect(app->window, "destroy", G_CALLBACK(gtk_main_quit), nullptr);
     g_signal_connect(app->window, "size-allocate", G_CALLBACK(OnSizeAllocate), app);
 
-    ApplyLayerShell(GTK_WINDOW(app->window), app);
+    app->panel = std::make_unique<rimes::desktop::PanelWindow>(GTK_WINDOW(app->window), "capsule", 16, !app->preview);
+    app->wayland_layer = app->panel->Layer();
     gtk_widget_set_size_request(app->window, kWindowWidth, kWindowHeight);
 
     GtkWidget* chrome = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_set_name(chrome, "rimes-chrome");
     gtk_container_add(GTK_CONTAINER(app->window), chrome);
 
-    GtkWidget* header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    gtk_container_set_border_width(GTK_CONTAINER(header), 8);
+    GtkWidget* header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 9);
+    gtk_widget_set_margin_start(header,14); gtk_widget_set_margin_end(header,14);
+    gtk_widget_set_margin_top(header,12); gtk_widget_set_size_request(header,-1,30);
     gtk_box_pack_start(GTK_BOX(chrome), header, FALSE, FALSE, 0);
 
     GtkWidget* title = gtk_label_new("Capsule");
@@ -532,6 +474,8 @@ void BuildUi(App* app) {
     app->count = gtk_label_new("0 ITEMS");
     gtk_widget_set_name(app->count, "rimes-count");
     gtk_box_pack_start(GTK_BOX(header), app->count, FALSE, FALSE, 0);
+    auto* manage = rimes::desktop::IconButton("gearshape", "管理 Capsule", [app] { SendCommand(app,R"({"v":1,"op":"manage"})"); });
+    gtk_widget_set_can_focus(manage,FALSE); gtk_box_pack_start(GTK_BOX(header),manage,FALSE,FALSE,0);
 
     GtkWidget* close = gtk_button_new_with_label("×");
     gtk_style_context_add_class(gtk_widget_get_style_context(close), "rimes-action");
@@ -544,8 +488,12 @@ void BuildUi(App* app) {
     GtkWidget* scroll = gtk_scrolled_window_new(nullptr, nullptr);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_AUTOMATIC,
                                    GTK_POLICY_NEVER);
-    gtk_container_set_border_width(GTK_CONTAINER(scroll), 8);
-    gtk_box_pack_start(GTK_BOX(chrome), scroll, TRUE, TRUE, 0);
+    auto* band = gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);
+    gtk_widget_set_margin_start(band,14); gtk_widget_set_margin_end(band,14); gtk_widget_set_margin_top(band,9);
+    gtk_box_pack_start(GTK_BOX(chrome),band,FALSE,FALSE,0);
+    app->filter_box=gtk_box_new(GTK_ORIENTATION_VERTICAL,3); gtk_widget_set_size_request(app->filter_box,60,126);
+    gtk_box_pack_start(GTK_BOX(band),app->filter_box,FALSE,FALSE,0);
+    gtk_widget_set_size_request(scroll,-1,126); gtk_box_pack_start(GTK_BOX(band),scroll,TRUE,TRUE,0);
 
     app->card_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_container_add(GTK_CONTAINER(scroll), app->card_box);
@@ -553,9 +501,11 @@ void BuildUi(App* app) {
     app->hint = gtk_label_new("Return inserts the selected note · Esc closes");
     gtk_widget_set_name(app->hint, "rimes-hint");
     gtk_widget_set_halign(app->hint, GTK_ALIGN_START);
-    gtk_widget_set_margin_start(app->hint, 10);
+    gtk_widget_set_margin_start(app->hint, 14);
+    gtk_widget_set_margin_top(app->hint,8);
     gtk_widget_set_margin_bottom(app->hint, 8);
-    gtk_box_pack_end(GTK_BOX(chrome), app->hint, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(chrome), app->hint, FALSE, FALSE, 0);
+    app->manager = std::make_unique<rimes::capsule::ManagerWindow>([app](auto command) { SendCommand(app,command); },app->preview);
 }
 
 }  // namespace
@@ -563,12 +513,19 @@ void BuildUi(App* app) {
 int main(int argc, char** argv) {
     gtk_init(&argc, &argv);
     std::string socket_path = DefaultSocketPath();
-    bool preview = false;
+    bool preview = false, manager_preview = false;
+    std::string render_path, preview_theme = "night";
     std::string dump_geometry;
     bool quit_after_dump = false;
     for (int index = 1; index < argc; ++index) {
         if (std::strcmp(argv[index], "--socket") == 0 && index + 1 < argc) {
             socket_path = argv[++index];
+        } else if (std::strcmp(argv[index], "--manager-preview") == 0) {
+            preview = true; manager_preview = true;
+        } else if (std::strcmp(argv[index], "--render") == 0 && index + 1 < argc) {
+            render_path = argv[++index];
+        } else if (std::strcmp(argv[index], "--theme") == 0 && index + 1 < argc) {
+            preview_theme = argv[++index];
         } else if (std::strcmp(argv[index], "--preview") == 0) {
             preview = true;
         } else if (std::strcmp(argv[index], "--dump-geometry") == 0 && index + 1 < argc) {
@@ -578,26 +535,46 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (!rimes::desktop::Visuals().at("palettes").contains(preview_theme) && preview_theme!="liquidGlass") return 2;
+    if (!render_path.empty() && !preview) return 2;
     App app;
     g_app = &app;
     app.dump_geometry = dump_geometry;
     app.quit_after_dump = quit_after_dump;
-    LoadCss();
+    app.preview = preview;
     BuildUi(&app);
 
     if (preview) {
         app.snapshot.visible = true;
+        app.snapshot.managing = manager_preview;
+        app.snapshot.theme = preview_theme;
+        for (auto module : rimes::capsule::kModules) if (module != rimes::capsule::Module::Notes) app.snapshot.modules.push_back(module);
+        std::sort(app.snapshot.modules.begin(),app.snapshot.modules.end());
         app.snapshot.armed = true;
         app.snapshot.tab = "note";
-        app.snapshot.hint = "Return inserts the selected note · Esc closes";
+        app.snapshot.hint = manager_preview ? "Ctrl+S SAVE   ESC BACK TO RAIL" : "Return inserts the selected note · Esc closes";
         app.snapshot.count = 1;
         rimes::capsule::Card demo;
         demo.id = rimes::capsule::kDefaultEntryId;
         demo.title = rimes::capsule::kDefaultEntryTitle;
         demo.preview = rimes::capsule::kDefaultEntryContent;
         demo.kind = rimes::capsule::Kind::Note;
-        app.snapshot.cards.push_back(demo);
+        if (manager_preview) {
+            int identity=1;
+            for(const auto& item:rimes::capsule::ModuleContract().at("managerPreview")) {
+                auto card=demo;card.id="72696d65-7300-4000-8000-00000000000"+std::to_string(++identity);
+                card.title=item.at("title"); card.payload=item.at("content");
+                card.preview=rimes::capsule::PreviewOf(card.payload.substr(0,card.payload.find('\n')));app.snapshot.cards.push_back(card);
+            }
+        }
+        app.snapshot.cards.push_back(demo); app.snapshot.selected_id=app.snapshot.cards.front().id;
+        app.snapshot.count=static_cast<int>(app.snapshot.cards.size());
         ApplySnapshot(&app);
+        if (!render_path.empty()) {
+            if(manager_preview) gtk_window_set_focus(GTK_WINDOW(app.manager->Window()),nullptr);
+            for (int i = 0; i < 30; ++i) { while (gtk_events_pending()) gtk_main_iteration(); g_usleep(10000); }
+            return rimes::desktop::Render(manager_preview ? app.manager->Root() : gtk_bin_get_child(GTK_BIN(app.window)), render_path) ? 0 : 1;
+        }
         if (!app.dump_geometry.empty()) {
             g_timeout_add(
                 200,
