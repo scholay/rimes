@@ -20,6 +20,7 @@
 #include "buffer_protocol.hpp"
 #include "buffer_return.hpp"
 #include "configuration.hpp"
+#include "units.hpp"
 
 namespace fcitx {
 
@@ -69,6 +70,8 @@ public:
     bool Generate();
     void CancelDerived();
     const rimes::buffer::DerivedWorkspace& derived() const { return derived_; }
+    const rimes::translation::Units& translation() const { return translation_; }
+    bool TranslationTick(bool force = false);
 
 private:
     struct Client {
@@ -114,6 +117,9 @@ private:
     void CancelHoldTimer();
     bool HasUiClients();
     void SynchronizeDerived();
+    bool Translating() const;
+    void SynchronizeTranslation();
+    void CancelTranslation(bool clear);
 
     Instance* instance_;
     PostFn post_;
@@ -131,6 +137,15 @@ private:
     std::string configuration_revision_, theme_ = "night";
     std::uint64_t focus_epoch_ = 0;
     bool synchronizing_derived_ = false;
+    rimes::translation::Units translation_;
+    std::string translation_scope_, translation_unit_, translation_ticket_;
+    std::string translation_result_id_;
+    bool translation_explicit_ = false;
+    bool translation_source_invalid_ = false;
+    std::optional<rimes::plugins::Lease> translation_lease_;
+    std::optional<rimes::runtime::RequestConfiguration> translation_configuration_;
+    std::shared_ptr<std::atomic<bool>> translation_cancel_;
+    std::unique_ptr<EventSourceTime> translation_timer_;
     std::string socket_path_;
     std::string dump_path_;
     int listen_fd_ = -1;

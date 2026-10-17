@@ -453,6 +453,7 @@ void BufferService::RegisterDerivedAdapter(std::string id, std::string capabilit
 }
 
 void BufferService::CancelDerived() {
+    CancelTranslation(false);
     if (derived_cancel_) derived_cancel_->store(true);
     derived_cancel_.reset();
     derived_request_.reset();
@@ -469,6 +470,12 @@ void BufferService::SynchronizeDerived() {
     derived_.Synchronize(model_.blocks(), plugins_ ? plugins_->SelectedBuffer() : "",
         configuration_revision_, {model_.capture_token(), focus_epoch_},
         model_.visible() && model_.processing_active(), model_.secure() || model_.password_field());
+    if (Translating()) {
+        SynchronizeTranslation();
+        synchronizing_derived_ = false;
+        return;
+    }
+    CancelTranslation(true);
     if (derived_request_ && !derived_.Owns(*derived_request_, grant)) CancelDerived();
     synchronizing_derived_ = false;
 }
@@ -481,6 +488,7 @@ bool BufferService::SelectPlugin(const std::string& id) {
 }
 
 bool BufferService::Generate() {
+    if (Translating()) return TranslationTick(true);
     SynchronizeDerived();
     if (!plugins_ || !freeze_ || !validate_) return false;
     const auto adapter = derived_adapters_.find(plugins_->SelectedBuffer());
@@ -503,7 +511,8 @@ bool BufferService::Generate() {
             post([this, alive, request, alternative, text = std::move(text), finished, success] {
                 if (!alive->load()) return;
                 SynchronizeDerived();
-                const bool grant = validate_ && validate_(request.lease);
+                bool grant = false;
+                try { grant = validate_ && validate_(request.lease); } catch (const std::exception&) {}
                 if (!derived_.Accepts(request, grant)) return;
                 const bool valid = text.empty() || derived_.Update(request, grant, alternative, text);
                 if (finished || !valid) {
@@ -879,8 +888,11 @@ void BufferService::HandleCommand(const rimes::buffer::Command& command) {
             Generate();
             break;
         case rimes::buffer::CommandOp::CancelGeneration:
+            CancelDerived();
+            break;
         case rimes::buffer::CommandOp::ReturnToEdit:
             CancelDerived();
+            if (Translating()) translation_.ReturnToEdit();
             break;
         case rimes::buffer::CommandOp::SelectResult:
             SynchronizeDerived();
@@ -888,6 +900,13 @@ void BufferService::HandleCommand(const rimes::buffer::Command& command) {
             break;
         case rimes::buffer::CommandOp::CopyResult: {
             SynchronizeDerived();
+            if (Translating()) {
+                if (translation_.Complete() && command.id == translation_result_id_) {
+                    const auto text = translation_.Preview();
+                    if (!text.empty()) WriteAll(rimes::runtime::Json{{"v", 1}, {"type", "copy_result"}, {"id", command.id}, {"text", text}}.dump());
+                }
+                break;
+            }
             const auto request = derived_request_;
             const bool grant = request && validate_ && validate_(request->lease);
             SynchronizeDerived();
@@ -1195,6 +1214,22 @@ void BufferService::Publish() {
     snapshot.can_generate = derived_.CanGenerate();
     snapshot.results = derived_.Results();
     if (const auto* selected = derived_.SelectedResult()) snapshot.selected_result = selected->id;
+    if (Translating()) {
+        const bool running = translation_.Running() || (translation_.HasPending() && !translation_.Paused() && translation_configuration_ &&
+            (translation_configuration_->plugin.value("continuous", true) || translation_explicit_));
+        snapshot.phase = translation_.Complete() ? rimes::buffer::DerivedPhase::Ready :
+            translation_.Failed() || translation_source_invalid_ ? rimes::buffer::DerivedPhase::Failed : running ? rimes::buffer::DerivedPhase::Running : rimes::buffer::DerivedPhase::Idle;
+        if (translation_source_invalid_) snapshot.message = "原文过长，请分段翻译";
+        else if (translation_.Failed()) snapshot.message = "本地翻译未完成，请检查语言资源或重试";
+        else if (translation_.Paused()) snapshot.message = "翻译已暂停";
+        snapshot.can_generate = !translation_.All().empty() && !translation_.Running();
+        snapshot.results.clear(); snapshot.selected_result.clear();
+        const auto preview = translation_.Preview();
+        if (!preview.empty()) {
+            snapshot.results.push_back({translation_result_id_, preview, 0, translation_.Complete()});
+            snapshot.selected_result = translation_result_id_;
+        }
+    }
     if (plugins_) for (const auto& state : plugins_->Entries()) {
         if (state.descriptor.kind == rimes::plugins::Kind::Buffer && state.installed && state.enabled &&
             derived_adapters_.count(state.descriptor.id))

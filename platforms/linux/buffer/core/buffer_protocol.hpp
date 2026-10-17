@@ -65,6 +65,7 @@ struct Snapshot {
     bool live_expand = true;
     std::vector<PluginChoice> plugins;
     DerivedPhase phase = DerivedPhase::Idle;
+    std::string message;
     bool can_generate = false;
     std::string selected_result;
     std::vector<DerivedResult> results;

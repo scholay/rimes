@@ -70,6 +70,10 @@ Snapshot MakeSnapshot(const BufferModel& model) {
 }
 
 std::string EncodeSnapshot(const Snapshot& snapshot) {
+    if (snapshot.password_field && !snapshot.secure) {
+        auto shielded = snapshot; shielded.secure = true; return EncodeSnapshot(shielded);
+    }
+    const auto caret = snapshot.secure ? CaretRect{} : snapshot.caret;
     Json blocks = Json::array(), results = Json::array(), choices = Json::array();
     if (!snapshot.secure) {
         for (const auto& b : snapshot.blocks)
@@ -85,12 +89,13 @@ std::string EncodeSnapshot(const Snapshot& snapshot) {
         {"close_after_last", snapshot.close_after_last}, {"empty", snapshot.secure || snapshot.empty},
         {"insertion_index", snapshot.insertion_index}, {"hold_progress", snapshot.hold_progress},
         {"preedit", snapshot.secure ? "" : snapshot.preedit}, {"placeholder", snapshot.placeholder},
-        {"target", snapshot.target}, {"staged_text", snapshot.secure ? "" : snapshot.staged_text},
-        {"caret", {{"x", snapshot.caret.x}, {"y", snapshot.caret.y}, {"w", snapshot.caret.width},
-                   {"h", snapshot.caret.height}, {"valid", snapshot.caret.valid}}},
+        {"target", snapshot.secure ? "" : snapshot.target}, {"staged_text", snapshot.secure ? "" : snapshot.staged_text},
+        {"caret", {{"x", caret.x}, {"y", caret.y}, {"w", caret.width},
+                   {"h", caret.height}, {"valid", caret.valid}}},
         {"ui_clients", snapshot.ui_clients}, {"blocks", blocks}, {"theme", snapshot.theme},
         {"active_plugin", snapshot.active_plugin}, {"plugins", choices}, {"live_expand", snapshot.live_expand},
         {"phase", PhaseName(snapshot.secure ? DerivedPhase::Protected : snapshot.phase)},
+        {"message", snapshot.secure ? "" : snapshot.message},
         {"can_generate", !snapshot.secure && snapshot.can_generate},
         {"selected_result", snapshot.secure ? "" : snapshot.selected_result}, {"results", results}}.dump();
 }
@@ -140,6 +145,8 @@ bool ParseSnapshot(std::string_view text, Snapshot* output) {
             for (const auto& p : value.at("plugins")) s.plugins.push_back({ReadText(p, "id"), ReadText(p, "name")});
         }
         s.phase = ReadPhase(ReadText(value, "phase", "idle"));
+        s.message = ReadText(value, "message", "");
+        if (s.message.size() > 512) return false;
         s.can_generate = value.value("can_generate", false);
         s.selected_result = ReadText(value, "selected_result");
         if (value.contains("results")) {
@@ -152,7 +159,7 @@ bool ParseSnapshot(std::string_view text, Snapshot* output) {
         }
         if (s.secure) {
             s.blocks.clear(); s.results.clear(); s.preedit.clear(); s.staged_text.clear();
-            s.selected_result.clear(); s.empty = true; s.can_generate = false; s.phase = DerivedPhase::Protected;
+            s.selected_result.clear(); s.message.clear(); s.empty = true; s.can_generate = false; s.phase = DerivedPhase::Protected;
         }
         *output = std::move(s);
         return true;

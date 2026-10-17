@@ -253,6 +253,7 @@ void Refresh(App* app) {
     gtk_button_set_label(GTK_BUTTON(app->selector), (title + "  ⌄").c_str());
     std::string status;
     if (s.secure) status = "内容已隐藏";
+    else if (!s.message.empty()) status = s.message;
     else if (s.phase == rimes::buffer::DerivedPhase::Running) status = "正在生成…";
     else if (s.phase == rimes::buffer::DerivedPhase::Failed) status = "生成失败，可重试";
     else if (!s.capturing) status = "已暂停";

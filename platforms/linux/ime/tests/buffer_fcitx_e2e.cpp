@@ -87,6 +87,18 @@ std::string IsolateDirs() {
     setenv("RIMES_BUFFER_AUTO_CAPTURE", "0", 1);
     setenv("RIMES_BUFFER_CLOSE_AFTER_LAST", "1", 1);
     setenv("RIMES_BUFFER_FOCUS_GRACE_MS", "200", 1);
+    if (const auto* resources = std::getenv("RIMES_TEST_TRANSLATION_RESOURCES")) {
+        // Copy only the active verified bundle, never a real user profile.
+        const auto source = std::filesystem::path(resources);
+        std::ifstream input(source / "current.json");
+        rimes::runtime::Json pointer; input >> pointer;
+        const auto bundle = pointer.at("bundle").get<std::string>();
+        if (bundle.size() != 39 || bundle.substr(0, 7) != "bundle-" || bundle.find_first_not_of("0123456789abcdef", 7) != std::string::npos) Die("invalid translation fixture");
+        std::filesystem::create_directories(root / "user/translation");
+        std::filesystem::permissions(root / "user/translation", std::filesystem::perms::owner_all);
+        std::filesystem::copy_file(source / "current.json", root / "user/translation/current.json");
+        std::filesystem::copy(source / bundle, root / "user/translation" / bundle, std::filesystem::copy_options::recursive);
+    }
     return dump_env;
 }
 
@@ -183,7 +195,7 @@ void SendBufferOp(const char* op, std::string_view text = {}) {
         Die("could not connect to the Buffer socket");
     }
     const std::string json = std::string("{\"v\":1,\"op\":\"") + op + "\"" +
-        (text.empty() ? "" : ",\"text\":" + rimes::buffer::JsonEscape(text)) + "}";
+        (text.empty() ? "" : (std::string(op) == "select_plugin" ? ",\"id\":" : ",\"text\":") + rimes::buffer::JsonEscape(text)) + "}";
     std::string frame;
     if (!rimes::buffer::EncodeFrame(json, &frame) ||
         send(fd, frame.data(), frame.size(), MSG_NOSIGNAL) != static_cast<ssize_t>(frame.size())) {
@@ -595,6 +607,44 @@ void RunBufferSuite(fcitx::Instance& instance,
 
 }  // namespace
 
+void RunTranslationSuite(SuiteCtx ctx) {
+    ctx.ic->setCapabilityFlags(fcitx::CapabilityFlags{fcitx::CapabilityFlag::Preedit} | fcitx::CapabilityFlag::ClientUnfocusCommit);
+    EnsureCapturing(ctx.frontend, ctx.uuid, ctx.dump_path);
+    SendBufferOp("select_plugin", "builtin.apple-translation");
+    SendBufferOp("paste", "今天天气很好，我们下午去公园散步。");
+    struct Progress { int phase = 0; std::string prefix, result_id; };
+    auto progress = std::make_shared<Progress>();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    ctx.timers->emplace_back(ctx.instance->eventLoop().addTimeEvent(CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + 50000, 0,
+        [ctx, progress, deadline](fcitx::EventSourceTime* timer, std::uint64_t) {
+            try {
+                if (std::chrono::steady_clock::now() >= deadline) Die("real translation addon deadline");
+                rimes::buffer::Snapshot snapshot;
+                if (!rimes::buffer::ParseSnapshot(ReadDump(ctx.dump_path), &snapshot)) Die("translation snapshot malformed");
+                if (snapshot.phase == rimes::buffer::DerivedPhase::Failed) Die("real translation adapter reported failure");
+                if (progress->phase == 0 && snapshot.phase == rimes::buffer::DerivedPhase::Ready) {
+                    if (snapshot.active_plugin != "builtin.apple-translation" || snapshot.results.size() != 1 || snapshot.results[0].text.find("park") == std::string::npos) Die("real translation result missing");
+                    progress->prefix = snapshot.results[0].text; progress->result_id = snapshot.results[0].id;
+                    if (snapshot.staged_text != "今天天气很好，我们下午去公园散步。") Die("translation consumed original source");
+                    SendBufferOp("paste", "请保存文档。"); progress->phase = 1;
+                } else if (progress->phase == 1 && snapshot.staged_text.find("请保存文档。") != std::string::npos) {
+                    if (snapshot.results.empty() || snapshot.results[0].text.substr(0, progress->prefix.size()) != progress->prefix) Die("tail edit erased ready prefix");
+                    if (snapshot.results[0].id == progress->result_id) Die("source edit reused whole-result copy authority");
+                    progress->phase = 2;
+                } else if (progress->phase == 2 && snapshot.phase == rimes::buffer::DerivedPhase::Ready) {
+                    if (snapshot.results[0].text.size() <= progress->prefix.size()) Die("new sentence was not translated");
+                    SendBufferOp("close"); progress->phase = 3;
+                } else if (progress->phase == 3 && !snapshot.visible) {
+                    if (!snapshot.results.empty()) Die("hidden workbench retained translation authority");
+                    std::cout << "ok: production Fcitx adapter, real engine, automatic debounce, stable prefix and close revocation\n";
+                    ctx.instance->exit(); return true;
+                }
+                timer->setTime(fcitx::now(CLOCK_MONOTONIC) + 50000); timer->setOneShot();
+            } catch (const std::exception& error) { std::cerr << error.what() << '\n'; g_exit_status = EXIT_FAILURE; ctx.instance->exit(); }
+            return true;
+        }));
+}
+
 int main(int argc, char** argv) {
     if (argc < 4) {
         std::cerr << "Usage: rimes-buffer-fcitx-e2e <build-dir> <addon-rel-dir> <data-rel-dir>\n";
@@ -603,6 +653,10 @@ int main(int argc, char** argv) {
 
     try {
         const auto dump_path = IsolateDirs();
+        struct FixtureCleanup {
+            std::filesystem::path root;
+            ~FixtureCleanup() { if (!root.empty()) { std::error_code error; std::filesystem::remove_all(root, error); } }
+        } cleanup{std::getenv("RIMES_TEST_TRANSLATION_RESOURCES") ? std::filesystem::path(dump_path).parent_path() : std::filesystem::path{}};
         fcitx::setupTestingEnvironment(argv[1], {argv[2]}, {argv[3]});
 
         char arg0[] = "rimes-buffer-fcitx-e2e";
@@ -675,8 +729,10 @@ int main(int argc, char** argv) {
                     suite_started = true;
                     std::cout << "ok: buffer testfrontend left Deploying\n";
                     try {
-                        RunBufferSuite(instance, frontend, uuid, ic, dump_path, &grace_timer,
-                                       &hold_timer, &extra_timers);
+                        if (std::getenv("RIMES_TEST_TRANSLATION_RESOURCES"))
+                            RunTranslationSuite({&instance, &extra_timers, frontend, uuid, ic, dump_path, &grace_timer, &hold_timer});
+                        else RunBufferSuite(instance, frontend, uuid, ic, dump_path, &grace_timer,
+                                            &hold_timer, &extra_timers);
                     } catch (const TestFailed&) {
                         instance.exit();
                     }
