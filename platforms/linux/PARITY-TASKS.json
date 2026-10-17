@@ -113,9 +113,10 @@
         "语言和连续翻译配置生效；原文编辑、取消、重试及部分结果有清楚反馈。",
         "验证快速连续输入、中文标点、多段粘贴、修改前段/尾段、错误重试和迟到结果。"
       ],
-      "status": "planned",
+      "status": "in_progress",
       "issue": 156,
-      "url": "https://github.com/scholay/xsime/issues/156"
+      "url": "https://github.com/scholay/xsime/issues/156",
+      "visual_status": "pending"
     },
     {
       "order": 7,
@@ -132,9 +133,10 @@
         "翻译单元首个子块交付后原子退休精确原文，其余译文不可变且不被重复翻译。",
         "可选自动发送采用单调时间，隐藏/暂停/保护不计龄；不强制收束组字，不重复投递，失败保留。"
       ],
-      "status": "planned",
+      "status": "in_progress",
       "issue": 157,
-      "url": "https://github.com/scholay/xsime/issues/157"
+      "url": "https://github.com/scholay/xsime/issues/157",
+      "visual_status": "pending"
     },
     {
       "order": 8,
@@ -152,9 +154,10 @@
         "网络任务不阻塞 Fcitx；支持 SSE 流式、取消、超时、鉴权失败、限流和有界响应。",
         "使用隔离协议服务器覆盖真实传输、碎片流、错误及失效任务；联通实际可用渠道时记录独立验收。"
       ],
-      "status": "planned",
+      "status": "in_progress",
       "issue": 158,
-      "url": "https://github.com/scholay/xsime/issues/158"
+      "url": "https://github.com/scholay/xsime/issues/158",
+      "visual_status": "pending"
     },
     {
       "order": 9,
@@ -172,9 +175,10 @@
         "焦点、输入源和 IC 退役立即撤销授权；恢复后不能复用旧任务/旧输入框。",
         "覆盖 Firefox 禁用 IM 的密码框、同 IC 换框、进程退出和锁屏恢复，记录平台可检测边界。"
       ],
-      "status": "planned",
+      "status": "in_progress",
       "issue": 159,
-      "url": "https://github.com/scholay/xsime/issues/159"
+      "url": "https://github.com/scholay/xsime/issues/159",
+      "visual_status": "pending"
     },
     {
       "order": 10,
@@ -191,9 +195,10 @@
         "跨输入法显式唤出时选择 XSIME 并等待新鲜焦点；关闭不切回旧输入法，尊重用户随后切换。",
         "采用 X11/Wayland 各自支持的注册机制，冲突与不支持时给出可操作入口；验证登录和重启恢复。"
       ],
-      "status": "planned",
+      "status": "in_progress",
       "issue": 160,
-      "url": "https://github.com/scholay/xsime/issues/160"
+      "url": "https://github.com/scholay/xsime/issues/160",
+      "visual_status": "pending"
     },
     {
       "order": 11,

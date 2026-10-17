@@ -39,11 +39,16 @@ public:
     void OnDeactivate(InputContext* ic, bool switching_im);
     void OnInputContextDestroyed(InputContext* ic);
     void OnPasswordField(InputContext* ic, bool password);
+    void OnSessionProtection(bool protected_session);
+    void SetManagedHotkey() { managed_hotkey_ = true; }
+    void ConfigureTheme(std::string theme) { if (theme_ != theme) { theme_ = std::move(theme); Publish(); } }
+    void ShowDetached();
 
     void Toggle(InputContext* ic);
     void Show(InputContext* ic);
     void Close();
     void SetEnabled(bool enabled);
+    bool Enabled() const { return enabled_; }
     bool Activate();
     bool CopySelected();
 
@@ -51,6 +56,10 @@ public:
     void Publish();
 
 private:
+    bool session_protected_ = false;
+    bool field_protected_ = false;
+    bool managed_hotkey_ = false;
+    std::string theme_ = "night";
     struct Client {
         int fd = -1;
         std::string incoming;

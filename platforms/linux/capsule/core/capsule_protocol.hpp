@@ -35,6 +35,7 @@ struct Snapshot {
     bool visible = false;
     bool armed = false;
     bool password_field = false;
+    std::string theme = "night";
     std::string tab;
     std::string query;
     std::string hint;

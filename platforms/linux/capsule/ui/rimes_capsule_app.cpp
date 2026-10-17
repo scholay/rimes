@@ -4,6 +4,8 @@
 #include "capsule_clipboard.hpp"
 #include "capsule_kinds.hpp"
 #include "capsule_protocol.hpp"
+#include "desktop.hpp"
+#include "panel_window.hpp"
 
 #include <gdk/gdk.h>
 #include <gtk/gtk.h>
@@ -51,6 +53,10 @@ struct App {
     bool dumped_geometry = false;
     rimes::capsule::Snapshot snapshot;
     bool wayland_layer = false;
+    bool preview = false;
+    bool placed = false;
+    std::string theme;
+    std::unique_ptr<rimes::desktop::PanelWindow> panel;
     struct CardRow {
         std::string id;
         GtkWidget* event = nullptr;
@@ -85,67 +91,6 @@ bool SendCommand(App* app, const std::string& json) {
     }
     return send(app->socket_fd, frame.data(), frame.size(), MSG_NOSIGNAL) ==
            static_cast<ssize_t>(frame.size());
-}
-
-void ApplyLayerShell(GtkWindow* window, App* app) {
-#ifdef HAVE_GTK_LAYER_SHELL
-    GdkDisplay* display = gtk_widget_get_display(GTK_WIDGET(window));
-#ifdef GDK_WINDOWING_WAYLAND
-    if (display == nullptr || !GDK_IS_WAYLAND_DISPLAY(display)) {
-        return;
-    }
-#else
-    (void)display;
-    return;
-#endif
-    if (!gtk_layer_is_supported()) {
-        return;
-    }
-    gtk_layer_init_for_window(window);
-    gtk_layer_set_layer(window, GTK_LAYER_SHELL_LAYER_OVERLAY);
-    gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_BOTTOM, TRUE);
-    gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_LEFT, TRUE);
-    gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_RIGHT, TRUE);
-    gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_BOTTOM, 48);
-    gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_LEFT, 80);
-    gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_RIGHT, 80);
-    gtk_layer_set_namespace(window, "rimes-capsule");
-#if GTK_LAYER_SHELL_MAJOR >= 0
-    // NONE keeps the rail from stealing focus. gtk_clipboard_set_text on
-    // Wayland then uses wl_data_device.set_selection with the last pointer
-    // serial. Ctrl+C is consumed by the IME, so this window never mints a
-    // keyboard serial; an unclicked bar often has serial 0 and labwc/sway
-    // drop the offer. Copy therefore prefers wl-copy (see ApplySnapshot).
-    gtk_layer_set_keyboard_mode(window, GTK_LAYER_SHELL_KEYBOARD_MODE_NONE);
-#endif
-    app->wayland_layer = true;
-#else
-    (void)window;
-    (void)app;
-#endif
-}
-
-void PlaceOnX11(App* app) {
-    if (app->wayland_layer) {
-        return;
-    }
-    GdkWindow* gdk_window = gtk_widget_get_window(app->window);
-    if (gdk_window == nullptr) {
-        return;
-    }
-    GdkDisplay* display = gtk_widget_get_display(app->window);
-    GdkMonitor* monitor = gdk_display_get_monitor_at_window(display, gdk_window);
-    if (monitor == nullptr) {
-        monitor = gdk_display_get_primary_monitor(display);
-    }
-    if (monitor == nullptr) {
-        return;
-    }
-    GdkRectangle workarea{};
-    gdk_monitor_get_workarea(monitor, &workarea);
-    const int x = workarea.x + (workarea.width - kWindowWidth) / 2;
-    const int y = workarea.y + workarea.height - kWindowHeight - 16;
-    gtk_window_move(GTK_WINDOW(app->window), x, y);
 }
 
 void WriteGeometryDump(App* app) {
@@ -353,7 +298,13 @@ void ApplyCopiedText(App* app, const rimes::capsule::ClipboardWriteDecision& dec
     }
 }
 
+void LoadCss(const std::string& theme, GdkScreen* screen);
+
 void ApplySnapshot(App* app) {
+    if (app->theme != app->snapshot.theme) {
+        LoadCss(app->snapshot.theme, gtk_widget_get_screen(app->window));
+        app->theme = app->snapshot.theme;
+    }
     gtk_label_set_text(GTK_LABEL(app->count),
                        rimes::capsule::CountText(app->snapshot.count).c_str());
     gtk_label_set_text(GTK_LABEL(app->hint), app->snapshot.hint.c_str());
@@ -372,12 +323,14 @@ void ApplySnapshot(App* app) {
     app->handled_copy_seq = copy_state.handled_seq;
     ApplyCopiedText(app, decision);
     if (app->snapshot.visible) {
+        app->panel->Place(kWindowWidth, kWindowHeight, {}, !app->placed);
         gtk_widget_show_all(app->window);
-        PlaceOnX11(app);
+        app->placed = true;
     } else {
         app->last_press_index = -1;
         app->last_press_ms = -1;
         gtk_widget_hide(app->window);
+        app->placed = false;
     }
 }
 
@@ -442,50 +395,26 @@ bool ConnectSocket(App* app, const std::string& path) {
     return true;
 }
 
-void LoadCss() {
-    GtkCssProvider* provider = gtk_css_provider_new();
-    const char* css = R"CSS(
-#rimes-capsule-window, .rimes-capsule {
-  background-color: #1c2420;
-  color: #e8f0ea;
-  border-radius: 10px;
-}
-#rimes-chrome { background-color: #1c2420; }
-#rimes-title { color: #e8f0ea; font-weight: bold; font-size: 13px; }
-#rimes-count, #rimes-query, #rimes-hint, #rimes-placeholder {
-  color: #9aada0; font-size: 12px;
-}
-button.rimes-tab {
-  background: #2a3830;
-  color: #e8f0ea;
-  border: 1px solid #4a6b58;
-  border-radius: 6px;
-  padding: 2px 8px;
-  font-size: 12px;
-}
-button.rimes-tab-active { background: #3b5a49; }
-button.rimes-action {
-  background: #2f463a;
-  color: #e8f0ea;
-  border: 1px solid #4a6b58;
-  border-radius: 6px;
-  min-width: 22px;
-  min-height: 22px;
-}
-#rimes-card {
-  background-color: #2a3830;
-  border-radius: 8px;
-  margin-right: 8px;
-}
-#rimes-card.rimes-card-selected { border: 1px solid #7cbc8a; }
-#rimes-card-title { color: #e8f0ea; font-weight: bold; }
-#rimes-card-preview { color: #9aada0; font-size: 11px; }
-)CSS";
-    gtk_css_provider_load_from_data(provider, css, -1, nullptr);
-    gtk_style_context_add_provider_for_screen(gdk_screen_get_default(),
-                                              GTK_STYLE_PROVIDER(provider),
-                                              GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-    g_object_unref(provider);
+void LoadCss(const std::string& theme, GdkScreen* screen) {
+    using namespace rimes::desktop;
+    Theme(theme, screen);
+    const auto& palette = Visuals().at("palettes").at(theme == "liquidGlass" ? "day" : theme);
+    auto c = [&](const char* key) { return palette.at(key).get<std::string>(); };
+    static auto* provider = gtk_css_provider_new();
+    const std::string css =
+        "#rimes-capsule-window, .rimes-capsule, #rimes-chrome { background: " + c("bufferBackground") + "; color: " + c("textPrimary") + "; border-radius: 10px; }"
+        "#rimes-title { color: " + c("textPrimary") + "; font-weight: bold; font-size: 13px; }"
+        "#rimes-count, #rimes-query, #rimes-hint, #rimes-placeholder { color: " + c("textSecondary") + "; font-size: 12px; }"
+        "button.rimes-tab, button.rimes-action { background: " + c("surfaceSecondary") + "; color: " + c("textPrimary") + "; border: 1px solid " + c("borderStrong") + "; border-radius: 6px; padding: 2px 8px; font-size: 12px; }"
+        "button.rimes-tab-active { background: alpha(" + c("accentGreen") + ", 0.18); }"
+        "button.rimes-action { min-width: 22px; min-height: 22px; padding: 0; }"
+        "#rimes-card { background: " + c("surfaceSecondary") + "; border-radius: 8px; margin-right: 8px; }"
+        "#rimes-card.rimes-card-selected { border: 1px solid " + c("accentGreen") + "; }"
+        "#rimes-card-title { color: " + c("textPrimary") + "; font-weight: bold; }"
+        "#rimes-card-preview { color: " + c("textSecondary") + "; font-size: 11px; }";
+    gtk_css_provider_load_from_data(provider, css.c_str(), -1, nullptr);
+    gtk_style_context_remove_provider_for_screen(screen, GTK_STYLE_PROVIDER(provider));
+    gtk_style_context_add_provider_for_screen(screen, GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
 }
 
 void BuildUi(App* app) {
@@ -507,7 +436,8 @@ void BuildUi(App* app) {
     g_signal_connect(app->window, "destroy", G_CALLBACK(gtk_main_quit), nullptr);
     g_signal_connect(app->window, "size-allocate", G_CALLBACK(OnSizeAllocate), app);
 
-    ApplyLayerShell(GTK_WINDOW(app->window), app);
+    app->panel = std::make_unique<rimes::desktop::PanelWindow>(GTK_WINDOW(app->window), "capsule", 16, !app->preview);
+    app->wayland_layer = app->panel->Layer();
     gtk_widget_set_size_request(app->window, kWindowWidth, kWindowHeight);
 
     GtkWidget* chrome = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -582,7 +512,7 @@ int main(int argc, char** argv) {
     g_app = &app;
     app.dump_geometry = dump_geometry;
     app.quit_after_dump = quit_after_dump;
-    LoadCss();
+    app.preview = preview;
     BuildUi(&app);
 
     if (preview) {
