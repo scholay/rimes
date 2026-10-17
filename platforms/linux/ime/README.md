@@ -48,18 +48,60 @@ Mailbox is still later. Buffer and Capsule behavior are specified in
   exiting. The lock file remains on disk; the OS releases ownership on exit.
 - Isolated user directory: `$XDG_DATA_HOME/rimes` (not `…/fcitx5/rime`)
 - Shared data: `$prefix/share/rimes/data` (policy-staged 57-file closure)
-- Default Buffer workbench (`Ctrl+Shift+B` / `Super+Shift+B`): Rime commits
+- Default Buffer workbench (configurable, default `Ctrl+Shift+B`): Rime commits
   stage as blocks, Return tap/hold and the paper plane send through the same
   `commitText` → `commitString` path
-- Capsule rail (`Ctrl+Shift+V` / `Super+Shift+V`): local Markdown notes,
+- Capsule rail (configurable, default `Ctrl+Shift+V`): local Markdown notes,
   seed card `RIMES 默认词条`, Return inserts the selected note through
   `commitString` after an armed-IC recheck
 
 macOS-only behaviour that is **not** reproduced here: custom candidate chrome,
 Mailbox, Capsule clipboard history / iCloud / password vault / media kinds,
-Buffer plugins (AI / translation / stream / music), cross-batch chord pairing,
+Buffer stream/music plugins, cross-batch chord pairing,
 IMK `Delivery.insert`. See [`../buffer/SPEC.md`](../buffer/SPEC.md) and
 [`../capsule/SPEC.md`](../capsule/SPEC.md) for the explicit gap lists.
+Local Chinese/English translation, incremental units and OpenAI-compatible
+streaming requests are implemented; their desktop and visual acceptance is
+tracked separately in the parity plan.
+
+## Desktop launch and global shortcuts
+
+Use **XSIME Buffer**, **XSIME Capsule** or **XSIME Settings** from the application
+menu, even when another input method is selected. `rimes-launch buffer`,
+`rimes-launch capsule` and `rimes-launch settings` provide the same entry points
+for system custom shortcuts. They start Fcitx5 if necessary; add XSIME to its
+input-method group first. A workspace launch selects XSIME for the focused
+input context, waits for activation and then captures it. Changing focus or
+switching input methods in that interval cancels capture. Closing the workspace
+keeps the selected input method. With no focused input context, the workspace
+opens without a delivery target.
+
+In **Settings → Buffer → 快捷键**, click a recorder and press a combination.
+Escape cancels; unmodified Delete restores that action's default. Duplicate
+bindings and Ctrl/Super+A/V are rejected. The defaults and action titles are
+imported from macOS `ShortcutPreferences.swift`, mapping Command to Ctrl:
+Buffer `Ctrl+Shift+B`, Capsule `Ctrl+Shift+V`, settings `Ctrl+Shift+S`.
+Mailbox `Ctrl+Shift+M` is reserved in preferences and remains unavailable until
+the Mailbox host is installed. Super can be selected explicitly in the recorder.
+Global grabs pause during recording and resume on completion, cancellation,
+settings-process exit or a two-minute timeout.
+
+On X11, checked key grabs report conflicts; choose another combination or
+release the conflicting application's shortcut and click **重新绑定全局快捷键**.
+Caps Lock and Num Lock do not change a binding. On Wayland, the desktop's
+**GlobalShortcuts portal** asks for permission and controls the actual binding.
+The recorder displays that binding after authorization. Unsupported or declined
+portals remain visibly unavailable; use the desktop entries or bind the
+`rimes-launch` commands in the desktop's own custom-shortcut settings.
+There is no XWayland grab fallback. Turning off **在其他输入法中使用全局快捷键**
+retains shortcuts while XSIME itself is selected. Preferences survive restart
+and removal of the application.
+
+`rimes-launch --status` reports bindings and the most recent launch result;
+`rimes-launch --retry` retries registration. The launcher accepts fixed action
+names only. Source uninstall and deb removal include the new launcher and menu
+entries while preserving user preferences, dictionaries and learning data.
+See [shortcut validation and desktop limits](../runtime/SHORTCUTS-VALIDATION.md).
 
 ## Importing source schemes
 

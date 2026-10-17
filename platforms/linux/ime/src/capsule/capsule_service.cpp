@@ -1,3 +1,4 @@
+#include "session/protected_input.hpp"
 #include "capsule_service.hpp"
 
 #include <algorithm>
@@ -203,8 +204,10 @@ void CapsuleService::DropSession(std::string_view reason) {
 }
 
 void CapsuleService::OnPasswordField(InputContext* ic, bool password) {
-    FCITX_UNUSED(ic);
-    if (password) {
+    if (ic && !ic->hasFocus()) return;
+    field_protected_ = password;
+    if (password || session_protected_) {
+        model_.Hide();
         model_.set_password_field(true);
         Publish();
         return;
@@ -213,6 +216,15 @@ void CapsuleService::OnPasswordField(InputContext* ic, bool password) {
         model_.set_password_field(false);
         Publish();
     }
+}
+
+void CapsuleService::OnSessionProtection(bool protected_session) {
+    if (session_protected_ == protected_session) return;
+    session_protected_ = protected_session;
+    pending_unfocus_token_.clear(); CancelFocusGraceTimer();
+    if (protected_session) model_.Hide();
+    model_.set_password_field(session_protected_ || field_protected_);
+    Publish();
 }
 
 void CapsuleService::Toggle(InputContext* ic) {
@@ -233,7 +245,7 @@ void CapsuleService::Show(InputContext* ic) {
     if (!enabled_ || ic == nullptr) {
         return;
     }
-    const bool password = ic->capabilityFlags().test(CapabilityFlag::Password);
+    const bool password = ProtectedInput(ic->capabilityFlags());
     OnPasswordField(ic, password);
     if (password || model_.password_field()) {
         return;
@@ -255,6 +267,13 @@ void CapsuleService::Close() {
     Publish();
 }
 
+void CapsuleService::ShowDetached() {
+    if (!enabled_ || model_.password_field()) return;
+    model_.Disarm("detached-open");
+    pending_unfocus_token_.clear(); CancelFocusGraceTimer();
+    ReloadNotes(); model_.set_visible(true); EnsureUi(); Publish();
+}
+
 void CapsuleService::SetEnabled(bool enabled) {
     if (enabled_ == enabled) return;
     enabled_ = enabled;
@@ -267,7 +286,7 @@ bool CapsuleService::DeliverNote(const rimes::capsule::Card& card) {
     if (ic == nullptr || card.payload.empty() || card.kind != rimes::capsule::Kind::Note) {
         return false;
     }
-    if (ic->capabilityFlags().test(CapabilityFlag::Password) || model_.password_field()) {
+    if (ProtectedInput(ic->capabilityFlags()) || model_.password_field()) {
         return false;
     }
     if (!model_.arms(TokenFor(ic))) {
@@ -278,7 +297,7 @@ bool CapsuleService::DeliverNote(const rimes::capsule::Card& card) {
 }
 
 bool CapsuleService::Activate() {
-    if (!enabled_) return false;
+    if (!enabled_ || model_.password_field()) return false;
     const auto* card = model_.Selected();
     if (card == nullptr) {
         return false;
@@ -299,7 +318,7 @@ bool CapsuleService::Activate() {
 }
 
 bool CapsuleService::CopySelected() {
-    if (!enabled_) return false;
+    if (!enabled_ || model_.password_field()) return false;
     const auto* card = model_.Selected();
     if (card == nullptr || card->kind != rimes::capsule::Kind::Note) {
         return false;
@@ -320,8 +339,8 @@ bool CapsuleService::HandleEarlyKey(KeyEvent& event) {
     if (ic == nullptr) {
         return false;
     }
-    OnPasswordField(ic, ic->capabilityFlags().test(CapabilityFlag::Password));
-    if (IsToggleHotkey(event)) {
+    OnPasswordField(ic, ProtectedInput(ic->capabilityFlags()));
+    if (!managed_hotkey_ && IsToggleHotkey(event)) {
         Toggle(ic);
         event.filterAndAccept();
         return true;
@@ -403,7 +422,7 @@ void CapsuleService::OnActivate(InputContext* ic) {
     if (ic == nullptr) {
         return;
     }
-    OnPasswordField(ic, ic->capabilityFlags().test(CapabilityFlag::Password));
+    OnPasswordField(ic, ProtectedInput(ic->capabilityFlags()));
     const auto token = TokenFor(ic);
     if (!model_.visible()) {
         return;
@@ -429,7 +448,7 @@ void CapsuleService::OnDeactivate(InputContext* ic, bool switching_im) {
     // deactivate). Mark the field before Close() so the snapshot stays
     // honest even though later keys never reach HandleEarlyKey.
     if (ic != nullptr) {
-        OnPasswordField(ic, ic->capabilityFlags().test(CapabilityFlag::Password));
+        OnPasswordField(ic, ProtectedInput(ic->capabilityFlags()));
     }
     if (switching_im) {
         Close();
@@ -472,6 +491,10 @@ void CapsuleService::CancelFocusGraceTimer() {
 }
 
 void CapsuleService::HandleCommand(const rimes::capsule::Command& command) {
+    if (model_.password_field() && command.op != rimes::capsule::CommandOp::Hello &&
+        command.op != rimes::capsule::CommandOp::Status && command.op != rimes::capsule::CommandOp::Close) {
+        Publish(); return;
+    }
     InputContext* ic = LiveTarget();
     if (ic == nullptr) {
         instance_->inputContextManager().foreachFocused([&](InputContext* focused) {

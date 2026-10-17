@@ -95,6 +95,11 @@ void Theme(const std::string &name) {
       ".name { font-size: 11px; font-weight: 600; } .card { background: " +
       c("surfaceSecondary") + "; border: 0.5px solid " + c("border") +
       "; border-radius: 8px; }"
+      ".shortcut-row { background: " + c("surfaceSecondary") + "; border: 0.5px solid " + c("border") +
+      "; border-radius: " + std::to_string(Visuals().at("metrics").at(name == "liquidGlass" ? "settingsGlassCardRadius" : "settingsCardRadius").get<int>()) +
+      "px; } .shortcut-title { font-size: " + std::to_string(Visuals().at("metrics").at("shortcutTitleFont").get<int>()) +
+      "px; font-weight: 600; } .shortcut-recorder { font-family: monospace; font-size: " +
+      std::to_string(Visuals().at("metrics").at("shortcutRecorderFont").get<int>()) + "px; font-weight: 500; }"
       ".panel { background: " +
       c("surfaceSecondary") + "; border: 1px solid " + c("border") +
       "; border-radius: 10px; padding: 11px; }"

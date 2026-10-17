@@ -107,7 +107,15 @@ Snapshot MakeSnapshot(const CapsuleModel& model) {
     return snapshot;
 }
 
-std::string EncodeSnapshot(const Snapshot& snapshot) {
+std::string EncodeSnapshot(const Snapshot& value) {
+    auto snapshot = value;
+    if (snapshot.password_field) {
+        snapshot.visible = false; snapshot.armed = false;
+        snapshot.query.clear(); snapshot.last_copied.clear(); snapshot.cards.clear();
+        snapshot.selected_id.clear(); snapshot.selected_title.clear(); snapshot.selected_preview.clear();
+        snapshot.count = 0; snapshot.selected = 0;
+        snapshot.hint = "受保护输入，内容已隐藏";
+    }
     std::ostringstream out;
     out << "{\"v\":" << kProtocolVersion
         << ",\"generation\":" << snapshot.generation

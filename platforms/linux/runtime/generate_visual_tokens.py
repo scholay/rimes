@@ -10,12 +10,12 @@ import re
 ROOT = Path(__file__).resolve().parents[3]
 SOURCES = ["Sources/RimeBuffer/RimeUI.swift", "Sources/RimeBuffer/SettingsWindow.swift",
            "Sources/RimeBuffer/SettingsRouting.swift", "Sources/RimeBuffer/BufferWindowController.swift",
-           "Sources/RimeBuffer/BufferInlineView.swift"]
+           "Sources/RimeBuffer/BufferInlineView.swift", "Sources/RimeBuffer/ShortcutPreferences.swift"]
 CATALOG = "Catalog/buffer-plugins.json"
 
 
 def extract():
-    ui, settings, routing, buffer, inline = [(ROOT / name).read_text() for name in SOURCES]
+    ui, settings, routing, buffer, inline, shortcuts = [(ROOT / name).read_text() for name in SOURCES]
     native_fields = set(re.findall(r"let (\w+): UInt32", ui.split("struct RimeThemePalette")[1].split("enum RimeThemePalettes")[0]))
     palettes = {}
     for name in ("night", "day", "quiet", "rasta"):
@@ -62,6 +62,20 @@ def extract():
     for field in ("blockSpacing", "railHorizontalInset", "itemHeight", "blockUnderlineWidth", "selectedBlockUnderlineWidth"):
         metrics[field] = number(r"static let " + field + r": CGFloat = (\d+)", inline)
     chrome = settings.split("private enum SettingsVisualStyle")[1].split("private enum SettingsPluginSwitchMode")[0]
+    shortcut_rows = settings.split("private func shortcutSettingsView()", 1)[1].split("private func candidateMetricRow", 1)[0]
+    for name, pattern in {
+        "shortcutTitleFont": r"titleLabel.font = .systemFont\(ofSize: (\d+)",
+        "shortcutTitleMaxWidth": r"titleLabel.widthAnchor.constraint\(lessThanOrEqualToConstant: (\d+)",
+        "shortcutRowWidth": r"row.widthAnchor.constraint\(equalToConstant: (\d+)",
+        "shortcutControlSpacing": r"row.spacing = (\d+)",
+        "shortcutInsetVertical": r"NSEdgeInsets\(top: (\d+)",
+        "shortcutInsetHorizontal": r"NSEdgeInsets\(top: \d+, left: (\d+)",
+        "shortcutRowSpacing": r"stack.spacing = (\d+)",
+    }.items(): metrics[name] = number(pattern, shortcut_rows)
+    metrics["shortcutRecorderFont"] = number(r"font = .monospacedSystemFont\(ofSize: (\d+)", shortcuts)
+    metrics["shortcutRecorderMinWidth"] = number(r"widthAnchor.constraint\(greaterThanOrEqualToConstant: (\d+)", shortcuts)
+    metrics["settingsCardRadius"] = number(r"cardRadius: CGFloat \{ RimeUI.isLiquidGlass \? \d+ : (\d+)", chrome)
+    metrics["settingsGlassCardRadius"] = number(r"cardRadius: CGFloat \{ RimeUI.isLiquidGlass \? (\d+)", chrome)
     for name, palette in palettes.items():
         for key, field in (("settingsBackground", "background"), ("settingsSeparator", "separator")):
             match = re.search(r"static var " + field + r".*?RimeUI.isDark \? (0x[0-9A-Fa-f]+) : (0x[0-9A-Fa-f]+)", chrome, re.S)
