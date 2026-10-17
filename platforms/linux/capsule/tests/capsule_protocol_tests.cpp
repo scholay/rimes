@@ -36,6 +36,15 @@ int main() {
     Expect(decoded.cards.size() == 1, "decoded card");
     Expect(decoded.cards[0].title == rimes::capsule::kDefaultEntryTitle, "decoded title");
 
+    model.set_last_copied("private-clipboard");
+    model.set_query("private-query");
+    model.set_password_field(true);
+    const auto protected_json = rimes::capsule::EncodeSnapshot(rimes::capsule::MakeSnapshot(model));
+    Expect(protected_json.find("private-") == std::string::npos, "protected clipboard and query leaked");
+    Expect(protected_json.find(rimes::capsule::kDefaultEntryTitle) == std::string::npos, "protected card title leaked");
+    Expect(rimes::capsule::DecodeSnapshot(protected_json, &decoded) && decoded.cards.empty() &&
+           !decoded.visible && !decoded.armed, "protected snapshot still actionable");
+
     rimes::capsule::Command command;
     std::string error;
     Expect(rimes::capsule::ParseCommand(R"({"v":1,"op":"activate"})", &command, &error),

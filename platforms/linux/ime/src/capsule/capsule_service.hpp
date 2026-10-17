@@ -39,6 +39,7 @@ public:
     void OnDeactivate(InputContext* ic, bool switching_im);
     void OnInputContextDestroyed(InputContext* ic);
     void OnPasswordField(InputContext* ic, bool password);
+    void OnSessionProtection(bool protected_session);
 
     void Toggle(InputContext* ic);
     void Show(InputContext* ic);
@@ -51,6 +52,8 @@ public:
     void Publish();
 
 private:
+    bool session_protected_ = false;
+    bool field_protected_ = false;
     struct Client {
         int fd = -1;
         std::string incoming;

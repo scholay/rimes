@@ -43,6 +43,14 @@ int main() {
               snapshot.provider.at("model") == "fixture-model",
           "credential did not reach frozen request");
     PrivateDirectory prefs(root / "settings");
+    auto legacy = store.Load();
+    legacy.erase("autoSendSeconds");
+    prefs.Write("preferences.json", legacy.dump());
+    Check(store.Load().at("autoSendSeconds") == 1 &&
+          store.Load().at("revision") == legacy.at("revision"), "legacy auto-send migration lost revision");
+    auto invalid_lifetime = store.Load();
+    invalid_lifetime["autoSendSeconds"] = 4;
+    Reject([&] { store.Save(invalid_lifetime, invalid_lifetime.at("revision")); });
     Check(prefs.Read("preferences.json", 1048576)->find(secret) ==
               std::string::npos,
           "credential leaked to ordinary preferences");

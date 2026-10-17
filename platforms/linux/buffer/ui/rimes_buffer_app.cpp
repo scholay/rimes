@@ -47,10 +47,12 @@ struct App {
     GtkWidget* source_row = nullptr;
     GtkWidget* result_row = nullptr;
     GtkWidget* result_text = nullptr;
+    GtkWidget* result_chips = nullptr;
     GtkWidget* source_actions = nullptr;
     GtkWidget* result_actions = nullptr;
     GtkWidget* selector = nullptr;
     GtkWidget* edit = nullptr;
+    GtkWidget* auto_send = nullptr;
     GtkWidget* copy = nullptr;
     GtkWidget* generate = nullptr;
     GtkWidget* pager = nullptr;
@@ -188,6 +190,8 @@ void RebuildChips(App* app) {
     for (const auto& block : app->snapshot.blocks) {
         GtkWidget* chip = gtk_label_new(block.text.c_str());
         gtk_widget_set_name(chip, "rimes-chip");
+        const auto age = app->snapshot.auto_send_progress.find(block.id);
+        gtk_widget_set_opacity(chip, 1.0 - 0.55 * (age == app->snapshot.auto_send_progress.end() ? 0 : age->second));
         gtk_widget_set_size_request(chip, -1, rimes::native::itemHeight);
         gtk_widget_set_tooltip_text(chip, block.text.c_str());
         gtk_label_set_single_line_mode(GTK_LABEL(chip), TRUE);
@@ -208,7 +212,8 @@ void Paste(App* app) {
     if (app->snapshot.secure || !app->snapshot.visible) return;
     auto* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
     auto* text = gtk_clipboard_wait_for_text(clipboard);
-    if (text && *text) SendCommand(app, rimes::runtime::Json{{"v", 1}, {"op", "paste"}, {"text", text}}.dump());
+    if (text && *text && !app->snapshot.secure && app->snapshot.visible)
+        SendCommand(app, rimes::runtime::Json{{"v", 1}, {"op", "paste"}, {"text", text}}.dump());
     g_free(text);
 }
 
@@ -241,9 +246,17 @@ void Refresh(App* app) {
     gtk_widget_set_visible(app->result_row, target);
     gtk_widget_set_visible(app->source_actions, source && !target);
     gtk_widget_set_visible(app->edit, derived && output);
-    gtk_widget_set_visible(app->send, !derived);
-    gtk_widget_set_sensitive(app->send, s.capturing && !s.blocks.empty() && !s.secure);
-    gtk_widget_set_visible(app->generate, derived);
+    gtk_widget_set_visible(app->auto_send, !derived);
+    gtk_widget_set_sensitive(app->auto_send, !s.secure);
+    const auto auto_title = s.auto_send_seconds ? std::to_string(s.auto_send_seconds) : "N";
+    gtk_button_set_label(GTK_BUTTON(app->auto_send), auto_title.c_str());
+    const auto auto_help = s.auto_send_seconds ? "自动上屏：" + auto_title + " 秒" : "自动上屏：关闭";
+    gtk_widget_set_tooltip_text(app->auto_send, auto_help.c_str());
+    atk_object_set_name(gtk_widget_get_accessible(app->auto_send), auto_help.c_str());
+    const bool result_action = derived && (s.can_deliver || s.phase == rimes::buffer::DerivedPhase::Ready);
+    gtk_widget_set_visible(app->send, !derived || result_action);
+    gtk_widget_set_sensitive(app->send, !s.secure && s.preedit.empty() && (derived ? s.can_deliver : s.capturing && !s.blocks.empty()));
+    gtk_widget_set_visible(app->generate, derived && !result_action);
     gtk_widget_set_sensitive(app->generate, !s.secure && (s.can_generate || s.phase == rimes::buffer::DerivedPhase::Running));
     const char* action = s.phase == rimes::buffer::DerivedPhase::Running ? "停止生成" : "生成结果";
     gtk_widget_set_tooltip_text(app->generate, action);
@@ -253,6 +266,7 @@ void Refresh(App* app) {
     gtk_button_set_label(GTK_BUTTON(app->selector), (title + "  ⌄").c_str());
     std::string status;
     if (s.secure) status = "内容已隐藏";
+    else if (!s.message.empty()) status = s.message;
     else if (s.phase == rimes::buffer::DerivedPhase::Running) status = "正在生成…";
     else if (s.phase == rimes::buffer::DerivedPhase::Failed) status = "生成失败，可重试";
     else if (!s.capturing) status = "已暂停";
@@ -265,6 +279,20 @@ void Refresh(App* app) {
     const std::string text = s.secure ? "" : result == s.results.end() ? (s.phase == rimes::buffer::DerivedPhase::Failed ? "生成失败，可重试" : "等待结果…") : result->text;
     gtk_label_set_text(GTK_LABEL(app->result_text), text.c_str());
     gtk_widget_set_tooltip_text(app->result_text, text.c_str());
+    auto* old_chips = gtk_container_get_children(GTK_CONTAINER(app->result_chips));
+    for (auto* child = old_chips; child; child = child->next) gtk_widget_destroy(GTK_WIDGET(child->data));
+    g_list_free(old_chips);
+    for (const auto& block : s.result_blocks) {
+        if (s.secure) break;
+        auto* chip = gtk_label_new(block.text.c_str());
+        gtk_widget_set_name(chip, "rimes-result");
+        gtk_widget_set_size_request(chip, -1, rimes::native::itemHeight);
+        gtk_label_set_single_line_mode(GTK_LABEL(chip), TRUE);
+        gtk_widget_set_tooltip_text(chip, block.text.c_str());
+        gtk_box_pack_start(GTK_BOX(app->result_chips), chip, FALSE, FALSE, 0);
+        gtk_widget_show(chip);
+    }
+    gtk_widget_set_visible(app->result_text, s.result_blocks.empty() || s.secure);
     gtk_widget_set_visible(app->copy, result != s.results.end());
     gtk_widget_set_sensitive(app->copy, result != s.results.end() && result->ready && !s.secure);
     gtk_widget_set_visible(app->pager, s.results.size() > 1);
@@ -624,6 +652,10 @@ void BuildUi(App* app) {
     Add(tools, Label(""), true);
     app->edit = Action("arrow.uturn.backward", "返回编辑", [app] { SendCommand(app, R"({"v":1,"op":"return_to_edit"})"); });
     Add(tools, app->edit);
+    app->auto_send = Button("N", [app] { SendCommand(app, R"({"v":1,"op":"cycle_auto_send"})"); }, "rimes-action");
+    gtk_widget_set_can_focus(app->auto_send, FALSE);
+    gtk_widget_set_size_request(app->auto_send, rimes::native::controlSize, rimes::native::controlSize);
+    Add(tools, app->auto_send);
     app->target = Label("");
     gtk_label_set_ellipsize(GTK_LABEL(app->target), PANGO_ELLIPSIZE_END);
     gtk_label_set_max_width_chars(GTK_LABEL(app->target), 16);
@@ -676,6 +708,8 @@ void BuildUi(App* app) {
     gtk_widget_set_valign(app->caret, GTK_ALIGN_CENTER);
     Add(source, app->caret);
     auto* target = make_rail(&app->result_row, &app->result_actions);
+    app->result_chips = Row(rimes::native::blockSpacing);
+    Add(target, app->result_chips);
     app->result_text = Label("");
     gtk_widget_set_size_request(app->result_text, -1, rimes::native::itemHeight);
     gtk_widget_set_name(app->result_text, "rimes-result");
@@ -720,10 +754,12 @@ int RenderFixtures(App* app, const std::filesystem::path& output) {
     s.blocks = {{"fixture-source", "同一窗口先展开为双轨", rimes::buffer::Origin::Rime, 0}};
     rimes::runtime::Json manifest = rimes::runtime::Json::array();
     for (const std::string theme : {"night", "day", "quiet", "rasta", "liquidGlass"}) {
-        for (const std::string state : {"standard", "dual", "protected", "running", "failed", "alternatives", "exchange", "return-to-edit", "restored", "hold"}) {
+        for (const std::string state : {"standard", "dual", "protected", "running", "failed", "alternatives", "exchange", "return-to-edit", "restored", "hold", "automatic", "translation-delivery"}) {
             s.theme = theme;
             s.secure = state == "protected";
-            s.active_plugin = state == "standard" || state == "restored" || state == "hold" ? "" : "fixture.transform";
+            s.active_plugin = state == "standard" || state == "restored" || state == "hold" || state == "automatic" ? "" : "fixture.transform";
+            s.auto_send_seconds = state == "automatic" ? 1 : 0;
+            s.auto_send_progress = {{"fixture-source", state == "automatic" ? 0.5 : 0}};
             s.hold_progress = state == "hold" ? 0.5 : 0;
             s.plugins = {{"fixture.transform", "Default"}};
             s.live_expand = state != "exchange" && state != "return-to-edit";
@@ -731,9 +767,17 @@ int RenderFixtures(App* app, const std::filesystem::path& output) {
                       state == "failed" ? rimes::buffer::DerivedPhase::Failed :
                       state == "return-to-edit" || s.active_plugin.empty() ? rimes::buffer::DerivedPhase::Idle : rimes::buffer::DerivedPhase::Ready;
             s.results.clear();
+            s.result_blocks.clear();
             if (s.phase == rimes::buffer::DerivedPhase::Ready || s.phase == rimes::buffer::DerivedPhase::Running)
                 s.results.push_back({"fixture-result", "再验证它能缩回单轨", 0, s.phase == rimes::buffer::DerivedPhase::Ready});
             if (state == "alternatives") s.results.push_back({"fixture-alternative", "另一个结果", 1, true});
+            if (state == "translation-delivery") {
+                s.results = {{"fixture-result", "The weather is nice. Let's walk in the park. ", 0, true}};
+                s.result_blocks = {{"part-1", "The weather is nice. ", rimes::buffer::Origin::Local, 0},
+                                   {"part-2", "Let's walk in the ", rimes::buffer::Origin::Local, 0},
+                                   {"part-3", "park. ", rimes::buffer::Origin::Local, 0}};
+            }
+            s.can_deliver = s.phase == rimes::buffer::DerivedPhase::Ready && !s.secure;
             s.selected_result = s.results.empty() ? "" : s.results.front().id;
             s.can_generate = !s.active_plugin.empty() && s.phase != rimes::buffer::DerivedPhase::Running;
             Refresh(app);

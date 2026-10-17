@@ -215,7 +215,8 @@ Json ConfigurationStore::Defaults() {
   return {{"schemaVersion", 1},       {"revision", RandomID()},
           {"theme", "night"},         {"bufferWidth", 760},
           {"closeAfterLast", true},   {"resetOnAppSwitch", false},
-          {"autoSend", false},        {"activeConnector", "openai-compatible"},
+          {"autoSend", false},        {"autoSendSeconds", 1},
+          {"activeConnector", "openai-compatible"},
           {"activeProvider", ""},     {"providers", Json::array()},
           {"plugins", Json::object()}};
 }
@@ -269,7 +270,7 @@ Json ConfigurationStore::NormalizePlugin(std::string_view id,
   return normalized;
 }
 void ConfigurationStore::Validate(const Json &value) {
-  Require(value.is_object() && value.size() == 11 &&
+  Require(value.is_object() && value.size() == 12 &&
           value.at("schemaVersion") == 1 && Identity(value.at("revision")));
   Require(value.at("theme") == "night" || value.at("theme") == "day" ||
           value.at("theme") == "quiet" || value.at("theme") == "rasta" ||
@@ -278,6 +279,9 @@ void ConfigurationStore::Validate(const Json &value) {
           value.at("bufferWidth") >= rimes::native::bufferMinimumWidth && value.at("bufferWidth") <= rimes::native::bufferMaximumWidth);
   for (auto key : {"closeAfterLast", "resetOnAppSwitch", "autoSend"})
     Require(value.at(key).is_boolean());
+  Require(value.at("autoSendSeconds").is_number_integer() &&
+          (value.at("autoSendSeconds") == 1 || value.at("autoSendSeconds") == 2 ||
+           value.at("autoSendSeconds") == 3 || value.at("autoSendSeconds") == 5));
   Require(value.at("activeConnector") == "openai-compatible" ||
           value.at("activeConnector") == "codex-cli" ||
           value.at("activeConnector") == "claude-code-cli");
@@ -312,6 +316,7 @@ Json ConfigurationStore::Load() const {
   if (!bytes)
     throw std::runtime_error("设置文件缺失，请恢复备份后重试。");
   auto value = Json::parse(*bytes);
+  if (value.is_object() && !value.contains("autoSendSeconds")) value["autoSendSeconds"] = 1;
   Validate(value);
   return value;
 }
@@ -319,6 +324,7 @@ bool ConfigurationStore::Save(
     Json next, const std::string &expected,
     const std::map<std::string, std::string> &changes) {
   auto lock = files_.Lock();
+  if (next.is_object() && !next.contains("autoSendSeconds")) next["autoSendSeconds"] = 1;
   const auto current = Load();
   if (current.at("revision") != expected)
     throw std::runtime_error("设置已在其他窗口更新，请重新加载后再保存。");

@@ -8,14 +8,14 @@ enum PresetBufferPluginCatalog {
             id: "builtin.apple-translation",
             nameZH: "实时翻译",
             nameEN: "Translation",
-            version: "2.2.0",
+            version: "2.3.0",
             summaryZH: "实时翻译官方插件；用户数据由 RIMES 宿主管理。",
             summaryEN: "Translation official plugin; user data remains owned by the RIMES host.",
             producerID: "official",
             defaultInstalled: true,
             defaultEnabled: true,
-            downloadAssetName: "preset-plugin-builtin.apple-translation-2.2.0.json",
-            sha256: "6fbb30f06133b95b6a7e9ee167550f95a123ca522637c21265df9e36fbc8d37e"
+            downloadAssetName: "preset-plugin-builtin.apple-translation-2.3.0.json",
+            sha256: "9ed28df8f1621bb22c2bbfdec48397e38a035ff9d0c00a8826d330d07ad8daa4"
         ),
         PresetBufferPluginCatalogEntry(
             id: "builtin.capsule.capture",
@@ -203,14 +203,14 @@ enum PresetBufferPluginCatalog {
             id: "builtin.openai-compatible",
             nameZH: "AI API",
             nameEN: "AI API",
-            version: "1.0.0",
+            version: "1.1.0",
             summaryZH: "把源缓冲区原样作为请求发给通用 Open API（OpenAI 兼容），回复进入独立目标缓冲区。",
             summaryEN: "AI API official plugin; user data remains owned by the RIMES host.",
             producerID: "official",
             defaultInstalled: false,
             defaultEnabled: false,
-            downloadAssetName: "preset-plugin-builtin.openai-compatible-1.0.0.json",
-            sha256: "9d4b1e16d0db3dc70cd30fd7ffb8e122968bcab321e2e2061f368a51d12f52a9"
+            downloadAssetName: "preset-plugin-builtin.openai-compatible-1.1.0.json",
+            sha256: "01550f3450571af0810fbf7332a95e1a099dd78dabce17100d9a63f80cb2396c"
         ),
         PresetBufferPluginCatalogEntry(
             id: "builtin.polisher",

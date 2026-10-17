@@ -55,7 +55,7 @@ target_include_directories(RimesBufferCore PUBLIC
     "${RIMES_BUFFER_ROOT}/core"
 )
 set_target_properties(RimesBufferCore PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(RimesBufferCore PUBLIC RimesPluginCore)
+target_link_libraries(RimesBufferCore PUBLIC RimesPluginCore RimesTranslationUnits)
 rimes_harden(RimesBufferCore)
 
 add_library(RimesCapsuleCore STATIC
@@ -114,10 +114,13 @@ if(RIMES_BUILD_FCITX5)
         src/fcitx/rimes_candidate.cpp
         src/fcitx/rimes_ime.cpp
         src/fcitx/rimes_state.cpp
+        src/session/session_monitor.cpp
         src/buffer/buffer_service.cpp
+        src/buffer/buffer_translation.cpp
+        src/buffer/buffer_delivery.cpp
         src/capsule/capsule_service.cpp
     )
-    target_link_libraries(rimes PRIVATE Fcitx5::Core RimesEngine RimesBufferCore RimesCapsuleCore RimesPluginCore)
+    target_link_libraries(rimes PRIVATE Fcitx5::Core RimesEngine RimesBufferCore RimesCapsuleCore RimesPluginCore RimesLocalTranslation RimesAI)
     pkg_check_modules(GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0)
     pkg_check_modules(GTK_LAYER_SHELL IMPORTED_TARGET gtk-layer-shell-0)
     target_link_libraries(rimes PRIVATE PkgConfig::GTK3)
@@ -285,6 +288,11 @@ if(RIMES_BUILD_TESTS)
     rimes_harden(rimes-derived-workspace-tests)
     add_test(NAME derived-workspace COMMAND rimes-derived-workspace-tests)
 
+    add_executable(rimes-buffer-auto-send-tests "${RIMES_BUFFER_ROOT}/tests/buffer_auto_send_tests.cpp")
+    target_link_libraries(rimes-buffer-auto-send-tests PRIVATE RimesBufferCore)
+    rimes_harden(rimes-buffer-auto-send-tests)
+    add_test(NAME buffer-auto-send COMMAND rimes-buffer-auto-send-tests)
+
     add_executable(rimes-buffer-return-tests
         "${RIMES_BUFFER_ROOT}/tests/buffer_return_tests.cpp"
     )
@@ -382,11 +390,31 @@ if(RIMES_BUILD_TESTS)
         )
         rimes_harden(rimes-fcitx-e2e)
 
-        add_executable(rimes-buffer-derived-host-tests tests/buffer_derived_host_tests.cpp src/buffer/buffer_service.cpp)
+        add_executable(rimes-buffer-derived-host-tests tests/buffer_derived_host_tests.cpp src/buffer/buffer_service.cpp src/buffer/buffer_translation.cpp src/buffer/buffer_delivery.cpp)
         target_include_directories(rimes-buffer-derived-host-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
         target_link_libraries(rimes-buffer-derived-host-tests PRIVATE Fcitx5::Core RimesBufferCore Threads::Threads)
         rimes_harden(rimes-buffer-derived-host-tests)
         add_test(NAME buffer-derived-host COMMAND rimes-buffer-derived-host-tests)
+
+        add_executable(rimes-buffer-translation-host-tests tests/buffer_translation_host_tests.cpp src/buffer/buffer_service.cpp src/buffer/buffer_translation.cpp src/buffer/buffer_delivery.cpp)
+        target_include_directories(rimes-buffer-translation-host-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        target_link_libraries(rimes-buffer-translation-host-tests PRIVATE Fcitx5::Core RimesBufferCore Threads::Threads)
+        rimes_harden(rimes-buffer-translation-host-tests)
+        add_test(NAME buffer-translation-host COMMAND rimes-buffer-translation-host-tests)
+
+        add_executable(rimes-buffer-delivery-host-tests tests/buffer_delivery_host_tests.cpp src/buffer/buffer_service.cpp src/buffer/buffer_translation.cpp src/buffer/buffer_delivery.cpp)
+        target_include_directories(rimes-buffer-delivery-host-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        target_link_libraries(rimes-buffer-delivery-host-tests PRIVATE Fcitx5::Core RimesBufferCore Threads::Threads)
+        rimes_harden(rimes-buffer-delivery-host-tests)
+        add_test(NAME buffer-delivery-host COMMAND rimes-buffer-delivery-host-tests)
+
+        add_executable(rimes-session-monitor-tests tests/session_monitor_tests.cpp src/session/session_monitor.cpp)
+        target_include_directories(rimes-session-monitor-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        target_link_libraries(rimes-session-monitor-tests PRIVATE Fcitx5::Core)
+        rimes_harden(rimes-session-monitor-tests)
+        find_program(DBUS_RUN_SESSION dbus-run-session REQUIRED)
+        add_test(NAME session-protection-dbus COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:rimes-session-monitor-tests>)
+        set_tests_properties(session-protection-dbus PROPERTIES ENVIRONMENT "RIMES_PRIVATE_SESSION_TEST=1")
 
         add_executable(rimes-buffer-fcitx-e2e tests/buffer_fcitx_e2e.cpp)
         target_link_libraries(rimes-buffer-fcitx-e2e PRIVATE

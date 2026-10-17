@@ -21,6 +21,9 @@
 #include "plugin_registry.hpp"
 #include "package_binding.hpp"
 #include "configuration.hpp"
+#include "local_translation.hpp"
+#include "ai_api.hpp"
+#include "session/session_monitor.hpp"
 
 namespace fcitx {
 
@@ -80,6 +83,8 @@ private:
     std::unique_ptr<CapsuleService> capsule_;
     std::unique_ptr<HandlerTableEntry<EventHandler>> destroy_watch_;
     std::unique_ptr<HandlerTableEntry<EventHandler>> capability_watch_;
+    std::unique_ptr<HandlerTableEntry<EventHandler>> focus_watch_;
+    std::unique_ptr<SessionMonitor> session_monitor_;
     bool deploy_announced_ = false;
     rimes::plugins::Registry plugins_;
     std::unique_ptr<rimes::plugins::PackageStore> plugin_store_;
@@ -90,6 +95,8 @@ private:
     std::unique_ptr<EventSourceIO> configuration_watch_;
     int configuration_watch_fd_ = -1;
     std::string configuration_revision_;
+    rimes::runtime::LocalTranslationWorker translation_worker_;
+    rimes::runtime::AIWorker ai_worker_;
 };
 
 class RimesImeFactory : public AddonFactory {
